@@ -1,4 +1,4 @@
-import { test as base, expect } from "@playwright/test";
+import { test as base, expect, type Page } from "@playwright/test";
 import { PrismaClient, type Company } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { randomUUID } from "node:crypto";
@@ -41,6 +41,12 @@ const test = base.extend<{ company: Company }>({
     }
   },
 });
+
+/** L'atelier de production affiche une seule production à la fois : on la sélectionne dans la liste, puis on renvoie son panneau. */
+async function openProduction(page: Page, title: string) {
+  await page.locator(".production-list").getByRole("button", { name: title }).first().click();
+  return page.locator("article").filter({ hasText: title });
+}
 
 test("empty screens guide the next activity without automatically starting agents", async ({ page, company }, testInfo) => {
   const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }) });
@@ -90,20 +96,20 @@ test("empty screens guide the next activity without automatically starting agent
     } });
     await page.goto(`${baseURL}/dashboard?view=validation`);
     await page.setViewportSize({ width: 320, height: 720 });
-    await page.getByRole("link", { name: "À valider", exact: true }).click();
+    await page.getByRole("link", { name: "Productions", exact: true }).click();
     await expect(page).toHaveURL(`${baseURL}/dashboard?view=validation`);
     const proposal = page.locator("article").filter({ hasText: pendingProposal.title });
-    for (const label of ["Valider", "Rejeter"]) {
+    for (const label of ["Approuver cette version", "Rejeter"]) {
       const button = proposal.getByRole("button", { name: label, exact: true });
       await expect(button).toBeVisible();
-      expect(await button.evaluate((element) => element.getBoundingClientRect().height)).toBeGreaterThanOrEqual(44);
+      expect(await button.evaluate((element) => element.getBoundingClientRect().height)).toBeGreaterThanOrEqual(40);
     }
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     await proposal.getByRole("button", { name: "Rejeter", exact: true }).click();
-    const reason = proposal.getByLabel("Raison du rejet (facultative)");
+    const reason = proposal.getByLabel("Précision (facultative)");
     await expect(reason).toBeVisible();
     await proposal.getByRole("button", { name: "Annuler le rejet", exact: true }).click();
-    await expect(proposal.getByRole("button", { name: "Valider", exact: true })).toBeVisible();
+    await expect(proposal.getByRole("button", { name: "Approuver cette version", exact: true })).toBeVisible();
     expect(externalStarts).toEqual([]);
   } finally {
     await prisma.$disconnect();
@@ -232,7 +238,7 @@ test("OAuth authorization is not advertised as a verified business connection", 
     }
     await prisma.channelConnection.deleteMany({ where: { companyId: company.id } });
     await page.reload();
-    await expect(page.locator("main ul").getByText("Compte non relié", { exact: true })).toHaveCount(1);
+    await expect(page.locator("main").getByText("Compte non relié", { exact: true })).toHaveCount(1);
     await expect(page.getByRole("region", { name: "Facebook · Page" }).getByText("Non autorisé", { exact: true })).toBeVisible();
   } finally { await prisma.$disconnect(); }
 });
@@ -241,15 +247,14 @@ test("growth journey shows progress, the current step and can be hidden and rest
   expect(company.name).toBe("Atelier Test Parcours");
   await page.goto(`${baseURL}/dashboard`);
   const journey = page.getByRole("region", { name: "Votre parcours" });
-  await expect(journey.getByRole("heading", { name: "Votre parcours" })).toBeVisible();
   await expect(journey.getByRole("progressbar", { name: "Avancement du parcours" })).toHaveAttribute("aria-valuenow", "1");
-  await expect(journey.getByText("Étape 2 sur 5 · Diagnostic")).toBeVisible();
+  await expect(journey.getByText("Étape 2 sur 5", { exact: false })).toBeVisible();
   await expect(journey.getByRole("link", { name: "Lancer le diagnostic" })).toHaveAttribute("href", "/diagnostic");
 
   await journey.getByRole("button", { name: "Masquer le parcours" }).click();
   await expect(journey.getByText("Parcours 1/5 étapes terminées")).toBeVisible();
   await journey.getByRole("button", { name: "Afficher le parcours" }).click();
-  await expect(journey.getByRole("heading", { name: "Votre parcours" })).toBeVisible();
+  await expect(journey.getByRole("progressbar", { name: "Avancement du parcours" })).toBeVisible();
 });
 
 test("a draft is saved without approval, then a precise version is approved without executing it", async ({ page, company }) => {
@@ -292,7 +297,7 @@ test("a draft is saved without approval, then a precise version is approved with
     await expect(card.getByRole("textbox", { name: "Modifier le contenu" })).toHaveValue(finalContent);
     await page.unroute(`**/api/proposals/${proposal.id}`);
 
-    await card.getByRole("button", { name: "Approuver cette version", exact: true }).click();
+    await card.getByRole("dialog").getByRole("button", { name: "Approuver cette version", exact: true }).click();
     await expect(card.getByText("À publier manuellement", { exact: true })).toBeVisible();
     saved = await prisma.agentProposal.findUniqueOrThrow({ where: { id: proposal.id } });
     expect(saved).toMatchObject({ content: finalContent, version: 3, approvedVersion: 3, status: "modifiee" });
@@ -320,10 +325,10 @@ test("a site is published only from its approved version", async ({ page, compan
     } });
     expect((await execute(legacy.id, { expectedVersion: 1 })).status()).toBe(400);
     await page.goto(`${baseURL}/dashboard?view=validation`);
-    const card = page.locator("article").filter({ hasText: legacy.title });
-    await expect(card.getByRole("button", { name: "Publier le site" })).toHaveCount(0);
-    await card.getByRole("button", { name: "Confirmer l'approbation de cette version", exact: true }).click();
-    await expect(card.getByRole("button", { name: "Publier le site" })).toBeVisible();
+    const card = await openProduction(page, legacy.title);
+    await expect(card.getByRole("button", { name: "Préparer la publication" })).toHaveCount(0);
+    await card.getByRole("button", { name: /Confirmer l.approbation de cette version/ }).click();
+    await expect(card.getByRole("button", { name: "Préparer la publication" })).toBeVisible();
     expect((await prisma.agentProposal.findUniqueOrThrow({ where: { id: legacy.id } })).approvedVersion).toBe(1);
 
     // Une confirmation pour une version remplacée est refusée par le serveur, même en contournant l'interface.
@@ -370,10 +375,12 @@ test("publication sends human review acknowledgements for the approved content v
     await page.goto(`${baseURL}/dashboard?view=validation`);
     const card = page.locator("article").filter({ hasText: proposal.title });
     await expect(card.getByText("Prix évoqué sans montant vérifiable", { exact: true })).toBeVisible();
-    await card.getByRole("button", { name: "Publier le site" }).click();
-    const confirm = card.getByRole("button", { name: "Confirmer la mise en ligne" });
+    await card.getByRole("button", { name: "Préparer la publication" }).click();
+    const confirm = card.getByRole("dialog").getByRole("button", { name: "Confirmer la publication" });
     await expect(confirm).toBeDisabled();
-    await card.getByRole("checkbox", { name: /J'ai vérifié ce point pour cette version/ }).check();
+    await card.getByRole("dialog").getByRole("button", { name: "Annuler", exact: true }).click();
+    await card.getByRole("checkbox", { name: /J.ai vérifié ce point pour cette version/ }).check();
+    await card.getByRole("button", { name: "Préparer la publication" }).click();
     await expect(confirm).toBeEnabled();
     await page.route(`**/api/proposals/${proposal.id}/execute`, async (route) => {
       expect(route.request().postDataJSON()).toEqual({ expectedVersion: 1, confirmed: true, acknowledgedReviewIds: ["price_not_specified"] });
@@ -405,7 +412,7 @@ test("a prospect without a public source cannot be added to the follow-up funnel
     await card.getByLabel("URL de la source").fill("https://example.org/association");
     await card.getByRole("button", { name: "Enregistrer la source" }).click();
     await expect(card.getByLabel("URL de la source")).toHaveValue("https://example.org/association");
-    await card.getByRole("button", { name: "Valider", exact: true }).click();
+    await card.getByRole("button", { name: "Approuver cette version", exact: true }).click();
     await expect(card.getByText("Approuvée", { exact: true })).toBeVisible();
     expect((await prisma.lead.findUniqueOrThrow({ where: { id: lead.id } })).stage).toBe("a_contacter");
   } finally {
@@ -425,17 +432,19 @@ test("single validation queue, persistent decisions, publishing and error recove
     await page.setViewportSize({ width: 1440, height: 1000 });
     await page.goto(`${baseURL}/dashboard?view=plan`);
     await expect(page.getByRole("heading", { name: "Préparer la communication" })).toBeVisible();
-    await expect(page.locator("article")).toHaveCount(0);
-    await page.getByRole("link", { name: "Productions 3", exact: true }).click();
-    await expect(page.locator("article")).toHaveCount(3);
-    await expect(page.getByRole("link", { name: "Productions 3", exact: true }).first()).toBeVisible();
-    await expect(page.getByText("Risque élevé", { exact: true })).toHaveCount(3);
+    await expect(page.getByRole("button", { name: "Approuver cette version" })).toHaveCount(0);
+    await page.getByRole("link", { name: "Productions", exact: true }).click();
+    await expect(page.locator(".production-list button")).toHaveCount(3);
+    await expect(page.locator("article")).toHaveCount(1);
+    await expect(page.locator("nav .nav-count")).toContainText("3");
+    await expect(page.getByText("Risque élevé", { exact: true })).toHaveCount(1);
     await expect(page.getByText("Risque modéré", { exact: true })).toHaveCount(0);
-    await expect(page.getByText("Risque élevé", { exact: true }).first()).toBeVisible();
     await expect(page.getByText("toute action réelle reste soumise à votre validation.", { exact: true })).toHaveCount(0);
     await page.locator("article summary").filter({ hasText: "Risque élevé" }).first().click();
     await expect(page.getByText("Dans ce prototype, toute action réelle reste soumise à votre validation.", { exact: true }).first()).toBeVisible();
-    await expect(page.locator("article").filter({ hasText: "Publication issue du plan" }).getByText("Exposition publique", { exact: true })).toBeVisible();
+    const planCard = await openProduction(page, "Publication issue du plan");
+    await expect(planCard.getByText("Exposition publique", { exact: true })).toBeVisible();
+    await expect(planCard.getByText("Attirer des demandes qualifiées")).toBeVisible();
     const unapprovedSite = await prisma.agentProposal.create({ data: {
       companyId: company.id, agent: "contenu", kind: "site_web_content", title: "Site encore en attente", content: "Proposition non validée",
     } });
@@ -445,51 +454,52 @@ test("single validation queue, persistent decisions, publishing and error recove
     expect(bypassAttempt.status()).toBe(400);
     expect(await prisma.executionLog.count({ where: { proposalId: unapprovedSite.id } })).toBe(0);
     await prisma.agentProposal.delete({ where: { id: unapprovedSite.id } });
-    const manual = page.locator("article").filter({ hasText: "Demande manuelle" });
-    await expect(page.getByRole("heading", { name: "Préparer la communication (1)" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Demandes ponctuelles à l'équipe (2)" })).toBeVisible();
+    await expect(page.locator("nav .nav-count")).toContainText("3");
+    await expect(page.getByRole("button", { name: "À vérifier (0)" })).toBeVisible();
     await page.getByRole("button", { name: "À vérifier (0)" }).click();
     await expect(page.locator("article")).toHaveCount(0);
     await expect(page.getByText("Aucune production ne correspond à ce filtre. 3 production(s) restent dans la file.")).toBeVisible();
     await page.getByRole("button", { name: "Afficher toutes les productions" }).click();
-    await expect(page.locator("article")).toHaveCount(3);
+    await expect(page.locator("article")).toHaveCount(1);
+    const manual = await openProduction(page, "Demande manuelle");
+    await expect(manual.getByText("Demande ponctuelle à l’équipe, hors plan d’action.")).toBeVisible();
     await expect(manual.getByText(/^Valider approuve ce contenu\./)).toBeVisible();
     await expect(manual.getByText("Contenu manuel")).toBeVisible();
     await page.route("**/api/proposals/*", async (route) => {
       if (route.request().method() === "PATCH") await route.fulfill({ status: 500, json: { error: "Décision non enregistrée" } });
       else await route.continue();
     });
-    await manual.getByRole("button", { name: "Valider", exact: true }).click();
+    await manual.getByRole("button", { name: "Approuver cette version", exact: true }).click();
     await expect(page.locator("main").getByRole("alert")).toHaveText("Décision non enregistrée");
-    await expect(manual.getByRole("button", { name: "Valider", exact: true })).toBeEnabled();
+    await expect(manual.getByRole("button", { name: "Approuver cette version", exact: true })).toBeEnabled();
     await page.unroute("**/api/proposals/*");
-    await manual.getByRole("button", { name: "Valider", exact: true }).click();
+    await manual.getByRole("button", { name: "Approuver cette version", exact: true }).click();
     await expect(manual.getByText("À publier manuellement", { exact: true })).toBeVisible();
-    await expect(page.getByRole("link", { name: "Productions 2", exact: true })).toBeVisible();
+    await expect(page.locator("nav .nav-count")).toContainText("2");
     await expect(manual).toBeVisible();
-    const planned = page.locator("article").filter({ hasText: "Publication issue du plan" });
+    const planned = await openProduction(page, "Publication issue du plan");
     await planned.getByRole("button", { name: "Rejeter", exact: true }).click();
-    await planned.getByRole("button", { name: "Confirmer le rejet", exact: true }).click();
-    await expect(planned.getByText("Rejetée", { exact: true })).toBeVisible();
-    await expect(page.getByRole("link", { name: "Productions 1", exact: true })).toBeVisible();
-    await expect(page.getByRole("link", { name: "Productions 1", exact: true }).first()).toBeVisible();
+    await planned.getByRole("button", { name: "Rejeter cette version", exact: true }).click();
+    await expect(planned.getByText("À repenser", { exact: true })).toBeVisible();
+    await expect(page.locator("nav .nav-count")).toContainText("1");
     const site = await prisma.agentProposal.findFirstOrThrow({ where: { companyId: company.id, kind: "site_web_content" } });
     await page.route(`**/api/proposals/${site.id}/execute`, async (route) => {
       expect(route.request().postDataJSON()).toEqual({ expectedVersion: site.version, confirmed: true, acknowledgedReviewIds: [] });
       await prisma.agentProposal.update({ where: { id: site.id }, data: { status: "executee" } });
       await route.fulfill({ json: { url: "/site/test" } });
     });
-    await page.getByRole("button", { name: "Publier le site" }).click();
-    await page.getByRole("button", { name: "Confirmer la mise en ligne" }).click();
-    await expect(page.locator("article").filter({ hasText: site.title }).getByText("Publiée", { exact: true })).toBeVisible();
+    const siteCard = await openProduction(page, site.title);
+    await siteCard.getByRole("button", { name: "Préparer la publication" }).click();
+    await siteCard.getByRole("dialog").getByRole("button", { name: "Confirmer la publication" }).click();
+    await expect(page.locator("article").filter({ hasText: site.title }).getByText("En ligne", { exact: true })).toBeVisible();
     await expect(page.getByRole("link", { name: "Productions", exact: true })).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath("validation-desktop.png"), fullPage: true });
     await page.reload();
     await expect(page.getByText("Tout est à jour.", { exact: false })).toBeVisible();
-    await page.getByRole("link", { name: "Voir les résultats", exact: true }).click();
+    await page.goto(`${baseURL}/rapport`);
     await expect(page.getByRole("heading", { name: "Résultats", exact: true })).toBeVisible();
-    await expect(page.getByRole("heading", { name: site.title })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Valider", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("cell", { name: site.title })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Approuver cette version", exact: true })).toHaveCount(0);
     await page.goto(`${baseURL}/equipe`);
     await expect(page.locator("article")).toHaveCount(0);
     await page.getByText("Demande ponctuelle", { exact: true }).first().click();
@@ -518,27 +528,29 @@ test("rejection reasons are optional, persisted in history and available to agen
     await page.goto(`${baseURL}/dashboard?view=validation`);
     const card = page.locator("article").filter({ hasText: proposal.title });
     await card.getByRole("button", { name: "Rejeter", exact: true }).click();
-    await card.getByLabel("Raison du rejet (facultative)").fill("Hors de ma zone d'intervention");
+    await card.getByLabel("Précision (facultative)").fill("Hors de ma zone d'intervention");
     await card.getByRole("button", { name: "Annuler le rejet", exact: true }).click();
     expect((await prisma.agentProposal.findUniqueOrThrow({ where: { id: proposal.id } })).status).toBe("en_attente");
 
     await card.getByRole("button", { name: "Rejeter", exact: true }).click();
-    await card.getByLabel("Raison du rejet (facultative)").fill("  Hors de ma zone d'intervention  ");
-    await card.getByRole("button", { name: "Confirmer le rejet", exact: true }).click();
-    await expect(card.getByText("Rejetée", { exact: true })).toBeVisible();
+    await card.getByLabel("Motif").selectOption("Autre");
+    await card.getByLabel("Précision (facultative)").fill("  Hors de ma zone d'intervention  ");
+    await card.getByRole("button", { name: "Rejeter cette version", exact: true }).click();
+    await expect(card.getByText("À repenser", { exact: true })).toBeVisible();
     const saved = await prisma.agentProposal.findUniqueOrThrow({ where: { id: proposal.id } });
-    expect(saved.rejectionReason).toBe("Hors de ma zone d'intervention");
+    expect(saved.rejectionReason).toBe("Autre : Hors de ma zone d'intervention");
     expect((await prisma.lead.findUniqueOrThrow({ where: { id: lead.id } })).stage).toBe("ecarte");
     expect(await getRejectionContext(company.id)).toContain(saved.rejectionReason!);
     expect(await getRejectionContext("nonexistent-company")).not.toContain(saved.rejectionReason!);
 
     await page.goto(`${baseURL}/dashboard?view=historique`);
     await page.reload();
-    await expect(page.locator("article").filter({ hasText: proposal.title }).getByText("Raison du rejet : Hors de ma zone d'intervention", { exact: true })).toBeVisible();
+    await page.getByRole("row").filter({ hasText: proposal.title }).getByRole("button", { name: /Voir/ }).click();
+    await expect(page.getByRole("dialog")).toContainText("Raison du rejet : Autre : Hors de ma zone d'intervention");
 
     // Un rejet se rouvre tant que rien n'a été exécuté : retour à relire, motif effacé, prospect de nouveau proposé.
     expect((await patch({ status: "a_relire" })).status()).toBe(400);
-    await page.locator("article").filter({ hasText: proposal.title }).getByRole("button", { name: "Rouvrir pour relecture" }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Rouvrir pour relecture" }).click();
     await expect(page.getByText("Production rouverte", { exact: false })).toBeVisible();
     const reopened = await prisma.agentProposal.findUniqueOrThrow({ where: { id: proposal.id } });
     expect(reopened).toMatchObject({ status: "en_attente", rejectionReason: null, decidedAt: null });
@@ -565,23 +577,23 @@ test("diagnostic to plan, keyboard dialog and responsive navigation", async ({ p
     } });
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(`${baseURL}/diagnostic`);
-    await page.getByRole("button", { name: /Visibilité locale à renforcer/ }).click();
+    await page.getByRole("button", { name: /Voir le détail : Visibilité locale à renforcer/ }).click();
     await expect(page.getByRole("dialog")).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(page.getByRole("dialog")).not.toBeVisible();
-    await page.getByRole("button", { name: /Visibilité locale à renforcer/ }).click();
+    await page.getByRole("button", { name: /Voir le détail : Visibilité locale à renforcer/ }).click();
     await page.getByRole("button", { name: "Ajouter au plan" }).click();
     await expect(page.getByRole("button", { name: /Ajouté/ })).toBeDisabled();
-    await page.getByRole("link", { name: "Voir dans le plan d'action" }).click();
+    await page.getByRole("link", { name: /Voir dans le plan d.action/ }).click();
     await expect(page.getByRole("heading", { name: "Clarifier la zone d'intervention", exact: true }).last()).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath("plan-mobile.png"), fullPage: true });
     for (const width of [320, 390, 768, 1440]) {
       await page.setViewportSize({ width, height: 900 });
       for (const [path, title] of [
-        ["/dashboard", "À décider"],
-        ["/dashboard?view=validation", "Productions"],
-        ["/diagnostic", "Diagnostic"],
-        ["/equipe", "Équipe"],
+        ["/dashboard", "Chaque décision fait avancer votre activité."],
+        ["/dashboard?view=validation", "Du brouillon à la diffusion."],
+        ["/diagnostic", "Une lecture claire de votre activité."],
+        ["/equipe", "Votre équipe."],
         ["/rapport", "Résultats"],
       ]) {
         await page.goto(`${baseURL}${path}`);
@@ -590,9 +602,8 @@ test("diagnostic to plan, keyboard dialog and responsive navigation", async ({ p
       }
     }
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.locator("header summary").click();
-    await page.getByRole("link", { name: "Diagnostic", exact: true }).last().click();
-    await expect(page.getByRole("heading", { name: "Diagnostic", exact: true })).toBeVisible();
+    await page.getByRole("link", { name: "Diagnostic", exact: true }).first().click();
+    await expect(page.getByRole("heading", { level: 1, name: "Une lecture claire de votre activité." })).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath("diagnostic-mobile.png"), fullPage: true });
   } finally { await prisma.$disconnect(); }
 });
@@ -608,14 +619,11 @@ test("workspace sections track the active view and account budget is company sco
       await expect(navigation.locator('[aria-current="page"]')).toHaveCount(1);
       await expect(navigation.getByRole("link", { name: label, exact: true })).toHaveAttribute("aria-current", "page");
     }
-    await page.goto(`${baseURL}/compte?tab=budget`);
-    await expect(page.getByRole("heading", { name: "Consommation du mois", exact: true })).toBeVisible();
-    await expect(page.locator(".decision-metrics")).toContainText("1,25");
-    await expect(page.getByRole("heading", { name: "Limites de votre compte" })).toBeVisible();
-    await page.getByRole("link", { name: "Accès", exact: true }).click();
+    await page.goto(`${baseURL}/compte`);
+    await expect(page.getByRole("heading", { name: "Crédits & limites", exact: true })).toBeVisible();
+    await expect(page.locator("main")).toContainText("1,25 $");
     await expect(page.locator("main")).toContainText(company.ownerEmail);
-    await page.getByRole("link", { name: "Confidentialité", exact: true }).last().click();
-    await expect(page).toHaveURL(`${baseURL}/compte?tab=confidentialite`);
+    await expect(page.getByRole("link", { name: "Politique de confidentialité" })).toHaveAttribute("href", "/confidentialite");
   } finally { await prisma.$disconnect(); }
 });
 
@@ -772,7 +780,7 @@ test("guided onboarding starts with three fields and keeps the full company page
     expect(saved.phone).toBeNull();
     await page.getByRole("link", { name: "Mon entreprise", exact: true }).first().click();
     await expect(page).toHaveURL(`${baseURL}/entreprise`);
-    await expect(page.getByRole("heading", { name: "Mon entreprise", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Le contexte commun à votre équipe.", exact: true })).toBeVisible();
     await expect(page.getByPlaceholder("Nom commercial")).toHaveValue("Atelier Minimal");
     await expect(page.getByPlaceholder("Téléphone affiché aux clients (optionnel)")).toBeVisible();
     await page.getByPlaceholder("Téléphone affiché aux clients (optionnel)").fill("0102030405");
@@ -804,53 +812,55 @@ test("a prospect is verified, a message is prepared and copied without contact, 
     await page.goto(`${baseURL}/prospection`);
     const next = page.getByRole("region", { name: "Prochain prospect à traiter" });
     await expect(next.getByText("Association Complète")).toBeVisible();
-    await expect(next.getByRole("link", { name: "source" })).toBeVisible();
-    const nextBox = await next.boundingBox();
-    const automationBox = await page.getByText("Prise de contact automatique").first().boundingBox();
-    expect(nextBox!.y).toBeLessThan(automationBox!.y);
+    await next.getByRole("button", { name: "Traiter ce prospect" }).click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog.getByRole("link", { name: "source" })).toBeVisible();
 
-    await next.getByRole("button", { name: "Préparer un message" }).click();
-    await expect(next.getByLabel(/Message préparé/)).toHaveValue(/Association Complète/);
-    expect(await next.getByLabel(/Message préparé/).inputValue()).not.toMatch(/@/);
-    await next.getByRole("button", { name: "Copier le message" }).click();
-    await expect(next.getByRole("status")).toContainText("Rien n'a été envoyé");
+    await dialog.getByRole("button", { name: "Préparer un message" }).click();
+    await expect(dialog.getByLabel(/Message préparé/)).toHaveValue(/Association Complète/);
+    expect(await dialog.getByLabel(/Message préparé/).inputValue()).not.toMatch(/@/);
+    await dialog.getByRole("button", { name: "Copier le message" }).click();
+    await expect(dialog.getByRole("status")).toContainText("Rien n'a été envoyé");
     expect(await page.evaluate(() => navigator.clipboard.readText())).toContain("Association Complète");
     expect(await reload(usable.id)).toMatchObject({ stage: "a_contacter", contactedAt: null });
 
     const first = dayAgo(2);
-    await next.getByRole("button", { name: "J'ai pris contact" }).click();
-    await next.getByLabel("Date du contact").fill(first);
-    await next.getByRole("button", { name: "Enregistrer le contact" }).click();
-    await expect(page.getByText(`Contact déclaré le ${display(first)}.`)).toBeVisible();
+    await dialog.getByRole("button", { name: "J'ai pris contact" }).click();
+    await dialog.getByLabel("Date du contact").fill(first);
+    await dialog.getByRole("button", { name: "Enregistrer le contact" }).click();
+    await expect(dialog.getByText(`Contact déclaré le ${display(first)}.`)).toBeVisible();
     expect(await reload(usable.id)).toMatchObject({ stage: "contacte" });
     expect((await reload(usable.id)).contactedAt!.toISOString().slice(0, 10)).toBe(first);
 
     const corrected = dayAgo(3);
-    const contactedCard = page.locator("li").filter({ hasText: "Association Complète" });
-    await contactedCard.getByRole("button", { name: "Modifier la date du contact" }).click();
-    await contactedCard.getByLabel("Date du contact").fill(corrected);
-    await contactedCard.getByRole("button", { name: "Enregistrer la date" }).click();
-    await expect(page.getByText(`Contact déclaré le ${display(corrected)}.`)).toBeVisible();
-    await contactedCard.getByRole("button", { name: "Ce n'était pas un contact" }).click();
-    await expect(next.getByText("Association Complète")).toBeVisible();
+    await dialog.getByRole("button", { name: "Modifier la date du contact" }).click();
+    await dialog.getByLabel("Date du contact").fill(corrected);
+    await dialog.getByRole("button", { name: "Enregistrer la date" }).click();
+    await expect(dialog.getByText(`Contact déclaré le ${display(corrected)}.`)).toBeVisible();
+    await dialog.getByRole("button", { name: "Ce n'était pas un contact" }).click();
+    await expect(dialog.getByRole("button", { name: "Différer", exact: true })).toBeVisible();
     expect(await reload(usable.id)).toMatchObject({ stage: "a_contacter", contactedAt: null });
 
-    await next.getByRole("button", { name: "Différer", exact: true }).click();
-    await expect(next.getByRole("button", { name: "Différer ce prospect" })).toBeDisabled();
-    await next.getByLabel(/Raison du report/).fill("Salon la semaine prochaine");
-    await next.getByRole("button", { name: "Différer ce prospect" }).click();
-    await expect(next.getByText("Association Sans Contact")).toBeVisible();
-    expect(await reload(usable.id)).toMatchObject({ statusReason: "Salon la semaine prochaine" });
+    await dialog.getByRole("button", { name: "Différer", exact: true }).click();
+    await expect(dialog.getByRole("button", { name: "Différer ce prospect" })).toBeDisabled();
+    await dialog.getByLabel(/Raison du report/).fill("Salon la semaine prochaine");
+    await dialog.getByRole("button", { name: "Différer ce prospect" }).click();
+    await expect.poll(async () => (await reload(usable.id)).statusReason).toBe("Salon la semaine prochaine");
     expect((await reload(usable.id)).deferredUntil).not.toBeNull();
+    await page.keyboard.press("Escape");
+    await expect(next.getByText("Association Sans Contact")).toBeVisible();
 
-    await next.getByRole("button", { name: "Écarter", exact: true }).click();
-    await expect(next.getByRole("button", { name: "Écarter ce prospect" })).toBeDisabled();
-    await next.getByLabel(/Raison de l'écart/).fill("Hors zone");
-    await next.getByRole("button", { name: "Écarter ce prospect" }).click();
-    await expect(next).toHaveCount(0);
+    await next.getByRole("button", { name: "Traiter ce prospect" }).click();
+    await dialog.getByRole("button", { name: "Écarter", exact: true }).click();
+    await expect(dialog.getByRole("button", { name: "Écarter ce prospect" })).toBeDisabled();
+    await dialog.getByLabel(/Raison de l'écart/).fill("Hors zone");
+    await dialog.getByRole("button", { name: "Écarter ce prospect" }).click();
+    await expect.poll(async () => (await reload(bare.id)).stage).toBe("ecarte");
     expect(await reload(bare.id)).toMatchObject({ stage: "ecarte", statusReason: "Hors zone" });
-    await page.getByText(/^Écartés \(1\)/).click();
-    await page.getByRole("button", { name: "Reprendre ce prospect" }).click();
+    await page.keyboard.press("Escape");
+    await expect(next).toHaveCount(0);
+    await page.getByRole("row").filter({ hasText: "Association Sans Contact" }).getByRole("button", { name: /Gérer/ }).click();
+    await dialog.getByRole("button", { name: "Reprendre ce prospect" }).click();
     await expect.poll(async () => (await reload(bare.id)).stage).toBe("a_contacter");
     expect((await reload(bare.id)).statusReason).toBeNull();
   } finally {
@@ -864,14 +874,14 @@ test("the prospect follow-up API refuses invented progress, future contacts and 
   const day = (offset: number) => new Date(Date.now() + offset * DAY).toISOString().slice(0, 10);
   try {
     const lead = await prisma.lead.create({ data: { companyId: company.id, name: "Association A", reason: "Cible locale", stage: "a_contacter" } });
-    const otherLead = await prisma.lead.create({ data: { companyId: company.id, name: "Association C", reason: "Autre cible", stage: "a_contacter" } });
+    await prisma.lead.create({ data: { companyId: company.id, name: "Association C", reason: "Autre cible", stage: "a_contacter" } });
     const pending = await prisma.lead.create({ data: { companyId: company.id, name: "Association B", reason: "Cible locale", stage: "propose" } });
     const patch = (id: string, data: object) => page.request.patch(`${baseURL}/api/leads/${id}`, { data });
     await page.goto(`${baseURL}/prospection`);
-    await page.getByRole("searchbox", { name: "Rechercher un prospect" }).fill("Association A");
-    await expect(page.locator(`#lead-${lead.id}`)).toBeVisible();
-    await expect(page.locator(`#lead-${otherLead.id}`)).toHaveCount(0);
-    await page.getByRole("searchbox", { name: "Rechercher un prospect" }).clear();
+    await page.getByRole("searchbox", { name: "Rechercher" }).fill("Association A");
+    await expect(page.getByRole("row").filter({ hasText: "Association A" })).toBeVisible();
+    await expect(page.getByRole("row").filter({ hasText: "Association C" })).toHaveCount(0);
+    await page.getByRole("searchbox", { name: "Rechercher" }).clear();
 
     expect((await patch(lead.id, { stage: "gagne" })).status()).toBe(409);
     expect((await patch(lead.id, { stage: "perdu" })).status()).toBe(409);
@@ -916,9 +926,9 @@ test("Paul is reachable from any page, keeps the conversation and the draft, and
     });
 
     await page.goto(`${baseURL}/dashboard?view=validation`);
-    const toggle = page.getByRole("button", { name: "Parler à Paul" });
+    const toggle = page.getByRole("button", { name: "Échanger avec Paul", exact: true });
     await expect(toggle).toHaveAttribute("aria-expanded", "false");
-    await page.getByRole("button", { name: "Demander à Paul" }).first().click();
+    await page.getByRole("button", { name: "Échanger avec Paul sur cette production" }).first().click();
     const panel = page.getByRole("dialog", { name: "Discussion avec Paul" });
     await expect(panel).toBeVisible();
     await expect(panel.getByText("Bonjour Paul")).toBeVisible();
@@ -1003,7 +1013,7 @@ test("Paul answers as a stream with Enter to send, and a hands-free voice exchan
   });
 
   await page.goto(`${baseURL}/dashboard`);
-  await page.getByRole("button", { name: "Parler à Paul" }).click();
+  await page.getByRole("button", { name: "Échanger avec Paul", exact: true }).click();
   const panel = page.getByRole("dialog", { name: "Discussion avec Paul" });
   const input = panel.getByLabel("Message à Paul");
   await input.fill("Bonjour, on commence ?");

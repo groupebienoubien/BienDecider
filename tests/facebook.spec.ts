@@ -385,8 +385,8 @@ test("the dashboard names the Page and asks for an explicit confirmation before 
     // Sans Page connectée, aucune commande de publication n'est proposée.
     await page.goto(`${baseURL}/dashboard?view=historique`);
     const card = page.locator("article").filter({ hasText: proposal.title });
-    await expect(card).toBeVisible();
-    await expect(card.getByRole("button", { name: "Publier sur Facebook" })).toHaveCount(0);
+    await expect(page.getByRole("row").filter({ hasText: proposal.title })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Préparer la publication" })).toHaveCount(0);
 
     await prisma.channelConnection.create({ data: { companyId: company.id, channel: "facebook", status: "connecte",
       accessToken: encryptFacebookAccount({ ...account, pages: [account.pages[0]], selectedPageId: "2000001" }, company.id) } });
@@ -398,14 +398,14 @@ test("the dashboard names the Page and asks for an explicit confirmation before 
       await route.fulfill({ json: { message: "Publication mise en ligne sur la Page Facebook « Atelier Test · Page principale »." } });
     });
     await page.goto(`${baseURL}/dashboard?view=validation`);
-    await card.getByRole("button", { name: "Publier sur Facebook" }).click();
-    await expect(card.getByText("La version 1 sera publiée maintenant sur la Page Facebook « Atelier Test · Page principale », visible par le public.")).toBeVisible();
-    await card.getByRole("button", { name: "Annuler", exact: true }).click();
+    await card.getByRole("button", { name: "Préparer la publication" }).click();
+    await expect(card.getByRole("dialog")).toContainText("Page « Atelier Test · Page principale » · Public");
+    await card.getByRole("dialog").getByRole("button", { name: "Annuler", exact: true }).click();
     expect(executed).toBe(0);
-    await card.getByRole("button", { name: "Publier sur Facebook" }).click();
-    await card.getByRole("button", { name: "Confirmer la publication" }).click();
+    await card.getByRole("button", { name: "Préparer la publication" }).click();
+    await card.getByRole("dialog").getByRole("button", { name: "Confirmer la publication" }).click();
     await expect(page.getByText("Publication mise en ligne sur la Page Facebook « Atelier Test · Page principale ».")).toBeVisible();
-    await expect(card.getByText("Publiée", { exact: true })).toBeVisible();
+    await expect(card.getByText("En ligne", { exact: true })).toBeVisible();
     expect(executed).toBe(1);
     expect(await page.content()).not.toContain("private-");
   } finally {
