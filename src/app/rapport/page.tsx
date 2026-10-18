@@ -36,7 +36,7 @@ export default async function RapportPage() {
       <section aria-labelledby="results-target">
         <SectionTitle title="Objectif de chiffre d’affaires"><Link href="/entreprise">Actualiser ma situation →</Link></SectionTitle>
         {target ? (
-          <div className="metrics" style={{ gridTemplateColumns: "repeat(4, 1fr)" }}>
+          <div className="metrics metrics-4">
             <div className="metric"><div className="metric-label">CA mensuel déclaré</div><div className="metric-value">{formatEuros(target.current)}</div></div>
             <div className="metric"><div className="metric-label">CA mensuel visé</div><div className="metric-value">{formatEuros(target.target)}</div></div>
             <div className="metric"><div className="metric-label">Écart à combler</div><div className="metric-value">{formatEuros(Math.max(0, target.gap))}</div></div>
@@ -46,7 +46,7 @@ export default async function RapportPage() {
       </section>
       <section>
         <SectionTitle title="Prospection · ce mois-ci"><Link href="/prospection">Suivre les contacts →</Link></SectionTitle>
-        <div className="metrics" style={{ gridTemplateColumns: "repeat(4, 1fr)" }}>
+        <div className="metrics metrics-4">
           {([
             ["Prospects contactés", funnel.thisMonth.contactes],
             ["Réponses reçues", funnel.thisMonth.reponses],

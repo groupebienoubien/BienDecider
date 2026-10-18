@@ -107,7 +107,7 @@ export default async function AdminPage() {
         />
 
         {/* Entonnoir d'activation */}
-        <section className="metrics" style={{ gridTemplateColumns: "repeat(4, 1fr)" }} aria-label="Entonnoir d’activation">
+        <section className="metrics metrics-4" aria-label="Entonnoir d’activation">
           {funnel.map((f) => (
             <div key={f.label} className="metric">
               <div className="metric-label">{f.label}</div>

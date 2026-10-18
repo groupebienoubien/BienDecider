@@ -12,7 +12,8 @@ test("brand variants share the wordmark and explicit slogan", () => {
     const markup = renderToStaticMarkup(createElement(BrandLogo, { light, slogan: true }));
     expect(markup).toContain("BienDecider");
     expect(markup).toContain("Vous décidez. Votre activité avance.");
-    expect(markup).toContain(light ? "/brand/symbol-light.svg" : "/brand/symbol.svg");
+    expect(markup).toContain('class="brand-mark"');
+    expect(markup).toContain(light ? "brand-logo-light" : "brand-logo ");
   }
 });
 
