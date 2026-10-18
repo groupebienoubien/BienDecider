@@ -7,6 +7,8 @@ import { PersonaAvatar } from "@/components/persona-avatar";
 import { PERSONAS } from "@/lib/agents/personas";
 import { describePage, PAUL_ELEMENT_LABELS, PAUL_OPEN_EVENT, type PaulElement } from "@/lib/paul-context";
 import type { PaulReference } from "@/lib/paul-references";
+import { DictationButton, ReadAloudButton } from "@/components/voice-controls";
+import { appendDictation, spokenText } from "@/lib/voice";
 
 type PanelState = { open: boolean; draft: string };
 type ChatEntry = { id: string; role: string; content: string; createdAt: string; references?: PaulReference[] };
@@ -155,15 +157,18 @@ export function PaulPanel() {
           <div role="log" aria-label="Conversation avec Paul" className="min-h-24 flex-1 space-y-3 overflow-y-auto px-3 py-3">
             {messages.length === 0 && <p className="text-sm text-slate-600">Aucun échange pour le moment. Posez une question sur votre plan, une production ou un prospect.</p>}
             {messages.map((message) => (
-              <p key={message.id} className={`whitespace-pre-wrap break-words text-sm ${message.role === "user" ? "text-indigo-900" : "text-slate-700"}`}>
-                <span className="block text-xs font-medium text-slate-600">{message.role === "user" ? "Vous" : persona.name} · {formatDate(message.createdAt)}</span>
-                {renderLinkedMessage(message.content, message.references)}
-              </p>
+              <div key={message.id}>
+                <p className={`whitespace-pre-wrap break-words text-sm ${message.role === "user" ? "text-indigo-900" : "text-slate-700"}`}>
+                  <span className="block text-xs font-medium text-slate-600">{message.role === "user" ? "Vous" : persona.name} · {formatDate(message.createdAt)}</span>
+                  {renderLinkedMessage(message.content, message.references)}
+                </p>
+                {message.role !== "user" && <ReadAloudButton text={spokenText(message.content, message.references)} label={`Écouter la réponse de ${persona.name}`} />}
+              </div>
             ))}
             {sending && <p className="text-sm text-slate-600">{persona.name} réfléchit…</p>}
           </div>
           {error && <p role="alert" className="mx-3 mb-2 rounded bg-red-50 p-2 text-sm text-red-800">{error}</p>}
-          <form onSubmit={send} className="flex gap-2 border-t border-slate-200 p-3">
+          <form onSubmit={send} className="flex flex-wrap gap-2 border-t border-slate-200 p-3">
             <textarea
               ref={inputRef}
               aria-label={`Message à ${persona.name}`}
@@ -174,6 +179,7 @@ export function PaulPanel() {
               maxLength={4000}
               className="min-w-0 flex-1 resize-none rounded-lg border border-slate-300 px-3 py-2 text-sm"
             />
+            <DictationButton label={`Dicter un message à ${persona.name}`} onTranscript={(text) => writePanel({ draft: appendDictation(readPanel().draft, text, 4000) })} />
             <button type="submit" disabled={sending || !panel.draft.trim()} className="min-h-11 self-end rounded-lg bg-slate-900 px-3 py-2 text-sm text-white disabled:opacity-50">Envoyer</button>
           </form>
         </section>

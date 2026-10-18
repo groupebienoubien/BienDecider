@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { useId, useRef, useState } from "react";
 import { AskPaulButton } from "@/components/ask-paul-button";
+import { ReadAloudButton } from "@/components/voice-controls";
+import { spokenText } from "@/lib/voice";
 import type { AuditFinding } from "@prisma/client";
 import { PERSONAS, type AgentKey } from "@/lib/agents/personas";
 import { parseFindingActionItems, type FindingActionItem } from "@/lib/finding-shared";
@@ -24,6 +26,9 @@ export function FindingCard({ finding }: { finding: AuditFinding }) {
   const titleId = useId();
   const actionItems = parseFindingActionItems(finding.actionItems);
   const hasStructure = Boolean(finding.whatWorks || finding.toImprove || actionItems.length > 0);
+  const findingSpeech = spokenText(hasStructure
+    ? [finding.title, finding.whatWorks && `Ce qui est bien : ${finding.whatWorks}`, finding.toImprove && `Ce qu'il faut améliorer : ${finding.toImprove}`, ...actionItems.map((item) => `Recommandation : ${item.title}`)].filter(Boolean).join(". ")
+    : `${finding.title}. ${finding.content}`);
 
   return (
     <>
@@ -50,6 +55,7 @@ export function FindingCard({ finding }: { finding: AuditFinding }) {
                 Fermer
               </button>
             </div>
+            <ReadAloudButton text={findingSpeech} label="Écouter ce constat" />
 
             {hasStructure ? (
               <div className="mt-4 space-y-4">

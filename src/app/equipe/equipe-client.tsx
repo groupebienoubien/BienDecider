@@ -9,6 +9,8 @@ import { PERSONAS, type AgentKey } from "@/lib/agents/personas";
 import { CHANNEL_CAPABILITIES } from "@/lib/channel-capabilities";
 import { PersonaAvatar } from "@/components/persona-avatar";
 import { useAgentProfileCompletion } from "@/components/agent-profile-completion";
+import { DictationButton } from "@/components/voice-controls";
+import { appendDictation } from "@/lib/voice";
 
 export function EquipeClient({ initialAgentRuns }: { initialAgentRuns: AgentRunView[] }) {
   const { requestProfile, profileDialog, checking } = useAgentProfileCompletion();
@@ -112,6 +114,10 @@ export function EquipeClient({ initialAgentRuns }: { initialAgentRuns: AgentRunV
                       {key === "contenu" ? "Actualité à communiquer (facultatif)" : "Prospects visés (facultatif)"}
                       <input value={key === "contenu" ? newsContext : prospectDescription} onChange={(event) => key === "contenu" ? setNewsContext(event.target.value) : setProspectDescription(event.target.value)} className="mt-1 block w-full rounded-lg border px-3 py-2 text-sm" />
                     </label>
+                    <DictationButton
+                      label={`Dicter la demande pour ${persona.name}`}
+                      onTranscript={(text) => key === "contenu" ? setNewsContext((previous) => appendDictation(previous, text, 4000)) : setProspectDescription((previous) => appendDictation(previous, text, 4000))}
+                    />
                     <button disabled={running !== null || checking || agentRuns.some((run) => run.agent === key && (run.status === "queued" || run.status === "running"))} className="rounded-lg bg-slate-900 px-4 py-2 text-sm text-white disabled:opacity-50">{running === key ? "Mise en file…" : agentRuns.some((run) => run.agent === key && (run.status === "queued" || run.status === "running")) ? "En cours" : agentRuns.some((run) => run.agent === key && run.status === "failed") ? "Relancer" : "Confier la demande"}</button>
                   </form>
                 </details>

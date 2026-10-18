@@ -67,6 +67,8 @@ jobs:
         run: npm run test:database-url
       - name: Session token tests (no database)
         run: npm run test:session
+      - name: Voice helpers tests (no database)
+        run: npm run test:voice
       - name: Backlog importer tests (no network)
         run: node --test scripts/sync-backlog.test.cjs
       - name: Wiki pages build and relative links resolve

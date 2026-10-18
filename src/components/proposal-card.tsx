@@ -3,6 +3,8 @@
 import type { AgentProposal } from "@prisma/client";
 import { useState } from "react";
 import { AskPaulButton } from "@/components/ask-paul-button";
+import { ReadAloudButton } from "@/components/voice-controls";
+import { spokenText } from "@/lib/voice";
 import { PERSONAS, type AgentKey } from "@/lib/agents/personas";
 import { assessActionRisk } from "@/lib/delegation-risk";
 import { getApprovalConsequence, getProposalGuidance } from "@/lib/channel-capabilities";
@@ -251,6 +253,7 @@ export function ProposalCard({
         </details>
       )}
       <AskPaulButton element={{ type: "proposal", id: proposal.id, title: proposal.title }} />
+      {!editing && <ReadAloudButton text={spokenText(`${proposal.title}. ${displayContent}`)} label={`Écouter la production de ${persona?.name ?? "l'agent"}`} />}
       {proposal.status === "rejetee" && proposal.rejectionReason && (
         <p className="mt-3 whitespace-pre-wrap break-words text-sm text-slate-600"><span className="font-medium">Raison du rejet : </span>{proposal.rejectionReason}</p>
       )}
