@@ -465,13 +465,13 @@ test("single validation queue, persistent decisions, publishing and error recove
     await page.unroute("**/api/proposals/*");
     await manual.getByRole("button", { name: "Valider", exact: true }).click();
     await expect(manual.getByText("À publier manuellement", { exact: true })).toBeVisible();
-    await expect(page.getByRole("link", { name: "À valider 2", exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Productions 2", exact: true })).toBeVisible();
     await expect(manual).toBeVisible();
     const planned = page.locator("article").filter({ hasText: "Publication issue du plan" });
     await planned.getByRole("button", { name: "Rejeter", exact: true }).click();
     await planned.getByRole("button", { name: "Confirmer le rejet", exact: true }).click();
     await expect(planned.getByText("Rejetée", { exact: true })).toBeVisible();
-    await expect(page.getByRole("link", { name: "À valider 1", exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Productions 1", exact: true })).toBeVisible();
     await expect(page.getByRole("link", { name: "Productions 1", exact: true }).first()).toBeVisible();
     const site = await prisma.agentProposal.findFirstOrThrow({ where: { companyId: company.id, kind: "site_web_content" } });
     await page.route(`**/api/proposals/${site.id}/execute`, async (route) => {
@@ -482,7 +482,7 @@ test("single validation queue, persistent decisions, publishing and error recove
     await page.getByRole("button", { name: "Publier le site" }).click();
     await page.getByRole("button", { name: "Confirmer la mise en ligne" }).click();
     await expect(page.locator("article").filter({ hasText: site.title }).getByText("Publiée", { exact: true })).toBeVisible();
-    await expect(page.getByRole("link", { name: "À valider 0", exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Productions", exact: true })).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath("validation-desktop.png"), fullPage: true });
     await page.reload();
     await expect(page.getByText("Tout est à jour.", { exact: false })).toBeVisible();
