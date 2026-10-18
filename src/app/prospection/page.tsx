@@ -25,7 +25,7 @@ export default async function ProspectionPage() {
   const pendingCount = await getPendingDecisionCount(company.id);
 
   return (
-    <AppShell companyName={company.name} pendingCount={pendingCount}>
+    <AppShell companyName={company.name} companyTrade={company.trade} companyArea={company.servingArea} pendingCount={pendingCount}>
       <ProspectionClient
         initialLeads={leads}
         initialAutoOutreach={company.autoOutreachEnabled}
