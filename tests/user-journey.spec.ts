@@ -682,7 +682,9 @@ test("clearing optional company profile fields removes them from storage and age
     await expect(page.getByPlaceholder("Site web (optionnel — beaucoup de TPE n'en ont pas)")).toHaveValue(previousProfile.website);
     await expect(page.locator('input[placeholder^="Compte Instagram/Facebook"]')).toHaveValue(previousProfile.socialHandles);
 
+    await page.getByRole("button", { name: "Objectifs", exact: true }).click();
     await page.getByPlaceholder("ex: 10 nouveaux clients par mois").fill("");
+    await page.getByRole("button", { name: "Informations", exact: true }).click();
     await page.locator("textarea").fill("");
     await page.getByPlaceholder("Téléphone affiché aux clients (optionnel)").fill("");
     await page.getByPlaceholder("Certifications / labels (ex: RGE, optionnel)").fill("");
