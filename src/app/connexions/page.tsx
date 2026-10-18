@@ -77,7 +77,7 @@ export default async function ConnexionsPage({
   const facebookView = facebookConnectionView(byChannel.get("facebook"), company.id, checkedAt);
 
   return (
-    <AppShell companyName={company.name} pendingCount={pendingCount}>
+    <AppShell companyName={company.name} companyTrade={company.trade} companyArea={company.servingArea} pendingCount={pendingCount}>
       <div className="mx-auto max-w-2xl">
         <h1 className="text-2xl font-semibold">Connexions</h1>
         <CompanySections active="connexions" />

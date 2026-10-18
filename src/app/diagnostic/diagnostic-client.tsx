@@ -36,11 +36,11 @@ export function DiagnosticClient({ initialFindings }: { initialFindings: AuditFi
   return (
     <div className="mx-auto max-w-4xl">
       <header className="flex flex-wrap items-start justify-between gap-3">
-        <div><h1 className="text-2xl font-semibold">Diagnostic</h1><p className="mt-1 text-sm text-slate-500">Visibilité, site et positionnement concurrentiel</p></div>
+        <div><p className="mb-2 text-xs font-semibold uppercase tracking-wide text-indigo-700">Diagnostic de présence en ligne</p><h1 className="text-2xl font-semibold">Diagnostic</h1><p className="mt-1 text-sm text-slate-500">Visibilité, site et positionnement concurrentiel</p></div>
         {findings.length > 0 && <Link href="/dashboard" className="text-sm font-medium text-indigo-600 underline">Passer au plan d&apos;action</Link>}
       </header>
       <section className="my-6 flex flex-wrap items-center justify-between gap-4 border-y border-slate-200 py-4">
-        <div className="flex items-center gap-3"><PersonaAvatar agentKey="marketing" size={40} /><div><h2 className="text-sm font-medium">Analyse de Martine</h2><p className="text-xs text-slate-500">{findings.length} constat(s)</p></div></div>
+        <div className="flex items-center gap-3"><PersonaAvatar agentKey="marketing" size={40} /><div><h2 className="text-sm font-medium">Analyse de Martine</h2><p className="text-xs text-slate-500">{findings.length} constat(s){findings[0] && <> · Dernier constat enregistré le {new Date(findings[0].createdAt).toLocaleString("fr-FR", { dateStyle: "medium", timeStyle: "short" })}</>}</p></div></div>
         <button onClick={() => void requestProfile("marketing", run)} disabled={running || checking} className="rounded-lg bg-slate-900 px-4 py-2 text-sm text-white disabled:opacity-50">{running ? "Analyse en cours…" : findings.length ? "Actualiser le diagnostic" : "Lancer le diagnostic"}</button>
       </section>
       {profileDialog}

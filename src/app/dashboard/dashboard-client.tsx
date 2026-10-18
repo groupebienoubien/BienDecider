@@ -21,12 +21,21 @@ import { openPaul } from "@/lib/paul-context";
 type PlanItemWithProposals = ActionPlanItem & { proposals: AgentProposal[]; agentRuns: AgentRunView[] };
 type View = "today" | "plan" | "validation" | "historique";
 
-export function DashboardClient({ company, initialPlanItems, initialAgentRuns, initialProposals, leadSources, initialDiagnosticCount, initialView, riskSettings, facebookPageName }: {
+function proposalChannel(kind: string) {
+  if (kind === "site_web_content") return "Site";
+  if (kind === "social_post") return "Facebook";
+  if (kind === "gmail_email" || kind === "prospecting_email") return "Gmail";
+  if (kind === "gbp_update" || kind === "review_reply") return "Google";
+  return "Prospection";
+}
+
+export function DashboardClient({ company, initialPlanItems, initialAgentRuns, initialProposals, leadSources, initialLeadStats, initialDiagnosticCount, initialView, riskSettings, facebookPageName }: {
   company: SafeCompany;
   initialPlanItems: PlanItemWithProposals[];
   initialAgentRuns: AgentRunView[];
   initialProposals: AgentProposal[];
   leadSources: Record<string, string | null>;
+  initialLeadStats: { active: number; appointments: number };
   initialDiagnosticCount: number;
   initialView: View;
   riskSettings: Record<string, string>;
@@ -48,6 +57,7 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
   const [discardReason, setDiscardReason] = useState("");
   const [decidedIds, setDecidedIds] = useState<string[]>([]);
   const [queueFilter, setQueueFilter] = useState<QueueFilter>("all");
+  const [historyFilter, setHistoryFilter] = useState("Tout l’historique");
   const monitorRun = useAgentRunMonitor(initialAgentRuns, {
     onUpdate: (run) => setAgentRuns((previous) => [run, ...previous.filter((entry) => entry.id !== run.id)].slice(0, 20)),
     onFinished: async (finished) => {
@@ -231,6 +241,7 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
   const queueCounts = countByFilter(validationItems);
   const queueGroups = groupQueue(validationItems, queueFilter, new Map(planItems.map((item) => [item.id, item.title])));
   const history = proposals.filter((proposal) => !needsAttention(proposal, facebookPageName));
+  const visibleHistory = history.filter((proposal) => historyFilter === "Tout l’historique" || proposalChannel(proposal.kind) === historyFilter);
   const nextItem = activeItems.find((item) => item.status === "propose");
   const runningItem = activeItems.find((item) => item.status === "en_cours");
   const needsFirstDiagnostic = initialDiagnosticCount === 0 && planItems.length === 0;
@@ -242,17 +253,21 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
     <div className="mx-auto max-w-5xl">
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <p className="mb-2 text-xs font-semibold uppercase text-indigo-700">{company.name}</p>
+          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-indigo-700">Mon activité</p>
           <h1 className="text-2xl font-semibold">{({ today: "À décider", plan: "Mon plan d’action", validation: "Productions", historique: "Historique" })[initialView]}</h1>
-          <p className="mt-1 text-sm text-slate-500">{company.objective || "Votre activité, vos priorités"}</p>
+          <p className="mt-1 text-sm text-slate-500">{initialView === "today" ? "Voici ce qui mérite votre attention aujourd’hui." : company.objective || "Votre activité, vos priorités"}</p>
         </div>
         <Link href="/rapport" className="text-sm font-medium text-indigo-600 underline underline-offset-4">Voir les résultats</Link>
       </header>
       {initialView === "today" && <dl className="decision-metrics">
-        <div><dt>Productions à examiner</dt><dd>{actionable.length}</dd></div>
-        <div><dt>Actions à confier</dt><dd>{activeItems.filter((item) => item.status === "propose").length}</dd></div>
-        <div><dt>Productions exécutées</dt><dd>{proposals.filter((proposal) => proposal.status === "executee").length}</dd></div>
+        <div><dt>À décider</dt><dd>{actionable.length + activeItems.filter((item) => item.status === "propose").length}<small>Validation ou action à confier</small></dd></div>
+        <div><dt>Productions diffusées</dt><dd>{proposals.filter((proposal) => proposal.status === "executee").length}<small>Exécutions enregistrées</small></dd></div>
+        <div><dt>Prospects actifs</dt><dd>{initialLeadStats.active}<small>{initialLeadStats.appointments} rendez-vous déclarés</small></dd></div>
       </dl>}
+      {initialView === "today" && company.objective && <div className="goal-line mt-6 flex flex-wrap items-center justify-between gap-3 border-y border-slate-200 py-4 text-sm">
+        <span>Mon objectif : <strong className="font-medium">{company.objective}</strong></span>
+        <Link href="/entreprise?tab=objectifs" className="text-sm font-medium text-indigo-700 underline underline-offset-4">Ajuster l’objectif</Link>
+      </div>}
       {initialView === "today" && needsFirstDiagnostic && <JourneyProgress
         objectiveComplete={Boolean(company.objective?.trim())}
         diagnosticComplete={initialDiagnosticCount > 0}
@@ -289,7 +304,7 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
           </article>)}</div>
         </section>}
         <div className="mt-8 grid gap-8 lg:grid-cols-2">
-          <section><h2 className="text-lg font-semibold">Dernières décisions</h2>
+          <section><h2 className="text-lg font-semibold">Ce qui a été fait</h2>
             {history.length === 0 ? <p className="mt-3 text-sm text-slate-600">Vos décisions apparaîtront ici après la première relecture.</p> : <ul className="mt-3 divide-y divide-slate-200">{history.slice(0, 3).map((proposal) => <li key={proposal.id} className="py-3"><Link className="text-sm font-medium text-indigo-700" href={`/dashboard?view=historique&proposal=${encodeURIComponent(proposal.id)}`}>{proposal.title}</Link><p className="mt-1 text-xs text-slate-600">{proposal.status === "executee" ? "Exécution enregistrée" : proposal.status === "rejetee" ? "Rejetée" : "Décision enregistrée"}</p></li>)}</ul>}
             <Link href="/dashboard?view=historique" className="mt-3 inline-block text-sm text-indigo-700 underline">Consulter l&apos;historique</Link>
           </section>
@@ -417,12 +432,18 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
       )}
       {initialView === "historique" && (
         <section className="space-y-4 py-5" aria-label="Historique">
-          <h2 className="font-medium">Productions traitées</h2>
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div><p className="text-xs font-semibold uppercase tracking-wide text-indigo-700">Registre de l’activité</p><h2 className="mt-1 font-medium">Productions traitées</h2></div>
+          </div>
+          {history.length > 0 && <div role="group" aria-label="Filtrer l’historique par canal" className="flex flex-wrap gap-2">
+            {["Tout l’historique", "Site", "Facebook", "Gmail", "Google"].map((channel) => <button key={channel} type="button" aria-pressed={historyFilter === channel} onClick={() => setHistoryFilter(channel)} className={`min-h-11 rounded-md border px-3 text-sm ${historyFilter === channel ? "border-indigo-700 bg-indigo-50 font-medium text-indigo-900" : "border-slate-300 text-slate-700"}`}>{channel}</button>)}
+          </div>}
           {history.length === 0 && <div role="region" aria-label="Historique à venir">
             <p className="text-sm text-slate-600">Aucune production traitée. Vos validations et refus resteront ici pour retrouver vos décisions.</p>
             <Link href={actionable.length > 0 ? "/dashboard?view=validation" : emptyNextHref} className="mt-3 inline-block text-sm font-medium text-indigo-600 underline">{actionable.length > 0 ? "Examiner les productions" : emptyNextLabel}</Link>
           </div>}
-          {history.map((proposal) => <ProposalCard key={proposal.id} proposal={proposal} onDecision={handleDecision} busy={locked} showAgent riskSettings={riskSettings} facebookPageName={facebookPageName} />)}
+          {history.length > 0 && visibleHistory.length === 0 && <p role="status" className="py-4 text-sm text-slate-600">Aucune production traitée sur ce canal.</p>}
+          {visibleHistory.map((proposal) => <ProposalCard key={proposal.id} proposal={proposal} onDecision={handleDecision} busy={locked} showAgent riskSettings={riskSettings} facebookPageName={facebookPageName} />)}
           <h2 className="pt-4 font-medium">Actions terminées et écartées</h2>
           {closedItems.length === 0 && <p className="text-sm text-slate-500">Les actions terminées ou écartées du plan seront conservées ici.</p>}
           <ul className="divide-y divide-slate-200">

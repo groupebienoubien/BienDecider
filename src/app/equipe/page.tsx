@@ -24,7 +24,7 @@ export default async function EquipePage() {
   const pendingCount = await getPendingDecisionCount(company.id);
 
   return (
-    <AppShell companyName={company.name} pendingCount={pendingCount}>
+    <AppShell companyName={company.name} companyTrade={company.trade} companyArea={company.servingArea} pendingCount={pendingCount}>
       <CompanySections active="equipe" />
       <EquipeClient initialAgentRuns={initialAgentRuns} />
     </AppShell>
