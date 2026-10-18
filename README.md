@@ -16,7 +16,7 @@ Copilote IA agentique pour indépendants et TPE (kiné, plombier, installateur s
 
 ## Statut
 
-4 agents (Paul, Martine, Camille, Jean-Claude), plan d'action piloté par Paul avec validation/réorientation par le dirigeant, première exécution réelle (site d'une page publié sur `/site/[slug]`), rapport, vue admin (coûts/usage), connexions OAuth (code prêt, identifiants Google/Meta à fournir), login par email + mot de passe. Base de données : PostgreSQL (plus de SQLite). Voir [docs/backlog.md](docs/backlog.md) pour le détail à jour.
+4 agents (Paul, Martine, Camille, Jean-Claude), plan d'action piloté par Paul avec validation/réorientation par le dirigeant, discussion avec Paul depuis toutes les pages (réponse au fil de l'eau, dictée et lecture à voix haute), exécutions réelles après approbation et confirmation (site d'une page publié sur `/site/[slug]`, publication sur la Page Facebook connectée, email Gmail manuel), connexion du profil LinkedIn (sans publication), rapport, vue admin (coûts/usage, quotas par entreprise), suppression du compte, login par email + mot de passe. Fiche Google et Instagram : non connectés (démarches externes). Base de données : PostgreSQL (plus de SQLite). Voir [docs/backlog.md](docs/backlog.md) pour le détail à jour.
 
 Parcours : `/` → `/login` → `/onboarding`, puis :
 
@@ -57,7 +57,7 @@ Prérequis : Node.js, une clé API Anthropic (https://console.anthropic.com/), u
 
 Gmail manuel : voir [docs/oauth-setup.md](docs/oauth-setup.md) pour `GMAIL_OAUTH_CLIENT_ID`, `GMAIL_OAUTH_CLIENT_SECRET` et `OAUTH_TOKEN_ENCRYPTION_KEY`. Callback `/api/oauth/gmail/callback`, scopes Gmail send + identité standard, aucun accès en lecture aux emails. Sans ces variables, la connexion reste désactivée. Tests locaux : `npm run test:gmail` (aucun réseau).
 
-Test public de marque (aucune donnée créée ni appel agent) : `npm run test:brand`, avec un serveur local actif et Chromium installé. Vérifie les métadonnées, la langue, les liens de contact et les pages publiques de 320 à 1440 px.
+Test public de marque (aucune donnée créée ni appel agent) : `npm run test:brand`, avec un serveur local actif et Chromium installé. Vérifie les métadonnées, la langue, les liens de contact et les pages publiques de 320 à 1440 px. Tests unitaires de la voix et du flux de réponse de Paul (aucun réseau, aucune base) : `npm run test:voice`.
 
 Avec le serveur local actif : `npx playwright install chromium`, puis `npm run test:ux`. Tests de sécurité (cookies falsifiés, verrouillage, isolation entre entreprises) : `npm run test:security`, avec `ADMIN_EMAILS` défini côté serveur ; toute nouvelle route API doit y être déclarée.
 Les tests utilisent `DATABASE_URL` et `SESSION_SECRET` du fichier `.env`. Ils créent uniquement des entreprises fictives `ux-test-…@example.invalid`, supprimées en fin de test. Par sécurité, ils refusent toute base non locale ; `UX_TEST_ALLOW_REMOTE_DB=1` les autorise sur une base de développement distante dédiée, jamais sur celle du prototype. Les appels aux agents et la publication sont simulés ; les décisions et l'ajout au plan utilisent les vraies API. `UX_TEST_BASE_URL` permet de changer le port (défaut : `http://localhost:3000`). Captures desktop/mobile dans `test-results/` (ignoré par Git).
