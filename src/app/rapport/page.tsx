@@ -26,7 +26,7 @@ export default async function RapportPage() {
   const pendingCount = await getPendingDecisionCount(company.id);
 
   return (
-    <AppShell companyName={company.name} pendingCount={pendingCount}>
+    <AppShell companyName={company.name} companyTrade={company.trade} companyArea={company.servingArea} pendingCount={pendingCount}>
       <div className="w-full">
         <header className="flex flex-wrap items-start justify-between gap-3">
           <h1 className="text-2xl font-semibold">Résultats</h1>

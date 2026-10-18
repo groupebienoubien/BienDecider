@@ -3,19 +3,32 @@ import { Suspense } from "react";
 import { SidebarNav } from "@/components/sidebar-nav";
 import { PaulPanel } from "@/components/paul-panel";
 import { BrandLogo } from "@/components/brand-logo";
+import { WorkspaceBreadcrumb } from "@/components/workspace-breadcrumb";
 
 /** Coque commune des pages connectées : barre latérale (parcours lisible) + contenu + discussion avec Paul. */
 export function AppShell({
   companyName,
+  companyTrade,
+  companyArea,
   pendingCount = 0,
   paul = Boolean(companyName),
   children,
 }: {
   companyName?: string;
+  companyTrade?: string | null;
+  companyArea?: string | null;
   pendingCount?: number;
   paul?: boolean;
   children: React.ReactNode;
 }) {
+  const companyInitials = companyName
+    ?.split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0].toLocaleUpperCase())
+    .join("");
+  const companyDescriptor = [companyTrade, companyArea].filter(Boolean).join(" · ");
+
   return (
     <div className="app-frame flex min-h-screen bg-slate-50 font-sans text-slate-900">
       <a href="#contenu" className="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:z-50 focus:rounded focus:bg-white focus:px-3 focus:py-2 focus:text-sm focus:font-medium focus:text-indigo-800">Aller au contenu</a>
@@ -23,7 +36,13 @@ export function AppShell({
         <Link href="/dashboard" className="mb-6 block px-2 pt-2">
           <BrandLogo />
           {companyName && (
-            <span className="mt-6 block truncate border-t border-slate-200 pt-4 text-sm text-slate-600">{companyName}</span>
+            <span className="mt-6 flex min-w-0 items-center gap-3 border-t border-slate-200 pt-4">
+              <span aria-hidden="true" className="grid size-9 shrink-0 place-items-center rounded-md bg-indigo-50 text-xs font-semibold text-indigo-800">{companyInitials}</span>
+              <span className="min-w-0 text-sm text-slate-700">
+                <strong className="block truncate font-medium">{companyName}</strong>
+                {companyDescriptor && <span className="block truncate text-xs text-slate-500">{companyDescriptor}</span>}
+              </span>
+            </span>
           )}
         </Link>
         <Suspense fallback={null}><SidebarNav pendingCount={pendingCount} /></Suspense>
@@ -43,7 +62,11 @@ export function AppShell({
         <header className="workspace-heading px-4 py-3 md:px-8">
           <div className="flex flex-wrap items-center justify-between gap-3">
           <Link href="/dashboard" className="font-semibold md:hidden"><BrandLogo /></Link>
-          <div className="hidden min-w-0 md:block"><p className="truncate">{companyName || "Votre espace BienDecider"}</p></div>
+          <div className="hidden min-w-0 md:block">
+            <Suspense fallback={<p className="truncate">{companyName || "Votre espace BienDecider"}</p>}>
+              <WorkspaceBreadcrumb fallback={companyName || "Votre espace BienDecider"} />
+            </Suspense>
+          </div>
           <div className="flex items-center gap-4"><p className="hidden lg:block">Vous décidez. Votre activité avance.</p>{paul && <Suspense fallback={null}><PaulPanel inlineLauncher /></Suspense>}</div>
           <div className="flex min-w-0 items-center gap-3 md:hidden">
             {companyName && <span className="max-w-28 truncate text-xs text-slate-500">{companyName}</span>}

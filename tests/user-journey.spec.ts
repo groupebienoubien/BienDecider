@@ -864,9 +864,14 @@ test("the prospect follow-up API refuses invented progress, future contacts and 
   const day = (offset: number) => new Date(Date.now() + offset * DAY).toISOString().slice(0, 10);
   try {
     const lead = await prisma.lead.create({ data: { companyId: company.id, name: "Association A", reason: "Cible locale", stage: "a_contacter" } });
+    const otherLead = await prisma.lead.create({ data: { companyId: company.id, name: "Association C", reason: "Autre cible", stage: "a_contacter" } });
     const pending = await prisma.lead.create({ data: { companyId: company.id, name: "Association B", reason: "Cible locale", stage: "propose" } });
     const patch = (id: string, data: object) => page.request.patch(`${baseURL}/api/leads/${id}`, { data });
     await page.goto(`${baseURL}/prospection`);
+    await page.getByRole("searchbox", { name: "Rechercher un prospect" }).fill("Association A");
+    await expect(page.locator(`#lead-${lead.id}`)).toBeVisible();
+    await expect(page.locator(`#lead-${otherLead.id}`)).toHaveCount(0);
+    await page.getByRole("searchbox", { name: "Rechercher un prospect" }).clear();
 
     expect((await patch(lead.id, { stage: "gagne" })).status()).toBe(409);
     expect((await patch(lead.id, { stage: "perdu" })).status()).toBe(409);
