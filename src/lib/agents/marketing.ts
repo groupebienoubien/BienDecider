@@ -4,6 +4,7 @@ import { anthropic, AGENT_MODEL } from "@/lib/anthropic";
 import { prisma } from "@/lib/prisma";
 import { getRejectionContext, rejectedDuplicateNotice } from "@/lib/agents/rejection-context";
 import { ensureAgentProduced } from "@/lib/agents/agent-errors";
+import { facebookAuditSource } from "@/lib/facebook-audit-source";
 import { recordUsage, runToolLoop } from "@/lib/usage";
 import {
   PERSONAS,
@@ -59,6 +60,8 @@ export async function runMarketingAgent(
       toImprove: z
         .string()
         .describe("Ce qu'il faut améliorer, en 2-4 phrases factuelles et concrètes — pas de jargon marketing creux."),
+      sourceUrl: z.string().url().optional().describe("URL effectivement consultée pour étayer ce constat"),
+      sourceStatus: z.enum(["consultée", "accès limité", "indisponible"]).optional().describe("Résultat réel de consultation de la source"),
       actionItems: z
         .array(
           z.object({
@@ -67,6 +70,8 @@ export async function runMarketingAgent(
               .describe("Agent qui réaliserait cette action : marketing (fiche Google), contenu (posts/site), demarchage (prospection)"),
             title: z.string().describe("Action concrète et courte, ex: \"Mettre la carte en texte HTML\""),
             rationale: z.string().describe("Pourquoi cette action, en lien direct avec ce constat"),
+                      theme: z.enum(["Visibilité", "Conversion", "Prospection"]).describe("But principal de l'action, pas le canal ou l'agent"),
+                      priority: z.number().int().min(1).max(5).describe("Priorité de 1 (la plus urgente) à 5"),
           }),
         )
         .max(3)
@@ -83,6 +88,8 @@ export async function runMarketingAgent(
           whatWorks: input.whatWorks,
           toImprove: input.toImprove,
           actionItems: input.actionItems,
+          sourceUrl: input.sourceUrl,
+          sourceStatus: input.sourceStatus,
         },
       });
       createdFindingIds.push(finding.id);
@@ -136,6 +143,10 @@ export async function runMarketingAgent(
   const websiteInstruction = company.website
     ? `Un site web est déclaré pour cette entreprise (son URL est donnée dans le message ci-dessous, pas ici) : utilise l'outil web_fetch pour le consulter EN ENTIER (page d'accueil, horaires, menu/services, contact) avant de conclure quoi que ce soit — une lecture partielle (ex: un seul extrait trouvé via web_search) n'est jamais suffisante. Si web_fetch échoue (erreur technique, page inaccessible), n'abandonne pas : fais une recherche web_search sur le nom de l'entreprise pour retrouver son contenu autrement. Ne signale "site inaccessible" qu'après avoir réellement essayé les deux.`
     : `Aucun site web n'a été déclaré. Enregistre un constat "site_web" signalant l'absence de site comme premier axe d'amélioration, sans inventer de contenu.`;
+  const facebookUrl = facebookAuditSource(company.name, company.socialHandles);
+  const facebookInstruction = facebookUrl
+    ? `Page Facebook à auditer réellement : ${facebookUrl}. Essaie web_fetch avec cette URL exacte. Si Facebook ne révèle qu'une page de connexion ou masque les publications, crée quand même un constat reseaux_sociaux avec sourceUrl=${facebookUrl}, sourceStatus="accès limité", en disant explicitement que l'activité et la qualité des publications ne peuvent pas être confirmées depuis l'accès public. Ne remplace pas cela par un avertissement générique et n'invente aucun post, date, avis ou statistique.`
+    : "Aucune URL Facebook propre à l'entreprise n'est identifiée ; ne lui attribue pas une page trouvée par simple similarité de nom.";
 
   // Système scindé en deux blocs pour le prompt caching (cf. doc Tool Runner /
   // prompt caching) : le bloc stable (persona, profil entreprise, règles) ne
@@ -156,6 +167,7 @@ Ton rôle a deux volets, à faire tous les deux sauf si un brief ci-dessous te d
 Règles strictes :
 - Tu ne produis PAS de contenu créatif (posts réseaux sociaux, contenu de site) — c'est le rôle de ${PERSONAS.contenu.name}, qui s'appuiera sur tes constats.
 - ${websiteInstruction}
+- ${facebookInstruction}
 - Si le site est inaccessible, signale-le comme un constat factuel, ne devine jamais son contenu.
 - Utilise web_search pour identifier des concurrents réels (ex: "${company.trade} ${company.servingArea}") — cite tes sources, n'invente jamais de concurrent.
 - Tu ne fais QUE proposer/constater, jamais exécuter directement.
@@ -182,9 +194,11 @@ Règles strictes :
     messages: [
       {
         role: "user",
-        content: company.website
-          ? `Fais le point sur la présence en ligne de cette entreprise et pilote sa fiche Google.\n\nSite web à consulter avec web_fetch : ${company.website}`
-          : "Fais le point sur la présence en ligne de cette entreprise et pilote sa fiche Google.",
+        content: [
+          "Fais le point sur la présence en ligne de cette entreprise et pilote sa fiche Google.",
+          company.website ? `Site web à consulter avec web_fetch : ${company.website}` : null,
+          facebookUrl ? `Page Facebook à consulter avec web_fetch : ${facebookUrl}` : null,
+        ].filter(Boolean).join("\n\n"),
       },
     ],
   }));

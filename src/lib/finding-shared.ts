@@ -13,6 +13,8 @@ export type FindingActionItem = {
   agent: FindingActionAgent;
   title: string;
   rationale: string;
+  theme?: "Visibilité" | "Conversion" | "Prospection";
+  priority?: number;
 };
 
 /** Parsing défensif : une colonne Json n'est pas vérifiée par Prisma à la lecture. */

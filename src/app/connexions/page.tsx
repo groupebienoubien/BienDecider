@@ -78,7 +78,7 @@ export default async function ConnexionsPage({
 
   return (
     <AppShell companyName={company.name} pendingCount={pendingCount}>
-      <div className="mx-auto max-w-2xl">
+      <div className="w-full">
         <h1 className="text-2xl font-semibold">Connexions</h1>
         <CompanySections active="connexions" />
         <p className="mt-2 text-sm text-gray-600">

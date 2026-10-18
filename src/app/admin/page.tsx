@@ -98,7 +98,7 @@ export default async function AdminPage() {
 
   return (
     <AppShell>
-      <div className="mx-auto max-w-6xl">
+      <div className="w-full">
         <h1 className="text-2xl font-semibold">Administration</h1>
         <p className="mt-1 text-sm text-slate-500">
           Accès réservé — {usageByCompany.length === 0 ? "aucun usage mesuré encore" : `${totals._count._all} appel(s) modèle au total`}.

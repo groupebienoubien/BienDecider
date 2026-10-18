@@ -4,7 +4,7 @@ import { z } from "zod";
 import { AgentRunQuotaError, enqueueDirectRun } from "@/lib/agent-runs";
 import { getSessionCompany } from "@/lib/session";
 
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 const requestSchema = z.object({ prospectDescription: z.string().max(4000).optional(), requestId: z.string().uuid().optional() }).strict();
 

@@ -13,7 +13,7 @@ export default async function DelegationRiskPage() {
   const authorized = isExplicitAdminEmail(email);
   return (
     <AppShell>
-      <div className="mx-auto max-w-4xl">
+      <div className="w-full">
         <header className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-200 pb-5">
           <div>
             <p className="text-xs font-medium uppercase text-slate-500">Administration · Gouvernance</p>

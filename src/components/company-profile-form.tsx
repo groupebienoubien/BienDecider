@@ -152,7 +152,7 @@ export function CompanyProfileForm({ guided = false, initialTab = "informations"
 
   return (
     <AppShell paul={!guided} companyName={guided ? undefined : name}>
-      <div className="mx-auto max-w-3xl">
+      <div className="w-full">
         <h1 className="text-2xl font-semibold">
           {guided ? "Parlez-nous de votre activité" : "Mon entreprise"}
         </h1>

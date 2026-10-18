@@ -23,7 +23,7 @@ export default async function DashboardPage({ searchParams }: {
   const [planItems, recentAgentRuns, proposals, leads, diagnosticCount, riskSettings, facebookConnection] = await Promise.all([
     prisma.actionPlanItem.findMany({
       where: { companyId: company.id },
-      orderBy: { createdAt: "asc" },
+      orderBy: [{ priority: "asc" }, { createdAt: "asc" }],
       include: {
         proposals: { orderBy: { createdAt: "desc" } },
         agentRuns: { orderBy: { createdAt: "desc" }, take: 1, select: { id: true, agent: true, planItemId: true, status: true, attempts: true, maxDurationSeconds: true, queuedAt: true, startedAt: true, finishedAt: true, resultCount: true, errorMessage: true } },

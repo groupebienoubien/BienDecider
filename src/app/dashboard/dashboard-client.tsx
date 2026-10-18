@@ -17,6 +17,7 @@ import { describeProgress, summarizeProposals } from "@/lib/proposal-progress";
 import { countByFilter, FILTER_LABELS, groupQueue, type QueueFilter } from "@/lib/validation-queue";
 import { needsAttention } from "@/lib/pending-decisions";
 import { openPaul } from "@/lib/paul-context";
+import { groupPlanItems } from "@/lib/action-plan-view";
 
 type PlanItemWithProposals = ActionPlanItem & { proposals: AgentProposal[]; agentRuns: AgentRunView[] };
 type View = "today" | "plan" | "validation" | "historique";
@@ -225,6 +226,7 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
   }
 
   const activeItems = planItems.filter((item) => item.status !== "ecarte" && item.status !== "termine");
+  const planGroups = groupPlanItems(activeItems);
   const closedItems = planItems.filter((item) => item.status === "ecarte" || item.status === "termine");
   const actionable = proposals.filter((proposal) => needsAttention(proposal, facebookPageName));
   const validationItems = proposals.filter((proposal) => needsAttention(proposal, facebookPageName) || decidedIds.includes(proposal.id));
@@ -239,7 +241,7 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
   const locked = busyId !== null || planLoading;
 
   return (
-    <div className="mx-auto max-w-5xl">
+    <div className="w-full">
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <p className="mb-2 text-xs font-semibold uppercase text-indigo-700">{company.name}</p>
@@ -304,17 +306,6 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
       {error && <p role="alert" className="mt-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}
       {notice && <p role="status" className="mt-4 rounded-lg bg-emerald-50 p-3 text-sm text-emerald-800">{notice}</p>}
       <AgentRunTracker runs={agentRuns} onCheck={(runId) => void checkRun(runId)} onRetry={() => void handleRetryPlanGeneration()} retryDisabled={planLoading} />
-      {initialView !== "today" && <nav aria-label="Actions" className="mt-6 flex flex-wrap gap-x-6 border-b border-slate-200">
-        {([
-          ["plan", "Plan d'action", activeItems.length],
-          ["validation", "À valider", actionable.length],
-          ["historique", "Historique", history.length],
-        ] as const).map(([view, label, count]) => (
-          <Link key={view} href={`/dashboard?view=${view}`} aria-current={initialView === view ? "page" : undefined} className={`border-b-2 py-3 text-sm font-medium ${initialView === view ? "border-indigo-600 text-indigo-700" : "border-transparent text-slate-500 hover:text-slate-900"}`}>
-            {label} <span className="ml-1 text-xs">{count}</span>
-          </Link>
-        ))}
-      </nav>}
       {initialView === "plan" && (
         <section id="plan-actions" className="py-5" aria-label="Plan d'action">
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
@@ -326,8 +317,10 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
             <p className="mt-2 max-w-prose text-sm text-slate-600">Aucune action à lancer pour le moment. Le plan rassemble les priorités proposées par Paul ; vous choisissez celles à confier à l&apos;équipe.</p>
             {needsFirstDiagnostic ? <Link href="/diagnostic" className="mt-3 inline-block text-sm font-medium text-indigo-600 underline">Commencer par le diagnostic</Link> : <p className="mt-3 text-sm text-slate-500">Préparez le plan avec Paul pour obtenir de nouvelles propositions. Aucune action externe ne sera exécutée à cette étape.</p>}
           </div>}
-          <ol className="divide-y divide-slate-200">
-            {activeItems.map((item, index) => {
+          {planGroups.map(({ theme, items }) => <section key={theme} className="mt-5" aria-label={`Thème ${theme}`}>
+            <h3 className="border-b border-slate-200 pb-2 text-sm font-semibold text-slate-700">{theme}</h3>
+            <ol className="divide-y divide-slate-200">
+            {items.map((item) => {
               const persona = PERSONAS[item.agent as AgentKey];
               const count = proposals.filter((proposal) => proposal.planItemId === item.id && needsAttention(proposal, facebookPageName)).length;
               const progress = summarizeProposals(proposals.filter((proposal) => proposal.planItemId === item.id));
@@ -335,11 +328,10 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
               return (
                 <li key={item.id} className="py-5">
                   <div className="flex flex-wrap items-start gap-3">
-                    <span className="pt-1 text-sm text-slate-600">{index + 1}.</span>
+                    <span className="pt-1 text-sm text-slate-600">P{item.priority ?? "–"}</span>
                     <PersonaAvatar agentKey={item.agent as AgentKey} size={32} />
                     <div className="min-w-0 flex-1 basis-40">
                       <p className="text-xs text-slate-500">{persona?.name ?? item.agent} · {item.timing}</p>
-                      <span className="mt-2 inline-block rounded bg-indigo-50 px-2 py-1 text-xs font-medium text-indigo-800">{item.agent === "marketing" ? "Marketing & visibilité" : item.agent === "demarchage" ? "Prospection" : "Contenus & site"}</span>
                       <h3 className="mt-1 font-medium">{item.title}</h3>
                       <p className="mt-2 max-w-2xl text-sm text-slate-600">{item.rationale}</p>
                       {progressParts.length > 0 && <p className="mt-2 text-xs text-slate-600">Avancement : {progressParts.join(" · ")}.</p>}
@@ -369,6 +361,7 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
               );
             })}
           </ol>
+          </section>)}
           {closedItems.length > 0 && <Link href="/dashboard?view=historique" className="mt-4 inline-block text-sm text-slate-500 underline">{closedItems.length} action(s) traitée(s) ou écartée(s)</Link>}
         </section>
       )}

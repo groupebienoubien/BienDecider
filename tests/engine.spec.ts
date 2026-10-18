@@ -362,9 +362,9 @@ test("a request made in the chat becomes a plan action that can only be launched
   expect(statusAfterRun(2)).toBe("lance");
   expect(statusAfterRun(0)).toBe("termine");
 
-  const item = await createChatPlanItem(company.id, "contenu", "  Trois posts sur les chantiers  ", " Demande du dirigeant : montrer les réalisations récentes. ");
+  const item = await createChatPlanItem(company.id, "contenu", "  Trois posts sur les chantiers  ", " Demande du dirigeant : montrer les réalisations récentes. ", "Visibilité", 2);
   expect(item).toMatchObject({
-    companyId: company.id, agent: "contenu", status: "propose", timing: CHAT_REQUEST_TIMING,
+    companyId: company.id, agent: "contenu", status: "propose", timing: CHAT_REQUEST_TIMING, theme: "Visibilité", priority: 2,
     title: "Trois posts sur les chantiers", rationale: "Demande du dirigeant : montrer les réalisations récentes.",
   });
   // Les productions de l'agent sont rattachées à l'action par planItemId, comme pour une action du plan de Paul.

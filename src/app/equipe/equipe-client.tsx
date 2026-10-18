@@ -72,7 +72,7 @@ export function EquipeClient({ initialAgentRuns }: { initialAgentRuns: AgentRunV
   }
 
   return (
-    <div className="mx-auto max-w-4xl">
+    <div className="w-full">
       <header className="flex flex-wrap items-start justify-between gap-3">
         <h1 className="text-2xl font-semibold">Équipe</h1>
         <Link href="/dashboard" className="text-sm font-medium text-indigo-600 underline">Voir le plan d&apos;action</Link>

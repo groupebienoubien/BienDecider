@@ -161,6 +161,8 @@ model ActionPlanItem {
   title       String
   rationale   String
   timing      String // ex: "cette semaine", "aujourd'hui"
+  theme       String?
+  priority    Int?
   status      String   @default("propose") // propose, en_cours, lance, termine, ecarte
   feedback    String? // raison donnée par le dirigeant quand il écarte l'action — relue par Paul au plan suivant
   createdAt   DateTime @default(now())
@@ -181,7 +183,7 @@ model AgentRun {
   status             String         @default("queued")
   attempts           Int            @default(0)
   reservedCostUsd    Float          @default(1)
-  maxDurationSeconds Int            @default(60)
+  maxDurationSeconds Int            @default(300)
   queuedAt           DateTime       @default(now())
   startedAt          DateTime?
   finishedAt         DateTime?
@@ -237,6 +239,8 @@ model AuditFinding {
   whatWorks   String? // "Ce qui est bien"
   toImprove   String? // "Ce qu'il faut améliorer"
   actionItems Json? // Plan d'action suggéré, potentiellement exécutable par Pepito : { agent, title, rationale }[]
+  sourceUrl   String?
+  sourceStatus String?
   agentRunId  String?
   agentRun    AgentRun? @relation(fields: [agentRunId], references: [id], onDelete: SetNull)
   createdAt   DateTime @default(now())

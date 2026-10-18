@@ -60,7 +60,7 @@ export function AppShell({
             <form action="/api/auth/logout" method="post" className="px-3 py-4"><button className="min-h-11 text-sm text-slate-700">Déconnexion</button></form>
           </details>
         </header>
-        <main id="contenu" tabIndex={-1} className="mx-auto max-w-6xl break-words p-4 pb-24 focus:outline-none sm:p-6 sm:pb-24 md:p-8 md:pb-24">{children}</main>
+        <main id="contenu" tabIndex={-1} className="mx-auto w-full max-w-6xl break-words p-4 pb-24 focus:outline-none sm:p-6 sm:pb-24 md:p-8 md:pb-24">{children}</main>
       </div>
     </div>
   );

@@ -34,7 +34,7 @@ export function DiagnosticClient({ initialFindings }: { initialFindings: AuditFi
   }
 
   return (
-    <div className="mx-auto max-w-4xl">
+    <div className="w-full">
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div><h1 className="text-2xl font-semibold">Diagnostic</h1><p className="mt-1 text-sm text-slate-500">Visibilité, site et positionnement concurrentiel</p></div>
         {findings.length > 0 && <Link href="/dashboard" className="text-sm font-medium text-indigo-600 underline">Passer au plan d&apos;action</Link>}

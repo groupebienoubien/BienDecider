@@ -22,7 +22,7 @@ export default async function AccountPage({ searchParams }: { searchParams: Prom
     _count: true,
   }) : null;
   return <AppShell companyName={company.name} pendingCount={pendingCount}>
-    <div className="mx-auto max-w-3xl">
+    <div className="w-full">
       <h1 className="text-2xl font-semibold">Mon compte</h1>
       <p className="mt-2 text-sm text-slate-600">Vos accès, votre consommation et vos données.</p>
       <nav className="section-tabs" aria-label="Rubriques de mon compte">

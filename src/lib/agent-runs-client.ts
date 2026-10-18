@@ -12,7 +12,7 @@ export async function waitForAgentRun(
   onUpdate: (run: AgentRunView) => void,
   signal?: AbortSignal,
 ): Promise<AgentRunView | null> {
-  for (let attempt = 0; attempt < 75; attempt++) {
+  for (let attempt = 0; attempt < 270; attempt++) {
     if (signal?.aborted) return null;
     let run: AgentRunView;
     try {

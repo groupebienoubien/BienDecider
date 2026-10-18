@@ -9,6 +9,7 @@ import { agentFailureMessage } from "@/lib/agents/agent-errors";
 import { PERSONAS, objectiveLine, directionLine, companyProfileLines } from "@/lib/agents/personas";
 import { enqueuePlanRun } from "@/lib/agent-runs";
 import { createChatPlanItem, findLaunchablePlanItem, type PlanAgent } from "@/lib/agents/plan-items";
+import { PLAN_THEMES, type PlanTheme } from "@/lib/plan-themes";
 import { recordUsage, runStreamingToolLoop, runToolLoop } from "@/lib/usage";
 import { getFunnelStats, funnelLines } from "@/lib/funnel";
 import { CAPABILITY_CATALOG, recordUncoveredRequest } from "@/lib/agents/capabilities";
@@ -133,6 +134,8 @@ export async function runCoCeoTurn(
   const planActionFields = {
     actionTitle: z.string().describe("Titre court et concret de l'action demandée, tel qu'il apparaîtra dans le plan, ex: 'Trois posts sur les chantiers terminés'"),
     brief: z.string().describe("Ce que le dirigeant a demandé et pourquoi, en une ou deux phrases : c'est la consigne que l'agent devra réaliser"),
+    theme: z.enum(PLAN_THEMES).describe("But principal : Visibilité, Conversion ou Prospection ; ne pas utiliser le nom de l'agent ou du canal"),
+    priority: z.number().int().min(1).max(5).describe("Priorité de 1 (la plus urgente) à 5"),
     planItemId: z
       .string()
       .optional()
@@ -141,13 +144,13 @@ export async function runCoCeoTurn(
 
   async function delegateThroughPlan(
     agent: PlanAgent,
-    input: { actionTitle: string; brief: string; planItemId?: string },
+    input: { actionTitle: string; brief: string; theme: PlanTheme; priority: number; planItemId?: string },
     extras: { newsContext?: string; prospectDescription?: string } = {},
   ) {
     const agentName = PERSONAS[agent].name;
     const item = input.planItemId
       ? await findLaunchablePlanItem(companyId, agent, input.planItemId)
-      : await createChatPlanItem(companyId, agent, input.actionTitle, input.brief);
+      : await createChatPlanItem(companyId, agent, input.actionTitle, input.brief, input.theme, input.priority);
     if (!item) {
       return `ÉCHEC, rien n'a été lancé : aucune action à lancer avec cet identifiant pour ${agentName}. Relis le plan avec get_current_status.`;
     }
@@ -307,6 +310,8 @@ export async function runCoCeoPlanning(companyId: string, agentRunId?: string) {
         .string()
         .describe("Pourquoi cette action, en lien avec l'objectif business du dirigeant"),
       timing: z.string().describe("Quand, en langage naturel : 'aujourd'hui', 'cette semaine', 'dès que le site est en ligne'"),
+      theme: z.enum(PLAN_THEMES).describe("But principal : Visibilité, Conversion ou Prospection ; agent et canal ne sont pas des thèmes"),
+      priority: z.number().int().min(1).max(5).describe("Priorité de 1 (la plus urgente) à 5"),
     }),
     run: async (input) => {
       const item = await prisma.actionPlanItem.create({
@@ -316,6 +321,8 @@ export async function runCoCeoPlanning(companyId: string, agentRunId?: string) {
           title: input.title,
           rationale: input.rationale,
           timing: input.timing,
+          theme: input.theme,
+          priority: input.priority,
         },
       });
       createdItemIds.push(item.id);
@@ -336,6 +343,7 @@ ${directionLine(company.direction)}
 Ta tâche : propose un plan priorisé de 3 à 5 actions concrètes via propose_plan_item, chacune rattachée à un agent (${PERSONAS.marketing.name}/marketing pour audit-positionnement-fiche Google, ${PERSONAS.contenu.name}/contenu pour posts et site web, ${PERSONAS.demarchage.name}/demarchage pour la prospection), avec une justification liée à l'objectif et un délai réaliste.
 Règles :
 - Chaque action doit faire avancer l'objectif de façon mesurable — dis dans la justification QUEL effet attendu (appels, devis, avis, visibilité).
+- Classe chaque action par but principal parmi Visibilité, Conversion et Prospection (jamais par agent ou canal) et donne une priorité de 1 (la plus urgente) à 5, cohérente avec l'objectif et le diagnostic.
 - Une action = un brief exécutable par l'agent tel quel : précis sur le quoi (ex: "3 posts sur les chantiers terminés avec photos avant/après"), pas vague ("améliorer la com").
 - Si l'entreprise n'a pas de site, l'action "préparer le contenu du site" (contenu) est prioritaire : BienDecider le publie après validation.
 - Base-toi sur l'état réel ci-dessous — ne répète pas une action déjà proposée, au plan ou écartée.
