@@ -43,6 +43,9 @@ Ouvre ensuite la pull request sur GitHub. Le modèle se remplit tout seul : indi
 |---|---|---|
 | `npm run test:gmail` | Envoi Gmail : périmètre, chiffrement, format | Rien |
 | `npm run test:delegation` | Règles de risque des actions | Rien |
+| `npm run test:voice` | Dictée, lecture à voix haute et flux de réponse de Paul (fonctions pures) | Rien |
+| `npm run test:session` | Jeton de session signé, expiration | Rien |
+| `npm run test:database-url` | Résolution de l'URL de base de données | Rien |
 | `npm run test:brand` | Pages publiques, de 320 à 1440 px | Serveur local démarré |
 | `npm run test:ux` | Parcours connectés | Serveur local et base locale |
 | `npm run test:engine` | Ce que Paul et les agents lisent et écrivent autour des appels au modèle | Base locale |

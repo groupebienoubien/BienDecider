@@ -4,28 +4,29 @@ Le backlog est réparti en douze domaines fonctionnels. Chaque US porte un label
 
 ## Carte des domaines
 
-État du catalogue [github-backlog.json](github-backlog.json) au 2026-10-10 : 121 US.
+État des Issues `type:us` au 2026-10-18 : 143 US, dont 119 ouvertes et 24 fermées. Les colonnes P0 à P3 comptent les US ouvertes ; le catalogue initial [github-backlog.json](github-backlog.json) comptait 121 US au 2026-10-10, auxquelles se sont ajoutées celles de l'audit UX du 14 octobre et d'autres Issues libres.
 
-| Domaine | Label | Périmètre | US | P0 | P1 | P2 | P3 |
-|---|---|---|---|---|---|---|---|
-| Dirigeant | `domaine:dirigeant` | Compte, objectif, tableau de bord, validation | 5 | 0 | 5 | 0 | 0 |
-| Moteur et agents | `domaine:moteur` | Paul et les agents, de comprendre à arbitrer | 10 | 0 | 5 | 4 | 1 |
-| Délégation et garde-fous | `domaine:delegation` | Niveaux, budget, autorisations, risque, transparence | 10 | 0 | 7 | 3 | 0 |
-| Connecteurs | `domaine:connecteurs` | Gmail, Google, Meta, site : ce qui exécute | 14 | 0 | 13 | 1 | 0 |
-| Mesure | `domaine:mesure` | Résultats, bilan, apprentissage | 8 | 0 | 2 | 6 | 0 |
-| Monétisation | `domaine:monetisation` | Prix, crédits, paiement, facturation | 8 | 0 | 5 | 3 | 0 |
-| Sécurité et conformité | `domaine:securite` | Accès, sessions, données personnelles, légal | 10 | 4 | 5 | 1 | 0 |
-| Administration BienDecider | `domaine:admin` | Back-office, quotas, support, pilote | 7 | 1 | 3 | 3 | 0 |
-| Plateforme technique | `domaine:plateforme` | Fiabilité, base de données, tests, documentation | 10 | 3 | 3 | 4 | 0 |
-| Marque | `domaine:marque` | Landing, domaine, logo, tarifs | 6 | 0 | 1 | 5 | 0 |
-| Expérience utilisateur | `domaine:ux` | Clarté du parcours, attente, mobile, accessibilité, cohérence visuelle | 18 | 0 | 6 | 11 | 1 |
-| Entreprise | `domaine:entreprise` | Démarches des pères fondateurs : société BienOuBien, banque, contrats, assurances | 15 | 5 | 3 | 6 | 1 |
+| Domaine | Label | Périmètre | Ouvertes | P0 | P1 | P2 | P3 | Fermées |
+|---|---|---|---|---|---|---|---|---|
+| Dirigeant | `domaine:dirigeant` | Compte, objectif, tableau de bord, validation | 4 | 0 | 4 | 0 | 0 | 2 |
+| Moteur et agents | `domaine:moteur` | Paul et les agents, de comprendre à arbitrer | 6 | 0 | 4 | 1 | 1 | 6 |
+| Délégation et garde-fous | `domaine:delegation` | Niveaux, budget, autorisations, risque, transparence | 11 | 0 | 8 | 3 | 0 | 0 |
+| Connecteurs | `domaine:connecteurs` | Gmail, Google, Meta, site : ce qui exécute | 11 | 0 | 7 | 4 | 0 | 0 |
+| Mesure | `domaine:mesure` | Résultats, bilan, apprentissage | 6 | 0 | 2 | 4 | 0 | 0 |
+| Monétisation | `domaine:monetisation` | Prix, crédits, paiement, facturation | 8 | 0 | 5 | 3 | 0 | 0 |
+| Sécurité et conformité | `domaine:securite` | Accès, sessions, données personnelles, légal | 4 | 1 | 1 | 2 | 0 | 4 |
+| Administration BienDecider | `domaine:admin` | Back-office, quotas, support, pilote | 5 | 0 | 2 | 3 | 0 | 1 |
+| Plateforme technique | `domaine:plateforme` | Fiabilité, base de données, tests, documentation | 7 | 1 | 2 | 4 | 0 | 2 |
+| Marque | `domaine:marque` | Landing, domaine, logo, tarifs | 4 | 0 | 0 | 4 | 0 | 0 |
+| Expérience utilisateur | `domaine:ux` | Clarté du parcours, attente, mobile, accessibilité, cohérence visuelle | 22 | 0 | 7 | 13 | 2 | 7 |
+| Entreprise | `domaine:entreprise` | Démarches des pères fondateurs : société BienOuBien, banque, contrats, assurances | 15 | 5 | 3 | 6 | 1 | 0 |
+| Sans label de domaine | — | US du catalogue initial (#1 à #18) à classer par les responsables | 16 | 1 | 11 | 4 | 0 | 2 |
 
 Vue par domaine : `https://github.com/groupebienoubien/BienDecider/issues?q=is%3Aissue%20is%3Aopen%20label%3Adomaine%3Amoteur` (remplacer `moteur` par le domaine voulu).
 
 ## Focus actuel : délégation P1
 
-État vérifié dans les Issues ouvertes le **2026-10-10** : [7 US `domaine:delegation` en P1](https://github.com/groupebienoubien/BienDecider/issues?q=is%3Aissue%20is%3Aopen%20label%3Adomaine%3Adelegation%20label%3Apriority%3Ap1), 3 US en P2. Les priorités sont déjà correctement étiquetées ; ne pas promouvoir automatiquement les P2.
+État vérifié dans les Issues ouvertes le **2026-10-18** : [8 US `domaine:delegation` en P1](https://github.com/groupebienoubien/BienDecider/issues?q=is%3Aissue%20is%3Aopen%20label%3Adomaine%3Adelegation%20label%3Apriority%3Ap1) (les sept du 2026-10-10 et #179, issue de l'audit UX), 3 US en P2. Aucune n'est fermée ; #39 et #179 sont `status:in-progress`, les autres `status:backlog`. Les priorités sont déjà correctement étiquetées ; ne pas promouvoir automatiquement les P2.
 
 **Attention au vocabulaire :** ce domaine concerne l'autonomie de BienDecider dans les actions des entreprises. Ce n'est pas la délégation de revue des PR aux développeurs après 4 secondes, documentée dans [ci-cd.md](ci-cd.md).
 
@@ -58,16 +59,16 @@ Implémentation : [src/lib/delegation-risk.ts](../src/lib/delegation-risk.ts), p
 
 ## Trajectoire cible
 
-Promesse : *vous fixez l'objectif, l'IA trouve comment agir, vous gardez le contrôle.* Le moteur enchaîne sept étapes. Le tableau situe le code du 2026-10-09 face à cette cible.
+Promesse : *vous fixez l'objectif, l'IA trouve comment agir, vous gardez le contrôle.* Le moteur enchaîne sept étapes. Le tableau situe le code du 2026-10-09 face à cette cible ; les lignes Comprendre et Exécuter ont été mises à jour le 2026-10-18.
 
 | Étape | Aujourd'hui | Écart | Domaine |
 |---|---|---|---|
-| Comprendre | Formulaire d'onboarding | Pas d'objectif exprimé en langage naturel | `dirigeant`, `ux` |
+| Comprendre | Formulaire d'onboarding ; une phrase libre préremplit le profil pour confirmation | Recette de #20 à faire | `dirigeant`, `ux` |
 | Diagnostiquer | Martine, page Diagnostic | Couvert | `moteur` |
 | Planifier | Plan de Paul | Ni coût estimé ni impact attendu par action | `moteur`, `monetisation` |
 | Arbitrer | Rien | Une seule action proposée, pas d'options ni de critères | `moteur` |
 | Déléguer | Tout est validé à la main | Un seul niveau sur trois ; pas de budget, d'autorisations ni d'évaluation du risque | `delegation` |
-| Exécuter | Site, email Gmail manuel | Fiche Google et Meta bloqués ; publicité et administratif à cadrer | `connecteurs` |
+| Exécuter | Site, email Gmail manuel, publication sur la Page Facebook connectée | Fiche Google, Instagram et publication LinkedIn non disponibles ; publicité et administratif à cadrer | `connecteurs` |
 | Mesurer | Suivi des prospects, objectif chiffré | Rien sur les posts, le site, la fiche Google | `mesure` |
 | Adapter | Paul lit le suivi des prospects | Pas de proposition de réorientation | `mesure`, `moteur` |
 
