@@ -109,6 +109,12 @@ export default function ConfidentialitePage() {
             <strong>Vercel</strong> (hébergement de l&apos;application et de la base de données).
           </li>
           <li>
+            <strong>Votre navigateur</strong> : si vous utilisez la dictée vocale, l&apos;audio est traité
+            par le service de reconnaissance vocale de votre navigateur (par exemple Google pour Chrome),
+            pas par BienDecider ; seul le texte reconnu nous est transmis, quand vous l&apos;envoyez.
+            La lecture à voix haute utilise la voix de votre appareil.
+          </li>
+          <li>
             <strong>Google / Meta</strong> : uniquement si vous connectez explicitement un compte,
             et uniquement pour les actions que vous autorisez.
           </li>

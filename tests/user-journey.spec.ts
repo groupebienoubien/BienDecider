@@ -921,6 +921,77 @@ test("Paul is reachable from any page, keeps the conversation and the draft, and
   }
 });
 
+test("Paul answers as a stream with Enter to send, and a hands-free voice exchange reads the reply then stops after silence", async ({ page, company }) => {
+  expect(company.ownerEmail).toContain("@");
+  await page.addInitScript(() => {
+    const spoken: string[] = [];
+    let heard = 0;
+    Object.assign(window, { __spoken: spoken });
+    class FakeRecognition {
+      onresult: ((event: unknown) => void) | null = null;
+      onerror: ((event: { error: string }) => void) | null = null;
+      onend: (() => void) | null = null;
+      start() {
+        setTimeout(() => {
+          if (heard++ === 0) this.onresult?.({ results: [Object.assign([{ transcript: "Où en est mon plan" }], { isFinal: true })] });
+          else this.onerror?.({ error: "no-speech" });
+          this.onend?.();
+        }, 30);
+      }
+      stop() {}
+      abort() {}
+    }
+    Object.assign(window, { SpeechRecognition: FakeRecognition, webkitSpeechRecognition: FakeRecognition });
+    class FakeUtterance { onend: (() => void) | null = null; onerror: (() => void) | null = null; text: string; constructor(text: string) { this.text = text; } }
+    Object.assign(window, { SpeechSynthesisUtterance: FakeUtterance });
+    Object.defineProperty(window, "speechSynthesis", {
+      configurable: true,
+      value: { cancel() {}, speak(utterance: FakeUtterance) { spoken.push(utterance.text); setTimeout(() => utterance.onend?.(), 20); } },
+    });
+  });
+  const sent: Array<{ message: string }> = [];
+  await page.route("**/api/co-ceo/message", async (route) => {
+    sent.push(route.request().postDataJSON());
+    const reply = `Réponse ${sent.length}.`;
+    expect(route.request().headers().accept).toContain("application/x-ndjson");
+    await route.fulfill({
+      status: 200,
+      contentType: "application/x-ndjson; charset=utf-8",
+      body: [
+        { type: "delta", text: "Réponse " },
+        { type: "reset" },
+        { type: "delta", text: `Réponse ${sent.length}. [[bd:proposal:abc` },
+        { type: "done", reply, references: [] },
+      ].map((event) => `${JSON.stringify(event)}\n`).join(""),
+    });
+  });
+
+  await page.goto(`${baseURL}/dashboard`);
+  await page.getByRole("button", { name: "Parler à Paul" }).click();
+  const panel = page.getByRole("dialog", { name: "Discussion avec Paul" });
+  const input = panel.getByLabel("Message à Paul");
+  await input.fill("Bonjour, on commence ?");
+  await input.press("Enter");
+  await expect(panel.getByText("Bonjour, on commence ?")).toBeVisible();
+  await expect(panel.getByText("Réponse 1.")).toBeVisible();
+  await expect(input).toHaveValue("");
+  expect(await panel.getByText(/\[\[bd/).count()).toBe(0);
+  await input.fill("Ligne 1");
+  await input.press("Shift+Enter");
+  await expect(input).toHaveValue("Ligne 1\n");
+  expect(sent).toHaveLength(1);
+  await input.fill("");
+
+  await panel.getByRole("button", { name: "Échange vocal" }).click();
+  await expect(panel.getByText("Où en est mon plan")).toBeVisible();
+  await expect(panel.getByText("Réponse 2.")).toBeVisible();
+  expect(sent[1].message).toBe("Où en est mon plan");
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __spoken: string[] }).__spoken)).toEqual(["Réponse 2."]);
+  await expect(panel.getByText("Échange vocal arrêté : je n'ai rien entendu.")).toBeVisible();
+  await expect(panel.getByRole("button", { name: "Échange vocal" })).toBeVisible();
+  expect(sent).toHaveLength(2);
+});
+
 test("a running agent shows indicative steps, is followed again after leaving the page, and its end is announced", async ({ page, company }) => {
   const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }) });
   try {
