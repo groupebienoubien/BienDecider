@@ -2,52 +2,64 @@
 
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
+import { Icon, type IconName } from "@/components/icon";
 
-const ITEMS = [
-  { href: "/dashboard", label: "À décider", group: "Mon activité" },
-  { href: "/diagnostic", label: "Diagnostic", group: "Mon activité" },
-  { href: "/dashboard?view=plan", label: "Plan d’action", group: "Mon activité" },
-  { href: "/dashboard?view=validation", label: "Productions", group: "Mon activité", pending: true },
-  { href: "/prospection", label: "Prospection", group: "Mon activité" },
-  { href: "/dashboard?view=historique", label: "Historique", group: "Mon activité" },
-  { href: "/rapport", label: "Résultats", group: "Mon activité" },
-  { href: "/entreprise", label: "Mon entreprise", group: "Organisation" },
-  { href: "/compte", label: "Mon compte", group: "Organisation" },
-  { href: "/admin", label: "Administration", group: "Organisation" },
+const ITEMS: { href: string; label: string; icon: IconName; counter?: boolean }[] = [
+  { href: "/dashboard", label: "À décider", icon: "inbox", counter: true },
+  { href: "/diagnostic", label: "Diagnostic", icon: "scan-line" },
+  { href: "/dashboard?view=plan", label: "Plan d’action", icon: "list-ordered" },
+  { href: "/dashboard?view=validation", label: "Productions", icon: "panels-top-left" },
+  { href: "/prospection", label: "Prospection", icon: "contact-round" },
+  { href: "/dashboard?view=historique", label: "Historique", icon: "history" },
 ];
 
-export function SidebarNav({ pendingCount = 0 }: { pendingCount?: number }) {
+const SETTINGS: { href: string; label: string; icon: IconName; paths: string[] }[] = [
+  { href: "/entreprise", label: "Mon entreprise", icon: "settings-2", paths: ["/entreprise", "/equipe", "/connexions"] },
+  { href: "/compte", label: "Mon compte", icon: "circle-user-round", paths: ["/compte"] },
+  { href: "/admin", label: "Administration", icon: "shield-check", paths: ["/admin"] },
+];
+
+/** Navigation principale de la maquette : six étapes du parcours, le compteur indique les décisions attendues. */
+export function SidebarNav({ decisionCount = 0 }: { decisionCount?: number }) {
   const pathname = usePathname();
-  const searchParams = useSearchParams();
+  const view = useSearchParams().get("view") ?? "";
   return (
-    <nav aria-label="Navigation principale" className="flex flex-col gap-1">
-      {ITEMS.map((item, index) => {
+    <nav aria-label="Navigation principale">
+      {ITEMS.map((item) => {
         const [itemPath, query] = item.href.split("?");
+        const itemView = new URLSearchParams(query).get("view") ?? "";
         const active = itemPath === "/dashboard"
-          ? pathname === itemPath && (searchParams.get("view") ?? "") === (new URLSearchParams(query).get("view") ?? "")
-          : itemPath === "/entreprise"
-            ? ["/entreprise", "/equipe", "/connexions"].includes(pathname)
-            : pathname === itemPath || pathname.startsWith(itemPath + "/");
+          ? pathname === itemPath && view === itemView
+          : pathname === itemPath || pathname.startsWith(itemPath + "/");
+        const current = active || (item.label === "Historique" && pathname === "/rapport");
         return (
-          <div key={item.href}>
-          {(index === 0 || ITEMS[index - 1].group !== item.group) && <p className="px-3 pb-2 pt-5 text-xs font-medium uppercase tracking-wide text-slate-600">{item.group}</p>}
-          <Link
-            href={item.href}
-            aria-current={active ? "page" : undefined}
-            className={`block min-h-11 rounded-lg px-3 py-2.5 text-sm transition ${
-              active
-                ? "bg-indigo-600 text-white"
-                : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
-            }`}
-          >
-            <span className="block font-medium">
-              {item.label}
-              {"pending" in item && pendingCount > 0 && <>{" "}<span className={`ml-1 rounded-full px-2 text-xs font-semibold ${active ? "bg-white text-indigo-800" : "bg-indigo-700 text-white"}`}>{pendingCount}</span></>}
-            </span>
+          <Link key={item.href} href={item.href} className={current ? "active" : undefined} aria-current={current ? "page" : undefined}>
+            <Icon name={item.icon} />
+            {item.label}
+            {item.counter && decisionCount > 0 && <span className="nav-count">{decisionCount}<span className="sr-only"> décision(s) en attente</span></span>}
           </Link>
-          </div>
         );
       })}
+      <Link className="phone-only" href="/entreprise">Entreprise</Link>
+      <Link className="phone-only" href="/compte">Compte</Link>
     </nav>
+  );
+}
+
+/** Liens du bas de la barre latérale : entreprise, compte et administration. */
+export function SidebarSettingsLinks() {
+  const pathname = usePathname();
+  return (
+    <>
+      {SETTINGS.map((item) => {
+        const current = item.paths.some((path) => pathname === path || pathname.startsWith(path + "/"));
+        return (
+          <Link key={item.href} href={item.href} aria-current={current ? "page" : undefined}>
+            <Icon name={item.icon} />
+            {item.label}
+          </Link>
+        );
+      })}
+    </>
   );
 }

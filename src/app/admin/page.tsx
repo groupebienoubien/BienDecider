@@ -3,6 +3,8 @@ import { prisma } from "@/lib/prisma";
 import { getSessionEmail } from "@/lib/session";
 import { isAdminEmail, isExplicitAdminEmail } from "@/lib/admin";
 import { AppShell } from "@/components/app-shell";
+import { PageHeading } from "@/components/mockup-ui";
+import { getShellPropsForEmail } from "@/lib/shell-data";
 import { PERSONAS, type AgentKey } from "@/lib/agents/personas";
 import { DeleteCompanyButton } from "./delete-company-button";
 import Link from "next/link";
@@ -21,15 +23,14 @@ export default async function AdminPage() {
 
   if (!isAdminEmail(ownerEmail)) {
     return (
-      <AppShell>
-        <div className="mx-auto max-w-lg rounded-xl border border-amber-200 bg-amber-50 p-6 text-sm text-amber-800">
-          <h1 className="text-lg font-medium">Accès réservé</h1>
-          <p className="mt-2">
+      <AppShell {...await getShellPropsForEmail(ownerEmail)}>
+        <div className="warning">
+          <strong>Accès réservé</strong>
+          <br />
             Cette page est réservée aux administrateurs. Pour vous donner
             accès, ajoutez votre email dans <code>ADMIN_EMAILS</code> (séparés
             par des virgules) dans le <code>.env</code> du serveur, puis
             reconnectez-vous.
-          </p>
         </div>
       </AppShell>
     );
@@ -97,73 +98,74 @@ export default async function AdminPage() {
   const uncoveredRequests = isExplicitAdminEmail(ownerEmail) ? await listUncoveredRequests() : null;
 
   return (
-    <AppShell>
-      <div className="w-full">
-        <h1 className="text-2xl font-semibold">Administration</h1>
-        <p className="mt-1 text-sm text-slate-500">
-          Accès réservé — {usageByCompany.length === 0 ? "aucun usage mesuré encore" : `${totals._count._all} appel(s) modèle au total`}.
-        </p>
+    <AppShell {...await getShellPropsForEmail(ownerEmail)}>
+      <div>
+        <PageHeading
+          kicker="ADMINISTRATION · ACCÈS RESTREINT"
+          title="Pilotage de la plateforme"
+          description={`Vue réservée à l’administrateur, distincte de l’espace entreprise. ${usageByCompany.length === 0 ? "Aucun usage mesuré encore." : `${totals._count._all} appel(s) modèle au total.`}`}
+        />
 
         {/* Entonnoir d'activation */}
-        <section className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <section className="metrics" style={{ gridTemplateColumns: "repeat(4, 1fr)" }} aria-label="Entonnoir d’activation">
           {funnel.map((f) => (
-            <div key={f.label} className="rounded-xl border border-slate-200 bg-white p-4 text-center shadow-sm">
-              <p className="text-2xl font-semibold">{f.count}</p>
-              <p className="mt-1 text-xs text-slate-500">{f.label}</p>
+            <div key={f.label} className="metric">
+              <div className="metric-label">{f.label}</div>
+              <div className="metric-value">{String(f.count).padStart(2, "0")}</div>
             </div>
           ))}
         </section>
 
         {isExplicitAdminEmail(ownerEmail) && (
-          <section className="mt-8 border-y border-slate-200 py-5">
-            <h2 className="font-medium">Politique de risque des actions</h2>
-            <p className="mt-1 text-sm text-slate-600">Réglez les niveaux de risque globaux par type d&apos;action.</p>
-            <Link href="/admin/risques" className="mt-3 inline-flex rounded-lg bg-slate-900 px-3 py-2 text-sm text-white">Configurer les risques</Link>
+          <section className="setting-section">
+            <h2>Politique de risque des actions</h2>
+            <p>Réglez les niveaux de risque globaux par type d&apos;action.</p>
+            <Link href="/admin/risques" className="btn primary">Configurer les risques</Link>
           </section>
         )}
 
         {/* Coût total */}
-        <section className="mt-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-          <p className="text-sm text-slate-500">Coût total estimé (tous modèles, tarif au moment de l&apos;appel)</p>
-          <p className="mt-1 text-3xl font-semibold">{formatUsd(totals._sum.costUsd ?? 0)}</p>
-        </section>
+        <div className="sync-line">
+          <span>Coût total estimé (tous modèles, tarif au moment de l&apos;appel)</span>
+          <strong>{formatUsd(totals._sum.costUsd ?? 0)}</strong>
+        </div>
 
         {/* Entreprises */}
-        <section className="mt-8">
-          <h2 className="text-lg font-medium">Entreprises ({companies.length})</h2>
-          <div className="mt-3 overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
-            <table className="w-full text-left text-sm">
-              <thead className="border-b border-slate-200 bg-slate-50 text-xs text-slate-500">
+        <section>
+          <div className="section-title"><h2>Entreprises ({companies.length})</h2></div>
+          <div className="table-scroll">
+            <table className="data-table">
+              <thead>
                 <tr>
-                  <th className="px-3 py-2">Entreprise</th>
-                  <th className="px-3 py-2">Email</th>
-                  <th className="px-3 py-2">Créée le</th>
-                  <th className="px-3 py-2">Connexions</th>
-                  <th className="px-3 py-2">Dernière connexion</th>
-                  <th className="px-3 py-2">Propositions</th>
-                  <th className="px-3 py-2">Coût</th>
-                  {isExplicitAdminEmail(ownerEmail) && <th className="px-3 py-2">Plafonds IA (UTC)</th>}
-                  <th className="px-3 py-2"></th>
+                  <th>Entreprise</th>
+                  <th>Email</th>
+                  <th>Créée le</th>
+                  <th>Connexions</th>
+                  <th>Dernière connexion</th>
+                  <th>Propositions</th>
+                  <th>Coût</th>
+                  {isExplicitAdminEmail(ownerEmail) && <th>Plafonds IA (UTC)</th>}
+                  <th></th>
                 </tr>
               </thead>
               <tbody>
                 {companies.map((c) => {
                   const usage = usageMap.get(c.id);
                   return (
-                    <tr key={c.id} className="border-b border-slate-100">
-                      <td className="px-3 py-2 font-medium">
+                    <tr key={c.id}>
+                      <td>
                         {c.name}
-                        <span className="ml-1 text-xs text-slate-400">({c.trade})</span>
+                        <small>({c.trade})</small>
                       </td>
-                      <td className="px-3 py-2 text-slate-600">{c.ownerEmail}</td>
-                      <td className="px-3 py-2 text-slate-500">{c.createdAt.toLocaleDateString("fr-FR")}</td>
-                      <td className="px-3 py-2">{c.loginCount}</td>
-                      <td className="px-3 py-2 text-slate-500">
+                      <td>{c.ownerEmail}</td>
+                      <td>{c.createdAt.toLocaleDateString("fr-FR")}</td>
+                      <td>{c.loginCount}</td>
+                      <td>
                         {c.lastLoginAt ? c.lastLoginAt.toLocaleDateString("fr-FR") : "jamais"}
                       </td>
-                      <td className="px-3 py-2">{c._count.proposals}</td>
-                      <td className="px-3 py-2">{formatUsd(usage?._sum.costUsd ?? 0)}</td>
-                      {isExplicitAdminEmail(ownerEmail) && <td className="px-3 py-2"><CompanyQuotaForm
+                      <td>{c._count.proposals}</td>
+                      <td>{formatUsd(usage?._sum.costUsd ?? 0)}</td>
+                      {isExplicitAdminEmail(ownerEmail) && <td><CompanyQuotaForm
                         companyId={c.id}
                         limits={{ dailyAgentRunLimit: c.dailyAgentRunLimit, monthlyAgentRunLimit: c.monthlyAgentRunLimit, dailySpendLimitUsd: c.dailySpendLimitUsd, monthlySpendLimitUsd: c.monthlySpendLimitUsd }}
                         dailyRuns={(attemptsTodayMap.get(c.id) ?? 0) + (inlineCallsTodayMap.get(c.id) ?? 0)}
@@ -172,7 +174,7 @@ export default async function AdminPage() {
                         monthlyCost={usageMonthMap.get(c.id) ?? 0}
                         reservedCost={(reservedMap.get(c.id) ?? 0) + (reservedInlineMap.get(c.id) ?? 0)}
                       /></td>}
-                      <td className="px-3 py-2 text-right">
+                      <td>
                         <DeleteCompanyButton companyId={c.id} companyName={c.name} />
                       </td>
                     </tr>
@@ -180,7 +182,7 @@ export default async function AdminPage() {
                 })}
                 {companies.length === 0 && (
                   <tr>
-                    <td colSpan={isExplicitAdminEmail(ownerEmail) ? 9 : 8} className="px-3 py-6 text-center text-slate-400">
+                    <td colSpan={isExplicitAdminEmail(ownerEmail) ? 9 : 8}>
                       Aucune entreprise encore.
                     </td>
                   </tr>
@@ -191,17 +193,17 @@ export default async function AdminPage() {
         </section>
 
         {/* Coût par agent */}
-        <section className="mt-8">
-          <h2 className="text-lg font-medium">Coût par agent</h2>
-          <div className="mt-3 overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
-            <table className="w-full text-left text-sm">
-              <thead className="border-b border-slate-200 bg-slate-50 text-xs text-slate-500">
+        <section>
+          <div className="section-title"><h2>Coût par agent</h2></div>
+          <div className="table-scroll">
+            <table className="data-table">
+              <thead>
                 <tr>
-                  <th className="px-3 py-2">Agent</th>
-                  <th className="px-3 py-2">Appels</th>
-                  <th className="px-3 py-2">Tokens entrée</th>
-                  <th className="px-3 py-2">Tokens sortie</th>
-                  <th className="px-3 py-2">Coût</th>
+                  <th>Agent</th>
+                  <th>Appels</th>
+                  <th>Tokens entrée</th>
+                  <th>Tokens sortie</th>
+                  <th>Coût</th>
                 </tr>
               </thead>
               <tbody>
@@ -209,18 +211,18 @@ export default async function AdminPage() {
                   const persona =
                     u.agent in PERSONAS ? PERSONAS[u.agent as AgentKey].name : u.agent;
                   return (
-                    <tr key={u.agent} className="border-b border-slate-100">
-                      <td className="px-3 py-2 font-medium">{persona} <span className="text-xs text-slate-400">({u.agent})</span></td>
-                      <td className="px-3 py-2">{u._count._all}</td>
-                      <td className="px-3 py-2">{(u._sum.inputTokens ?? 0).toLocaleString("fr-FR")}</td>
-                      <td className="px-3 py-2">{(u._sum.outputTokens ?? 0).toLocaleString("fr-FR")}</td>
-                      <td className="px-3 py-2">{formatUsd(u._sum.costUsd ?? 0)}</td>
+                    <tr key={u.agent}>
+                      <td>{persona} <small>({u.agent})</small></td>
+                      <td>{u._count._all}</td>
+                      <td>{(u._sum.inputTokens ?? 0).toLocaleString("fr-FR")}</td>
+                      <td>{(u._sum.outputTokens ?? 0).toLocaleString("fr-FR")}</td>
+                      <td>{formatUsd(u._sum.costUsd ?? 0)}</td>
                     </tr>
                   );
                 })}
                 {usageByAgent.length === 0 && (
                   <tr>
-                    <td colSpan={5} className="px-3 py-6 text-center text-slate-400">
+                    <td colSpan={5}>
                       Aucun appel modèle mesuré encore.
                     </td>
                   </tr>
@@ -232,33 +234,33 @@ export default async function AdminPage() {
 
         {/* Réservé aux administrateurs explicites : ces demandes citent ce que d'autres entreprises ont écrit. */}
         {uncoveredRequests && (
-          <section className="mt-8">
-            <h2 className="text-lg font-medium">Demandes hors catalogue ({uncoveredRequests.length})</h2>
-            <p className="mt-1 text-sm text-slate-500">Ce que des dirigeants ont demandé et qu&apos;aucun agent ne couvre, noté par Paul. Les 50 plus récentes.</p>
-            <div className="mt-3 overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
-              <table className="w-full text-left text-sm">
-                <thead className="border-b border-slate-200 bg-slate-50 text-xs text-slate-500">
+          <section>
+            <div className="section-title"><h2>Demandes hors catalogue ({uncoveredRequests.length})</h2></div>
+            <p className="legend">Ce que des dirigeants ont demandé et qu&apos;aucun agent ne couvre, noté par Paul. Les 50 plus récentes.</p>
+            <div className="table-scroll">
+              <table className="data-table">
+                <thead>
                   <tr>
-                    <th className="px-3 py-2">Date</th>
-                    <th className="px-3 py-2">Entreprise</th>
-                    <th className="px-3 py-2">Demande</th>
-                    <th className="px-3 py-2">Proposé à la place</th>
-                    <th className="px-3 py-2">Origine</th>
+                    <th>Date</th>
+                    <th>Entreprise</th>
+                    <th>Demande</th>
+                    <th>Proposé à la place</th>
+                    <th>Origine</th>
                   </tr>
                 </thead>
                 <tbody>
                   {uncoveredRequests.map((entry) => (
-                    <tr key={entry.id} className="border-b border-slate-100 align-top">
-                      <td className="px-3 py-2 whitespace-nowrap">{entry.createdAt.toLocaleDateString("fr-FR")}</td>
-                      <td className="px-3 py-2">{entry.company.name || entry.company.trade || "Sans nom"}</td>
-                      <td className="px-3 py-2">{entry.request}</td>
-                      <td className="px-3 py-2">{entry.closestAlternative ?? "Rien"}</td>
-                      <td className="px-3 py-2">{entry.source === "plan" ? "Plan" : "Chat"}</td>
+                    <tr key={entry.id}>
+                      <td>{entry.createdAt.toLocaleDateString("fr-FR")}</td>
+                      <td>{entry.company.name || entry.company.trade || "Sans nom"}</td>
+                      <td>{entry.request}</td>
+                      <td>{entry.closestAlternative ?? "Rien"}</td>
+                      <td>{entry.source === "plan" ? "Plan" : "Chat"}</td>
                     </tr>
                   ))}
                   {uncoveredRequests.length === 0 && (
                     <tr>
-                      <td colSpan={5} className="px-3 py-6 text-center text-slate-400">
+                      <td colSpan={5}>
                         Aucune demande hors catalogue notée.
                       </td>
                     </tr>
@@ -270,28 +272,28 @@ export default async function AdminPage() {
         )}
 
         {/* Coût par modèle */}
-        <section className="mt-8 mb-8">
-          <h2 className="text-lg font-medium">Coût par modèle</h2>
-          <div className="mt-3 overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
-            <table className="w-full text-left text-sm">
-              <thead className="border-b border-slate-200 bg-slate-50 text-xs text-slate-500">
+        <section>
+          <div className="section-title"><h2>Coût par modèle</h2></div>
+          <div className="table-scroll">
+            <table className="data-table">
+              <thead>
                 <tr>
-                  <th className="px-3 py-2">Modèle</th>
-                  <th className="px-3 py-2">Appels</th>
-                  <th className="px-3 py-2">Coût</th>
+                  <th>Modèle</th>
+                  <th>Appels</th>
+                  <th>Coût</th>
                 </tr>
               </thead>
               <tbody>
                 {usageByModel.map((u) => (
-                  <tr key={u.model} className="border-b border-slate-100">
-                    <td className="px-3 py-2 font-medium">{u.model}</td>
-                    <td className="px-3 py-2">{u._count._all}</td>
-                    <td className="px-3 py-2">{formatUsd(u._sum.costUsd ?? 0)}</td>
+                  <tr key={u.model}>
+                    <td>{u.model}</td>
+                    <td>{u._count._all}</td>
+                    <td>{formatUsd(u._sum.costUsd ?? 0)}</td>
                   </tr>
                 ))}
                 {usageByModel.length === 0 && (
                   <tr>
-                    <td colSpan={3} className="px-3 py-6 text-center text-slate-400">
+                    <td colSpan={3}>
                       Aucun appel modèle mesuré encore.
                     </td>
                   </tr>

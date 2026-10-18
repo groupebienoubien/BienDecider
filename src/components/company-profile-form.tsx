@@ -4,9 +4,9 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
 import { TradeCombobox } from "@/components/trade-combobox";
-import { CompanySections } from "@/components/company-sections";
+import { PageHeading } from "@/components/mockup-ui";
 
-export function CompanyProfileForm({ guided = false, initialTab = "informations" }: { guided?: boolean; initialTab?: "informations" | "objectifs" }) {
+export function CompanyProfileForm({ guided = false, embedded = false, initialTab = "informations" }: { guided?: boolean; embedded?: boolean; initialTab?: "informations" | "objectifs" }) {
   const router = useRouter();
   const [profileTab, setProfileTab] = useState(initialTab);
   const [name, setName] = useState("");
@@ -150,23 +150,25 @@ export function CompanyProfileForm({ guided = false, initialTab = "informations"
     }
   }
 
-  return (
-    <AppShell paul={!guided} companyName={guided ? undefined : name}>
-      <div className="w-full">
-        <h1 className="text-2xl font-semibold">
-          {guided ? "Parlez-nous de votre activité" : "Mon entreprise"}
-        </h1>
-        <p className="mt-1 text-sm text-gray-500">
-          {guided
-            ? "Moins de 5 minutes. Vous pourrez tout modifier plus tard."
-            : "Modifiez ces informations à tout moment — elles orientent directement vos agents."}
-        </p>
-
-        {!guided && <CompanySections active={profileTab} onProfileTab={setProfileTab} />}
+  const content = (
+      <div id="modifier">
+        {guided ? (
+          <PageHeading kicker="BIENVENUE" title="Parlez-nous de votre activité" description="Moins de 5 minutes. Vous pourrez tout modifier plus tard." />
+        ) : (
+          <>
+            <h2>Modifier les informations</h2>
+            <p className="legend">Modifiez ces informations à tout moment — elles orientent directement vos agents.</p>
+            <div className="tabs" role="group" aria-label="Rubriques de mon entreprise">
+              {([["informations", "Informations"], ["objectifs", "Objectifs"]] as const).map(([tab, label]) => (
+                <button key={tab} type="button" className={profileTab === tab ? "selected" : undefined} aria-current={profileTab === tab ? "page" : undefined} onClick={() => setProfileTab(tab)}>{label}</button>
+              ))}
+            </div>
+          </>
+        )}
 
         {guided && isNew && profileLoaded && (
           <section aria-label="Démarrer en une phrase" className="mt-5 border-y border-slate-200 py-4">
-            <label htmlFor="profile-sentence" className="text-sm font-medium">Décrivez votre activité et votre objectif en une phrase</label>
+            <label htmlFor="profile-sentence" className="field">Décrivez votre activité et votre objectif en une phrase</label>
             <textarea
               id="profile-sentence"
               value={profileSentence}
@@ -174,11 +176,11 @@ export function CompanyProfileForm({ guided = false, initialTab = "informations"
               maxLength={1200}
               rows={3}
               placeholder="Ex. Je suis plombière à Lille et je veux trouver 5 nouveaux clients par mois."
-              className="mt-2 w-full rounded border px-3 py-2 text-sm"
+              
             />
             <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
               <p className="text-xs text-slate-500">Paul propose un profil à vérifier ; rien n&apos;est enregistré avant votre confirmation.</p>
-              <button type="button" onClick={() => void interpretProfileSentence()} disabled={interpreting || profileSentence.trim().length < 8} className="rounded bg-indigo-700 px-3 py-2 text-sm text-white disabled:opacity-50">
+              <button type="button" onClick={() => void interpretProfileSentence()} disabled={interpreting || profileSentence.trim().length < 8} className="primary">
                 {interpreting ? "Lecture de votre phrase…" : "Préremplir mon profil"}
               </button>
             </div>
@@ -190,9 +192,9 @@ export function CompanyProfileForm({ guided = false, initialTab = "informations"
                   <div className="mt-3 flex flex-wrap items-end gap-2">
                     <label className="min-w-48 flex-1 text-xs text-slate-600">
                       Information manquante : {nextMissingField.label}
-                      <input value={missingAnswer} onChange={(event) => setMissingAnswer(event.target.value)} className="mt-1 w-full rounded border px-3 py-2 text-sm text-slate-900" />
+                      <input value={missingAnswer} onChange={(event) => setMissingAnswer(event.target.value)}  />
                     </label>
-                    <button type="button" onClick={addMissingProfileField} disabled={!missingAnswer.trim()} className="rounded bg-slate-900 px-3 py-2 text-sm text-white disabled:opacity-50">Continuer</button>
+                    <button type="button" onClick={addMissingProfileField} disabled={!missingAnswer.trim()} className="primary">Continuer</button>
                   </div>
                 )}
               </div>
@@ -212,13 +214,13 @@ export function CompanyProfileForm({ guided = false, initialTab = "informations"
           <div data-profile-section="objectifs" hidden={!guided && profileTab !== "objectifs"}>
           <div className="flex flex-col gap-3">
           {(!guided || profileInterpreted) && <>
-            <label htmlFor="profile-objective" className="text-sm font-medium">Quel est votre objectif principal ?</label>
+            <label htmlFor="profile-objective" className="field">Quel est votre objectif principal ?</label>
             <input
               id="profile-objective"
               placeholder="ex: 10 nouveaux clients par mois"
               value={objective}
               onChange={(e) => setObjective(e.target.value)}
-              className="rounded border px-3 py-2 text-sm"
+             
             />
 
           </>}
@@ -233,7 +235,7 @@ export function CompanyProfileForm({ guided = false, initialTab = "informations"
                 <a href="/confidentialite#traitement" className="underline">Voir la politique de confidentialité</a>.
               </p>
               <div className="grid gap-3 sm:grid-cols-2">
-                <label htmlFor="profile-revenue" className="flex flex-col gap-1 text-xs text-slate-600">
+                <label htmlFor="profile-revenue" className="field">
                   Chiffre d&apos;affaires mensuel actuel (€ par mois)
                   <input
                     id="profile-revenue"
@@ -242,10 +244,10 @@ export function CompanyProfileForm({ guided = false, initialTab = "informations"
                     placeholder="CA mensuel actuel (€)"
                     value={monthlyRevenue}
                     onChange={(e) => setMonthlyRevenue(e.target.value)}
-                    className="rounded border px-3 py-2 text-sm text-slate-900"
+                   
                   />
                 </label>
-                <label htmlFor="profile-revenue-target" className="flex flex-col gap-1 text-xs text-slate-600">
+                <label htmlFor="profile-revenue-target" className="field">
                   Chiffre d&apos;affaires mensuel visé (€ par mois)
                   <input
                     id="profile-revenue-target"
@@ -254,19 +256,19 @@ export function CompanyProfileForm({ guided = false, initialTab = "informations"
                     placeholder="CA mensuel visé (€)"
                     value={revenueTarget}
                     onChange={(e) => setRevenueTarget(e.target.value)}
-                    className="rounded border px-3 py-2 text-sm text-slate-900"
+                   
                   />
                 </label>
-                <label className="flex flex-col gap-1 text-xs text-slate-600">
+                <label className="field">
                   Échéance (mois visé)
                   <input
                     type="month"
                     value={targetDate}
                     onChange={(e) => setTargetDate(e.target.value)}
-                    className="rounded border px-3 py-2 text-sm text-slate-900"
+                   
                   />
                 </label>
-                <label htmlFor="profile-client-value" className="flex flex-col gap-1 text-xs text-slate-600">
+                <label htmlFor="profile-client-value" className="field">
                   Valeur moyenne d&apos;un client (€ au total)
                   <input
                     id="profile-client-value"
@@ -275,10 +277,10 @@ export function CompanyProfileForm({ guided = false, initialTab = "informations"
                     placeholder="Valeur moyenne d'un client (€)"
                     value={averageClientValue}
                     onChange={(e) => setAverageClientValue(e.target.value)}
-                    className="rounded border px-3 py-2 text-sm text-slate-900"
+                   
                   />
                 </label>
-                <label htmlFor="profile-new-clients" className="flex flex-col gap-1 text-xs text-slate-600 sm:col-span-2">
+                <label htmlFor="profile-new-clients" className="field" style={{ gridColumn: "1 / -1" }}>
                   Nouveaux clients par mois aujourd&apos;hui (nombre par mois)
                   <input
                     id="profile-new-clients"
@@ -287,7 +289,7 @@ export function CompanyProfileForm({ guided = false, initialTab = "informations"
                     placeholder="Nouveaux clients par mois aujourd'hui"
                     value={newClientsPerMonth}
                     onChange={(e) => setNewClientsPerMonth(e.target.value)}
-                    className="rounded border px-3 py-2 text-sm text-slate-900"
+                   
                   />
                 </label>
               </div>
@@ -302,30 +304,30 @@ export function CompanyProfileForm({ guided = false, initialTab = "informations"
           </div>
           <div data-profile-section="informations" hidden={!guided && profileTab !== "informations"}>
           <div className="flex flex-col gap-3">
-          <label htmlFor="profile-name" className="text-sm font-medium">Nom commercial</label>
+          <label htmlFor="profile-name" className="field">Nom commercial</label>
           <input
             id="profile-name"
             required
             placeholder="Nom commercial"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            className="rounded border px-3 py-2 text-sm"
+           
           />
 
           <TradeCombobox value={trade} onChange={setTrade} />
 
-          <label htmlFor="profile-area" className="text-sm font-medium">Zone de chalandise (là où vous trouvez vos clients)</label>
+          <label htmlFor="profile-area" className="field">Zone de chalandise (là où vous trouvez vos clients)</label>
           <input
             id="profile-area"
             required
             placeholder="Zone de chalandise (ex: Lyon et alentours)"
             value={servingArea}
             onChange={(e) => setServingArea(e.target.value)}
-            className="rounded border px-3 py-2 text-sm"
+           
           />
 
           {!guided && <>
-            <label htmlFor="profile-description" className="mt-2 text-sm font-medium">
+            <label htmlFor="profile-description" className="field">
               Décrivez votre entreprise, votre savoir-faire et ce qui vous différencie
             </label>
             <textarea
@@ -334,57 +336,57 @@ export function CompanyProfileForm({ guided = false, initialTab = "informations"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               rows={4}
-              className="rounded border px-3 py-2 text-sm"
+             
             />
             <p className="-mt-1 text-xs text-slate-600">
               Utilisé par tous les agents pour écrire dans votre ton — inutile de choisir un style dans une liste.
             </p>
 
             <div className="mt-2 grid gap-3 sm:grid-cols-2">
-              <label htmlFor="profile-phone" className="flex flex-col gap-1 text-xs text-slate-600">
+              <label htmlFor="profile-phone" className="field">
                 Téléphone affiché aux clients (facultatif)
                 <input
                   id="profile-phone"
                   placeholder="Téléphone affiché aux clients (optionnel)"
                   value={phone}
                   onChange={(e) => setPhone(e.target.value)}
-                  className="rounded border px-3 py-2 text-sm text-slate-900"
+                 
                 />
               </label>
-              <label htmlFor="profile-certifications" className="flex flex-col gap-1 text-xs text-slate-600">
+              <label htmlFor="profile-certifications" className="field">
                 Certifications et labels (facultatif)
                 <input
                   id="profile-certifications"
                   placeholder="Certifications / labels (ex: RGE, optionnel)"
                   value={certifications}
                   onChange={(e) => setCertifications(e.target.value)}
-                  className="rounded border px-3 py-2 text-sm text-slate-900"
+                 
                 />
               </label>
             </div>
-            <label htmlFor="profile-hours" className="text-sm font-medium">Horaires d&apos;ouverture (facultatif)</label>
+            <label htmlFor="profile-hours" className="field">Horaires d&apos;ouverture (facultatif)</label>
             <input
               id="profile-hours"
               placeholder="Horaires d'ouverture (optionnel)"
               value={openingHours}
               onChange={(e) => setOpeningHours(e.target.value)}
-              className="rounded border px-3 py-2 text-sm"
+             
             />
-            <label htmlFor="profile-website" className="text-sm font-medium">Site web (facultatif)</label>
+            <label htmlFor="profile-website" className="field">Site web (facultatif)</label>
             <input
               id="profile-website"
               placeholder="Site web (optionnel — beaucoup de TPE n'en ont pas)"
               value={website}
               onChange={(e) => setWebsite(e.target.value)}
-              className="rounded border px-3 py-2 text-sm"
+             
             />
-            <label htmlFor="profile-social" className="text-sm font-medium">Compte Instagram ou Facebook (facultatif)</label>
+            <label htmlFor="profile-social" className="field">Compte Instagram ou Facebook (facultatif)</label>
             <input
               id="profile-social"
               placeholder="Compte Instagram/Facebook (optionnel, ex: @cabinet_demo)"
               value={socialHandles}
               onChange={(e) => setSocialHandles(e.target.value)}
-              className="rounded border px-3 py-2 text-sm"
+             
             />
 
           </>}
@@ -393,7 +395,7 @@ export function CompanyProfileForm({ guided = false, initialTab = "informations"
           <button
             type="submit"
             disabled={loading || !profileLoaded}
-            className="mt-2 rounded bg-black px-3 py-2 text-sm text-white disabled:opacity-50"
+            className="primary"
           >
             {loading ? "Enregistrement…" : isNew ? "Valider et lancer mon audit" : "Enregistrer"}
           </button>
@@ -401,6 +403,8 @@ export function CompanyProfileForm({ guided = false, initialTab = "informations"
           </fieldset>
         </form>
       </div>
-    </AppShell>
   );
+
+  if (embedded) return content;
+  return <AppShell paul={!guided} companyName={guided ? undefined : name}>{content}</AppShell>;
 }

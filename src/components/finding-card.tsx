@@ -1,12 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { useId, useRef, useState } from "react";
-import { AskPaulButton } from "@/components/ask-paul-button";
+import { useState } from "react";
+import type { AuditFinding } from "@prisma/client";
+import { Icon, type IconName } from "@/components/icon";
+import { Modal } from "@/components/modal";
+import { Tag } from "@/components/mockup-ui";
 import { ReadAloudButton } from "@/components/voice-controls";
 import { spokenText } from "@/lib/voice";
-import type { AuditFinding } from "@prisma/client";
 import { PERSONAS, type AgentKey } from "@/lib/agents/personas";
+import { openPaul } from "@/lib/paul-context";
 import { parseFindingActionItems, type FindingActionItem } from "@/lib/finding-shared";
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -15,79 +18,62 @@ const CATEGORY_LABELS: Record<string, string> = {
   concurrence: "Concurrence",
 };
 
+const CATEGORY_ICONS: Record<string, IconName> = {
+  site_web: "panel-top",
+  reseaux_sociaux: "messages-square",
+  concurrence: "eye",
+};
+
 /**
- * Carte compacte + pop-up de détail structuré (ce qui est bien / ce qu'il
- * faut améliorer / plan d'action) — cf. docs/backlog.md "lisibilité des
- * constats". Les constats créés avant cette structuration n'ont que
- * `content` : affiché tel quel dans la pop-up, en repli.
+ * Ligne de diagnostic de la maquette + fenêtre de détail structuré (ce qui est bien / ce qu'il
+ * faut améliorer / plan d'action) — cf. docs/backlog.md "lisibilité des constats". Les constats
+ * créés avant cette structuration n'ont que `content` : affiché tel quel dans la fenêtre, en repli.
  */
 export function FindingCard({ finding }: { finding: AuditFinding }) {
-  const dialogRef = useRef<HTMLDialogElement>(null);
-  const titleId = useId();
+  const [open, setOpen] = useState(false);
   const actionItems = parseFindingActionItems(finding.actionItems);
   const hasStructure = Boolean(finding.whatWorks || finding.toImprove || actionItems.length > 0);
   const findingSpeech = spokenText(hasStructure
     ? [finding.title, finding.whatWorks && `Ce qui est bien : ${finding.whatWorks}`, finding.toImprove && `Ce qu'il faut améliorer : ${finding.toImprove}`, ...actionItems.map((item) => `Recommandation : ${item.title}`)].filter(Boolean).join(". ")
     : `${finding.title}. ${finding.content}`);
+  const category = CATEGORY_LABELS[finding.category] ?? finding.category;
+  const positive = Boolean(finding.whatWorks) && !finding.toImprove;
+  const safeSource = finding.sourceUrl && /^https?:\/\//i.test(finding.sourceUrl) ? finding.sourceUrl : null;
 
   return (
     <>
-      <button
-        id={`finding-${finding.id}`}
-        type="button"
-        onClick={() => dialogRef.current?.showModal()}
-        className="scroll-mt-24 w-full rounded-lg border border-slate-200 p-3 text-left transition hover:border-indigo-300 hover:bg-indigo-50/30"
-      >
-        <span className="text-xs uppercase text-slate-600">{CATEGORY_LABELS[finding.category] ?? finding.category}</span>
-        <h3 className="font-medium">{finding.title}</h3>
-        <p className="mt-1 line-clamp-2 text-sm text-slate-600">{finding.content}</p>
-        {finding.sourceUrl && <p className="mt-1 text-xs text-slate-500">Source {finding.sourceStatus ?? "à vérifier"}</p>}
-        <span className="mt-1 inline-block text-xs text-indigo-600">Voir le détail →</span>
-      </button>
-      <AskPaulButton element={{ type: "finding", id: finding.id, title: finding.title }} />
+      <article id={`finding-${finding.id}`} className="diagnostic-row">
+        <span className="activity-icon"><Icon name={CATEGORY_ICONS[finding.category] ?? "eye"} /></span>
+        <div>
+          <div className="tags"><Tag color="blue">{category}</Tag>{positive ? <Tag color="green">Point positif</Tag> : finding.toImprove ? <Tag color="orange">À renforcer</Tag> : null}</div>
+          <h3>{finding.title}</h3>
+          <p>{finding.content}</p>
+          {finding.sourceUrl && <small>Source {finding.sourceStatus ?? "à vérifier"}</small>}
+        </div>
+        <div>
+          <strong>{positive ? "À mesurer" : actionItems.length > 0 ? "À traiter" : "À examiner"}</strong>
+          <small>{actionItems[0]?.title ?? "Voir le détail du constat"}</small>
+          <button type="button" className="text-link" onClick={() => setOpen(true)}>Voir le détail<span className="sr-only"> : {finding.title}</span></button>
+          <button type="button" className="text-link" onClick={() => openPaul({ type: "finding", id: finding.id, title: finding.title })}>Demander à Paul<span className="sr-only"> : {finding.title}</span></button>
+        </div>
+      </article>
 
-      <dialog ref={dialogRef} aria-labelledby={titleId} className="fixed inset-0 m-auto max-h-[85vh] w-[calc(100%-2rem)] max-w-lg overflow-y-auto rounded-lg bg-white p-5 text-slate-900 shadow-xl backdrop:bg-black/40">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <span className="text-xs uppercase text-slate-600">{CATEGORY_LABELS[finding.category] ?? finding.category}</span>
-                <h2 id={titleId} className="text-lg font-semibold">{finding.title}</h2>
-              </div>
-              <button onClick={() => dialogRef.current?.close()} className="min-h-11 shrink-0 px-2 text-sm text-slate-700 hover:text-slate-900">
-                Fermer
-              </button>
-            </div>
-            <ReadAloudButton text={findingSpeech} label="Écouter ce constat" />
-            {finding.sourceUrl && <p className="mt-3 break-all text-xs text-slate-600">Source ({finding.sourceStatus ?? "à vérifier"}) : <a href={finding.sourceUrl} target="_blank" rel="noreferrer" className="underline">{finding.sourceUrl}</a></p>}
-
-            {hasStructure ? (
-              <div className="mt-4 space-y-4">
-                {finding.whatWorks && (
-                  <section>
-                    <h3 className="text-sm font-medium text-emerald-700">✓ Ce qui est bien</h3>
-                    <p className="mt-1 whitespace-pre-wrap text-sm text-slate-700">{finding.whatWorks}</p>
-                  </section>
-                )}
-                {finding.toImprove && (
-                  <section>
-                    <h3 className="text-sm font-medium text-amber-700">Ce qu&apos;il faut améliorer</h3>
-                    <p className="mt-1 whitespace-pre-wrap text-sm text-slate-700">{finding.toImprove}</p>
-                  </section>
-                )}
-                {actionItems.length > 0 && (
-                  <section>
-                    <h3 className="text-sm font-medium text-indigo-700">Recommandations</h3>
-                    <ul className="mt-2 space-y-2">
-                      {actionItems.map((item, i) => (
-                        <ActionItemRow key={i} item={item} />
-                      ))}
-                    </ul>
-                  </section>
-                )}
-              </div>
-            ) : (
-              <p className="mt-4 whitespace-pre-wrap text-sm text-slate-700">{finding.content}</p>
-            )}
-      </dialog>
+      <Modal open={open} onClose={() => setOpen(false)} kicker={category.toLocaleUpperCase("fr-FR")} title={finding.title} cancelLabel="Fermer">
+        <ReadAloudButton text={findingSpeech} label="Écouter ce constat" />
+        {safeSource && <p>Source ({finding.sourceStatus ?? "à vérifier"}) : <a href={safeSource} target="_blank" rel="noreferrer" className="break-all">{safeSource}</a></p>}
+        {hasStructure ? (
+          <>
+            {finding.whatWorks && <><h3>Ce qui est bien</h3><p className="whitespace-pre-wrap">{finding.whatWorks}</p></>}
+            {finding.toImprove && <><h3>Ce qu’il faut améliorer</h3><p className="whitespace-pre-wrap">{finding.toImprove}</p></>}
+            {actionItems.length > 0 && <>
+              <h3>Recommandations</h3>
+              {actionItems.map((item, i) => <ActionItemRow key={i} item={item} />)}
+            </>}
+          </>
+        ) : (
+          <p className="whitespace-pre-wrap">{finding.content}</p>
+        )}
+      </Modal>
     </>
   );
 }
@@ -112,22 +98,16 @@ function ActionItemRow({ item }: { item: FindingActionItem }) {
   }
 
   return (
-    <li className="border-t border-slate-200 py-3">
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div>
-          <p className="text-xs text-slate-600">{persona?.name ?? item.agent}</p>
-          <p className="text-sm font-medium">{item.title}</p>
-          <p className="mt-0.5 text-xs text-slate-500">{item.rationale}</p>
-        </div>
-        <button
-          onClick={addToPlan}
-          disabled={status === "saving" || status === "done"}
-          className="shrink-0 rounded-lg border border-indigo-200 bg-indigo-50 px-2 py-1 text-xs text-indigo-800 disabled:opacity-60"
-        >
-          {status === "done" ? "Ajouté ✓" : status === "saving" ? "…" : status === "error" ? "Réessayer" : "Ajouter au plan"}
-        </button>
+    <div className="activity-row">
+      <div>
+        <small>{persona?.name ?? item.agent}</small>
+        <strong>{item.title}</strong>
+        <small>{item.rationale}</small>
+        {status === "done" && <Link className="text-link" href="/dashboard?view=plan">Voir dans le plan d’action</Link>}
       </div>
-      {status === "done" && <Link href="/dashboard" className="mt-2 inline-block text-xs text-indigo-600 underline">Voir dans le plan d&apos;action</Link>}
-    </li>
+      <button type="button" onClick={addToPlan} disabled={status === "saving" || status === "done"}>
+        {status === "done" ? "Ajouté ✓" : status === "saving" ? "…" : status === "error" ? "Réessayer" : "Ajouter au plan"}
+      </button>
+    </div>
   );
 }

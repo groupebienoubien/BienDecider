@@ -3,7 +3,10 @@
 import { useState } from "react";
 import Link from "next/link";
 import type { Lead } from "@prisma/client";
-import { LeadCard, type LeadPatch } from "@/components/lead-card";
+import { Icon } from "@/components/icon";
+import { LeadCard, NEXT_LEAD_STAGES, type LeadMode, type LeadPatch } from "@/components/lead-card";
+import { Modal } from "@/components/modal";
+import { PageHeading, SectionTitle, Tag } from "@/components/mockup-ui";
 import { PERSONAS } from "@/lib/agents/personas";
 import { countLeads, MIN_CONTACTS_TO_CONCLUDE, type LeadStage } from "@/lib/funnel-shared";
 import { pickNextLead } from "@/lib/lead-followup";
@@ -11,16 +14,25 @@ import { pickNextLead } from "@/lib/lead-followup";
 const STAGE_LABELS: Record<string, string> = {
   a_contacter: "À contacter",
   contacte: "Contacté",
-  repondu: "A répondu",
-  rdv: "RDV pris",
-  gagne: "Client",
+  repondu: "Réponse reçue",
+  rdv: "Rendez-vous",
+  gagne: "Gagné",
   perdu: "Perdu",
+  ecarte: "Écarté",
 };
 
 const ORDER: LeadStage[] = ["a_contacter", "contacte", "repondu", "rdv", "gagne", "perdu"];
+const DAY = new Intl.DateTimeFormat("fr-FR", { day: "numeric", month: "short", timeZone: "Europe/Paris" });
 
-function pct(part: number, whole: number) {
-  return whole > 0 ? `${Math.round((part / whole) * 100)} %` : "—";
+/** Étapes que le menu peut déclarer directement ; « Contacté » depuis « À contacter » passe par la date du contact. */
+function reachableStages(stage: string): LeadStage[] {
+  return stage === "a_contacter" ? ["contacte"] : NEXT_LEAD_STAGES[stage] ?? [];
+}
+
+function lastSource(lead: Lead) {
+  const declared = lead.stage !== "a_contacter" && lead.stage !== "propose";
+  const date = lead.meetingAt ?? lead.repliedAt ?? lead.contactedAt ?? lead.closedAt ?? (declared ? lead.updatedAt : lead.createdAt);
+  return { label: declared ? "Saisi par vous" : `Proposé par ${PERSONAS.demarchage.name}`, date: DAY.format(new Date(date)) };
 }
 
 export function ProspectionClient({
@@ -43,6 +55,7 @@ export function ProspectionClient({
   const [openedAt] = useState(() => Date.now());
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [managed, setManaged] = useState<{ id: string; mode: LeadMode } | null>(null);
   const [autoOutreach, setAutoOutreach] = useState(initialAutoOutreach);
   const [outreachSaving, setOutreachSaving] = useState(false);
 
@@ -86,28 +99,21 @@ export function ProspectionClient({
     }
   }
 
+  function declareStage(lead: Lead, next: LeadStage) {
+    if (lead.stage === "a_contacter" && next === "contacte") setManaged({ id: lead.id, mode: "contact" });
+    else void patchLead(lead.id, { stage: next });
+  }
+
   const nextLead = pickNextLead(leads, openedAt);
   const normalizedSearch = search.trim().toLocaleLowerCase("fr-FR");
   const matchesSearch = (lead: Lead) => !normalizedSearch || [lead.name, lead.reason, lead.segment, lead.publicContact, lead.source]
     .some((value) => value?.toLocaleLowerCase("fr-FR").includes(normalizedSearch));
   const visibleLeads = leads.filter(matchesSearch);
-  const visibleNextLead = nextLead && matchesSearch(nextLead) ? nextLead : null;
-  const discarded = leads.filter((l) => l.stage === "ecarte");
-  const leadCard = (lead: Lead) => (
-    <LeadCard lead={lead} now={openedAt} busy={busyId === lead.id} companyName={companyName} trade={trade} phone={phone} onPatch={patchLead} />
-  );
+  const managedLead = leads.find((lead) => lead.id === managed?.id);
 
   // Recalculé depuis l'état local (pas depuis `funnel`, figé au chargement
   // serveur) pour refléter une déclaration sans attendre un rechargement.
   const t = countLeads(leads);
-  const steps = [
-    { label: "Identifiés", value: t.identifies },
-    { label: "Contactés", value: t.contactes, rate: pct(t.contactes, t.identifies) },
-    { label: "Réponses", value: t.reponses, rate: pct(t.reponses, t.contactes) },
-    { label: "RDV", value: t.rdv, rate: pct(t.rdv, t.reponses) },
-    { label: "Clients", value: t.clients, rate: pct(t.clients, t.rdv) },
-  ];
-
   const segments = new Map<string, Lead[]>();
   for (const lead of leads) {
     const key = lead.segment?.trim() || "sans segment";
@@ -119,124 +125,108 @@ export function ProspectionClient({
     .sort((a, b) => b.counts.contactes - a.counts.contactes);
 
   return (
-    <div className="w-full">
-      <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-indigo-700">Relations commerciales</p>
-      <h1 className="text-2xl font-semibold">Prospection</h1>
-      <p className="mt-1 text-sm text-slate-500">
-        {PERSONAS.demarchage.name} identifie des organisations correspondant à votre cible ; vous décidez lesquelles contacter
-        et déclarez ce qui s&apos;est passé. Chiffres calculés en base, jamais estimés par un agent.
-      </p>
-
-      {visibleNextLead && (
-        <section aria-label="Prochain prospect à traiter" className="mt-4 rounded-lg border-2 border-indigo-200 bg-white p-3">
-          <h2 className="text-sm font-semibold text-indigo-900">Prochain prospect à traiter</h2>
-          <p className="mb-2 mt-1 text-xs text-slate-700">Informations rapportées par {PERSONAS.demarchage.name} depuis le web : confirmez-les sur la source avant de contacter.</p>
-          {leadCard(visibleNextLead)}
-        </section>
-      )}
-
-      <section className="mt-6 grid grid-cols-5 gap-2">
-        {steps.map((s) => (
-          <div key={s.label} className="rounded-lg border bg-white p-3 text-center">
-            <p className="text-2xl font-semibold">{s.value}</p>
-            <p className="text-xs text-slate-500">{s.label}</p>
-            {s.rate && <p className="text-xs text-slate-600">{s.rate}</p>}
-          </div>
-        ))}
-      </section>
-      <p className="mt-1 text-xs text-slate-600">
-        Taux affichés par rapport à l&apos;étape précédente. Les prospects marqués « sans suite » restent comptés comme contactés.
-      </p>
-
-      <div className="mt-6 max-w-md">
-        <label htmlFor="lead-search" className="mb-1 block text-xs font-medium text-slate-600">Rechercher un prospect</label>
-        <input id="lead-search" type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Nom, projet ou source" className="min-h-11 w-full rounded-md border border-slate-300 bg-white px-3 text-sm" />
+    <div>
+      <PageHeading
+        kicker="RELATIONS COMMERCIALES"
+        title="Les contacts deviennent des échanges."
+        description="Les événements du canal et vos déclarations restent identifiables."
+        actions={<Link className="btn primary" href="/equipe"><Icon name="plus" /> Confier une recherche</Link>}
+      />
+      <div className="sync-line">
+        <span>{t.identifies} identifiés · {t.contactes} contactés · {t.reponses} réponses · {t.rdv} RDV · {t.clients} clients</span>
+        <Link href="/rapport">Suivre les résultats →</Link>
       </div>
 
-      {bySegment.length > 0 && (
-        <section className="mt-6 rounded-lg border bg-white p-4">
-          <h2 className="text-sm font-medium">Par type de cible</h2>
-          <ul className="mt-2 divide-y text-sm">
-            {bySegment
-              .map((s) => (
-                <li key={s.segment} className="flex flex-wrap items-center gap-x-3 py-2">
-                  <span className="font-medium capitalize">{s.segment}</span>
-                  <span className="text-slate-500">
-                    {s.counts.contactes} contactés · {s.counts.reponses} réponses · {s.counts.rdv} RDV · {s.counts.clients} clients
-                  </span>
-                  {s.counts.contactes < MIN_CONTACTS_TO_CONCLUDE && (
-                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-700">
-                      trop tôt pour conclure (moins de {MIN_CONTACTS_TO_CONCLUDE} contacts)
-                    </span>
-                  )}
-                </li>
-              ))}
-          </ul>
+      {nextLead && matchesSearch(nextLead) && (
+        <section aria-label="Prochain prospect à traiter" className="notice">
+          <strong>Prochain prospect à traiter : {nextLead.name}</strong> · {nextLead.reason}{" "}
+          <button type="button" className="text-link" onClick={() => setManaged({ id: nextLead.id, mode: null })}>Traiter ce prospect</button>
         </section>
       )}
 
-      {error && <p className="mt-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}
+      <div className="filter-bar">
+        <label htmlFor="lead-search">Rechercher</label>
+        <input id="lead-search" type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Nom ou projet" />
+      </div>
+
+      {error && <p role="alert" className="warning">{error}</p>}
 
       {leads.length === 0 ? (
-        <div role="region" className="mt-8 border-t border-slate-200 py-5" aria-label="Prospection à préparer">
-          <h2 className="text-base font-medium">Choisir les organisations à contacter</h2>
-          <p className="mt-2 max-w-prose text-sm text-slate-600">Aucun prospect validé pour l&apos;instant. {PERSONAS.demarchage.name} prépare des propositions ; vous choisissez les organisations à contacter. Les contacts retenus apparaîtront ici pour suivre les échanges et les rendez-vous.</p>
-          <div className="mt-3 flex flex-wrap gap-4">
-            <Link href="/dashboard?view=validation" className="text-sm font-medium text-indigo-600 underline">Examiner les prospects proposés</Link>
-            <Link href="/equipe" className="text-sm text-indigo-600 underline">Confier une recherche à {PERSONAS.demarchage.name}</Link>
-          </div>
+        <div className="empty" role="region" aria-label="Prospection à préparer">
+          <Icon name="contact-round" />
+          <h3>Choisir les organisations à contacter</h3>
+          <p>Aucun prospect validé pour l’instant. {PERSONAS.demarchage.name} prépare des propositions ; vous choisissez les organisations à contacter. Les contacts retenus apparaîtront ici pour suivre les échanges et les rendez-vous.</p>
+          <Link className="btn primary" href="/dashboard?view=validation">Examiner les prospects proposés</Link>{" "}
+          <Link className="btn" href="/equipe">Confier une recherche à {PERSONAS.demarchage.name}</Link>
         </div>
+      ) : visibleLeads.length === 0 ? (
+        <div role="status" className="empty">Aucun prospect ne correspond à « {search} ».</div>
       ) : (
-        visibleLeads.length === 0 ? <p role="status" className="mt-6 border-t border-slate-200 py-5 text-sm text-slate-600">Aucun prospect ne correspond à « {search} ».</p> : ORDER.filter((stage) => visibleLeads.some((l) => l.stage === stage)).map((stage) => (
-          <section key={stage} className="mt-6">
-            <h2 className="text-sm font-medium text-slate-700">
-              {STAGE_LABELS[stage]} <span className="text-slate-600">({visibleLeads.filter((l) => l.stage === stage).length})</span>
-            </h2>
-            <ul className="mt-2 space-y-2">
-              {visibleLeads
-                .filter((l) => l.stage === stage && l.id !== visibleNextLead?.id)
-                .map((lead) => (
-                  <li key={lead.id} className="rounded-lg border bg-white p-3">{leadCard(lead)}</li>
-                ))}
-            </ul>
-          </section>
-        ))
+        <div className="table-scroll"><table className="data-table">
+          <thead><tr><th>Prospect</th><th>Projet</th><th>Étape</th><th>Dernière source</th><th>Détail</th></tr></thead>
+          <tbody>{visibleLeads.map((lead) => {
+            const source = lastSource(lead);
+            const reachable = reachableStages(lead.stage);
+            return <tr key={lead.id} data-search={`${lead.name} ${lead.reason}`.toLowerCase()}>
+              <td><strong>{lead.name}</strong>{lead.publicContact && <small>{lead.publicContact}</small>}</td>
+              <td>{lead.reason}{lead.segment && <small className="capitalize">{lead.segment}</small>}</td>
+              <td>
+                <select aria-label={`Étape de ${lead.name}`} value={lead.stage} disabled={busyId === lead.id || lead.stage === "ecarte" || reachable.length === 0} onChange={(event) => declareStage(lead, event.target.value as LeadStage)}>
+                  <option value={lead.stage}>{STAGE_LABELS[lead.stage] ?? lead.stage}</option>
+                  {ORDER.filter((stage) => reachable.includes(stage) && stage !== lead.stage).map((stage) => <option key={stage} value={stage}>{STAGE_LABELS[stage]}</option>)}
+                </select>
+              </td>
+              <td><Tag color="gray">{source.label}</Tag><small>{source.date}</small></td>
+              <td><button type="button" onClick={() => setManaged({ id: lead.id, mode: null })}><Icon name="eye" /> Gérer<span className="sr-only"> : {lead.name}</span></button></td>
+            </tr>;
+          })}</tbody>
+        </table></div>
       )}
+      <p className="legend">{PERSONAS.demarchage.name} identifie des organisations correspondant à votre cible ; vous décidez lesquelles contacter et déclarez ce qui s’est passé. Chiffres calculés en base, jamais estimés par un agent. « Contacté » ne signifie ni « intéressé » ni « client ». Les rendez-vous et ventes sont déclarés par vous. Les prospects marqués « sans suite » restent comptés comme contactés.</p>
 
-      {discarded.length > 0 && (
-        <details className="mt-6">
-          <summary className="min-h-11 cursor-pointer py-2 text-sm font-medium text-slate-700">Écartés ({discarded.length})</summary>
-          <ul className="mt-2 space-y-2">
-            {discarded.map((lead) => <li key={lead.id} className="rounded-lg border bg-white p-3">{leadCard(lead)}</li>)}
-          </ul>
-        </details>
-      )}
+      {bySegment.length > 0 && <>
+        <SectionTitle title="Par type de cible" />
+        <div className="table-scroll"><table className="data-table">
+          <thead><tr><th>Type de cible</th><th>Contactés</th><th>Réponses</th><th>RDV</th><th>Clients</th></tr></thead>
+          <tbody>{bySegment.map((s) => <tr key={s.segment}>
+            <td><strong className="capitalize">{s.segment}</strong>{s.counts.contactes < MIN_CONTACTS_TO_CONCLUDE && <small>Trop tôt pour conclure (moins de {MIN_CONTACTS_TO_CONCLUDE} contacts)</small>}</td>
+            <td>{s.counts.contactes}</td><td>{s.counts.reponses}</td><td>{s.counts.rdv}</td><td>{s.counts.clients}</td>
+          </tr>)}</tbody>
+        </table></div>
+      </>}
 
-      <details className="mt-8 rounded-lg border bg-white p-3" open={sendingConfigured}>
-        <summary className="min-h-11 cursor-pointer py-2 text-sm font-medium text-slate-800">
-          Prise de contact automatique{sendingConfigured ? "" : " (pas encore disponible)"}
-        </summary>
-        <label className="mt-2 flex items-start gap-3">
+      <section className="setting-section" style={{ marginTop: 32 }}>
+        <h2>Prise de contact automatique{sendingConfigured ? "" : " (pas encore disponible)"}</h2>
+        <label className="check-label">
           <input
             type="checkbox"
             checked={autoOutreach}
             disabled={outreachSaving || !sendingConfigured}
             onChange={(e) => toggleAutoOutreach(e.target.checked)}
-            className="mt-0.5 h-4 w-4"
           />
-          <span className="text-sm">
-            <span className="font-medium text-slate-800">Laisser {PERSONAS.demarchage.name} prendre contact lui-même</span>{" "}
-            avec les prospects que vous validez, sans que vous ayez à envoyer l&apos;email vous-même. Désactivé par défaut :
-            c&apos;est vous qui décidez, prospect par prospect, de l&apos;activer ou non.
+          <span>
+            <strong>Laisser {PERSONAS.demarchage.name} prendre contact lui-même</strong>{" "}
+            avec les prospects que vous validez, sans que vous ayez à envoyer l’email vous-même. Désactivé par défaut :
+            c’est vous qui décidez, prospect par prospect, de l’activer ou non.
             {!sendingConfigured && (
-              <span className="mt-1 block text-xs text-amber-900">
-                Pas encore activable : aucun fournisseur d&apos;envoi d&apos;email n&apos;est configuré côté serveur. Le réglage
-                sera mémorisé et appliqué dès qu&apos;un canal d&apos;envoi sera en place.
-              </span>
+              <small>
+                Pas encore activable : aucun fournisseur d’envoi d’email n’est configuré côté serveur. Le réglage
+                sera mémorisé et appliqué dès qu’un canal d’envoi sera en place.
+              </small>
             )}
           </span>
         </label>
-      </details>
+      </section>
+
+      <Modal
+        open={Boolean(managedLead)}
+        onClose={() => setManaged(null)}
+        kicker="PROSPECTION"
+        title={managedLead?.name ?? ""}
+        cancelLabel="Fermer"
+      >
+        {managedLead && <LeadCard key={managedLead.id} lead={managedLead} now={openedAt} busy={busyId === managedLead.id} companyName={companyName} trade={trade} phone={phone} onPatch={patchLead} initialMode={managed?.mode ?? null} />}
+      </Modal>
     </div>
   );
 }

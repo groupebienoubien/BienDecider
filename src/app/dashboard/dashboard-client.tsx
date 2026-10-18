@@ -9,28 +9,48 @@ import { AgentRunTracker, useAgentRunMonitor } from "@/components/agent-run-trac
 import { finishedRunMessage } from "@/lib/agent-run-progress";
 import type { SafeCompany } from "@/lib/safe-company";
 import { PERSONAS, type AgentKey } from "@/lib/agents/personas";
-import { PersonaAvatar } from "@/components/persona-avatar";
 import { ProposalCard, type ProposalDecision } from "@/components/proposal-card";
+import { ProductionPreview } from "@/components/production-preview";
 import { JourneyProgress } from "@/components/journey-progress";
 import { useAgentProfileCompletion } from "@/components/agent-profile-completion";
+import { Icon, type IconName } from "@/components/icon";
+import { Modal } from "@/components/modal";
+import { PageHeading, SectionTitle, Tag } from "@/components/mockup-ui";
 import { describeProgress, summarizeProposals } from "@/lib/proposal-progress";
-import { countByFilter, FILTER_LABELS, groupQueue, type QueueFilter } from "@/lib/validation-queue";
+import { countByFilter, FILTER_LABELS, matchesFilter, type QueueFilter } from "@/lib/validation-queue";
 import { needsAttention } from "@/lib/pending-decisions";
+import { proposalStatusView, STATUS_TAG_COLORS } from "@/lib/proposal-status";
+import { proposalChannel } from "@/lib/proposal-channel";
 import { openPaul } from "@/lib/paul-context";
 import { groupPlanItems } from "@/lib/action-plan-view";
 
 type PlanItemWithProposals = ActionPlanItem & { proposals: AgentProposal[]; agentRuns: AgentRunView[] };
 type View = "today" | "plan" | "validation" | "historique";
 
-function proposalChannel(kind: string) {
-  if (kind === "site_web_content") return "Site";
-  if (kind === "social_post") return "Facebook";
-  if (kind === "gmail_email" || kind === "prospecting_email") return "Gmail";
-  if (kind === "gbp_update" || kind === "review_reply") return "Google";
-  return "Prospection";
+const EVENT_TIME = new Intl.DateTimeFormat("fr-FR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "Europe/Paris" });
+const COUNT_WORDS = ["aucune", "une", "deux", "trois", "quatre", "cinq", "six", "sept", "huit", "neuf", "dix"];
+const THEME_ICONS: Record<string, IconName> = { Visibilité: "megaphone", Conversion: "panel-top", Prospection: "contact-round" };
+const CYCLE_STEPS = ["Action validée", "Production à relire", "Confirmation", "Suivi & historique"];
+
+function eventLabel(proposal: AgentProposal) {
+  if (proposal.status === "executee") return proposal.kind === "gmail_email" ? "Mail envoyé" : proposal.kind === "site_web_content" ? "Page publiée" : "Production publiée";
+  if (proposal.status === "rejetee") return "Version rejetée";
+  if (proposal.status === "validee" || proposal.status === "modifiee") return "Version approuvée";
+  if (proposal.status === "envoi_incertain" || proposal.status === "publication_incertaine") return "Résultat incertain";
+  return "Décision enregistrée";
 }
 
-export function DashboardClient({ company, initialPlanItems, initialAgentRuns, initialProposals, leadSources, initialLeadStats, initialDiagnosticCount, initialView, riskSettings, facebookPageName }: {
+function eventTime(proposal: AgentProposal) {
+  return EVENT_TIME.format(new Date(proposal.decidedAt ?? proposal.createdAt));
+}
+
+function productionStage(status: string) {
+  if (status === "en_attente" || status === "rejetee") return 2;
+  if (status === "validee" || status === "modifiee") return 3;
+  return 4;
+}
+
+export function DashboardClient({ company, initialPlanItems, initialAgentRuns, initialProposals, leadSources, initialLeadStats, initialDiagnosticCount, initialView, riskSettings, facebookPageName, todayLabel, focusProposalId }: {
   company: SafeCompany;
   initialPlanItems: PlanItemWithProposals[];
   initialAgentRuns: AgentRunView[];
@@ -41,6 +61,8 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
   initialView: View;
   riskSettings: Record<string, string>;
   facebookPageName: string | null;
+  todayLabel: string;
+  focusProposalId?: string;
 }) {
   const { requestProfile, profileDialog, checking } = useAgentProfileCompletion();
   const router = useRouter();
@@ -54,10 +76,14 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
   const [notice, setNotice] = useState<string | null>(null);
   const [direction, setDirection] = useState(company.direction ?? "");
   const [directionSaving, setDirectionSaving] = useState(false);
-  const [discardingId, setDiscardingId] = useState<string | null>(null);
+  const [planModalId, setPlanModalId] = useState<string | null>(null);
+  const [discarding, setDiscarding] = useState(false);
   const [discardReason, setDiscardReason] = useState("");
+  const [refreshOpen, setRefreshOpen] = useState(false);
+  const [inspectedId, setInspectedId] = useState<string | null>(initialView === "historique" && focusProposalId ? focusProposalId : null);
   const [decidedIds, setDecidedIds] = useState<string[]>([]);
   const [queueFilter, setQueueFilter] = useState<QueueFilter>("all");
+  const [selectedId, setSelectedId] = useState<string | undefined>(focusProposalId);
   const [historyFilter, setHistoryFilter] = useState("Tout l’historique");
   const monitorRun = useAgentRunMonitor(initialAgentRuns, {
     onUpdate: (run) => setAgentRuns((previous) => [run, ...previous.filter((entry) => entry.id !== run.id)].slice(0, 20)),
@@ -98,25 +124,13 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
     setError(error instanceof Error ? error.message : "L'opération a échoué.");
   }
 
-  async function handleGeneratePlan() {
+  async function handleGeneratePlan(retry = false) {
     setPlanLoading(true);
     setError(null);
     try {
       const { run } = await request("/api/co-ceo/plan", "POST", { requestId: crypto.randomUUID() });
       await refresh();
-      setNotice("Paul prépare le plan en arrière-plan.");
-      void monitorRun(run.id);
-    } catch (error) { reportError(error); }
-    finally { setPlanLoading(false); }
-  }
-
-  async function handleRetryPlanGeneration() {
-    setPlanLoading(true);
-    setError(null);
-    try {
-      const { run } = await request("/api/co-ceo/plan", "POST", { requestId: crypto.randomUUID() });
-      await refresh();
-      setNotice("Paul relance la préparation du plan en arrière-plan.");
+      setNotice(retry ? "Paul relance la préparation du plan en arrière-plan." : "Paul prépare le plan en arrière-plan.");
       void monitorRun(run.id);
     } catch (error) { reportError(error); }
     finally { setPlanLoading(false); }
@@ -128,6 +142,7 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
     setNotice(null);
     try {
       const { run } = await request(`/api/action-plan/${item.id}/launch`, "POST", retryRunId ? { retryRunId } : {});
+      setPlanModalId(null);
       await refresh();
       setNotice("Action confiée. L'agent travaille en arrière-plan.");
       void monitorRun(run.id);
@@ -153,7 +168,8 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
     setError(null);
     try {
       await request(`/api/action-plan/${itemId}`, "PATCH", { status: "ecarte", feedback: discardReason });
-      setDiscardingId(null);
+      setPlanModalId(null);
+      setDiscarding(false);
       setDiscardReason("");
       await refresh();
       setNotice("Action écartée. Elle reste disponible dans l'historique.");
@@ -175,7 +191,7 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
       if (status !== "brouillon") setDecidedIds((previous) => [...previous, proposalId]);
       await refresh();
       setNotice(status === "a_relire"
-        ? "Production rouverte : elle est de nouveau à relire dans la file À valider."
+        ? "Production rouverte : elle est de nouveau à relire dans la file des productions."
         : status === "brouillon"
         ? "Brouillon enregistré. Il n'est pas approuvé : rien ne sera publié ni envoyé."
         : status === "modifiee"
@@ -241,226 +257,323 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
   const actionable = proposals.filter((proposal) => needsAttention(proposal, facebookPageName));
   const validationItems = proposals.filter((proposal) => needsAttention(proposal, facebookPageName) || decidedIds.includes(proposal.id));
   const queueCounts = countByFilter(validationItems);
-  const queueGroups = groupQueue(validationItems, queueFilter, new Map(planItems.map((item) => [item.id, item.title])));
+  const queueItems = validationItems.filter((proposal) => matchesFilter(proposal.status, queueFilter));
+  const selectedProposal = queueItems.find((proposal) => proposal.id === selectedId) ?? queueItems[0];
   const history = proposals.filter((proposal) => !needsAttention(proposal, facebookPageName));
   const visibleHistory = history.filter((proposal) => historyFilter === "Tout l’historique" || proposalChannel(proposal.kind) === historyFilter);
-  const nextItem = activeItems.find((item) => item.status === "propose");
+  const proposedItems = activeItems.filter((item) => item.status === "propose");
   const runningItem = activeItems.find((item) => item.status === "en_cours");
   const needsFirstDiagnostic = initialDiagnosticCount === 0 && planItems.length === 0;
   const emptyNextHref = needsFirstDiagnostic ? "/diagnostic" : "/dashboard?view=plan";
   const emptyNextLabel = needsFirstDiagnostic ? "Commencer par le diagnostic" : activeItems.length > 0 ? "Voir les actions du plan" : "Revenir au plan d'action";
   const locked = busyId !== null || planLoading;
+  const planOf = (proposal: AgentProposal) => {
+    const item = planItems.find((entry) => entry.id === proposal.planItemId);
+    return item ? { title: item.title, rationale: item.rationale, priority: item.priority, theme: item.theme } : null;
+  };
+  const decisions = [
+    ...proposedItems.map((item) => ({ key: `plan-${item.id}`, priority: item.priority ?? 99, item, proposal: undefined })),
+    ...actionable.map((proposal) => ({ key: proposal.id, priority: planItems.find((item) => item.id === proposal.planItemId)?.priority ?? 99, item: undefined, proposal })),
+  ].sort((left, right) => left.priority - right.priority);
+  const planModalItem = planItems.find((item) => item.id === planModalId);
+  const inspected = proposals.find((proposal) => proposal.id === inspectedId);
+  const planCount = activeItems.length;
+  const planTitle = planCount === 0 ? "Un plan à préparer." : `Un plan, ${COUNT_WORDS[planCount] ?? planCount} ${planCount > 1 ? "priorités" : "priorité"}.`;
+  const topTheme = proposedItems[0]?.theme ?? planItems.find((item) => item.theme)?.theme;
+  const notices = <>
+    {error && <p role="alert" className="warning">{error}</p>}
+    {notice && <p role="status" className="notice">{notice}</p>}
+  </>;
+  const goalLine = (extra: string) => <div className="goal-line"><Icon name="target" /><span>{company.objective ? <>Mon objectif : <strong>{company.objective}</strong></> : "Mon objectif : à définir"}{extra}</span><Link href="/entreprise?tab=objectifs">{company.objective ? "Ajuster l’objectif" : "Définir l’objectif"} →</Link></div>;
 
   return (
-    <div className="w-full">
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-indigo-700">Mon activité</p>
-          <h1 className="text-2xl font-semibold">{({ today: "À décider", plan: "Mon plan d’action", validation: "Productions", historique: "Historique" })[initialView]}</h1>
-          <p className="mt-1 text-sm text-slate-500">{initialView === "today" ? "Voici ce qui mérite votre attention aujourd’hui." : company.objective || "Votre activité, vos priorités"}</p>
-        </div>
-        <Link href="/rapport" className="text-sm font-medium text-indigo-600 underline underline-offset-4">Voir les résultats</Link>
-      </header>
-      {initialView === "today" && <dl className="decision-metrics">
-        <div><dt>À décider</dt><dd>{actionable.length + activeItems.filter((item) => item.status === "propose").length}<small>Validation ou action à confier</small></dd></div>
-        <div><dt>Productions diffusées</dt><dd>{proposals.filter((proposal) => proposal.status === "executee").length}<small>Exécutions enregistrées</small></dd></div>
-        <div><dt>Prospects actifs</dt><dd>{initialLeadStats.active}<small>{initialLeadStats.appointments} rendez-vous déclarés</small></dd></div>
-      </dl>}
-      {initialView === "today" && company.objective && <div className="goal-line mt-6 flex flex-wrap items-center justify-between gap-3 border-y border-slate-200 py-4 text-sm">
-        <span>Mon objectif : <strong className="font-medium">{company.objective}</strong></span>
-        <Link href="/entreprise?tab=objectifs" className="text-sm font-medium text-indigo-700 underline underline-offset-4">Ajuster l’objectif</Link>
-      </div>}
-      {initialView === "today" && needsFirstDiagnostic && <JourneyProgress
-        objectiveComplete={Boolean(company.objective?.trim())}
-        diagnosticComplete={initialDiagnosticCount > 0}
-        planComplete={planItems.length > 0}
-        workStarted={proposals.length > 0 || planItems.some((item) => ["en_cours", "lance", "termine"].includes(item.status))}
-        needsValidation={actionable.length > 0}
-        resultsAvailable={proposals.some((proposal) => proposal.status === "executee")}
-        planLoading={planLoading}
-        onPreparePlan={handleGeneratePlan}
-      />}
-      {initialView === "today" && <section className="mt-6 border-y border-slate-200 py-5" aria-labelledby="next-step">
-        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Prochaine étape</p>
-        <div className="mt-2 flex flex-wrap items-center justify-between gap-4">
-          <h2 id="next-step" className="max-w-xl text-lg font-medium">{actionable.length > 0 ? `${actionable.length} production(s) attendent votre décision` : nextItem ? nextItem.title : runningItem ? `En cours : ${runningItem.title}` : needsFirstDiagnostic ? "Repérer les premières opportunités" : "Préparer les prochaines actions"}</h2>
-          {actionable.length > 0 ? (
-            <Link href="/dashboard?view=validation" className="rounded-lg bg-indigo-600 px-4 py-2 text-sm text-white">Examiner les productions</Link>
-          ) : runningItem ? (
-            <span role="status" className="text-sm text-slate-600">L&apos;agent prépare le résultat…</span>
-          ) : nextItem ? (
-            <Link href="/dashboard?view=plan" className="rounded-lg bg-indigo-600 px-4 py-2 text-sm text-white">Examiner l&apos;action</Link>
-          ) : needsFirstDiagnostic ? (
-            <Link href="/diagnostic" className="rounded-lg bg-indigo-600 px-4 py-2 text-sm text-white">Commencer par le diagnostic</Link>
-          ) : (
-            <button onClick={handleGeneratePlan} disabled={locked} className="rounded-lg bg-indigo-600 px-4 py-2 text-sm text-white disabled:opacity-50">{planLoading ? "Paul réfléchit…" : "Préparer le plan"}</button>
-          )}
-        </div>
-      </section>}
+    <div>
       {initialView === "today" && <>
-        {actionable.length > 0 && <section className="mt-7" aria-label="Vos prochaines décisions">
-          <h2 className="mb-4 text-lg font-semibold">À examiner maintenant</h2>
-          <div>{actionable.slice(0, 3).map((proposal) => <article key={proposal.id} className="decision-row">
-            <div><p>{PERSONAS[proposal.agent as AgentKey]?.name ?? proposal.agent} · {proposal.status === "validee" || proposal.status === "modifiee" ? "Approuvée, diffusion à confirmer" : "Relecture attendue"}</p><h3 className="mt-1 font-semibold">{proposal.title}</h3><p>{planItems.find((item) => item.id === proposal.planItemId)?.title ?? "Demande à l’équipe"}</p></div>
-            <Link href={`/dashboard?view=validation&proposal=${encodeURIComponent(proposal.id)}#proposal-${encodeURIComponent(proposal.id)}`}>Examiner →</Link>
-          </article>)}</div>
-        </section>}
-        <div className="mt-8 grid gap-8 lg:grid-cols-2">
-          <section><h2 className="text-lg font-semibold">Ce qui a été fait</h2>
-            {history.length === 0 ? <p className="mt-3 text-sm text-slate-600">Vos décisions apparaîtront ici après la première relecture.</p> : <ul className="mt-3 divide-y divide-slate-200">{history.slice(0, 3).map((proposal) => <li key={proposal.id} className="py-3"><Link className="text-sm font-medium text-indigo-700" href={`/dashboard?view=historique&proposal=${encodeURIComponent(proposal.id)}`}>{proposal.title}</Link><p className="mt-1 text-xs text-slate-600">{proposal.status === "executee" ? "Exécution enregistrée" : proposal.status === "rejetee" ? "Rejetée" : "Décision enregistrée"}</p></li>)}</ul>}
-            <Link href="/dashboard?view=historique" className="mt-3 inline-block text-sm text-indigo-700 underline">Consulter l&apos;historique</Link>
+        <PageHeading
+          kicker={todayLabel}
+          title="Chaque décision fait avancer votre activité."
+          description="Bonjour. Voici ce qui mérite votre attention aujourd’hui."
+          actions={<button type="button" onClick={() => setRefreshOpen(true)}><Icon name="refresh-cw" /> Actualiser</button>}
+        />
+        {goalLine("")}
+        <div className="metrics">
+          <div className="metric"><div className="metric-label"><span className="dot orange" /> À décider</div><div className="metric-value">{String(decisions.length).padStart(2, "0")}<small>Votre validation attendue</small></div><small>Classées par priorité</small></div>
+          <div className="metric"><div className="metric-label"><span className="dot green" /> Productions diffusées</div><div className="metric-value">{String(proposals.filter((proposal) => proposal.status === "executee").length).padStart(2, "0")}<small>Historique disponible</small></div><small>Site, publications et mails</small></div>
+          <div className="metric"><div className="metric-label"><span className="dot blue" /> Prospects actifs</div><div className="metric-value">{String(initialLeadStats.active).padStart(2, "0")}<small>{initialLeadStats.appointments} rendez-vous déclaré(s)</small></div><small>Pas de vente attribuée automatiquement</small></div>
+        </div>
+        {notices}
+        {needsFirstDiagnostic && <JourneyProgress
+          objectiveComplete={Boolean(company.objective?.trim())}
+          diagnosticComplete={initialDiagnosticCount > 0}
+          planComplete={planItems.length > 0}
+          workStarted={proposals.length > 0 || planItems.some((item) => ["en_cours", "lance", "termine"].includes(item.status))}
+          needsValidation={actionable.length > 0}
+          resultsAvailable={proposals.some((proposal) => proposal.status === "executee")}
+          planLoading={planLoading}
+          onPreparePlan={() => void handleGeneratePlan()}
+        />}
+        <AgentRunTracker runs={agentRuns} onCheck={(runId) => void checkRun(runId)} onRetry={() => void handleGeneratePlan(true)} retryDisabled={planLoading} />
+        <SectionTitle title="Votre prochaine décision"><Link href="/dashboard?view=plan">Tout le plan →</Link></SectionTitle>
+        {decisions.length > 0 ? (
+          <div className="decision-list" aria-label="Vos prochaines décisions" role="region">
+            {decisions.slice(0, 5).map((decision, index) => {
+              const first = index === 0;
+              if (decision.item) {
+                const persona = PERSONAS[decision.item.agent as AgentKey];
+                return <article key={decision.key} className="decision-row">
+                  <span className="priority">{String(index + 1).padStart(2, "0")}</span>
+                  <div>
+                    <div className="tags"><Tag color="orange">À valider</Tag>{decision.item.theme && <Tag color="blue">{decision.item.theme}</Tag>}<small>{persona?.name ?? decision.item.agent} · {decision.item.timing}</small></div>
+                    <h3>{decision.item.title}</h3>
+                    <p>Valider cette action lancera la préparation d’une production par {persona?.name ?? "l’agent"}. Rien ne sera publié ni envoyé.</p>
+                  </div>
+                  <Link className={`btn ${first ? "primary" : ""}`} href={`/dashboard?view=plan#plan-item-${decision.item.id}`}>Examiner l’action <Icon name="arrow-right" /></Link>
+                </article>;
+              }
+              const proposal = decision.proposal!;
+              const status = proposalStatusView(proposal.status, proposal.kind, facebookPageName);
+              const plan = planOf(proposal);
+              const approved = proposal.status === "validee" || proposal.status === "modifiee";
+              return <article key={decision.key} className="decision-row">
+                <span className="priority">{String(index + 1).padStart(2, "0")}</span>
+                <div>
+                  <div className="tags"><Tag color={STATUS_TAG_COLORS[status.tone]}>{status.label}</Tag>{plan?.theme && <Tag color="blue">{plan.theme}</Tag>}<small>{PERSONAS[proposal.agent as AgentKey]?.name ?? proposal.agent} · {proposalChannel(proposal.kind)}</small></div>
+                  <h3>{proposal.title}</h3>
+                  <p>{approved ? "Version approuvée. La diffusion attend votre confirmation." : proposal.status === "publication_incertaine" ? "Le canal n’a pas confirmé le résultat. Vérifier avant toute nouvelle tentative." : plan?.title ?? "Une production à examiner, reliée à votre objectif."}</p>
+                </div>
+                <Link className={`btn ${first ? "primary" : ""}`} href={`/dashboard?view=validation&proposal=${encodeURIComponent(proposal.id)}#proposal-${encodeURIComponent(proposal.id)}`}>{approved ? "Préparer la diffusion" : "Examiner"} <Icon name="arrow-right" /></Link>
+              </article>;
+            })}
+          </div>
+        ) : runningItem ? (
+          <div className="empty"><Icon name="refresh-cw" /><h3>En cours : {runningItem.title}</h3><p role="status">L’agent prépare le résultat…</p></div>
+        ) : needsFirstDiagnostic ? (
+          <div className="empty"><Icon name="scan-line" /><h3>Repérer les premières opportunités</h3><p>Lancez le diagnostic pour obtenir les premiers constats. Vous déciderez ensuite des actions à confier.</p><Link className="btn primary" href="/diagnostic">Commencer par le diagnostic</Link></div>
+        ) : (
+          <div className="empty"><Icon name="circle-check" /><h3>Toutes les décisions sont à jour</h3><p>Les prochains signaux alimenteront votre diagnostic.</p><button type="button" onClick={() => void handleGeneratePlan()} disabled={locked}>{planLoading ? "Paul réfléchit…" : "Préparer le plan"}</button></div>
+        )}
+        <div className="two-column">
+          <section>
+            <SectionTitle title="Ce qui a été fait"><Link href="/dashboard?view=historique">Voir l’historique →</Link></SectionTitle>
+            {history.length === 0 ? <p className="legend">Vos décisions apparaîtront ici après la première relecture.</p> : history.slice(0, 3).map((proposal) => <div key={proposal.id} className="activity-row">
+              <span className="activity-icon"><Icon name="check" /></span>
+              <div><strong>{eventLabel(proposal)} · {proposalChannel(proposal.kind)}</strong><small>{proposal.title} · {eventTime(proposal)}</small></div>
+              <Link className="icon-button" href={`/dashboard?view=historique&proposal=${encodeURIComponent(proposal.id)}`} aria-label={`Voir : ${proposal.title}`} title="Voir la production"><Icon name="arrow-up-right" /></Link>
+            </div>)}
           </section>
-          <section className="border-t-2 border-indigo-600 bg-indigo-50 p-5"><div className="flex items-center gap-3"><PersonaAvatar agentKey="co_ceo" size={32} /><h2 className="text-base font-semibold">Le point avec Paul</h2></div><p className="mt-4 text-sm text-slate-700">{actionable.length > 0 ? "Des productions sont prêtes pour votre relecture. Examinons-les avant de préparer la suite." : "Faisons le point sur votre objectif et les prochains sujets à confier à l’équipe."}</p><button type="button" onClick={() => openPaul()} className="mt-4 min-h-11 text-sm font-semibold text-indigo-700">Échanger avec Paul →</button></section>
+          <aside className="paul-note">
+            <header><span className="paul-avatar" aria-hidden="true">P</span><div><strong>Le point de Paul</strong><small>{topTheme ? `Priorité à ${topTheme.toLowerCase()}` : "Votre copilote"}</small></div></header>
+            <p>{actionable.length > 0 ? "Des productions sont prêtes pour votre relecture. Examinons-les avant de préparer la suite, sans multiplier les contenus." : "Faisons le point sur votre objectif et les prochains sujets à confier à l’équipe."}</p>
+            <button type="button" onClick={() => openPaul()}>Parler des priorités <Icon name="arrow-right" /></button>
+          </aside>
         </div>
       </>}
-      {initialView === "validation" && (
-        <p className="mt-4 rounded-lg bg-slate-100 p-3 text-sm text-slate-800">
-          {actionable.length > 0 ? `${actionable.length} production(s) attendent votre décision. Valider ou rejeter ne publie ni n'envoie rien.` : "Aucune production n'attend votre décision."}
-        </p>
-      )}
-      {error && <p role="alert" className="mt-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}
-      {notice && <p role="status" className="mt-4 rounded-lg bg-emerald-50 p-3 text-sm text-emerald-800">{notice}</p>}
-      <AgentRunTracker runs={agentRuns} onCheck={(runId) => void checkRun(runId)} onRetry={() => void handleRetryPlanGeneration()} retryDisabled={planLoading} />
-      {initialView === "plan" && (
-        <section id="plan-actions" className="py-5" aria-label="Plan d'action">
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-            <h2 className="font-medium">Priorités de {PERSONAS.co_ceo.name}</h2>
-            {!needsFirstDiagnostic && <button onClick={handleGeneratePlan} disabled={locked} className="text-sm font-medium text-indigo-600 underline underline-offset-4 disabled:opacity-50">{planLoading ? "Préparation…" : "Compléter le plan"}</button>}
-          </div>
-          {activeItems.length === 0 && <div className="py-6" aria-label="Plan à préparer">
-            <h3 className="text-base font-medium">Choisir les prochaines activités à confier</h3>
-            <p className="mt-2 max-w-prose text-sm text-slate-600">Aucune action à lancer pour le moment. Le plan rassemble les priorités proposées par Paul ; vous choisissez celles à confier à l&apos;équipe.</p>
-            {needsFirstDiagnostic ? <Link href="/diagnostic" className="mt-3 inline-block text-sm font-medium text-indigo-600 underline">Commencer par le diagnostic</Link> : <p className="mt-3 text-sm text-slate-500">Préparez le plan avec Paul pour obtenir de nouvelles propositions. Aucune action externe ne sera exécutée à cette étape.</p>}
+
+      {initialView === "plan" && <>
+        <PageHeading
+          kicker="DU DIAGNOSTIC À L’ACTION"
+          title={planTitle}
+          description="Une action validée autorise la préparation. La diffusion reste une décision distincte."
+          actions={<button type="button" onClick={() => openPaul()}><Icon name="message-circle" /> Revoir avec Paul</button>}
+        />
+        {goalLine("")}
+        {notices}
+        <AgentRunTracker runs={agentRuns} onCheck={(runId) => void checkRun(runId)} onRetry={() => void handleGeneratePlan(true)} retryDisabled={planLoading} />
+        <section id="plan-actions" aria-label="Plan d'action">
+          {activeItems.length === 0 && <div className="empty" aria-label="Plan à préparer">
+            <Icon name="list-checks" />
+            <h3>Choisir les prochaines activités à confier</h3>
+            <p>Aucune action à lancer pour le moment. Le plan rassemble les priorités proposées par Paul ; vous choisissez celles à confier à l’équipe.</p>
+            {needsFirstDiagnostic ? <Link className="btn primary" href="/diagnostic">Commencer par le diagnostic</Link> : <p>Préparez le plan avec Paul pour obtenir de nouvelles propositions. Aucune action externe ne sera exécutée à cette étape.</p>}
           </div>}
-          {planGroups.map(({ theme, items }) => <section key={theme} className="mt-5" aria-label={`Thème ${theme}`}>
-            <h3 className="border-b border-slate-200 pb-2 text-sm font-semibold text-slate-700">{theme}</h3>
-            <ol className="divide-y divide-slate-200">
+          {planGroups.map(({ theme, items }) => <section key={theme} aria-label={`Thème ${theme}`}>
+            <div className="theme-heading"><Icon name={THEME_ICONS[theme] ?? "list-checks"} />{theme}</div>
             {items.map((item) => {
               const persona = PERSONAS[item.agent as AgentKey];
               const count = proposals.filter((proposal) => proposal.planItemId === item.id && needsAttention(proposal, facebookPageName)).length;
               const progress = summarizeProposals(proposals.filter((proposal) => proposal.planItemId === item.id));
               const progressParts = describeProgress(progress);
+              const proposed = item.status === "propose";
               return (
-                <li key={item.id} className="py-5">
-                  <div className="flex flex-wrap items-start gap-3">
-                    <span className="pt-1 text-sm text-slate-600">P{item.priority ?? "–"}</span>
-                    <PersonaAvatar agentKey={item.agent as AgentKey} size={32} />
-                    <div className="min-w-0 flex-1 basis-40">
-                      <p className="text-xs text-slate-500">{persona?.name ?? item.agent} · {item.timing}</p>
-                      <h3 className="mt-1 font-medium">{item.title}</h3>
-                      <p className="mt-2 max-w-2xl text-sm text-slate-600">{item.rationale}</p>
-                      {progressParts.length > 0 && <p className="mt-2 text-xs text-slate-600">Avancement : {progressParts.join(" · ")}.</p>}
-                      {progress.total > 0 && progress.rejected === progress.total && <p className="mt-1 text-xs text-slate-600">Rien n&apos;a été retenu : l&apos;action reste ouverte. Précisez votre consigne à l&apos;équipe pour obtenir une autre proposition.</p>}
-                    </div>
-                    {item.status === "en_cours" ? (
-                      <div className="flex items-center gap-3">
-                        <span role="status" className="text-sm text-slate-600">En cours</span>
-                        {item.agentRuns[0] && <button onClick={() => void checkRun(item.agentRuns[0].id)} className="text-xs text-indigo-600 underline">Vérifier l&apos;état</button>}
-                      </div>
-                    ) : item.status === "propose" ? (
-                      <div className="flex items-center gap-3">
-                        <button onClick={() => setDiscardingId(discardingId === item.id ? null : item.id)} disabled={locked} className="text-xs text-slate-500 disabled:opacity-50">Écarter</button>
-                        <button onClick={() => void requestProfile(item.agent as AgentKey, () => handleLaunch(item, item.agentRuns[0]?.status === "failed" ? item.agentRuns[0].id : undefined))} disabled={locked || checking} className="rounded-lg bg-slate-900 px-3 py-2 text-sm text-white disabled:opacity-50">{busyId === item.id ? "Mise en file…" : item.agentRuns[0]?.status === "failed" ? "Relancer" : "Lancer"}</button>
-                      </div>
-                    ) : (
-                      <Link href={count > 0 ? "/dashboard?view=validation" : "/dashboard?view=historique"} className="text-sm text-indigo-600 underline">{count > 0 ? `${count} à examiner` : "Voir la production"}</Link>
-                    )}
+                <article key={item.id} id={`plan-item-${item.id}`} className="plan-row">
+                  <span className="priority">{item.priority ? String(item.priority).padStart(2, "0") : "–"}</span>
+                  <div>
+                    <div className="tags">{item.priority && <Tag color={item.priority === 1 ? "orange" : "gray"}>Priorité {item.priority}</Tag>}<Tag color={proposed ? "orange" : "green"}>{proposed ? "À valider" : item.status === "en_cours" ? "En cours" : "Lancée"}</Tag></div>
+                    <h3>{item.title}</h3>
+                    <p>{item.rationale}</p>
+                    <small>{persona?.name ?? item.agent} · {item.timing}</small>
+                    {progressParts.length > 0 && <small>Avancement : {progressParts.join(" · ")}.</small>}
+                    {progress.total > 0 && progress.rejected === progress.total && <small>Rien n’a été retenu : l’action reste ouverte. Précisez votre consigne à l’équipe pour obtenir une autre proposition.</small>}
                   </div>
-                  {discardingId === item.id && (
-                    <form onSubmit={(event) => { event.preventDefault(); void handleDiscard(item.id); }} className="mt-3 flex flex-wrap gap-2">
-                      <input aria-label="Raison de l'abandon" placeholder="Pourquoi écarter cette action ?" value={discardReason} onChange={(event) => setDiscardReason(event.target.value)} className="min-w-0 flex-1 basis-48 rounded-lg border px-3 py-2 text-sm" />
-                      <button disabled={locked} className="rounded-lg bg-slate-700 px-3 py-2 text-sm text-white disabled:opacity-50">Confirmer</button>
-                    </form>
+                  {item.status === "en_cours" ? (
+                    item.agentRuns[0] ? <button type="button" onClick={() => void checkRun(item.agentRuns[0].id)}>Vérifier l’état</button> : <span role="status">En cours</span>
+                  ) : proposed ? (
+                    <button type="button" className="primary" onClick={() => { setDiscarding(false); setDiscardReason(""); setPlanModalId(item.id); }} disabled={locked}>{item.agentRuns[0]?.status === "failed" ? "Relancer l’action" : "Examiner et valider"}</button>
+                  ) : (
+                    <Link className="btn" href={count > 0 ? "/dashboard?view=validation" : "/dashboard?view=historique"}>{count > 0 ? `${count} à examiner` : "Voir la production"}</Link>
                   )}
-                </li>
+                </article>
               );
             })}
-          </ol>
           </section>)}
-          {closedItems.length > 0 && <Link href="/dashboard?view=historique" className="mt-4 inline-block text-sm text-slate-500 underline">{closedItems.length} action(s) traitée(s) ou écartée(s)</Link>}
+          {closedItems.length > 0 && <p className="legend"><Link href="/dashboard?view=historique">{closedItems.length} action(s) traitée(s) ou écartée(s)</Link></p>}
+          <div className="notice">Prochaine réévaluation : après un nouveau retour prospect ou à votre demande. Les actions déjà validées ne sont pas remplacées automatiquement. {!needsFirstDiagnostic && <button type="button" className="text-link" onClick={() => void handleGeneratePlan()} disabled={locked}>{planLoading ? "Préparation…" : "Compléter le plan"}</button>}</div>
         </section>
-      )}
-      {initialView === "validation" && (
-        <section className="space-y-4 py-5" aria-label="Productions à valider">
-          {validationItems.length === 0 && <div className="py-6" aria-label="Validation à venir">
-            <h2 className="text-base font-medium">Tout est à jour.</h2>
-            <p className="mt-2 max-w-prose text-sm text-slate-600">Aucune production à valider ou à publier. Les brouillons de l&apos;équipe apparaissent ici pour être relus, corrigés ou refusés avant toute action externe.</p>
-            <Link href={emptyNextHref} className="mt-3 inline-block text-sm font-medium text-indigo-600 underline">{emptyNextLabel}</Link>
+        <section className="setting-section">
+          <h2>Faire le point avec Paul</h2>
+          <label className="field" htmlFor="direction">Consigne pour l’équipe
+            <textarea id="direction" value={direction} onChange={(event) => setDirection(event.target.value)} placeholder="Priorités, contraintes, actualités…" rows={4} />
+          </label>
+          <button type="button" className="primary" onClick={handleSaveDirection} disabled={directionSaving}>{directionSaving ? "Enregistrement…" : "Enregistrer la consigne"}</button>
+          <p>Paul est disponible sur chaque page avec le bouton « Échanger avec Paul ». La conversation et votre brouillon sont conservés d’une page à l’autre.</p>
+        </section>
+      </>}
+
+      {initialView === "validation" && <>
+        <PageHeading kicker="ATELIER DE PRODUCTION" title="Du brouillon à la diffusion." description="Chaque version conserve son contenu, vos retours et votre décision." />
+        <div className="sync-line"><span>{actionable.length > 0 ? `${actionable.length} production(s) attendent votre décision. Approuver ou rejeter ne publie ni n’envoie rien.` : "Aucune production n’attend votre décision."}</span><Link href="/dashboard?view=plan">Voir le plan associé →</Link></div>
+        {notices}
+        <AgentRunTracker runs={agentRuns} onCheck={(runId) => void checkRun(runId)} onRetry={() => void handleGeneratePlan(true)} retryDisabled={planLoading} />
+        <section aria-label="Productions à valider">
+          {validationItems.length === 0 && <div className="empty" aria-label="Validation à venir">
+            <Icon name="circle-check" />
+            <h3>Tout est à jour.</h3>
+            <p>Aucune production à valider ou à publier. Les brouillons de l’équipe apparaissent ici pour être relus, corrigés ou refusés avant toute action externe.</p>
+            <Link className="btn primary" href={emptyNextHref}>{emptyNextLabel}</Link>
           </div>}
-          {validationItems.length > 0 && (
-            <div role="group" aria-label="Filtrer les productions" className="flex flex-wrap gap-2">
+          {validationItems.length > 0 && <div className="cycle" aria-label="Étapes de la production">
+            {CYCLE_STEPS.map((label, index) => <span key={label} className={selectedProposal && productionStage(selectedProposal.status) === index + 1 ? "current" : undefined}><b>{index + 1}</b>{label}</span>)}
+          </div>}
+          {validationItems.length > 1 && (
+            <div className="tabs" role="group" aria-label="Filtrer les productions">
               {(Object.keys(FILTER_LABELS) as QueueFilter[]).map((filter) => (
-                <button key={filter} type="button" aria-pressed={queueFilter === filter} onClick={() => setQueueFilter(filter)}
-                  className={`min-h-11 rounded-lg border px-3 text-sm ${queueFilter === filter ? "border-indigo-700 bg-indigo-50 font-medium text-indigo-900" : "border-slate-300 text-slate-700"}`}>
+                <button key={filter} type="button" aria-pressed={queueFilter === filter} className={queueFilter === filter ? "selected" : undefined} onClick={() => setQueueFilter(filter)}>
                   {FILTER_LABELS[filter]} ({queueCounts[filter]})
                 </button>
               ))}
             </div>
           )}
-          {validationItems.length > 0 && queueGroups.length === 0 && (
-            <div role="status" className="py-4">
-              <p className="text-sm text-slate-700">Aucune production ne correspond à ce filtre. {queueCounts.all} production(s) restent dans la file.</p>
-              <button type="button" onClick={() => setQueueFilter("all")} className="mt-2 min-h-11 text-sm font-medium text-indigo-700 underline">Afficher toutes les productions</button>
+          {validationItems.length > 0 && queueItems.length === 0 && (
+            <div role="status" className="empty">
+              <p>Aucune production ne correspond à ce filtre. {queueCounts.all} production(s) restent dans la file.</p>
+              <button type="button" onClick={() => setQueueFilter("all")}>Afficher toutes les productions</button>
             </div>
           )}
-          <div className={queueGroups.length > 0 ? "production-workspace" : undefined}>
-          {queueGroups.length > 0 && <nav className="production-index" aria-label="Sommaire des productions">
-            {queueGroups.map((group) => <div key={group.key}>
-              <p className="mb-2 text-xs font-semibold text-slate-600">{group.title}</p>
-              {group.items.map((proposal) => <a key={proposal.id} href={`#proposal-${proposal.id}`} className="mb-2 block rounded-md border border-slate-200 bg-white p-3 text-sm font-medium text-slate-800"><span className="mb-1 block text-xs font-normal text-indigo-700">{PERSONAS[proposal.agent as AgentKey]?.name ?? proposal.agent} · v{proposal.version}</span>{proposal.title}</a>)}
-            </div>)}
-          </nav>}
-          <div className="min-w-0 space-y-6">
-          {queueGroups.map((group) => (
-            <section key={group.key} aria-labelledby={`group-${group.key}`} className="space-y-3">
-              <h2 id={`group-${group.key}`} className="text-sm font-semibold text-slate-800">{group.title} <span className="font-normal text-slate-600">({group.items.length})</span></h2>
-              {group.items.map((proposal) => (
-                <ProposalCard key={proposal.id} proposal={proposal} onDecision={handleDecision} onExecute={handleExecute} onSetLeadSource={handleSetLeadSource} busy={locked} showAgent workspace riskSettings={riskSettings} facebookPageName={facebookPageName} siteDestination={company.siteSlug ? `/site/${company.siteSlug}` : null} companyPhone={company.phone} companyCertifications={company.certifications} leadSource={currentLeadSources[proposal.id]} />
-              ))}
-            </section>
-          ))}
-          </div>
-          </div>
+          {queueItems.length > 0 && selectedProposal && (
+            <div className="studio">
+              <aside className="production-list" aria-label="Productions">
+                {queueItems.map((proposal) => {
+                  const status = proposalStatusView(proposal.status, proposal.kind, facebookPageName);
+                  return <button key={proposal.id} type="button" className={`production-choice ${proposal.id === selectedProposal.id ? "active" : ""}`} aria-pressed={proposal.id === selectedProposal.id} onClick={() => setSelectedId(proposal.id)}>
+                    <Tag color={STATUS_TAG_COLORS[status.tone]}>{status.label}</Tag>
+                    <strong>{proposal.title}</strong>
+                    <small>{proposalChannel(proposal.kind)} · {PERSONAS[proposal.agent as AgentKey]?.name ?? proposal.agent} · v{proposal.version}</small>
+                  </button>;
+                })}
+              </aside>
+              <section>
+                <ProposalCard key={selectedProposal.id} proposal={selectedProposal} onDecision={handleDecision} onExecute={handleExecute} onSetLeadSource={handleSetLeadSource} busy={locked} riskSettings={riskSettings} facebookPageName={facebookPageName} siteDestination={company.siteSlug ? `/site/${company.siteSlug}` : null} companyName={company.name} companyPhone={company.phone} companyCertifications={company.certifications} leadSource={currentLeadSources[selectedProposal.id]} plan={planOf(selectedProposal)} />
+              </section>
+            </div>
+          )}
         </section>
-      )}
-      {initialView === "historique" && (
-        <section className="space-y-4 py-5" aria-label="Historique">
-          <div className="flex flex-wrap items-end justify-between gap-3">
-            <div><p className="text-xs font-semibold uppercase tracking-wide text-indigo-700">Registre de l’activité</p><h2 className="mt-1 font-medium">Productions traitées</h2></div>
-          </div>
-          {history.length > 0 && <div role="group" aria-label="Filtrer l’historique par canal" className="flex flex-wrap gap-2">
-            {["Tout l’historique", "Site", "Facebook", "Gmail", "Google"].map((channel) => <button key={channel} type="button" aria-pressed={historyFilter === channel} onClick={() => setHistoryFilter(channel)} className={`min-h-11 rounded-md border px-3 text-sm ${historyFilter === channel ? "border-indigo-700 bg-indigo-50 font-medium text-indigo-900" : "border-slate-300 text-slate-700"}`}>{channel}</button>)}
+      </>}
+
+      {initialView === "historique" && <>
+        <PageHeading kicker="REGISTRE DE L’ACTIVITÉ" title="Ce qui a été fait. Et ce qui est en ligne." description="Versions, confirmations et preuves de diffusion, au même endroit." />
+        {notices}
+        <AgentRunTracker runs={agentRuns} onCheck={(runId) => void checkRun(runId)} onRetry={() => void handleGeneratePlan(true)} retryDisabled={planLoading} />
+        <section aria-label="Historique">
+          {history.length > 0 && <div className="tabs" role="group" aria-label="Filtrer l’historique par canal">
+            {["Tout l’historique", "Site", "Facebook", "Gmail", "Google"].map((channel) => <button key={channel} type="button" aria-pressed={historyFilter === channel} className={historyFilter === channel ? "selected" : undefined} onClick={() => setHistoryFilter(channel)}>{channel}</button>)}
           </div>}
-          {history.length === 0 && <div role="region" aria-label="Historique à venir">
-            <p className="text-sm text-slate-600">Aucune production traitée. Vos validations et refus resteront ici pour retrouver vos décisions.</p>
-            <Link href={actionable.length > 0 ? "/dashboard?view=validation" : emptyNextHref} className="mt-3 inline-block text-sm font-medium text-indigo-600 underline">{actionable.length > 0 ? "Examiner les productions" : emptyNextLabel}</Link>
+          {history.length === 0 && <div className="empty" role="region" aria-label="Historique à venir">
+            <Icon name="history" />
+            <h3>Aucune production traitée</h3>
+            <p>Vos validations et refus resteront ici pour retrouver vos décisions.</p>
+            <Link className="btn primary" href={actionable.length > 0 ? "/dashboard?view=validation" : emptyNextHref}>{actionable.length > 0 ? "Examiner les productions" : emptyNextLabel}</Link>
           </div>}
-          {history.length > 0 && visibleHistory.length === 0 && <p role="status" className="py-4 text-sm text-slate-600">Aucune production traitée sur ce canal.</p>}
-          {visibleHistory.map((proposal) => <ProposalCard key={proposal.id} proposal={proposal} onDecision={handleDecision} busy={locked} showAgent riskSettings={riskSettings} facebookPageName={facebookPageName} />)}
-          <h2 className="pt-4 font-medium">Actions terminées et écartées</h2>
-          {closedItems.length === 0 && <p className="text-sm text-slate-500">Les actions terminées ou écartées du plan seront conservées ici.</p>}
-          <ul className="divide-y divide-slate-200">
-            {closedItems.map((item) => <li key={item.id} className="py-3 text-sm"><span className="text-xs text-slate-500">{item.status === "ecarte" ? "Écartée" : "Traitée"}</span><p className="font-medium">{item.title}</p>{item.feedback && <p className="mt-1 text-slate-500">{item.feedback}</p>}</li>)}
-          </ul>
-          <Link href="/diagnostic" className="inline-block text-sm text-indigo-600 underline">Consulter le diagnostic</Link>
+          {history.length > 0 && visibleHistory.length === 0 && <div role="status" className="empty">Aucun événement sur ce canal.</div>}
+          {visibleHistory.length > 0 && <div className="table-scroll"><table className="data-table">
+            <thead><tr><th>Événement / production</th><th>Canal</th><th>Source</th><th>Date</th><th>Consulter</th></tr></thead>
+            <tbody>{visibleHistory.map((proposal) => <tr key={proposal.id} id={`proposal-${proposal.id}`}>
+              <td><strong>{eventLabel(proposal)}</strong><small>{proposal.title} · v{proposal.version}</small></td>
+              <td><Tag color="blue">{proposalChannel(proposal.kind)}</Tag></td>
+              <td>{proposal.status === "executee" ? "Exécution enregistrée" : "Décision enregistrée"}<small>Version {proposal.version} · {PERSONAS[proposal.agent as AgentKey]?.name ?? proposal.agent}</small></td>
+              <td>{eventTime(proposal)}</td>
+              <td><button type="button" onClick={() => setInspectedId(proposal.id)}><Icon name="eye" /> Voir<span className="sr-only"> : {proposal.title}</span></button></td>
+            </tr>)}</tbody>
+          </table></div>}
+          {closedItems.length > 0 && <>
+            <SectionTitle title="Actions terminées et écartées" />
+            <div className="table-scroll"><table className="data-table">
+              <thead><tr><th>Action</th><th>État</th><th>Retour</th></tr></thead>
+              <tbody>{closedItems.map((item) => <tr key={item.id}><td><strong>{item.title}</strong></td><td><Tag color={item.status === "ecarte" ? "gray" : "green"}>{item.status === "ecarte" ? "Écartée" : "Traitée"}</Tag></td><td>{item.feedback ?? "—"}</td></tr>)}</tbody>
+            </table></div>
+          </>}
+          <p className="legend">Une génération, une approbation et une publication sont trois événements distincts. Aucun résultat commercial n’est attribué sans preuve. <Link href="/rapport">Voir les résultats</Link> · <Link href="/diagnostic">Consulter le diagnostic</Link></p>
         </section>
-      )}
+      </>}
+
       {profileDialog}
-      <details className="mt-6 border-t border-slate-200 py-5">
-        <summary className="flex cursor-pointer items-center gap-3 font-medium"><PersonaAvatar agentKey="co_ceo" size={32} />Faire le point avec {PERSONAS.co_ceo.name}</summary>
-        <div className="mt-5 grid gap-6 lg:grid-cols-2">
-          <section>
-            <label htmlFor="direction" className="text-sm font-medium">Consigne pour l&apos;équipe</label>
-            <textarea id="direction" value={direction} onChange={(event) => setDirection(event.target.value)} placeholder="Priorités, contraintes, actualités…" rows={4} className="mt-2 w-full rounded-lg border px-3 py-2 text-sm" />
-            <button onClick={handleSaveDirection} disabled={directionSaving} className="mt-2 rounded-lg bg-slate-900 px-3 py-2 text-sm text-white disabled:opacity-50">{directionSaving ? "Enregistrement…" : "Enregistrer la consigne"}</button>
-          </section>
-          <section className="min-w-0">
-            <h2 className="text-sm font-medium">Conversation avec {PERSONAS.co_ceo.name}</h2>
-            <p className="mt-2 text-sm text-slate-600">{PERSONAS.co_ceo.name} est disponible sur chaque page avec le bouton « Parler à {PERSONAS.co_ceo.name} ». La conversation et votre brouillon sont conservés d&apos;une page à l&apos;autre.</p>
-            <button type="button" onClick={() => openPaul()} className="mt-2 min-h-11 rounded-lg bg-slate-900 px-3 py-2 text-sm text-white">Ouvrir la discussion</button>
-          </section>
-        </div>
-      </details>
+
+      <Modal
+        open={refreshOpen}
+        onClose={() => setRefreshOpen(false)}
+        kicker="BOUCLE D’AMÉLIORATION"
+        title="Actualiser le diagnostic et le plan ?"
+        actions={needsFirstDiagnostic
+          ? <Link className="btn primary" href="/diagnostic">Commencer par le diagnostic</Link>
+          : <button type="button" className="primary" disabled={locked} onClick={() => { setRefreshOpen(false); void handleGeneratePlan(); }}>Actualiser sans remplacer mes décisions</button>}
+      >
+        <p>{decisions.length} décision(s) en attente et {initialLeadStats.active} prospect(s) actif(s) disponibles.</p>
+        <dl className="modal-details">
+          <dt>À intégrer</dt><dd>Décisions prises, productions réalisées et suivi déclaré des prospects</dd>
+          <dt>À préserver</dt><dd>Actions validées, versions approuvées et publications</dd>
+          <dt>À revoir</dt><dd>Priorités des prochaines actions, sans génération ni diffusion automatique</dd>
+        </dl>
+      </Modal>
+
+      <Modal
+        open={Boolean(planModalItem)}
+        onClose={() => setPlanModalId(null)}
+        kicker={planModalItem ? `${planModalItem.theme ?? "Action"} · Priorité ${planModalItem.priority ?? "–"}` : ""}
+        title="Valider l’action, puis préparer"
+        actions={planModalItem && (discarding
+          ? <button type="button" className="danger" disabled={locked} onClick={() => void handleDiscard(planModalItem.id)}>Confirmer</button>
+          : <>
+            <button type="button" className="quiet" disabled={locked} onClick={() => setDiscarding(true)}>Écarter</button>
+            <button type="button" className="primary" disabled={locked || checking} onClick={() => void requestProfile(planModalItem.agent as AgentKey, () => handleLaunch(planModalItem, planModalItem.agentRuns[0]?.status === "failed" ? planModalItem.agentRuns[0].id : undefined))}>{busyId === planModalItem.id ? "Mise en file…" : planModalItem.agentRuns[0]?.status === "failed" ? "Relancer" : "Valider et générer le brouillon"}</button>
+          </>)}
+      >
+        {planModalItem && <>
+          <p>{planModalItem.rationale}</p>
+          <dl className="modal-details">
+            <dt>Production</dt><dd>{planModalItem.title}</dd>
+            <dt>Agent</dt><dd>{PERSONAS[planModalItem.agent as AgentKey]?.name ?? planModalItem.agent}</dd>
+            <dt>Échéance</dt><dd>{planModalItem.timing}</dd>
+          </dl>
+          <p>Cette validation lance la génération d’un brouillon. Rien ne sera publié ou envoyé.</p>
+          {discarding && <label className="field">Raison de l’abandon
+            <input placeholder="Pourquoi écarter cette action ?" value={discardReason} onChange={(event) => setDiscardReason(event.target.value)} maxLength={500} />
+          </label>}
+        </>}
+      </Modal>
+
+      <Modal
+        open={Boolean(inspected)}
+        onClose={() => setInspectedId(null)}
+        kicker={inspected ? `${eventLabel(inspected)} · ${eventTime(inspected)}` : ""}
+        title={inspected ? `Version ${inspected.version} · ${proposalChannel(inspected.kind)}` : ""}
+        cancelLabel="Fermer"
+        actions={inspected?.status === "rejetee" ? <button type="button" className="primary" disabled={locked} onClick={async () => { if (await handleDecision(inspected.id, { status: "a_relire", expectedVersion: inspected.version })) setInspectedId(null); }}>Rouvrir pour relecture</button> : undefined}
+      >
+        {inspected && <>
+          <ProductionPreview kind={inspected.kind} title={inspected.title} content={inspected.content} version={inspected.version} companyName={company.name} siteDestination={company.siteSlug ? `/site/${company.siteSlug}` : null} />
+          <p>{inspected.status === "executee" ? "Exécution enregistrée" : "Décision enregistrée"}. Version {inspected.version}, {PERSONAS[inspected.agent as AgentKey]?.name ?? inspected.agent}.</p>
+          {inspected.status === "rejetee" && inspected.rejectionReason && <div className="warning"><strong>Raison du rejet :</strong> <span className="whitespace-pre-wrap break-words">{inspected.rejectionReason}</span></div>}
+        </>}
+      </Modal>
     </div>
   );
 }

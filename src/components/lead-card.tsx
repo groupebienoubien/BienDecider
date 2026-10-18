@@ -2,14 +2,14 @@
 
 import { useRef, useState } from "react";
 import type { Lead } from "@prisma/client";
-import { AskPaulButton } from "@/components/ask-paul-button";
 import { buildOutreachDraft, formatDay, hasPlaceholders, isDeferred, leadReadiness } from "@/lib/lead-followup";
 import type { LeadStage } from "@/lib/funnel-shared";
+import { openPaul } from "@/lib/paul-context";
 
 export type LeadPatch = { stage?: LeadStage; contactedAt?: string; deferUntil?: string | null; reason?: string };
 
 /** Étapes déclarables après un premier contact — le dirigeant dit ce qui s'est passé, BienDecider ne devine rien. */
-const NEXT: Record<string, LeadStage[]> = {
+export const NEXT_LEAD_STAGES: Record<string, LeadStage[]> = {
   contacte: ["repondu", "perdu"],
   repondu: ["rdv", "gagne", "perdu"],
   rdv: ["gagne", "perdu"],
@@ -24,7 +24,7 @@ const ACTION_LABELS: Record<string, string> = {
   perdu: "Sans suite",
 };
 
-type Mode = "draft" | "contact" | "date" | "defer" | "discard" | null;
+export type LeadMode = "draft" | "contact" | "date" | "defer" | "discard" | null;
 
 function localDay(offsetDays = 0) {
   const date = new Date();
@@ -32,10 +32,7 @@ function localDay(offsetDays = 0) {
   return date.toLocaleDateString("sv-SE");
 }
 
-const secondary = "min-h-11 rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-800 disabled:opacity-50";
-const primary = "min-h-11 rounded-lg bg-indigo-700 px-3 py-2 text-sm text-white disabled:opacity-50";
-
-export function LeadCard({ lead, now, busy, companyName, trade, phone, onPatch }: {
+export function LeadCard({ lead, now, busy, companyName, trade, phone, onPatch, initialMode = null }: {
   lead: Lead;
   now: number;
   busy: boolean;
@@ -43,18 +40,20 @@ export function LeadCard({ lead, now, busy, companyName, trade, phone, onPatch }
   trade: string | null;
   phone: string | null;
   onPatch: (id: string, patch: LeadPatch) => Promise<boolean>;
+  initialMode?: LeadMode;
 }) {
-  const [mode, setMode] = useState<Mode>(null);
+  const [mode, setMode] = useState<LeadMode>(initialMode);
   const [draft, setDraft] = useState("");
   const [copyNotice, setCopyNotice] = useState<string | null>(null);
-  const [day, setDay] = useState("");
+  const [day, setDay] = useState(initialMode === "contact" ? localDay() : "");
   const [reason, setReason] = useState("");
   const draftRef = useRef<HTMLTextAreaElement>(null);
   const readiness = leadReadiness(lead);
   const deferred = isDeferred(lead, now);
   const contacted = lead.stage !== "a_contacter" && lead.stage !== "ecarte" && lead.contactedAt;
+  const safeSource = lead.source && /^https?:\/\//i.test(lead.source) ? lead.source : null;
 
-  function open(next: Exclude<Mode, null>) {
+  function open(next: Exclude<LeadMode, null>) {
     setReason("");
     setCopyNotice(null);
     if (next === "contact") setDay(localDay());
@@ -79,82 +78,85 @@ export function LeadCard({ lead, now, busy, companyName, trade, phone, onPatch }
   }
 
   return (
-    <div id={`lead-${lead.id}`} tabIndex={-1} className="scroll-mt-24 text-sm">
-      <p className="font-medium">{lead.name}</p>
-      <p className="mt-0.5 text-slate-600">{lead.reason}</p>
-      <p className="mt-1 text-xs text-slate-600">
+    <div id={`lead-${lead.id}`} tabIndex={-1}>
+      <p><strong>{lead.name}</strong><br />{lead.reason}</p>
+      <small>
         {lead.segment && <span className="capitalize">{lead.segment} · </span>}
         {lead.publicContact && <span>{lead.publicContact} · </span>}
-        {lead.source && <a href={lead.source} target="_blank" rel="noreferrer" className="underline">source</a>}
-      </p>
+        {safeSource && <a href={safeSource} target="_blank" rel="noreferrer">source</a>}
+      </small>
       {lead.stage === "a_contacter" && readiness.toConfirm.length > 0 && (
-        <ul className="mt-2 list-disc space-y-0.5 pl-5 text-xs text-amber-900">
-          {readiness.toConfirm.map((item) => <li key={item}>{item}</li>)}
-        </ul>
+        <div className="warning">
+          {readiness.toConfirm.map((item) => <div key={item}>{item}</div>)}
+        </div>
       )}
-      {deferred && <p className="mt-2 text-xs text-slate-700">Différé jusqu&apos;au {formatDay(lead.deferredUntil)}{lead.statusReason ? ` : ${lead.statusReason}` : ""}.</p>}
-      {lead.stage === "ecarte" && lead.statusReason && <p className="mt-2 text-xs text-slate-700">Écarté : {lead.statusReason}</p>}
-      {contacted && <p className="mt-2 text-xs text-slate-700">Contact déclaré le {formatDay(lead.contactedAt)}.</p>}
+      {deferred && <p className="legend">Différé jusqu’au {formatDay(lead.deferredUntil)}{lead.statusReason ? ` : ${lead.statusReason}` : ""}.</p>}
+      {lead.stage === "ecarte" && lead.statusReason && <p className="legend">Écarté : {lead.statusReason}</p>}
+      {contacted && <p className="legend">Contact déclaré le {formatDay(lead.contactedAt)}.</p>}
 
-      <div className="mt-2 flex flex-wrap items-center gap-2">
-        <AskPaulButton element={{ type: "lead", id: lead.id, title: lead.name }} />
-        {lead.stage === "a_contacter" && (
-          <>
-            <button type="button" onClick={() => open("draft")} aria-expanded={mode === "draft"} className={secondary}>Préparer un message</button>
-            <button type="button" onClick={() => open("contact")} aria-expanded={mode === "contact"} className={secondary}>J&apos;ai pris contact</button>
-            <button type="button" onClick={() => open("defer")} aria-expanded={mode === "defer"} className={secondary}>Différer</button>
-            <button type="button" onClick={() => open("discard")} aria-expanded={mode === "discard"} className={secondary}>Écarter</button>
-          </>
-        )}
-        {lead.stage === "ecarte" && <button type="button" disabled={busy} onClick={() => void submit({ stage: "a_contacter" })} className={secondary}>Reprendre ce prospect</button>}
-        {NEXT[lead.stage]?.map((next) => (
-          <button key={next} type="button" disabled={busy} onClick={() => void submit({ stage: next })} className={secondary}>{ACTION_LABELS[next]}</button>
-        ))}
-        {contacted && <button type="button" onClick={() => open("date")} aria-expanded={mode === "date"} className={secondary}>Modifier la date du contact</button>}
-        {lead.stage === "contacte" && <button type="button" disabled={busy} onClick={() => void submit({ stage: "a_contacter" })} className={secondary}>Ce n&apos;était pas un contact</button>}
-        {lead.stage === "a_contacter" && deferred && <button type="button" disabled={busy} onClick={() => void submit({ deferUntil: null })} className={secondary}>Reprendre maintenant</button>}
+      <div className="production-actions">
+        <div>
+          <button type="button" className="quiet" onClick={() => openPaul({ type: "lead", id: lead.id, title: lead.name })}>Demander à Paul</button>
+          {lead.stage === "a_contacter" && (
+            <>
+              <button type="button" onClick={() => open("draft")} aria-expanded={mode === "draft"}>Préparer un message</button>
+              <button type="button" onClick={() => open("contact")} aria-expanded={mode === "contact"}>J&apos;ai pris contact</button>
+              <button type="button" onClick={() => open("defer")} aria-expanded={mode === "defer"}>Différer</button>
+              <button type="button" onClick={() => open("discard")} aria-expanded={mode === "discard"}>Écarter</button>
+            </>
+          )}
+          {lead.stage === "ecarte" && <button type="button" disabled={busy} onClick={() => void submit({ stage: "a_contacter" })}>Reprendre ce prospect</button>}
+          {NEXT_LEAD_STAGES[lead.stage]?.map((next) => (
+            <button key={next} type="button" disabled={busy} onClick={() => void submit({ stage: next })}>{ACTION_LABELS[next]}</button>
+          ))}
+          {contacted && <button type="button" onClick={() => open("date")} aria-expanded={mode === "date"}>Modifier la date du contact</button>}
+          {lead.stage === "contacte" && <button type="button" disabled={busy} onClick={() => void submit({ stage: "a_contacter" })}>Ce n&apos;était pas un contact</button>}
+          {lead.stage === "a_contacter" && deferred && <button type="button" disabled={busy} onClick={() => void submit({ deferUntil: null })}>Reprendre maintenant</button>}
+        </div>
       </div>
 
       {mode === "draft" && (
-        <div className="mt-3 space-y-2 rounded-lg bg-slate-50 p-3">
-          <label htmlFor={`draft-${lead.id}`} className="text-xs font-medium text-slate-700">Message préparé à partir de ce prospect (modifiable)</label>
-          <textarea id={`draft-${lead.id}`} ref={draftRef} value={draft} onChange={(event) => { setDraft(event.target.value); setCopyNotice(null); }} rows={10} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-          {hasPlaceholders(draft) && <p className="text-xs text-amber-900">Complétez les passages entre crochets avant d&apos;envoyer.</p>}
-          {!lead.publicContact?.trim() && <p className="text-xs text-amber-900">Aucune adresse n&apos;est proposée : BienDecider n&apos;en invente pas. Trouvez le contact sur la source avant d&apos;écrire.</p>}
-          <p className="text-xs text-slate-700">BienDecider n&apos;envoie pas ce message. Copiez-le, envoyez-le vous-même, puis déclarez le contact.</p>
-          <div className="flex flex-wrap gap-2">
-            <button type="button" onClick={() => void copyDraft()} className={primary}>Copier le message</button>
-            <button type="button" onClick={() => setMode(null)} className={secondary}>Fermer</button>
+        <div>
+          <label className="field" htmlFor={`draft-${lead.id}`}>Message préparé à partir de ce prospect (modifiable)
+            <textarea id={`draft-${lead.id}`} ref={draftRef} value={draft} onChange={(event) => { setDraft(event.target.value); setCopyNotice(null); }} rows={10} />
+          </label>
+          {hasPlaceholders(draft) && <div className="warning">Complétez les passages entre crochets avant d’envoyer.</div>}
+          {!lead.publicContact?.trim() && <div className="warning">Aucune adresse n’est proposée : BienDecider n’en invente pas. Trouvez le contact sur la source avant d’écrire.</div>}
+          <small>BienDecider n’envoie pas ce message. Copiez-le, envoyez-le vous-même, puis déclarez le contact.</small>
+          <div className="production-actions">
+            <div><button type="button" onClick={() => setMode(null)}>Fermer</button></div>
+            <button type="button" className="primary" onClick={() => void copyDraft()}>Copier le message</button>
           </div>
-          {copyNotice && <p role="status" className="text-sm text-emerald-800">{copyNotice}</p>}
+          {copyNotice && <p role="status" className="notice">{copyNotice}</p>}
         </div>
       )}
 
       {(mode === "contact" || mode === "date") && (
-        <form onSubmit={(event) => { event.preventDefault(); void submit(mode === "contact" ? { stage: "contacte", contactedAt: day } : { contactedAt: day }); }} className="mt-3 space-y-2 rounded-lg bg-slate-50 p-3">
-          <p className="text-xs text-slate-700">{mode === "contact" ? "Enregistrez seulement un contact réellement effectué. Vous pourrez en corriger la date ou l'annuler." : "Corrigez la date du contact déclaré."}</p>
-          <label htmlFor={`day-${lead.id}`} className="block text-xs font-medium text-slate-700">Date du contact</label>
-          <input id={`day-${lead.id}`} type="date" value={day} max={localDay()} required onChange={(event) => setDay(event.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-          <div className="flex flex-wrap gap-2">
-            <button type="submit" disabled={busy || !day} className={primary}>{mode === "contact" ? "Enregistrer le contact" : "Enregistrer la date"}</button>
-            <button type="button" onClick={() => setMode(null)} className={secondary}>Annuler</button>
+        <form onSubmit={(event) => { event.preventDefault(); void submit(mode === "contact" ? { stage: "contacte", contactedAt: day } : { contactedAt: day }); }}>
+          <p>{mode === "contact" ? "Enregistrez seulement un contact réellement effectué. Vous pourrez en corriger la date ou l’annuler." : "Corrigez la date du contact déclaré."}</p>
+          <label className="field" htmlFor={`day-${lead.id}`}>Date du contact
+            <input id={`day-${lead.id}`} type="date" value={day} max={localDay()} required onChange={(event) => setDay(event.target.value)} />
+          </label>
+          <div className="production-actions">
+            <div><button type="button" onClick={() => setMode(null)}>Annuler</button></div>
+            <button type="submit" className="primary" disabled={busy || !day}>{mode === "contact" ? "Enregistrer le contact" : "Enregistrer la date"}</button>
           </div>
         </form>
       )}
 
       {(mode === "defer" || mode === "discard") && (
-        <form onSubmit={(event) => { event.preventDefault(); void submit(mode === "defer" ? { deferUntil: day, reason } : { stage: "ecarte", reason }); }} className="mt-3 space-y-2 rounded-lg bg-slate-50 p-3">
+        <form onSubmit={(event) => { event.preventDefault(); void submit(mode === "defer" ? { deferUntil: day, reason } : { stage: "ecarte", reason }); }}>
           {mode === "defer" && (
-            <>
-              <label htmlFor={`until-${lead.id}`} className="block text-xs font-medium text-slate-700">Reprendre ce prospect le</label>
-              <input id={`until-${lead.id}`} type="date" value={day} min={localDay(1)} required onChange={(event) => setDay(event.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-            </>
+            <label className="field" htmlFor={`until-${lead.id}`}>Reprendre ce prospect le
+              <input id={`until-${lead.id}`} type="date" value={day} min={localDay(1)} required onChange={(event) => setDay(event.target.value)} />
+            </label>
           )}
-          <label htmlFor={`reason-${lead.id}`} className="block text-xs font-medium text-slate-700">{mode === "defer" ? "Raison du report (obligatoire)" : "Raison de l'écart (obligatoire)"}</label>
-          <textarea id={`reason-${lead.id}`} value={reason} onChange={(event) => setReason(event.target.value)} maxLength={300} rows={2} required className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-          <div className="flex flex-wrap gap-2">
-            <button type="submit" disabled={busy || !reason.trim() || (mode === "defer" && !day)} className={primary}>{mode === "defer" ? "Différer ce prospect" : "Écarter ce prospect"}</button>
-            <button type="button" onClick={() => setMode(null)} className={secondary}>Annuler</button>
+          <label className="field" htmlFor={`reason-${lead.id}`}>{mode === "defer" ? "Raison du report (obligatoire)" : "Raison de l'écart (obligatoire)"}
+            <textarea id={`reason-${lead.id}`} value={reason} onChange={(event) => setReason(event.target.value)} maxLength={300} rows={2} required />
+          </label>
+          <div className="production-actions">
+            <div><button type="button" onClick={() => setMode(null)}>Annuler</button></div>
+            <button type="submit" className={mode === "discard" ? "danger" : "primary"} disabled={busy || !reason.trim() || (mode === "defer" && !day)}>{mode === "defer" ? "Différer ce prospect" : "Écarter ce prospect"}</button>
           </div>
         </form>
       )}

@@ -7,11 +7,12 @@ import { facebookConnectionView, isMetaOAuthConfigured, META_ERROR_MESSAGES } fr
 import { FacebookPanel } from "./facebook-panel";
 import { decryptGmailAccount, isGmailConfigured } from "@/lib/oauth/gmail";
 import { GmailPanel } from "./gmail-panel";
-import { getPendingDecisionCount } from "@/lib/pending-decisions-server";
+import { getShellProps } from "@/lib/shell-data";
 import { LinkedInPanel } from "./linkedin-panel";
 import { decryptLinkedInAccount, isLinkedInConfigured, LINKEDIN_ERROR_MESSAGES } from "@/lib/oauth/linkedin";
 import { CHANNEL_CAPABILITIES } from "@/lib/channel-capabilities";
-import { CompanySections } from "@/components/company-sections";
+import { PageHeading } from "@/components/mockup-ui";
+import Link from "next/link";
 
 export const dynamic = "force-dynamic";
 
@@ -49,7 +50,6 @@ export default async function ConnexionsPage({
   if (!company || !company.name) redirect("/onboarding");
 
   const { connected, error } = await searchParams;
-  const pendingCount = await getPendingDecisionCount(company.id);
 
   const { connections: existing, checkedAt, gmailEmail } = await getConnectionSnapshot(company.id);
   const byChannel = new Map(existing.map((c) => [c.channel, c]));
@@ -77,16 +77,12 @@ export default async function ConnexionsPage({
   const facebookView = facebookConnectionView(byChannel.get("facebook"), company.id, checkedAt);
 
   return (
-    <AppShell companyName={company.name} companyTrade={company.trade} companyArea={company.servingArea} pendingCount={pendingCount}>
-      <div className="w-full">
-        <h1 className="text-2xl font-semibold">Connexions</h1>
-        <CompanySections active="connexions" />
-        <p className="mt-2 text-sm text-gray-600">
-          Relier un compte autorise un accès précis ; cela ne confie pas une activité et ne permet pas automatiquement de publier. Vous ne saisissez jamais le mot de passe de vos comptes fournisseurs ici.
-        </p>
-        <section className="mt-4 border-y border-slate-200 py-4" aria-labelledby="channel-capabilities">
-          <h2 id="channel-capabilities" className="text-sm font-medium text-slate-900">Capacités disponibles</h2>
-          <ul className="mt-2 space-y-2 text-sm text-slate-700">
+    <AppShell {...await getShellProps(company)}>
+      <div className="settings-stack">
+        <PageHeading kicker="MON ENTREPRISE" title="Connexions" description="Relier un compte autorise un accès précis ; cela ne confie pas une activité et ne permet pas automatiquement de publier. Vous ne saisissez jamais le mot de passe de vos comptes fournisseurs ici." actions={<Link className="btn" href="/entreprise">Mon entreprise</Link>} />
+        <section className="setting-section" aria-labelledby="channel-capabilities">
+          <h2 id="channel-capabilities">Capacités disponibles</h2>
+          <ul>
             {[
               CHANNEL_CAPABILITIES.gmail,
               CHANNEL_CAPABILITIES.facebook,
@@ -94,17 +90,17 @@ export default async function ConnexionsPage({
               CHANNEL_CAPABILITIES.googleBusiness,
               CHANNEL_CAPABILITIES.linkedin,
               CHANNEL_CAPABILITIES.instagram,
-            ].map((capability) => <li key={capability.label}><span className="font-medium">{capability.label} :</span> {capability.availability}</li>)}
+            ].map((capability) => <li key={capability.label}><strong>{capability.label} :</strong> {capability.availability}</li>)}
           </ul>
         </section>
 
         {connected && (
-          <p role="status" className="mt-4 rounded bg-green-50 p-3 text-sm text-green-700">
+          <p role="status" className="notice">
             {connected === "gmail" ? "Gmail relié. Vous pouvez rédiger et confirmer des envois individuels." : connected === "linkedin" ? "Profil LinkedIn relié. Aucune publication n'a été effectuée." : connected === "facebook_selection" ? "Accès Facebook autorisé. Choisissez la Page à relier." : "Accès Google autorisé ; la fiche établissement reste à vérifier."}
           </p>
         )}
         {error && (
-          <p role="alert" className="mt-4 rounded bg-red-50 p-3 text-sm text-red-700">
+          <p role="alert" className="warning">
             {linkedInErrors[error] ?? "La connexion a échoué. Réessayez ou contactez le support."}
           </p>
         )}
@@ -124,7 +120,7 @@ export default async function ConnexionsPage({
           hasConnection={Boolean(linkedin)}
         />
         <FacebookPanel configured={isMetaOAuthConfigured()} view={facebookView} />
-        <ul className="mt-6 space-y-3">
+        <section className="setting-section" aria-label="Google Business Profile">
           {CHANNELS.map((c) => {
             const connection = byChannel.get(c.channel);
             const expired = connection?.expiresAt ? connection.expiresAt.getTime() <= checkedAt : false;
@@ -137,43 +133,38 @@ export default async function ConnexionsPage({
                   ? "Accès autorisé · fiche établissement à vérifier"
                   : "Compte non relié";
             return (
-              <li
+              <div
                 key={c.channel}
-                className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-gray-200 p-4"
+                className="connection"
               >
-                <div className="min-w-0 flex-1 basis-64">
-                  <p className="font-medium">{c.label}</p>
-                  <p className="text-xs text-gray-500">
-                    {statusLabel}
-                  </p>
-                  {connection?.expiresAt && <p className="mt-1 text-xs text-gray-500">Autorisation valable jusqu&apos;au {connection.expiresAt.toLocaleString("fr-FR", { timeZone: "Europe/Paris" })} (heure de Paris)</p>}
+                <span>
+                  <strong>{c.label}</strong>
+                  <small>{statusLabel}</small>
+                  {connection?.expiresAt && <small>Autorisation valable jusqu&apos;au {connection.expiresAt.toLocaleString("fr-FR", { timeZone: "Europe/Paris" })} (heure de Paris)</small>}
                   {!c.configured && (
-                    <p className="mt-1 text-xs text-amber-600">
+                    <small>
                       {c.unavailable} Aucun accès à la fiche établissement n&apos;est encore vérifié.
-                    </p>
+                    </small>
                   )}
-                </div>
+                </span>
                 {c.configured ? (
                   <a
                     href={c.startUrl}
-                    className="shrink-0 rounded bg-black px-3 py-1.5 text-sm text-white"
+                    className="btn primary"
                   >
                       {connected ? "Relier de nouveau le compte Google" : "Relier mon compte Google"}
                   </a>
                 ) : (
-                  <button
-                    disabled
-                    className="shrink-0 cursor-not-allowed rounded bg-gray-200 px-3 py-1.5 text-sm text-gray-500"
-                  >
+                  <button disabled>
                     Bientôt disponible
                   </button>
                 )}
-              </li>
+              </div>
             );
           })}
-        </ul>
+        </section>
 
-        <p className="mt-6 text-xs text-slate-600">
+        <p className="legend">
           Avant un envoi ou une publication, le canal, la destination et l&apos;étape à confirmer sont indiqués avec la proposition.
         </p>
       </div>
