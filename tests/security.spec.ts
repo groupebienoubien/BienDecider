@@ -70,7 +70,7 @@ const PUBLIC_ROUTES: Record<string, string> = {
   "/api/health": "sonde publique sans donnée métier",
 };
 
-const GUARDED_PAGES = ["/admin", "/admin/risques", "/connexions", "/dashboard", "/diagnostic", "/equipe", "/entreprise", "/prospection", "/rapport"];
+const GUARDED_PAGES = ["/admin", "/admin/risques", "/compte", "/connexions", "/dashboard", "/diagnostic", "/equipe", "/entreprise", "/prospection", "/rapport"];
 
 function requireSecret(): string {
   if (!process.env.SESSION_SECRET) throw new Error("SESSION_SECRET is required for security tests.");

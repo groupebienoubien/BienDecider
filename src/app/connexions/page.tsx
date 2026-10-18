@@ -11,6 +11,7 @@ import { getPendingDecisionCount } from "@/lib/pending-decisions-server";
 import { LinkedInPanel } from "./linkedin-panel";
 import { decryptLinkedInAccount, isLinkedInConfigured, LINKEDIN_ERROR_MESSAGES } from "@/lib/oauth/linkedin";
 import { CHANNEL_CAPABILITIES } from "@/lib/channel-capabilities";
+import { CompanySections } from "@/components/company-sections";
 
 export const dynamic = "force-dynamic";
 
@@ -79,6 +80,7 @@ export default async function ConnexionsPage({
     <AppShell companyName={company.name} pendingCount={pendingCount}>
       <div className="mx-auto max-w-2xl">
         <h1 className="text-2xl font-semibold">Connexions</h1>
+        <CompanySections active="connexions" />
         <p className="mt-2 text-sm text-gray-600">
           Relier un compte autorise un accès précis ; cela ne confie pas une activité et ne permet pas automatiquement de publier. Vous ne saisissez jamais le mot de passe de vos comptes fournisseurs ici.
         </p>

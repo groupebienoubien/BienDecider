@@ -1,11 +1,13 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { DM_Sans, Sora, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+const dmSans = DM_Sans({
+  variable: "--font-dm-sans",
   subsets: ["latin"],
 });
+
+const sora = Sora({ variable: "--font-sora", subsets: ["latin"] });
 
 const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
@@ -15,11 +17,12 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   metadataBase: new URL("https://www.biendecider.com"),
   title: "BienDecider",
-  description: "Votre équipe IA pour développer votre activité : diagnostic, plan d'action et productions validées par vous.",
+  description: "Vous décidez. Votre activité avance. Votre équipe IA prépare diagnostic, plan d'action et contenus. Vous gardez le dernier mot.",
   applicationName: "BienDecider",
+  icons: { icon: "/brand/symbol.svg", apple: "/brand/apple-touch-icon.png" },
   openGraph: {
     title: "BienDecider",
-    description: "Votre équipe IA pour développer votre activité, avec votre validation à chaque étape.",
+    description: "Vous décidez. Votre activité avance. Votre équipe IA, avec votre validation à chaque étape.",
     siteName: "BienDecider",
     locale: "fr_FR",
     type: "website",
@@ -30,7 +33,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="fr"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${dmSans.variable} ${sora.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">{children}</body>
     </html>

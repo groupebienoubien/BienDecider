@@ -176,7 +176,7 @@ async function readReplyStream(body: ReadableStream<Uint8Array>, onLive: (text: 
   return result;
 }
 
-export function PaulPanel() {
+export function PaulPanel({ inlineLauncher = false }: { inlineLauncher?: boolean }) {
   const router = useRouter();
   const pathname = usePathname();
   const view = useSearchParams().get("view");
@@ -495,7 +495,7 @@ export function PaulPanel() {
         aria-expanded={panel.open}
         aria-controls={panelId}
         onClick={() => writePanel({ open: !panel.open })}
-        className="fixed bottom-4 right-4 z-40 inline-flex min-h-11 items-center gap-2 rounded-full bg-slate-900 px-4 py-2 text-sm font-medium text-white shadow-lg"
+        className={`${inlineLauncher ? "inline-flex" : "fixed bottom-4 right-4 z-40 inline-flex shadow-lg"} min-h-11 shrink-0 items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white`}
       >
         <PersonaAvatar agentKey="co_ceo" size={24} />
         Parler à {persona.name}

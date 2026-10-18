@@ -17,13 +17,14 @@ const PAGE_LABELS: Record<string, string> = {
   "/rapport": "Rapport des résultats",
   "/connexions": "Connexions",
   "/entreprise": "Mon entreprise",
+  "/compte": "Mon compte",
 };
 
 export function describePage(path: string, view?: string | null): string {
   if (path === "/dashboard") {
     if (view === "validation") return "Productions à valider";
     if (view === "historique") return "Historique des productions";
-    return "Plan d'action";
+    return view === "plan" ? "Plan d'action" : "À décider";
   }
   return PAGE_LABELS[path] ?? "une page de BienDecider";
 }

@@ -1,5 +1,7 @@
 import { Suspense, cache } from "react";
 import Link from "next/link";
+import Image from "next/image";
+import { BrandLogo } from "@/components/brand-logo";
 import { PERSONAS, type AgentKey } from "@/lib/agents/personas";
 import { PersonaAvatar } from "@/components/persona-avatar";
 import { getSessionEmail } from "@/lib/session";
@@ -62,7 +64,7 @@ const PRIMARY_BUTTON =
 function SignedOutActions() {
   return (
     <>
-      <div className="mt-8 flex flex-wrap items-center gap-3">
+      <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
         <Link href="/signup" className={PRIMARY_BUTTON}>
           Créer mon compte
         </Link>
@@ -73,9 +75,6 @@ function SignedOutActions() {
           J&apos;ai déjà un compte
         </Link>
       </div>
-      <p className="mt-3 text-sm text-slate-600">
-        Première étape : votre objectif, votre métier et votre zone. Votre plan vous est proposé ensuite.
-      </p>
     </>
   );
 }
@@ -92,7 +91,7 @@ async function HeaderAction() {
 async function HeroActions() {
   if (!(await isSignedIn())) return <SignedOutActions />;
   return (
-    <div className="mt-8">
+    <div className="mt-6">
       <Link href="/dashboard" className={PRIMARY_BUTTON}>
         Accéder à mon espace
       </Link>
@@ -102,33 +101,31 @@ async function HeroActions() {
 
 export default function LandingPage() {
   return (
-    <main className="min-h-screen bg-slate-50 font-sans text-slate-900">
-      <div className="mx-auto max-w-4xl px-4 py-10 sm:px-6 sm:py-16">
-        <header className="flex items-center justify-between gap-4">
-          <p className="text-lg font-semibold text-indigo-700">BienDecider</p>
+    <main className="landing-page min-h-screen bg-slate-50 font-sans text-slate-900">
+      <div className="mx-auto max-w-6xl px-4 py-5 sm:px-6">
+        <header className="flex items-center justify-between gap-4 border-b border-slate-200 pb-5">
+          <Link href="/" aria-label="BienDecider, accueil"><BrandLogo /></Link>
           <Suspense fallback={<Link href="/login" className={SECONDARY_LINK}>Se connecter</Link>}>
             <HeaderAction />
           </Suspense>
         </header>
 
-        <section className="mt-12" aria-labelledby="promesse">
-          <h1 id="promesse" className="text-3xl font-semibold leading-tight sm:text-4xl">
-            Vous fixez l&apos;objectif, BienDecider prépare le travail pour l&apos;atteindre.
-          </h1>
-          <p className="mt-4 max-w-2xl text-lg text-slate-600">
-            Pour les indépendants et les TPE qui n&apos;ont pas le temps de s&apos;occuper de leur croissance :
-            diagnostic, plan d&apos;action, site, publications et prospection sont préparés pour vous. Vous gardez
-            le dernier mot.
-          </p>
+        <section className="landing-hero" aria-labelledby="promesse">
+          <p className="text-xs font-semibold uppercase text-indigo-700">L&apos;équipe IA des indépendants et des TPE</p>
+          <h1 id="promesse" className="mt-3 text-4xl font-semibold leading-tight sm:text-5xl">BienDecider</h1>
+          <p className="landing-tagline">Vous décidez. Votre activité avance.</p>
+          <p className="mx-auto mt-4 max-w-2xl text-base text-slate-600">Les bonnes priorités. Le travail préparé. Le dernier mot pour vous.</p>
           <Suspense fallback={<SignedOutActions />}>
             <HeroActions />
           </Suspense>
+          <div className="landing-preview">
+            <Image src="/brand/workspace-preview.png" alt="Aperçu BienDecider : décisions à examiner, plan d’action et activité récente d’une entreprise fictive" width={1440} height={960} priority sizes="(max-width: 768px) 100vw, 1100px" />
+          </div>
+          <p className="mt-2 text-xs text-slate-600">Exemple fictif, aucune donnée client</p>
         </section>
 
-        <section className="mt-14 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6" aria-labelledby="exemple">
-          <p className="inline-block rounded-full bg-amber-100 px-3 py-1 text-sm font-medium text-amber-900">
-            Exemple fictif, aucune donnée client
-          </p>
+        <section className="landing-band" aria-labelledby="exemple">
+          <p className="text-xs font-semibold uppercase text-indigo-700">Du concret, pas une liste de conseils</p>
           <h2 id="exemple" className="mt-3 text-xl font-semibold">Un plombier qui veut plus de demandes de devis</h2>
           <p className="mt-1 text-base text-slate-600">
             Objectif : <strong className="font-medium text-slate-900">10 demandes de devis par mois</strong>.
@@ -154,7 +151,7 @@ export default function LandingPage() {
 
             <div>
               <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-600">Une production à relire</h3>
-              <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-4">
+              <div className="mt-3 border-l-2 border-indigo-300 bg-white p-4">
                 <p className="text-sm font-medium text-slate-600">Post Facebook · préparé par Camille</p>
                 <p className="mt-2 text-base">
                   Fuite sous l&apos;évier un dimanche ? Nous intervenons sur toute l&apos;agglomération, 7 jours sur 7.
@@ -173,12 +170,12 @@ export default function LandingPage() {
           </div>
         </section>
 
-        <section className="mt-14" aria-labelledby="qui-fait-quoi">
+        <section className="landing-band" aria-labelledby="qui-fait-quoi">
           <h2 id="qui-fait-quoi" className="text-xl font-semibold">Ce que BienDecider fait pour vous</h2>
           <p className="mt-1 text-base text-slate-600">
             Les agents préparent tout le travail. Ils n&apos;agissent en votre nom que sur votre décision.
           </p>
-          <ul className="mt-5 divide-y divide-slate-200 rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <ul className="mt-5 divide-y divide-slate-200 border-y border-slate-200">
             {CAPABILITIES.map((c) => (
               <li key={c.deliverable} className="grid gap-2 p-4 sm:grid-cols-[1fr_1.4fr_1.4fr] sm:gap-4">
                 <h3 className="font-medium">{c.deliverable}</h3>
@@ -195,11 +192,11 @@ export default function LandingPage() {
           </ul>
         </section>
 
-        <section className="mt-14" aria-labelledby="etapes">
+        <section className="landing-band" aria-labelledby="etapes">
           <h2 id="etapes" className="text-xl font-semibold">Comment ça marche</h2>
           <ol className="mt-5 grid gap-4 sm:grid-cols-2">
             {STEPS.map((s) => (
-              <li key={s.n} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <li key={s.n} className="border-t-2 border-indigo-200 py-5">
                 <span className="text-sm font-semibold text-indigo-700">Étape {s.n}</span>
                 <h3 className="mt-1 font-medium">{s.title}</h3>
                 <p className="mt-1 text-sm text-slate-600">{s.text}</p>
@@ -208,7 +205,7 @@ export default function LandingPage() {
           </ol>
         </section>
 
-        <section className="mt-14 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6" aria-labelledby="equipe">
+        <section className="landing-band" aria-labelledby="equipe">
           <h2 id="equipe" className="text-xl font-semibold">L&apos;équipe qui prépare le travail</h2>
           <ul className="mt-5 grid grid-cols-2 gap-4 sm:grid-cols-4">
             {TEAM.map((key) => (
