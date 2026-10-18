@@ -66,34 +66,34 @@ export function DelegationRiskSettings({ explicitlyAuthorized }: { explicitlyAut
   }
 
   return (
-    <section aria-labelledby="delegation-risk-heading" className="mt-8 border-y border-slate-200 py-6">
-      <header className="max-w-3xl">
-        <h2 id="delegation-risk-heading" className="text-lg font-medium">Politique de risque des actions</h2>
-        <p className="mt-1 text-sm text-slate-600">Réglage global appliqué à toutes les entreprises. Choisissez le niveau minimal à exiger pour chaque type d&apos;action.</p>
+    <section aria-labelledby="delegation-risk-heading" className="setting-section">
+      <header>
+        <h2 id="delegation-risk-heading">Politique de risque des actions</h2>
+        <p>Réglage global appliqué à toutes les entreprises. Choisissez le niveau minimal à exiger pour chaque type d&apos;action.</p>
       </header>
-      {!explicitlyAuthorized && <p role="alert" className="mt-4 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">Configuration masquée : définissez explicitement <code>ADMIN_EMAILS</code> dans l&apos;environnement serveur pour autoriser les fondateurs à modifier la politique. L&apos;ouverture historique de l&apos;admin à tout utilisateur connecté ne suffit pas pour ce réglage global.</p>}
-      {error && <p role="alert" className="mt-4 rounded-lg bg-red-50 p-3 text-sm text-red-800">{error}</p>}
-      {notice && <p role="status" className="mt-4 rounded-lg bg-emerald-50 p-3 text-sm text-emerald-800">{notice}</p>}
-      {explicitlyAuthorized && loading && <p className="mt-4 text-sm text-slate-500">Chargement des niveaux…</p>}
+      {!explicitlyAuthorized && <p role="alert" className="warning">Configuration masquée : définissez explicitement <code>ADMIN_EMAILS</code> dans l&apos;environnement serveur pour autoriser les fondateurs à modifier la politique. L&apos;ouverture historique de l&apos;admin à tout utilisateur connecté ne suffit pas pour ce réglage global.</p>}
+      {error && <p role="alert" className="warning">{error}</p>}
+      {notice && <p role="status" className="notice">{notice}</p>}
+      {explicitlyAuthorized && loading && <p>Chargement des niveaux…</p>}
       {explicitlyAuthorized && !loading && settings.length > 0 && (
-        <div className="mt-4 divide-y divide-slate-200 border-y border-slate-200">
+        <div>
           {settings.map((setting) => (
-            <div key={setting.kind} className="flex flex-wrap items-center gap-3 py-3">
-              <div className="min-w-0 flex-1 basis-48">
-                <p className="text-sm font-medium">{setting.label}</p>
-                <p className="mt-0.5 text-xs text-slate-500">
+            <div key={setting.kind} className="connection">
+              <span>
+                <strong>{setting.label}</strong>
+                <small>
                   {setting.configuredLevel ? "Réglage administrateur enregistré" : "Réglage initial calculé automatiquement"}
                   {" · "}Niveau effectif : {OPTIONS.find((option) => option.value === setting.effectiveLevel)?.label}
                   {" · "}Plancher : {OPTIONS.find((option) => option.value === setting.minimumLevel)?.label}
                   {setting.updatedBy && <> · Modifié par {setting.updatedBy}{setting.updatedAt && ` le ${new Date(setting.updatedAt).toLocaleString("fr-FR")}`}</>}
-                </p>
-              </div>
+                </small>
+              </span>
               <select
                 aria-label={`Risque pour ${setting.label}`}
                 value={setting.configuredLevel ?? setting.effectiveLevel}
                 disabled={busyKind !== null}
                 onChange={(event) => void save(setting.kind, event.target.value as ActionRiskLevel)}
-                className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm disabled:opacity-50"
+                style={{ maxWidth: 170 }}
               >
                   {OPTIONS.map((option) => (
                     <option key={option.value} value={option.value} disabled={LEVEL_RANK[option.value] < LEVEL_RANK[setting.minimumLevel]}>
@@ -105,7 +105,7 @@ export function DelegationRiskSettings({ explicitlyAuthorized }: { explicitlyAut
           ))}
         </div>
       )}
-      <div className="mt-4 max-w-3xl space-y-2 text-sm text-slate-600">
+      <div className="legend">
         <p>Catégories configurables : <strong>Faible</strong> (interne et réversible), <strong>Modéré</strong> (données de tiers ou impact limité), <strong>Élevé</strong> (public, externe, dépense ou difficile à annuler).</p>
         <p>Ces catégories évaluent le risque d&apos;une action ; elles sont distinctes des modes Conseiller, Accompagner et Déléguer. Ce réglage ne choisit pas le mode d&apos;une entreprise.</p>
         <p>Le niveau choisi est persistant et global. Le niveau effectif ne descend jamais sous le plancher calculé : exposition publique, communication externe, dépense ou action difficile à annuler → risque élevé ; données de tiers → au minimum modéré ; type inconnu → élevé.</p>

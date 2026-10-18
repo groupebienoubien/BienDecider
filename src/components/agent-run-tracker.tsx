@@ -4,6 +4,8 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { AgentRunView } from "@/lib/agent-run-types";
 import { waitForAgentRun } from "@/lib/agent-runs-client";
+import { Icon } from "@/components/icon";
+import { SectionTitle } from "@/components/mockup-ui";
 import {
   agentName, describeRunProgress, finishedRunMessage, formatDuration, isActiveRun, recentSucceededRuns, runResultHref,
 } from "@/lib/agent-run-progress";
@@ -70,21 +72,22 @@ function ActiveRun({ run, onCheck }: { run: AgentRunView; onCheck: (runId: strin
   const clock = useClock();
   const progress = describeRunProgress(run, clock || new Date(run.startedAt ?? run.queuedAt).getTime());
   return (
-    <li className="py-2">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <p><span className="font-medium">{agentName(run.agent)}</span> : {progress.headline}{clock > 0 && <span className="text-slate-600"> · depuis {formatDuration(progress.elapsedSeconds)}</span>}</p>
-        <button onClick={() => onCheck(run.id)} className="min-h-11 text-indigo-700 underline">Vérifier</button>
+    <div className="activity-row">
+      <span className="activity-icon"><Icon name="refresh-cw" /></span>
+      <div>
+        <strong>{agentName(run.agent)} : {progress.headline}{clock > 0 && <> · depuis {formatDuration(progress.elapsedSeconds)}</>}</strong>
+        <ol className="feedback-list">
+          {progress.steps.map((step) => (
+            <li key={step.label} aria-current={step.state === "active" ? "step" : undefined}>
+              <span aria-hidden="true">{step.state === "done" ? "✓" : step.state === "active" ? "●" : "○"}</span> {step.label}
+              <span className="sr-only"> ({step.state === "done" ? "estimée terminée" : step.state === "active" ? "en cours" : "à venir"})</span>
+            </li>
+          ))}
+        </ol>
+        <small>{progress.hint} Étapes indicatives. Vous pouvez quitter cette page : le résultat sera retrouvé ici.</small>
       </div>
-      <ol className="mt-1 space-y-0.5 text-xs text-slate-700">
-        {progress.steps.map((step) => (
-          <li key={step.label} aria-current={step.state === "active" ? "step" : undefined} className={step.state === "active" ? "font-medium text-slate-900" : undefined}>
-            <span aria-hidden="true">{step.state === "done" ? "✓" : step.state === "active" ? "●" : "○"}</span> {step.label}
-            <span className="sr-only"> ({step.state === "done" ? "estimée terminée" : step.state === "active" ? "en cours" : "à venir"})</span>
-          </li>
-        ))}
-      </ol>
-      <p className="mt-1 text-xs text-slate-600">{progress.hint} Étapes indicatives. Vous pouvez quitter cette page : le résultat sera retrouvé ici.</p>
-    </li>
+      <button type="button" onClick={() => onCheck(run.id)}>Vérifier</button>
+    </div>
   );
 }
 
@@ -101,23 +104,23 @@ export function AgentRunTracker({ runs, onCheck, onRetry, retryDisabled }: {
   if (active.length + failed.length + succeeded.length === 0) return null;
 
   return (
-    <section className="mt-4 border-b border-slate-200 pb-4" aria-label="Exécutions récentes">
-      <h2 className="text-sm font-medium">Exécutions récentes</h2>
-      <ul className="mt-2 divide-y divide-slate-100 text-sm">
-        {active.slice(0, 5).map((run) => <ActiveRun key={run.id} run={run} onCheck={onCheck} />)}
-        {failed.slice(0, 3).map((run) => (
-          <li key={run.id} className="flex flex-wrap items-center justify-between gap-2 py-2">
-            <span><span className="font-medium">{agentName(run.agent)}</span> : {run.errorMessage ?? "Échec, relançable"}</span>
-            {onRetry && run.agent === "co_ceo" && <button onClick={() => onRetry(run)} disabled={retryDisabled} className="min-h-11 text-indigo-700 underline disabled:opacity-50">Relancer Paul</button>}
-          </li>
-        ))}
-        {succeeded.map((run) => (
-          <li key={run.id} className="flex flex-wrap items-center justify-between gap-2 py-2">
-            <span>{finishedRunMessage(run)}</span>
-            {(run.agent === "co_ceo" || run.resultCount > 0) && <Link href={runResultHref(run)} className="min-h-11 text-indigo-700 underline">Voir le résultat</Link>}
-          </li>
-        ))}
-      </ul>
+    <section aria-label="Exécutions récentes">
+      <SectionTitle title="Exécutions récentes" />
+      {active.slice(0, 5).map((run) => <ActiveRun key={run.id} run={run} onCheck={onCheck} />)}
+      {failed.slice(0, 3).map((run) => (
+        <div key={run.id} className="activity-row">
+          <span className="activity-icon"><Icon name="x" /></span>
+          <div><strong>{agentName(run.agent)}</strong><small>{run.errorMessage ?? "Échec, relançable"}</small></div>
+          {onRetry && run.agent === "co_ceo" && <button type="button" onClick={() => onRetry(run)} disabled={retryDisabled}>Relancer Paul</button>}
+        </div>
+      ))}
+      {succeeded.map((run) => (
+        <div key={run.id} className="activity-row">
+          <span className="activity-icon"><Icon name="check" /></span>
+          <div><strong>{finishedRunMessage(run)}</strong></div>
+          {(run.agent === "co_ceo" || run.resultCount > 0) && <Link className="btn" href={runResultHref(run)}>Voir le résultat</Link>}
+        </div>
+      ))}
     </section>
   );
 }

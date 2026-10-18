@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { PersonaAvatar } from "@/components/persona-avatar";
+import { Icon } from "@/components/icon";
 import { PERSONAS } from "@/lib/agents/personas";
 import { describePage, PAUL_ELEMENT_LABELS, PAUL_OPEN_EVENT, type PaulElement } from "@/lib/paul-context";
 import type { PaulReference } from "@/lib/paul-references";
@@ -79,7 +80,7 @@ function MessageBody({ content, references = [], streaming = false }: { content:
   const blocks = parseMessage(content);
   const caret = streaming ? <span aria-hidden="true" className="ml-0.5 inline-block h-4 w-2 translate-y-0.5 animate-pulse rounded-sm bg-slate-700 motion-reduce:animate-none" /> : null;
   return (
-    <div className="space-y-3 break-words text-base leading-7 text-slate-800">
+    <div className="chat-message">
       {blocks.map((block, index) => {
         const last = index === blocks.length - 1;
         const key = `block-${index}`;
@@ -176,7 +177,7 @@ async function readReplyStream(body: ReadableStream<Uint8Array>, onLive: (text: 
   return result;
 }
 
-export function PaulPanel({ inlineLauncher = false }: { inlineLauncher?: boolean }) {
+export function PaulPanel() {
   const router = useRouter();
   const pathname = usePathname();
   const view = useSearchParams().get("view");
@@ -341,17 +342,15 @@ export function PaulPanel({ inlineLauncher = false }: { inlineLauncher?: boolean
           aria-modal="false"
           aria-label={`Discussion avec ${persona.name}`}
           onKeyDown={(event) => { if (event.key === "Escape") writePanel({ open: false }); }}
-          className={`fixed bottom-20 right-4 z-40 flex h-[min(40rem,calc(100dvh-7rem))] w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-2xl border border-slate-300 bg-white shadow-2xl ${wide ? "sm:h-[calc(100dvh-7rem)] sm:w-[min(52rem,calc(100vw-2rem))]" : "sm:w-[28rem]"}`}
+          className={`paul-panel ${wide ? "wide" : ""}`}
         >
-          <header className="flex items-center justify-between gap-2 border-b border-slate-200 px-3 py-2">
-            <div className="flex min-w-0 items-center gap-3">
-              <PersonaAvatar agentKey="co_ceo" size={32} />
-              <div className="min-w-0">
-                <h2 className="truncate text-base font-semibold leading-5">{persona.name}</h2>
-                <p className="truncate text-xs text-slate-600">{persona.role}</p>
-              </div>
+          <header>
+            <span className="paul-avatar" aria-hidden="true">{persona.name[0]}</span>
+            <div>
+              <strong>{persona.name}</strong>
+              <small>Votre copilote</small>
             </div>
-            <div className="flex items-center">
+            <div className="panel-controls">
               {voiceSupported && (
                 <button
                   type="button"
@@ -371,7 +370,7 @@ export function PaulPanel({ inlineLauncher = false }: { inlineLauncher?: boolean
               </button>
             </div>
           </header>
-          <p className="border-b border-slate-100 bg-slate-50 px-3 py-1.5 text-xs text-slate-600">{persona.name} sait que vous êtes sur : {describePage(pathname, view)}. Il ne lit que les données de votre entreprise.</p>
+          <p className="chat-context">{persona.name} sait que vous êtes sur : {describePage(pathname, view)}. Il ne lit que les données de votre entreprise.</p>
           {element && (
             <p className="mx-3 mt-2 flex flex-wrap items-center gap-2 rounded-2xl bg-indigo-50 px-3 py-1 text-xs text-indigo-900">
               <span className="min-w-0 break-words">À propos de : {PAUL_ELEMENT_LABELS[element.type].toLowerCase()} « {element.title} »</span>
@@ -395,7 +394,7 @@ export function PaulPanel({ inlineLauncher = false }: { inlineLauncher?: boolean
               aria-busy={sending}
               className="h-full overflow-y-auto"
             >
-              <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col gap-6 px-4 py-4">
+              <div className="chat-messages">
                 {messages.length === 0 && (
                   <div className="my-auto flex flex-col items-center gap-4 py-4 text-center">
                     <PersonaAvatar agentKey="co_ceo" size={56} />
@@ -417,7 +416,7 @@ export function PaulPanel({ inlineLauncher = false }: { inlineLauncher?: boolean
                     {(index === 0 || dayKey(messages[index - 1].createdAt) !== dayKey(message.createdAt)) && <DaySeparator iso={message.createdAt} />}
                     {message.role === "user" ? (
                       <div className="flex flex-col items-end">
-                        <p className="max-w-[85%] whitespace-pre-wrap break-words rounded-3xl bg-slate-100 px-4 py-2.5 text-base text-slate-900">
+                        <p className="chat-message user">
                           <span className="sr-only">Vous, {formatDate(message.createdAt)} : </span>{message.content}
                         </p>
                         <span className="mt-1 px-2 text-xs text-slate-600">{timeLabel(message.createdAt)}</span>
@@ -454,8 +453,8 @@ export function PaulPanel({ inlineLauncher = false }: { inlineLauncher?: boolean
             )}
           </div>
           {error && <p role="alert" className="mx-3 mb-2 rounded-2xl bg-red-50 px-3 py-2 text-sm text-red-800">{error}</p>}
-          <form onSubmit={send} className="px-3 pb-2 pt-1">
-            <div className="mx-auto flex w-full max-w-3xl flex-wrap items-end gap-1 rounded-3xl border border-slate-300 bg-white py-1 pl-4 pr-1 shadow-sm focus-within:border-indigo-600 focus-within:ring-2 focus-within:ring-indigo-600">
+          <form onSubmit={send}>
+            <div className="chat-input">
               <textarea
                 ref={inputRef}
                 aria-label={`Message à ${persona.name}`}
@@ -472,20 +471,20 @@ export function PaulPanel({ inlineLauncher = false }: { inlineLauncher?: boolean
                 maxLength={4000}
                 // Le focus est porté par le conteneur arrondi (anneau), pas par un contour carré dans le champ.
                 style={{ outline: "none" }}
-                className="max-h-48 min-h-11 min-w-0 flex-1 basis-0 resize-none bg-transparent py-2.5 text-base outline-none placeholder:text-slate-500"
+                className="min-w-0 flex-1 basis-0"
               />
               <DictationButton variant="icon" label={`Dicter pour ${persona.name}`} onTranscript={(text) => writePanel({ draft: appendDictation(readPanel().draft, text, 4000) })} />
               {sending ? (
-                <button type="button" onClick={() => abortRef.current?.abort()} aria-label="Arrêter la génération" title="Arrêter la génération" className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-slate-900 text-white">
+                <button type="button" onClick={() => abortRef.current?.abort()} aria-label="Arrêter la génération" title="Arrêter la génération" className="icon-button primary">
                   <StopIcon className="h-4 w-4" />
                 </button>
               ) : (
-                <button type="submit" disabled={!panel.draft.trim()} aria-label="Envoyer" title="Envoyer" className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-slate-900 text-white disabled:bg-slate-200 disabled:text-slate-500">
+                <button type="submit" disabled={!panel.draft.trim()} aria-label="Envoyer" title="Envoyer" className="icon-button primary">
                   <ArrowUpIcon />
                 </button>
               )}
             </div>
-            <p className="mt-1.5 text-center text-xs text-slate-600">{persona.name} peut se tromper : vérifiez avant de décider. Entrée pour envoyer, Maj+Entrée pour une nouvelle ligne.</p>
+            <small className="chat-disclaimer">{persona.name} peut se tromper : vérifiez avant de décider. Entrée pour envoyer, Maj+Entrée pour une nouvelle ligne.</small>
           </form>
         </section>
       )}
@@ -495,10 +494,11 @@ export function PaulPanel({ inlineLauncher = false }: { inlineLauncher?: boolean
         aria-expanded={panel.open}
         aria-controls={panelId}
         onClick={() => writePanel({ open: !panel.open })}
-        className={`${inlineLauncher ? "inline-flex" : "fixed bottom-4 right-4 z-40 inline-flex shadow-lg"} min-h-11 shrink-0 items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white`}
+        className="paul-launch"
       >
-        <PersonaAvatar agentKey="co_ceo" size={24} />
-        Parler à {persona.name}
+        <span className="paul-avatar" aria-hidden="true">{persona.name[0]}</span>
+        <span>Échanger avec {persona.name}</span>
+        <Icon name="message-circle" />
       </button>
     </>
   );

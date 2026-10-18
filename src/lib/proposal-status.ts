@@ -15,31 +15,33 @@ export function proposalStatusView(status: string, kind: string, facebookPageNam
       return { label: "À relire", icon: "✎", tone: "attente" };
     case "validee":
     case "modifiee": {
+      if (kind === "prospect" || kind === "piste_croissance") return { label: "Approuvée", icon: "✓", tone: "ok" };
       const manual = MANUAL_KINDS.includes(kind) || (kind === "social_post" && facebookPageName === null);
       return manual
         ? { label: "À publier manuellement", icon: "→", tone: "attente" }
-        : { label: "Approuvée", icon: "✓", tone: "ok" };
+        : { label: kind === "gmail_email" ? "Prêt à envoyer" : "Prêt à publier", icon: "✓", tone: "ok" };
     }
     case "rejetee":
-      return { label: "Rejetée", icon: "✕", tone: "neutre" };
+      return { label: "À repenser", icon: "✕", tone: "neutre" };
     case "executee":
-      return { label: kind === "gmail_email" ? "Envoyée" : "Publiée", icon: "✓", tone: "ok" };
+      return { label: kind === "gmail_email" ? "Envoyé" : "En ligne", icon: "✓", tone: "ok" };
     case "envoi_en_cours":
       return { label: "Envoi en cours", icon: "…", tone: "attente" };
     case "publication_en_cours":
       return { label: "Publication en cours", icon: "…", tone: "attente" };
     case "envoi_incertain":
-      return { label: "Envoi à vérifier dans Gmail", icon: "!", tone: "alerte" };
+      return { label: "À vérifier", icon: "!", tone: "alerte" };
     case "publication_incertaine":
-      return { label: "Publication à vérifier sur Facebook", icon: "!", tone: "alerte" };
+      return { label: "À vérifier", icon: "!", tone: "alerte" };
     default:
       return { label: status, icon: "•", tone: "neutre" };
   }
 }
 
-export const STATUS_TONE_CLASSES: Record<StatusTone, string> = {
-  attente: "bg-amber-100 text-amber-900",
-  ok: "bg-emerald-100 text-emerald-900",
-  neutre: "bg-slate-100 text-slate-700",
-  alerte: "bg-rose-100 text-rose-900",
+/** Couleur de l'étiquette de la maquette pour chaque ton d'état. */
+export const STATUS_TAG_COLORS: Record<StatusTone, "green" | "orange" | "gray"> = {
+  attente: "orange",
+  ok: "green",
+  neutre: "gray",
+  alerte: "orange",
 };

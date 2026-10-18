@@ -4,10 +4,14 @@ import Link from "next/link";
 import { useState } from "react";
 import type { AuditFinding } from "@prisma/client";
 import { FindingCard } from "@/components/finding-card";
-import { PersonaAvatar } from "@/components/persona-avatar";
+import { Icon } from "@/components/icon";
+import { PageHeading, SectionTitle } from "@/components/mockup-ui";
 import { useAgentProfileCompletion } from "@/components/agent-profile-completion";
 
-export function DiagnosticClient({ initialFindings }: { initialFindings: AuditFinding[] }) {
+const ANALYSIS_DATE = new Intl.DateTimeFormat("fr-FR", { day: "numeric", month: "long", timeZone: "Europe/Paris" });
+const ANALYSIS_TIME = new Intl.DateTimeFormat("fr-FR", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Paris" });
+
+export function DiagnosticClient({ initialFindings, feedback, leadCount }: { initialFindings: AuditFinding[]; feedback: string[]; leadCount: number }) {
   const { requestProfile, profileDialog, checking } = useAgentProfileCompletion();
   const [findings, setFindings] = useState(initialFindings);
   const [running, setRunning] = useState(false);
@@ -33,27 +37,35 @@ export function DiagnosticClient({ initialFindings }: { initialFindings: AuditFi
     }
   }
 
+  const latest = findings[0] ? new Date(findings[0].createdAt) : null;
+
   return (
-    <div className="w-full">
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div><p className="mb-2 text-xs font-semibold uppercase tracking-wide text-indigo-700">Diagnostic de présence en ligne</p><h1 className="text-2xl font-semibold">Diagnostic</h1><p className="mt-1 text-sm text-slate-500">Visibilité, site et positionnement concurrentiel</p></div>
-        {findings.length > 0 && <Link href="/dashboard" className="text-sm font-medium text-indigo-600 underline">Passer au plan d&apos;action</Link>}
-      </header>
-      <section className="my-6 flex flex-wrap items-center justify-between gap-4 border-y border-slate-200 py-4">
-        <div className="flex items-center gap-3"><PersonaAvatar agentKey="marketing" size={40} /><div><h2 className="text-sm font-medium">Analyse de Martine</h2><p className="text-xs text-slate-500">{findings.length} constat(s){findings[0] && <> · Dernier constat enregistré le {new Date(findings[0].createdAt).toLocaleString("fr-FR", { dateStyle: "medium", timeStyle: "short" })}</>}</p></div></div>
-        <button onClick={() => void requestProfile("marketing", run)} disabled={running || checking} className="rounded-lg bg-slate-900 px-4 py-2 text-sm text-white disabled:opacity-50">{running ? "Analyse en cours…" : findings.length ? "Actualiser le diagnostic" : "Lancer le diagnostic"}</button>
-      </section>
+    <div>
+      <PageHeading
+        kicker={`DIAGNOSTIC · ${findings.length} CONSTAT${findings.length > 1 ? "S" : ""}`}
+        title="Une lecture claire de votre activité."
+        description={<>{latest ? <>Dernière analyse : {ANALYSIS_DATE.format(latest)} à {ANALYSIS_TIME.format(latest)} · </> : null}À partir de vos informations et des signaux disponibles.</>}
+        actions={<button type="button" className="primary" onClick={() => void requestProfile("marketing", run)} disabled={running || checking}><Icon name="refresh-cw" /> {running ? "Analyse en cours…" : findings.length ? "Actualiser le diagnostic" : "Lancer le diagnostic"}</button>}
+      />
+      <div className="sync-line">
+        <span>{findings.length > 0 ? "Diagnostic à jour avec les signaux retenus" : "Aucun diagnostic disponible pour le moment"} · {leadCount} prospect(s) suivi(s)</span>
+        {findings.length > 0 && <Link href="/dashboard?view=plan">Voir le plan associé →</Link>}
+      </div>
       {profileDialog}
-      {error && <p role="alert" className="mb-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}
-      {done && <p role="status" className="mb-4 rounded-lg bg-emerald-50 p-3 text-sm text-emerald-800">Diagnostic actualisé. <Link href="/dashboard?view=validation" className="underline">Voir les productions à valider</Link></p>}
+      {error && <p role="alert" className="warning">{error}</p>}
+      {done && <p role="status" className="notice">Diagnostic actualisé. <Link href="/dashboard?view=validation">Voir les productions à valider</Link></p>}
       {findings.length === 0 && (
-        <div className="py-6" aria-label="Diagnostic à préparer">
-          <h2 className="text-base font-medium">Repérer les premières opportunités</h2>
-          <p className="mt-2 max-w-prose text-sm text-slate-600">Aucun diagnostic disponible pour le moment. Martine peut examiner votre présence en ligne et votre positionnement pour proposer des priorités liées à votre objectif.</p>
-          <p className="mt-2 text-sm text-slate-500">Lancez le diagnostic pour obtenir les premiers constats. Vous déciderez ensuite des actions à confier.</p>
+        <div className="empty" aria-label="Diagnostic à préparer">
+          <Icon name="scan-line" />
+          <h3>Repérer les premières opportunités</h3>
+          <p>Aucun diagnostic disponible pour le moment. Martine peut examiner votre présence en ligne et votre positionnement pour proposer des priorités liées à votre objectif.</p>
+          <p>Lancez le diagnostic pour obtenir les premiers constats. Vous déciderez ensuite des actions à confier.</p>
         </div>
       )}
-      <ul className="grid gap-3 sm:grid-cols-2">{findings.map((finding) => <li key={finding.id} className="min-w-0"><FindingCard finding={finding} /></li>)}</ul>
+      {findings.map((finding) => <FindingCard key={finding.id} finding={finding} />)}
+      <SectionTitle title="Ce que votre équipe retient" />
+      <div className="notice">{feedback.length ? `${feedback.length} retour(s) explicite(s) pris en compte dans la prochaine préparation.` : "Aucune préférence nouvelle enregistrée. Vos corrections ne changent pas votre objectif sans votre accord."}</div>
+      {feedback.length > 0 && <ul className="feedback-list">{feedback.map((item, index) => <li key={index}>{item}</li>)}</ul>}
     </div>
   );
 }

@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getSessionEmail } from "@/lib/session";
 import { AppShell } from "@/components/app-shell";
-import { getPendingDecisionCount } from "@/lib/pending-decisions-server";
+import { getShellProps } from "@/lib/shell-data";
 import { isOutreachSendingConfigured } from "@/lib/outreach";
 import { ProspectionClient } from "./prospection-client";
 
@@ -22,10 +22,9 @@ export default async function ProspectionPage() {
     },
     orderBy: { updatedAt: "desc" },
   });
-  const pendingCount = await getPendingDecisionCount(company.id);
 
   return (
-    <AppShell companyName={company.name} companyTrade={company.trade} companyArea={company.servingArea} pendingCount={pendingCount}>
+    <AppShell {...await getShellProps(company)}>
       <ProspectionClient
         initialLeads={leads}
         initialAutoOutreach={company.autoOutreachEnabled}

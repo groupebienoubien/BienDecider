@@ -1,23 +1,31 @@
 import Link from "next/link";
 import { Suspense } from "react";
-import { SidebarNav } from "@/components/sidebar-nav";
+import { SidebarNav, SidebarSettingsLinks } from "@/components/sidebar-nav";
 import { PaulPanel } from "@/components/paul-panel";
 import { BrandLogo } from "@/components/brand-logo";
 import { WorkspaceBreadcrumb } from "@/components/workspace-breadcrumb";
 
-/** Coque commune des pages connectées : barre latérale (parcours lisible) + contenu + discussion avec Paul. */
+const MONEY = new Intl.NumberFormat("fr-FR", { maximumFractionDigits: 2 });
+
+/** Coque commune des pages connectées, fidèle à la maquette : barre latérale, bandeau, contenu, pied de page et Paul. */
 export function AppShell({
   companyName,
   companyTrade,
   companyArea,
-  pendingCount = 0,
+  objective,
+  ownerEmail,
+  decisionCount = 0,
+  budget,
   paul = Boolean(companyName),
   children,
 }: {
   companyName?: string;
   companyTrade?: string | null;
   companyArea?: string | null;
-  pendingCount?: number;
+  objective?: string | null;
+  ownerEmail?: string;
+  decisionCount?: number;
+  budget?: { spentUsd: number; limitUsd: number };
   paul?: boolean;
   children: React.ReactNode;
 }) {
@@ -30,60 +38,50 @@ export function AppShell({
   const companyDescriptor = [companyTrade, companyArea].filter(Boolean).join(" · ");
 
   return (
-    <div className="app-frame flex min-h-screen bg-slate-50 font-sans text-slate-900">
-      <a href="#contenu" className="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:z-50 focus:rounded focus:bg-white focus:px-3 focus:py-2 focus:text-sm focus:font-medium focus:text-indigo-800">Aller au contenu</a>
-      <aside className="app-sidebar hidden w-60 shrink-0 flex-col border-r border-slate-200 bg-white p-4 md:flex">
-        <Link href="/dashboard" className="mb-6 block px-2 pt-2">
-          <BrandLogo />
-          {companyName && (
-            <span className="mt-6 flex min-w-0 items-center gap-3 border-t border-slate-200 pt-4">
-              <span aria-hidden="true" className="grid size-9 shrink-0 place-items-center rounded-md bg-indigo-50 text-xs font-semibold text-indigo-800">{companyInitials}</span>
-              <span className="min-w-0 text-sm text-slate-700">
-                <strong className="block truncate font-medium">{companyName}</strong>
-                {companyDescriptor && <span className="block truncate text-xs text-slate-500">{companyDescriptor}</span>}
-              </span>
-            </span>
+    <div className="mq">
+      <a href="#contenu" className="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:z-50 focus:rounded focus:bg-white focus:px-3 focus:py-2 focus:text-sm focus:font-medium focus:text-green-900">Aller au contenu</a>
+      <aside className="sidebar" aria-label="Barre latérale">
+        <Link className="brand" href="/dashboard"><BrandLogo /></Link>
+        {companyName && (
+          <div className="company">
+            <span aria-hidden="true" className="company-avatar">{companyInitials}</span>
+            <div><strong>{companyName}</strong>{companyDescriptor && <small>{companyDescriptor}</small>}</div>
+          </div>
+        )}
+        <div className="nav-label">MON ACTIVITÉ</div>
+        <Suspense fallback={null}><SidebarNav decisionCount={decisionCount} /></Suspense>
+        <div className="sidebar-bottom">
+          <Suspense fallback={null}><SidebarSettingsLinks /></Suspense>
+          {budget && (
+            <div className="credit">
+              <span>Budget IA du mois</span>
+              <strong>{MONEY.format(budget.spentUsd)} $ <small>/ {MONEY.format(budget.limitUsd)} $</small></strong>
+              <progress value={Math.min(budget.spentUsd, budget.limitUsd)} max={budget.limitUsd} aria-label="Budget IA consommé" />
+            </div>
           )}
-        </Link>
-        <Suspense fallback={null}><SidebarNav pendingCount={pendingCount} /></Suspense>
-        <form action="/api/auth/logout" method="post" className="mt-auto px-3 pt-6">
-          <button type="submit" className="min-h-11 text-sm text-slate-600 hover:text-slate-900">
-            Déconnexion
-          </button>
-        </form>
-        <div className="flex flex-wrap gap-x-3 px-3 pt-2 text-xs text-slate-600">
-          <Link href="/cgu" className="inline-flex min-h-11 items-center hover:text-slate-900">CGU</Link>
-          <Link href="/confidentialite" className="inline-flex min-h-11 items-center hover:text-slate-900">Confidentialité</Link>
-          <Link href="/mentions-legales" className="inline-flex min-h-11 items-center hover:text-slate-900">Mentions légales</Link>
-          <a href="mailto:contact@biendecider.com" className="inline-flex min-h-11 items-center hover:text-slate-900">Contact</a>
         </div>
       </aside>
-      <div className="min-w-0 flex-1">
-        <header className="workspace-heading px-4 py-3 md:px-8">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-          <Link href="/dashboard" className="font-semibold md:hidden"><BrandLogo /></Link>
-          <div className="hidden min-w-0 md:block">
-            <Suspense fallback={<p className="truncate">{companyName || "Votre espace BienDecider"}</p>}>
-              <WorkspaceBreadcrumb fallback={companyName || "Votre espace BienDecider"} />
-            </Suspense>
+      <div className="workspace">
+        <header className="topbar">
+          <Suspense fallback={<span className="breadcrumb">{companyName || "Votre espace BienDecider"}</span>}>
+            <WorkspaceBreadcrumb fallback={companyName || "Votre espace BienDecider"} />
+          </Suspense>
+          <div>
+            {paul && <Suspense fallback={null}><PaulPanel /></Suspense>}
+            {ownerEmail && <span className="user-avatar" title={ownerEmail}>{ownerEmail[0]}</span>}
           </div>
-          <div className="flex items-center gap-4"><p className="hidden lg:block">Vous décidez. Votre activité avance.</p>{paul && <Suspense fallback={null}><PaulPanel inlineLauncher /></Suspense>}</div>
-          <div className="flex min-w-0 items-center gap-3 md:hidden">
-            {companyName && <span className="max-w-28 truncate text-xs text-slate-500">{companyName}</span>}
-            <Link href="/dashboard?view=validation" aria-describedby={pendingCount > 0 ? "pending-description" : undefined} className="inline-flex min-h-11 shrink-0 items-center gap-2 rounded border border-indigo-200 px-3 text-sm font-medium text-indigo-700">
-              À valider
-              {pendingCount > 0 && <span aria-hidden="true" className="rounded-full bg-indigo-700 px-2 text-xs font-semibold text-white">{pendingCount}</span>}
-            </Link>
-            {pendingCount > 0 && <span id="pending-description" className="sr-only">{pendingCount} production(s) attendent votre décision</span>}
-          </div>
-          </div>
-          <details className="mt-3 md:hidden">
-            <summary className="flex min-h-11 cursor-pointer items-center py-1 text-sm font-medium text-slate-700">Menu</summary>
-            <Suspense fallback={null}><SidebarNav pendingCount={pendingCount} /></Suspense>
-            <form action="/api/auth/logout" method="post" className="px-3 py-4"><button className="min-h-11 text-sm text-slate-700">Déconnexion</button></form>
-          </details>
         </header>
-        <main id="contenu" tabIndex={-1} className="mx-auto w-full max-w-6xl break-words p-4 pb-24 focus:outline-none sm:p-6 sm:pb-24 md:p-8 md:pb-24">{children}</main>
+        <main id="contenu" tabIndex={-1}>{children}</main>
+        <footer className="workspace-footer">
+          <span>{companyName ? `${companyName}${objective ? ` · Objectif : ${objective}` : ""}` : "BienDecider"}</span>
+          <span className="footer-links">
+            <Link href="/cgu">CGU</Link>
+            <Link href="/confidentialite">Confidentialité</Link>
+            <Link href="/mentions-legales">Mentions légales</Link>
+            <a href="mailto:contact@biendecider.com">Contact</a>
+            {(companyName || ownerEmail) && <form action="/api/auth/logout" method="post"><button type="submit">Déconnexion</button></form>}
+          </span>
+        </footer>
       </div>
     </div>
   );

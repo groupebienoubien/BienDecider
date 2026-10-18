@@ -6,7 +6,8 @@ import { omitPasswordHash } from "@/lib/safe-company";
 import { DashboardClient } from "./dashboard-client";
 import { getConfiguredRiskLevels } from "@/lib/delegation-policy";
 import { facebookConnectionView } from "@/lib/oauth/meta";
-import { countPendingDecisions, needsAttention } from "@/lib/pending-decisions";
+import { needsAttention } from "@/lib/pending-decisions";
+import { getShellProps } from "@/lib/shell-data";
 
 export const dynamic = "force-dynamic";
 
@@ -54,7 +55,7 @@ export default async function DashboardPage({ searchParams }: {
     : view === "validation" || view === "historique" || view === "plan" ? view : "today";
 
   return (
-    <AppShell companyName={company.name} companyTrade={company.trade} companyArea={company.servingArea} pendingCount={countPendingDecisions(proposals, facebookPageName)}>
+    <AppShell {...await getShellProps(company)}>
       <DashboardClient
         company={omitPasswordHash(company)}
         initialPlanItems={planItems}
@@ -69,6 +70,8 @@ export default async function DashboardPage({ searchParams }: {
         riskSettings={riskSettings}
         facebookPageName={facebookPageName}
         initialView={initialView}
+        focusProposalId={focusedProposal?.id}
+        todayLabel={new Intl.DateTimeFormat("fr-FR", { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "Europe/Paris" }).format(new Date()).toLocaleUpperCase("fr-FR")}
       />
     </AppShell>
   );
