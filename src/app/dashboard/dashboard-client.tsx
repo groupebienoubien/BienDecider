@@ -19,7 +19,7 @@ import { needsAttention } from "@/lib/pending-decisions";
 import { openPaul } from "@/lib/paul-context";
 
 type PlanItemWithProposals = ActionPlanItem & { proposals: AgentProposal[]; agentRuns: AgentRunView[] };
-type View = "plan" | "validation" | "historique";
+type View = "today" | "plan" | "validation" | "historique";
 
 export function DashboardClient({ company, initialPlanItems, initialAgentRuns, initialProposals, leadSources, initialDiagnosticCount, initialView, riskSettings, facebookPageName }: {
   company: SafeCompany;
@@ -239,15 +239,21 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
   const locked = busyId !== null || planLoading;
 
   return (
-    <div className="mx-auto max-w-4xl">
+    <div className="mx-auto max-w-5xl">
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold">Aujourd&apos;hui</h1>
+          <p className="mb-2 text-xs font-semibold uppercase text-indigo-700">{company.name}</p>
+          <h1 className="text-2xl font-semibold">{({ today: "À décider", plan: "Mon plan d’action", validation: "Productions", historique: "Historique" })[initialView]}</h1>
           <p className="mt-1 text-sm text-slate-500">{company.objective || "Votre activité, vos priorités"}</p>
         </div>
         <Link href="/rapport" className="text-sm font-medium text-indigo-600 underline underline-offset-4">Voir les résultats</Link>
       </header>
-      {initialView !== "validation" && <JourneyProgress
+      {initialView === "today" && <dl className="decision-metrics">
+        <div><dt>Productions à examiner</dt><dd>{actionable.length}</dd></div>
+        <div><dt>Actions à confier</dt><dd>{activeItems.filter((item) => item.status === "propose").length}</dd></div>
+        <div><dt>Productions exécutées</dt><dd>{proposals.filter((proposal) => proposal.status === "executee").length}</dd></div>
+      </dl>}
+      {initialView === "today" && needsFirstDiagnostic && <JourneyProgress
         objectiveComplete={Boolean(company.objective?.trim())}
         diagnosticComplete={initialDiagnosticCount > 0}
         planComplete={planItems.length > 0}
@@ -257,7 +263,7 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
         planLoading={planLoading}
         onPreparePlan={handleGeneratePlan}
       />}
-      {initialView !== "validation" && <section className="mt-6 border-y border-slate-200 py-5" aria-labelledby="next-step">
+      {initialView === "today" && <section className="mt-6 border-y border-slate-200 py-5" aria-labelledby="next-step">
         <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Prochaine étape</p>
         <div className="mt-2 flex flex-wrap items-center justify-between gap-4">
           <h2 id="next-step" className="max-w-xl text-lg font-medium">{actionable.length > 0 ? `${actionable.length} production(s) attendent votre décision` : nextItem ? nextItem.title : runningItem ? `En cours : ${runningItem.title}` : needsFirstDiagnostic ? "Repérer les premières opportunités" : "Préparer les prochaines actions"}</h2>
@@ -266,7 +272,7 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
           ) : runningItem ? (
             <span role="status" className="text-sm text-slate-600">L&apos;agent prépare le résultat…</span>
           ) : nextItem ? (
-            <button onClick={() => handleLaunch(nextItem)} disabled={locked} className="rounded-lg bg-indigo-600 px-4 py-2 text-sm text-white disabled:opacity-50">{busyId === nextItem.id ? "En préparation…" : "Lancer l'action"}</button>
+            <Link href="/dashboard?view=plan" className="rounded-lg bg-indigo-600 px-4 py-2 text-sm text-white">Examiner l&apos;action</Link>
           ) : needsFirstDiagnostic ? (
             <Link href="/diagnostic" className="rounded-lg bg-indigo-600 px-4 py-2 text-sm text-white">Commencer par le diagnostic</Link>
           ) : (
@@ -274,6 +280,22 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
           )}
         </div>
       </section>}
+      {initialView === "today" && <>
+        {actionable.length > 0 && <section className="mt-7" aria-label="Vos prochaines décisions">
+          <h2 className="mb-4 text-lg font-semibold">À examiner maintenant</h2>
+          <div>{actionable.slice(0, 3).map((proposal) => <article key={proposal.id} className="decision-row">
+            <div><p>{PERSONAS[proposal.agent as AgentKey]?.name ?? proposal.agent} · {proposal.status === "validee" || proposal.status === "modifiee" ? "Approuvée, diffusion à confirmer" : "Relecture attendue"}</p><h3 className="mt-1 font-semibold">{proposal.title}</h3><p>{planItems.find((item) => item.id === proposal.planItemId)?.title ?? "Demande à l’équipe"}</p></div>
+            <Link href={`/dashboard?view=validation&proposal=${encodeURIComponent(proposal.id)}#proposal-${encodeURIComponent(proposal.id)}`}>Examiner →</Link>
+          </article>)}</div>
+        </section>}
+        <div className="mt-8 grid gap-8 lg:grid-cols-2">
+          <section><h2 className="text-lg font-semibold">Dernières décisions</h2>
+            {history.length === 0 ? <p className="mt-3 text-sm text-slate-600">Vos décisions apparaîtront ici après la première relecture.</p> : <ul className="mt-3 divide-y divide-slate-200">{history.slice(0, 3).map((proposal) => <li key={proposal.id} className="py-3"><Link className="text-sm font-medium text-indigo-700" href={`/dashboard?view=historique&proposal=${encodeURIComponent(proposal.id)}`}>{proposal.title}</Link><p className="mt-1 text-xs text-slate-600">{proposal.status === "executee" ? "Exécution enregistrée" : proposal.status === "rejetee" ? "Rejetée" : "Décision enregistrée"}</p></li>)}</ul>}
+            <Link href="/dashboard?view=historique" className="mt-3 inline-block text-sm text-indigo-700 underline">Consulter l&apos;historique</Link>
+          </section>
+          <section className="border-t-2 border-indigo-600 bg-indigo-50 p-5"><div className="flex items-center gap-3"><PersonaAvatar agentKey="co_ceo" size={32} /><h2 className="text-base font-semibold">Le point avec Paul</h2></div><p className="mt-4 text-sm text-slate-700">{actionable.length > 0 ? "Des productions sont prêtes pour votre relecture. Examinons-les avant de préparer la suite." : "Faisons le point sur votre objectif et les prochains sujets à confier à l’équipe."}</p><button type="button" onClick={() => openPaul()} className="mt-4 min-h-11 text-sm font-semibold text-indigo-700">Échanger avec Paul →</button></section>
+        </div>
+      </>}
       {initialView === "validation" && (
         <p className="mt-4 rounded-lg bg-slate-100 p-3 text-sm text-slate-800">
           {actionable.length > 0 ? `${actionable.length} production(s) attendent votre décision. Valider ou rejeter ne publie ni n'envoie rien.` : "Aucune production n'attend votre décision."}
@@ -282,7 +304,7 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
       {error && <p role="alert" className="mt-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}
       {notice && <p role="status" className="mt-4 rounded-lg bg-emerald-50 p-3 text-sm text-emerald-800">{notice}</p>}
       <AgentRunTracker runs={agentRuns} onCheck={(runId) => void checkRun(runId)} onRetry={() => void handleRetryPlanGeneration()} retryDisabled={planLoading} />
-      <nav aria-label="Actions" className="mt-6 flex flex-wrap gap-x-6 border-b border-slate-200">
+      {initialView !== "today" && <nav aria-label="Actions" className="mt-6 flex flex-wrap gap-x-6 border-b border-slate-200">
         {([
           ["plan", "Plan d'action", activeItems.length],
           ["validation", "À valider", actionable.length],
@@ -292,7 +314,7 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
             {label} <span className="ml-1 text-xs">{count}</span>
           </Link>
         ))}
-      </nav>
+      </nav>}
       {initialView === "plan" && (
         <section id="plan-actions" className="py-5" aria-label="Plan d'action">
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
@@ -317,8 +339,9 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
                     <PersonaAvatar agentKey={item.agent as AgentKey} size={32} />
                     <div className="min-w-0 flex-1 basis-40">
                       <p className="text-xs text-slate-500">{persona?.name ?? item.agent} · {item.timing}</p>
+                      <span className="mt-2 inline-block rounded bg-indigo-50 px-2 py-1 text-xs font-medium text-indigo-800">{item.agent === "marketing" ? "Marketing & visibilité" : item.agent === "demarchage" ? "Prospection" : "Contenus & site"}</span>
                       <h3 className="mt-1 font-medium">{item.title}</h3>
-                      <details className="mt-2 text-sm text-slate-600"><summary className="cursor-pointer text-xs">Pourquoi cette action ?</summary><p className="mt-2">{item.rationale}</p></details>
+                      <p className="mt-2 max-w-2xl text-sm text-slate-600">{item.rationale}</p>
                       {progressParts.length > 0 && <p className="mt-2 text-xs text-slate-600">Avancement : {progressParts.join(" · ")}.</p>}
                       {progress.total > 0 && progress.rejected === progress.total && <p className="mt-1 text-xs text-slate-600">Rien n&apos;a été retenu : l&apos;action reste ouverte. Précisez votre consigne à l&apos;équipe pour obtenir une autre proposition.</p>}
                     </div>
@@ -372,14 +395,24 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
               <button type="button" onClick={() => setQueueFilter("all")} className="mt-2 min-h-11 text-sm font-medium text-indigo-700 underline">Afficher toutes les productions</button>
             </div>
           )}
+          <div className={queueGroups.length > 0 ? "production-workspace" : undefined}>
+          {queueGroups.length > 0 && <nav className="production-index" aria-label="Sommaire des productions">
+            {queueGroups.map((group) => <div key={group.key}>
+              <p className="mb-2 text-xs font-semibold text-slate-600">{group.title}</p>
+              {group.items.map((proposal) => <a key={proposal.id} href={`#proposal-${proposal.id}`} className="mb-2 block rounded-md border border-slate-200 bg-white p-3 text-sm font-medium text-slate-800"><span className="mb-1 block text-xs font-normal text-indigo-700">{PERSONAS[proposal.agent as AgentKey]?.name ?? proposal.agent} · v{proposal.version}</span>{proposal.title}</a>)}
+            </div>)}
+          </nav>}
+          <div className="min-w-0 space-y-6">
           {queueGroups.map((group) => (
             <section key={group.key} aria-labelledby={`group-${group.key}`} className="space-y-3">
               <h2 id={`group-${group.key}`} className="text-sm font-semibold text-slate-800">{group.title} <span className="font-normal text-slate-600">({group.items.length})</span></h2>
               {group.items.map((proposal) => (
-                <ProposalCard key={proposal.id} proposal={proposal} onDecision={handleDecision} onExecute={handleExecute} onSetLeadSource={handleSetLeadSource} busy={locked} showAgent riskSettings={riskSettings} facebookPageName={facebookPageName} siteDestination={company.siteSlug ? `/site/${company.siteSlug}` : null} companyPhone={company.phone} companyCertifications={company.certifications} leadSource={currentLeadSources[proposal.id]} />
+                <ProposalCard key={proposal.id} proposal={proposal} onDecision={handleDecision} onExecute={handleExecute} onSetLeadSource={handleSetLeadSource} busy={locked} showAgent workspace riskSettings={riskSettings} facebookPageName={facebookPageName} siteDestination={company.siteSlug ? `/site/${company.siteSlug}` : null} companyPhone={company.phone} companyCertifications={company.certifications} leadSource={currentLeadSources[proposal.id]} />
               ))}
             </section>
           ))}
+          </div>
+          </div>
         </section>
       )}
       {initialView === "historique" && (

@@ -5,6 +5,7 @@ import { AppShell } from "@/components/app-shell";
 import { getPendingDecisionCount } from "@/lib/pending-decisions-server";
 import { EquipeClient } from "./equipe-client";
 import type { AgentRunView } from "@/lib/agent-run-types";
+import { CompanySections } from "@/components/company-sections";
 
 export const dynamic = "force-dynamic";
 
@@ -24,6 +25,7 @@ export default async function EquipePage() {
 
   return (
     <AppShell companyName={company.name} pendingCount={pendingCount}>
+      <CompanySections active="equipe" />
       <EquipeClient initialAgentRuns={initialAgentRuns} />
     </AppShell>
   );

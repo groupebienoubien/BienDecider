@@ -50,6 +50,7 @@ export function ProposalCard({
   companyPhone,
   companyCertifications,
   leadSource,
+  workspace = false,
 }: {
   proposal: AgentProposal;
   onDecision: (id: string, decision: ProposalDecision) => Promise<boolean>;
@@ -63,6 +64,7 @@ export function ProposalCard({
   companyPhone?: string | null;
   companyCertifications?: string | null;
   leadSource?: string | null;
+  workspace?: boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const [editedContent, setEditedContent] = useState(proposal.content);
@@ -138,7 +140,7 @@ export function ProposalCard({
   }
 
   return (
-    <article id={`proposal-${proposal.id}`} tabIndex={-1} className="scroll-mt-24 rounded-lg border border-slate-200 bg-white p-4">
+    <article id={`proposal-${proposal.id}`} tabIndex={-1} className={`scroll-mt-24 rounded-lg border border-slate-200 bg-white p-4 ${workspace ? "production-card-workspace" : ""}`}>
       <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
         <span className="text-slate-600">
           {showAgent && persona ? `${persona.name} · ` : ""}
@@ -220,7 +222,7 @@ export function ProposalCard({
         </section>
       )}
       {editing ? (
-        <form onSubmit={approveEditedContent} className="mt-3 space-y-2">
+        <form onSubmit={approveEditedContent} className="production-preview mt-3 space-y-2">
           <label htmlFor={`proposal-content-${proposal.id}`} className="text-xs font-medium text-slate-700">Modifier le contenu</label>
           <textarea
             id={`proposal-content-${proposal.id}`}
@@ -247,7 +249,7 @@ export function ProposalCard({
           </div>
         </form>
       ) : (
-        <details className="mt-1" open={proposal.status === "en_attente"}>
+        <details className="production-preview mt-1" open={workspace || proposal.status === "en_attente"}>
           <summary className="cursor-pointer text-xs text-indigo-600">Voir le contenu</summary>
           <p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">{displayContent}</p>
         </details>

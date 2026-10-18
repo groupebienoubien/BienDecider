@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { BrandLogo } from "@/components/brand-logo";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -43,7 +44,8 @@ export default function LoginPage() {
 
   return (
     <main className="mx-auto flex max-w-sm flex-col justify-center p-8 font-sans min-h-screen">
-      <h1 className="text-2xl font-semibold">BienDecider</h1>
+      <h1><Link href="/" aria-label="BienDecider, accueil"><BrandLogo /></Link></h1>
+      <p className="mt-3 text-sm text-indigo-700">Vous décidez. Votre activité avance.</p>
       <h2 className="mt-4 text-lg font-medium">Connexion</h2>
       <p className="mt-1 text-sm text-gray-500">
         Connectez-vous avec l&apos;email et le mot de passe de votre compte.

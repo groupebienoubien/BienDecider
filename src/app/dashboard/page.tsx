@@ -50,7 +50,7 @@ export default async function DashboardPage({ searchParams }: {
   const focusedProposal = focusProposalId ? proposals.find((proposal) => proposal.id === focusProposalId) : undefined;
   const initialView = focusedProposal
     ? needsAttention(focusedProposal, facebookPageName) ? "validation" : "historique"
-    : view === "validation" || view === "historique" ? view : "plan";
+    : view === "validation" || view === "historique" || view === "plan" ? view : "today";
 
   return (
     <AppShell companyName={company.name} pendingCount={countPendingDecisions(proposals, facebookPageName)}>

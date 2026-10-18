@@ -423,12 +423,12 @@ test("single validation queue, persistent decisions, publishing and error recove
       { companyId: company.id, agent: "contenu", kind: "site_web_content", title: "Site approuvé à publier", content: "Contenu du site", status: "validee", approvedVersion: 1 },
     ] });
     await page.setViewportSize({ width: 1440, height: 1000 });
-    await page.goto(`${baseURL}/dashboard`);
+    await page.goto(`${baseURL}/dashboard?view=plan`);
     await expect(page.getByRole("heading", { name: "Préparer la communication" })).toBeVisible();
     await expect(page.locator("article")).toHaveCount(0);
     await page.getByRole("link", { name: "À valider 3", exact: true }).click();
     await expect(page.locator("article")).toHaveCount(3);
-    await expect(page.getByRole("link", { name: "Productions à valider 3", exact: true }).first()).toBeVisible();
+    await expect(page.getByRole("link", { name: "Productions 3", exact: true }).first()).toBeVisible();
     await expect(page.getByText("Risque élevé", { exact: true })).toHaveCount(3);
     await expect(page.getByText("Risque modéré", { exact: true })).toHaveCount(0);
     await expect(page.getByText("Risque élevé", { exact: true }).first()).toBeVisible();
@@ -472,7 +472,7 @@ test("single validation queue, persistent decisions, publishing and error recove
     await planned.getByRole("button", { name: "Confirmer le rejet", exact: true }).click();
     await expect(planned.getByText("Rejetée", { exact: true })).toBeVisible();
     await expect(page.getByRole("link", { name: "À valider 1", exact: true })).toBeVisible();
-    await expect(page.getByRole("link", { name: "Productions à valider 1", exact: true }).first()).toBeVisible();
+    await expect(page.getByRole("link", { name: "Productions 1", exact: true }).first()).toBeVisible();
     const site = await prisma.agentProposal.findFirstOrThrow({ where: { companyId: company.id, kind: "site_web_content" } });
     await page.route(`**/api/proposals/${site.id}/execute`, async (route) => {
       expect(route.request().postDataJSON()).toEqual({ expectedVersion: site.version, confirmed: true, acknowledgedReviewIds: [] });
@@ -578,8 +578,8 @@ test("diagnostic to plan, keyboard dialog and responsive navigation", async ({ p
     for (const width of [320, 390, 768, 1440]) {
       await page.setViewportSize({ width, height: 900 });
       for (const [path, title] of [
-        ["/dashboard", "Aujourd'hui"],
-        ["/dashboard?view=validation", "Aujourd'hui"],
+        ["/dashboard", "À décider"],
+        ["/dashboard?view=validation", "Productions"],
         ["/diagnostic", "Diagnostic"],
         ["/equipe", "Équipe"],
         ["/rapport", "Résultats"],
@@ -594,6 +594,28 @@ test("diagnostic to plan, keyboard dialog and responsive navigation", async ({ p
     await page.getByRole("link", { name: "Diagnostic", exact: true }).last().click();
     await expect(page.getByRole("heading", { name: "Diagnostic", exact: true })).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath("diagnostic-mobile.png"), fullPage: true });
+  } finally { await prisma.$disconnect(); }
+});
+
+test("workspace sections track the active view and account budget is company scoped", async ({ page, company }) => {
+  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }) });
+  try {
+    await prisma.usageEvent.create({ data: { companyId: company.id, agent: "contenu", model: "test", inputTokens: 100, outputTokens: 20, costUsd: 1.25 } });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    for (const [view, label] of [["", "À décider"], ["?view=plan", "Plan d’action"], ["?view=validation", "Productions"], ["?view=historique", "Historique"]]) {
+      await page.goto(`${baseURL}/dashboard${view}`);
+      const navigation = page.locator("aside").getByRole("navigation", { name: "Navigation principale" });
+      await expect(navigation.locator('[aria-current="page"]')).toHaveCount(1);
+      await expect(navigation.getByRole("link", { name: label, exact: true })).toHaveAttribute("aria-current", "page");
+    }
+    await page.goto(`${baseURL}/compte?tab=budget`);
+    await expect(page.getByRole("heading", { name: "Consommation du mois", exact: true })).toBeVisible();
+    await expect(page.locator(".decision-metrics")).toContainText("1,25");
+    await expect(page.getByRole("heading", { name: "Limites de votre compte" })).toBeVisible();
+    await page.getByRole("link", { name: "Accès", exact: true }).click();
+    await expect(page.locator("main")).toContainText(company.ownerEmail);
+    await page.getByRole("link", { name: "Confidentialité", exact: true }).last().click();
+    await expect(page).toHaveURL(`${baseURL}/compte?tab=confidentialite`);
   } finally { await prisma.$disconnect(); }
 });
 
@@ -750,8 +772,15 @@ test("guided onboarding starts with three fields and keeps the full company page
     await expect(page).toHaveURL(`${baseURL}/entreprise`);
     await expect(page.getByRole("heading", { name: "Mon entreprise", exact: true })).toBeVisible();
     await expect(page.getByPlaceholder("Nom commercial")).toHaveValue("Atelier Minimal");
-    await expect(page.getByPlaceholder("CA mensuel actuel (€)")).toBeVisible();
     await expect(page.getByPlaceholder("Téléphone affiché aux clients (optionnel)")).toBeVisible();
+    await page.getByPlaceholder("Téléphone affiché aux clients (optionnel)").fill("0102030405");
+    await page.getByRole("button", { name: "Objectifs", exact: true }).click();
+    await expect(page.getByPlaceholder("CA mensuel actuel (€)")).toBeVisible();
+    await page.getByPlaceholder("CA mensuel actuel (€)").fill("4200");
+    await page.getByRole("button", { name: "Informations", exact: true }).click();
+    await expect(page.getByPlaceholder("Téléphone affiché aux clients (optionnel)")).toHaveValue("0102030405");
+    await page.getByRole("button", { name: "Objectifs", exact: true }).click();
+    await expect(page.getByPlaceholder("CA mensuel actuel (€)")).toHaveValue("4200");
     await expect(page.getByRole("region", { name: "Démarrer en une phrase" })).toHaveCount(0);
   } finally {
     await prisma.$disconnect();

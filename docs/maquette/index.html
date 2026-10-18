@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>BienDecider · Maquette du parcours</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Sora:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="maquette.css">
+  <script defer src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
+  <script defer src="maquette.js"></script>
+</head>
+<body>
+  <aside class="sidebar" aria-label="Navigation principale">
+    <a class="brand" href="#today"><span class="brand-mark">b.</span>BienDecider<span class="brand-dot">.</span></a>
+    <div class="company"><span class="company-avatar">AC</span><div><strong>Atelier Camille</strong><small>Peinture · Toulouse</small></div></div>
+    <div class="nav-label">MON ACTIVITÉ</div>
+    <nav id="navigation"></nav>
+    <div class="sidebar-bottom"><button data-page="settings"><i data-lucide="settings-2"></i> Mon entreprise</button><button data-page="account"><i data-lucide="circle-user-round"></i> Mon compte</button><button data-page="admin"><i data-lucide="shield-check"></i> Administration</button><div class="credit"><span>Budget IA du mois</span><strong>12 € <small>/ 30 €</small></strong><progress value="12" max="30" aria-label="Budget IA consommé"></progress></div></div>
+  </aside>
+  <div class="workspace">
+    <header class="topbar"><span id="breadcrumb">Mon activité / À décider</span><div><span class="prototype"><span></span> Maquette · données fictives</span><button class="paul-launch" id="paul-open" aria-label="Échanger avec Paul" title="Échanger avec Paul"><span class="paul-avatar">P</span><span>Échanger avec Paul</span><i data-lucide="message-circle"></i></button><button class="icon-button" id="reset" title="Réinitialiser la maquette" aria-label="Réinitialiser la maquette"><i data-lucide="rotate-ccw"></i></button><span class="user-avatar" title="Camille, dirigeante">C</span></div></header>
+    <main id="main" tabindex="-1"></main>
+    <footer class="workspace-footer"><span>Atelier Camille · Objectif : 4 commandes ce mois-ci</span><span>Aucune opération réelle</span></footer>
+  </div>
+  <dialog id="paul-dialog" class="paul-dialog" aria-labelledby="paul-title"><header><span class="paul-avatar">P</span><div><strong id="paul-title">Paul</strong><small>Votre copilote</small></div><button class="icon-button" data-close="paul-dialog" aria-label="Fermer Paul" title="Fermer"><i data-lucide="x"></i></button></header><div id="chat-messages" class="chat-messages" aria-live="polite"></div><form id="chat-form"><label class="sr-only" for="chat-input">Message à Paul</label><textarea id="chat-input" rows="2" placeholder="Parlons de cette décision…" required maxlength="1000"></textarea><button class="icon-button primary" title="Envoyer" aria-label="Envoyer"><i data-lucide="arrow-up"></i></button></form><small class="chat-disclaimer">Réponses de démonstration · Paul peut se tromper.</small></dialog>
+  <dialog id="modal" aria-labelledby="modal-title"><div id="modal-content"></div></dialog>
+  <div id="toast" role="status"></div>
+</body>
+</html>

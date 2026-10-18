@@ -4,9 +4,11 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
 import { TradeCombobox } from "@/components/trade-combobox";
+import { CompanySections } from "@/components/company-sections";
 
-export function CompanyProfileForm({ guided = false, children }: { guided?: boolean; children?: React.ReactNode }) {
+export function CompanyProfileForm({ guided = false, initialTab = "informations" }: { guided?: boolean; initialTab?: "informations" | "objectifs" }) {
   const router = useRouter();
+  const [profileTab, setProfileTab] = useState(initialTab);
   const [name, setName] = useState("");
   const [trade, setTrade] = useState("");
   const [servingArea, setServingArea] = useState("");
@@ -149,8 +151,8 @@ export function CompanyProfileForm({ guided = false, children }: { guided?: bool
   }
 
   return (
-    <AppShell paul={!guided}>
-      <div className="mx-auto max-w-lg">
+    <AppShell paul={!guided} companyName={guided ? undefined : name}>
+      <div className="mx-auto max-w-3xl">
         <h1 className="text-2xl font-semibold">
           {guided ? "Parlez-nous de votre activité" : "Mon entreprise"}
         </h1>
@@ -159,6 +161,8 @@ export function CompanyProfileForm({ guided = false, children }: { guided?: bool
             ? "Moins de 5 minutes. Vous pourrez tout modifier plus tard."
             : "Modifiez ces informations à tout moment — elles orientent directement vos agents."}
         </p>
+
+        {!guided && <CompanySections active={profileTab} onProfileTab={setProfileTab} />}
 
         {guided && isNew && profileLoaded && (
           <section aria-label="Démarrer en une phrase" className="mt-5 border-y border-slate-200 py-4">
@@ -196,7 +200,17 @@ export function CompanyProfileForm({ guided = false, children }: { guided?: bool
           </section>
         )}
 
-        <form onSubmit={handleSubmit} className="mt-6 flex flex-col gap-3">
+        <form onSubmit={handleSubmit} onInvalidCapture={(event) => {
+          if (guided) return;
+          event.preventDefault();
+          const field = event.target as HTMLInputElement;
+          setProfileTab(field.closest("[data-profile-section]")?.getAttribute("data-profile-section") === "objectifs" ? "objectifs" : "informations");
+          setError("Vérifiez le champ indiqué avant d’enregistrer.");
+          requestAnimationFrame(() => field.focus());
+        }} className="mt-6 flex flex-col gap-3">
+          <fieldset disabled={!profileLoaded || loading} className="flex min-w-0 flex-col gap-3">
+          <div data-profile-section="objectifs" hidden={!guided && profileTab !== "objectifs"}>
+          <div className="flex flex-col gap-3">
           {(!guided || profileInterpreted) && <>
             <label htmlFor="profile-objective" className="text-sm font-medium">Quel est votre objectif principal ?</label>
             <input
@@ -284,6 +298,10 @@ export function CompanyProfileForm({ guided = false, children }: { guided?: bool
             </fieldset>
           </>}
 
+          </div>
+          </div>
+          <div data-profile-section="informations" hidden={!guided && profileTab !== "informations"}>
+          <div className="flex flex-col gap-3">
           <label htmlFor="profile-name" className="text-sm font-medium">Nom commercial</label>
           <input
             id="profile-name"
@@ -370,6 +388,8 @@ export function CompanyProfileForm({ guided = false, children }: { guided?: bool
             />
 
           </>}
+          </div>
+          </div>
           <button
             type="submit"
             disabled={loading || !profileLoaded}
@@ -378,8 +398,8 @@ export function CompanyProfileForm({ guided = false, children }: { guided?: bool
             {loading ? "Enregistrement…" : isNew ? "Valider et lancer mon audit" : "Enregistrer"}
           </button>
           {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
+          </fieldset>
         </form>
-        {children}
       </div>
     </AppShell>
   );

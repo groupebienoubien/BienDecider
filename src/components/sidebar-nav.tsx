@@ -1,26 +1,33 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 
 const ITEMS = [
+  { href: "/dashboard", label: "À décider", group: "Activité" },
   { href: "/diagnostic", label: "Diagnostic", group: "Activité" },
-  { href: "/dashboard", label: "Aujourd'hui", group: "Activité" },
-  { href: "/dashboard?view=validation", label: "Productions à valider", group: "Activité", pending: true },
+  { href: "/dashboard?view=plan", label: "Plan d’action", group: "Activité" },
+  { href: "/dashboard?view=validation", label: "Productions", group: "Activité", pending: true },
+  { href: "/dashboard?view=historique", label: "Historique", group: "Activité" },
   { href: "/prospection", label: "Prospection", group: "Activité" },
   { href: "/rapport", label: "Résultats", group: "Activité" },
-  { href: "/equipe", label: "Équipe", group: "Organisation" },
-  { href: "/connexions", label: "Connexions", group: "Organisation" },
   { href: "/entreprise", label: "Mon entreprise", group: "Organisation" },
+  { href: "/compte", label: "Mon compte", group: "Organisation" },
   { href: "/admin", label: "Administration", group: "Organisation" },
 ];
 
 export function SidebarNav({ pendingCount = 0 }: { pendingCount?: number }) {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
   return (
     <nav aria-label="Navigation principale" className="flex flex-col gap-1">
       {ITEMS.map((item, index) => {
-        const active = pathname === item.href || pathname.startsWith(item.href + "/");
+        const [itemPath, query] = item.href.split("?");
+        const active = itemPath === "/dashboard"
+          ? pathname === itemPath && (searchParams.get("view") ?? "") === (new URLSearchParams(query).get("view") ?? "")
+          : itemPath === "/entreprise"
+            ? ["/entreprise", "/equipe", "/connexions"].includes(pathname)
+            : pathname === itemPath || pathname.startsWith(itemPath + "/");
         return (
           <div key={item.href}>
           {(index === 0 || ITEMS[index - 1].group !== item.group) && <p className="px-3 pb-2 pt-5 text-xs font-medium uppercase tracking-wide text-slate-600">{item.group}</p>}

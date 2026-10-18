@@ -3,8 +3,18 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import Loading from "../src/app/loading";
 import ErrorPage from "../src/app/error";
+import { BrandLogo } from "../src/components/brand-logo";
 
 const baseURL = process.env.UX_TEST_BASE_URL ?? "http://localhost:3000";
+
+test("brand variants share the wordmark and explicit slogan", () => {
+  for (const light of [false, true]) {
+    const markup = renderToStaticMarkup(createElement(BrandLogo, { light, slogan: true }));
+    expect(markup).toContain("BienDecider");
+    expect(markup).toContain("Vous décidez. Votre activité avance.");
+    expect(markup).toContain(light ? "/brand/symbol-light.svg" : "/brand/symbol.svg");
+  }
+});
 
 test("loading and error states are French and do not expose technical details", () => {
   const loading = renderToStaticMarkup(createElement(Loading));
@@ -33,18 +43,21 @@ test("unknown pages offer a French return route on desktop and mobile", async ({
     await page.screenshot({ path: testInfo.outputPath(`not-found-${width}.png`), fullPage: true });
   }
   await page.getByRole("link", { name: "Retour à l'accueil", exact: true }).click();
-  await expect(page.getByRole("heading", { level: 1, name: /BienDecider prépare le travail/ })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "BienDecider", exact: true })).toBeVisible();
 });
 
 test("BienDecider public identity, metadata, contact and responsive pages", async ({ page }, testInfo) => {
   await page.goto(baseURL);
   await expect(page).toHaveTitle("BienDecider");
   await expect(page.locator("html")).toHaveAttribute("lang", "fr");
-  await expect(page.getByRole("heading", { level: 1, name: /BienDecider prépare le travail/ })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "BienDecider", exact: true })).toBeVisible();
+  await expect(page.getByText("Vous décidez. Votre activité avance.", { exact: true })).toBeVisible();
   await expect(page.getByText("BienDecider", { exact: true }).first()).toBeVisible();
   await expect(page.getByRole("link", { name: "Créer mon compte", exact: true })).toHaveAttribute("href", "/signup");
   await expect(page.getByRole("link", { name: "J'ai déjà un compte", exact: true })).toHaveAttribute("href", "/login");
   await expect(page.getByText("Exemple fictif, aucune donnée client")).toBeVisible();
+  await expect(page.getByRole("img", { name: /Aperçu BienDecider/ })).toBeVisible();
+  await expect(page.locator('link[rel="icon"][href="/brand/symbol.svg"]')).toHaveCount(1);
   await expect(page.locator("body")).not.toContainText(/gratuit pendant le pilote/i);
   await expect(page.locator('meta[property="og:site_name"]')).toHaveAttribute("content", "BienDecider");
   await expect(page.locator('meta[property="og:locale"]')).toHaveAttribute("content", "fr_FR");
@@ -53,7 +66,7 @@ test("BienDecider public identity, metadata, contact and responsive pages", asyn
     await page.setViewportSize({ width, height: 900 });
     for (const path of ["/", "/login", "/signup", "/cgu", "/confidentialite", "/mentions-legales"]) {
       await page.goto(`${baseURL}${path}`);
-      await expect(page.locator("h1")).toBeVisible();
+      await expect(page.locator("h1").filter({ hasNotText: /^Chargement en cours$/ })).toBeVisible();
       await expect(page).toHaveTitle("BienDecider");
       await expect(page.locator("body")).not.toContainText("Pepito");
       await expect(page.locator("body")).not.toContainText(/\S+@gmail\.com/);

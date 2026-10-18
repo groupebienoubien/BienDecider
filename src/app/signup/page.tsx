@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { BrandLogo } from "@/components/brand-logo";
 
 export default function SignupPage() {
   const router = useRouter();
@@ -37,7 +38,8 @@ export default function SignupPage() {
 
   return (
     <main className="mx-auto flex min-h-screen max-w-sm flex-col justify-center p-8 font-sans">
-      <h1 className="text-2xl font-semibold">BienDecider</h1>
+      <h1><Link href="/" aria-label="BienDecider, accueil"><BrandLogo /></Link></h1>
+      <p className="mt-3 text-sm text-indigo-700">Vous décidez. Votre activité avance.</p>
       <h2 className="mt-4 text-lg font-medium">Créer un compte</h2>
       <p className="mt-1 text-sm text-gray-500">Créez un compte avec votre email et un mot de passe d&apos;au moins 6 caractères.</p>
       <form onSubmit={handleSubmit} className="mt-6 flex flex-col gap-3">
