@@ -1,10 +1,10 @@
 # Architecture Pepito
 
-Document de référence à jour (2026-10-05) — remplace [architecture-technique.md](architecture-technique.md) qui garde la trace de la décision initiale (CTO, avant Postgres/Vercel/réorg agents) à titre historique.
+Document de référence à jour (2026-10-18) — remplace [architecture-technique.md](architecture-technique.md) qui garde la trace de la décision initiale (CTO, avant Postgres/Vercel/réorg agents) à titre historique.
 
 ## 1. Vue d'ensemble
 
-Pepito est une application web (Next.js) où un **Co-CEO (Paul)**, orchestré par IA, pilote une petite équipe de **3 agents spécialisés**. Chaque agent **propose** des actions (contenu, diagnostic, pistes commerciales) ; **rien n'est jamais exécuté sans validation explicite du dirigeant**, sauf la publication du site web qui est l'unique exécution automatisée existante aujourd'hui, et seulement sur une proposition déjà validée.
+Pepito est une application web (Next.js) où un **Co-CEO (Paul)**, orchestré par IA, pilote une petite équipe de **3 agents spécialisés**. Chaque agent **propose** des actions (contenu, diagnostic, pistes commerciales) ; **rien n'est jamais exécuté sans validation explicite du dirigeant**. Les exécutions réelles existantes — publication du site, publication sur la Page Facebook connectée, envoi d'un email Gmail — partent toutes d'une production approuvée et d'une confirmation explicite ; aucune n'est automatique.
 
 ```mermaid
 flowchart LR
@@ -25,7 +25,7 @@ flowchart LR
 | IA | **Claude Sonnet 5.5** (`claude-sonnet-5-5`) via `@anthropic-ai/sdk`, pattern **Tool Runner** | Un seul modèle partout pour l'instant ; chaque agent définit ses propres outils (function calling), la bibliothèque gère la boucle d'appel |
 | Auth | Cookie de session **signé HMAC-SHA256** (`SESSION_SECRET`), expiration à 30 jours, `HttpOnly`/`SameSite=Lax`, `Secure` en production ; version de session révocable en base. Mot de passe haché **scrypt** (natif Node, aucune dépendance). | Cookie forgé corrigé le 2026-10-05 ; expiration et révocation étendues par l'US #65 — voir [backlog.md](backlog.md) |
 | Hébergement | **Vercel**, déploiement auto sur push GitHub | Zéro configuration CI/CD, intégration GitHub native (aucune clé API partagée) |
-| OAuth (optionnel) | Google OAuth2, Meta Graph API | Code prêt, inactif tant que les identifiants ne sont pas fournis (`/connexions` l'indique honnêtement) |
+| OAuth (optionnel) | Google OAuth2 (Gmail), Meta Graph API (Page Facebook), LinkedIn (connexion du profil) | Gmail et Facebook recettés en production (2026-10-13 et 2026-10-15) ; LinkedIn : connexion seulement, pas de publication ; fiche Google et Instagram non connectés (cf. [oauth-setup.md](oauth-setup.md)) |
 
 ## 3. Logique inter-agents
 
@@ -33,12 +33,12 @@ flowchart LR
 
 | Agent | Rôle | Outils (function calling) | Produit |
 |---|---|---|---|
-| **Paul** (`co_ceo`) | Point de contact, orchestrateur, "meneur" | `get_current_status`, `delegate_marketing`, `delegate_contenu`, `delegate_demarchage`, `propose_plan_item` | Réponses de chat, plan d'action priorisé (`ActionPlanItem`) |
+| **Paul** (`co_ceo`) | Point de contact, orchestrateur, "meneur" | `get_current_status`, `delegate_marketing`, `delegate_contenu`, `delegate_demarchage`, `record_uncovered_request` (chat), `propose_plan_item` (plan) | Réponses de chat, plan d'action priorisé (`ActionPlanItem`) |
 | **Martine** (`marketing`) | Diagnostic + pilotage de la fiche Google. Jamais de contenu créatif. | `web_fetch`, `web_search`, `record_audit_finding`, `propose_action` (gbp_update, review_reply) | `AuditFinding`, `AgentProposal` |
 | **Camille** (`contenu`) | Production créative : posts + site web. S'appuie sur les constats de Martine. | `propose_content` (social_post, site_web_content) | `AgentProposal` |
 | **Jean-Claude** (`demarchage`) | Pistes de croissance publiques + templates de prospection générique | `web_search`, `propose_growth_lead`, `propose_prospecting_email` | `AgentProposal` |
 
-**Garde-fou non négociable, commun à tous** : chaque outil d'agent **écrit en base** (`create`), il n'appelle **jamais** une API externe. L'exécution réelle est un code séparé (`src/lib/site/publish.ts` aujourd'hui, seule exécution existante), déclenché uniquement sur une proposition déjà `validee`.
+**Garde-fou non négociable, commun à tous** : chaque outil d'agent **écrit en base** (`create`), il n'appelle **jamais** une API externe. L'exécution réelle est un code séparé (`src/lib/site/publish.ts` pour le site, `src/lib/social/facebook-publish.ts` pour la Page Facebook, la route `/api/gmail/send` pour l'email), déclenché uniquement sur une production déjà approuvée et une confirmation explicite, avec le niveau de risque contrôlé côté serveur.
 
 ### 3.4 Lancements persistés et quotas
 
@@ -64,6 +64,14 @@ flowchart TD
 ```
 
 Camille ne reçoit pas les constats de Martine via un mécanisme de handoff dédié : elle lit simplement les derniers `AuditFinding` en base au moment de son propre run (même table, pas de couplage de code entre les deux agents).
+
+### 3.5 Discussion avec Paul
+
+Le panneau de discussion est accessible de toutes les pages connectées (`src/components/paul-panel.tsx`) ; l'historique est relu côté serveur (50 derniers messages) et le brouillon survit à la navigation. Paul connaît la page ouverte et l'élément consulté (constat, production, prospect), résolu côté serveur dans les seules données de l'entreprise connectée et transmis comme donnée, jamais comme instruction. Quand Paul cite un objet, il ajoute un marqueur typé que le serveur ne transforme en lien interne que si l'objet existe et appartient à l'entreprise (`src/lib/paul-references.ts`).
+
+`POST /api/co-ceo/message` renvoie la réponse en flux NDJSON (`application/x-ndjson`, `src/lib/chat-stream.ts`) quand le client l'annonce dans `Accept`, sinon un JSON unique ; le texte s'affiche au fil de l'eau et la réponse finale, liens résolus, fait foi. Un client déconnecté n'interrompt pas le tour : la réponse est quand même enregistrée.
+
+La voix repose sur l'API Web Speech du navigateur, sans service ni coût côté BienDecider : dictée, lecture à voix haute et échange vocal mains libres (`src/lib/speech.ts`), tous déclenchés par une action explicite. L'audio de la dictée est traité par le service vocal du navigateur ; seul le texte reconnu est envoyé à BienDecider, et seulement quand il est validé par l'envoi du message ou de la demande.
 
 ### 3.3 Boucle plan → action → proposition → validation
 
@@ -163,6 +171,8 @@ erDiagram
 | Mots de passe | Hachés scrypt + sel, jamais stockés ni renvoyés au client (`omitPasswordHash` systématique) |
 | Force brute | 5 échecs → verrouillage 15 min, compteur incrémenté atomiquement en base (valable entre instances serverless) ; en plus, par IP hachée (`x-real-ip`, posée par Vercel) : 20 échecs de connexion / 15 min et 10 inscriptions / h, puis 429 + `Retry-After` (`src/lib/auth-throttle.ts`) ; ignoré si l'IP est absente |
 | Isolation multi-tenant | Toutes les routes vérifient l'appartenance via la session, pas via un ID client |
+| Entrées des routes API | Corps JSON validé (objet, types, longueurs, montants bornés) ; une entrée invalide renvoie un 400 clair, jamais une erreur serveur (`src/lib/request-body.ts`, schémas zod) |
+| Suppression du compte | `POST /api/companies/delete` : mot de passe et confirmation exigés ; effacement en cascade des données et des jetons chiffrés, révocation Google/Meta au mieux avant effacement ; sauvegardes de la base non purgées |
 | Contenu généré (site) | HTML nettoyé (scripts/handlers retirés) + servi dans une `<iframe sandbox="">` sans droits |
 | OAuth | Jamais de mot de passe tiers collecté — flux OAuth officiel uniquement (Google/Meta) |
 | Admin (`/admin`) | **Ouvert par défaut** à tout utilisateur connecté (décision CEO le 2026-10-05) — à refermer via `ADMIN_EMAILS` avant tout client externe non trié sur le volet |
@@ -183,9 +193,9 @@ Variables d'environnement requises en production : `DATABASE_URL` (nom canonique
 ## 7. Limites connues (volontaires, pas des oublis)
 
 - **Un seul modèle** (`claude-sonnet-5-5`) partout — choix de coût assumé, à réévaluer par cas si la qualité ne suffit pas (cf. [architecture-technique.md](architecture-technique.md)).
-- **Pas de tests automatisés** — plusieurs régressions (fiabilité Martine, fuite `passwordHash`, route morte après renommage) n'ont été trouvées que par tests manuels. Identifié comme priorité P2 dans le backlog.
-- **Pas de monitoring d'erreurs** dédié (Sentry ou équivalent) — seuls les logs serveur Vercel existent aujourd'hui.
-- **OAuth non fonctionnel** tant que les identifiants Google/Meta ne sont pas fournis (démarche externe, cf. [oauth-setup.md](oauth-setup.md)).
+- **Tests** : la CI GitHub lance lint, des tests unitaires sans réseau, le build, puis Playwright sur une base jetée (parcours, sécurité, moteur, connecteurs). Les tests qui écrivent en base ne tournent qu'en CI ou sur une base locale ; aucun test n'appelle les API réelles d'Anthropic, Google ou Meta, donc le flux réel avec le modèle et les consentements fournisseurs se vérifient par recette manuelle.
+- **Pas de monitoring d'erreurs** dédié (Sentry ou équivalent, US #83) — seuls les logs serveur Vercel existent aujourd'hui.
+- **Connecteurs** : Gmail et la Page Facebook sont recettés en production ; la fiche Google, Instagram et la publication LinkedIn ne sont pas disponibles (démarches externes, cf. [oauth-setup.md](oauth-setup.md)).
 
 Pour le détail complet des décisions prises et de ce qui reste à faire, voir [backlog.md](backlog.md).
 
