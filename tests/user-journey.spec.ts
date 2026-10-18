@@ -426,7 +426,7 @@ test("single validation queue, persistent decisions, publishing and error recove
     await page.goto(`${baseURL}/dashboard?view=plan`);
     await expect(page.getByRole("heading", { name: "Préparer la communication" })).toBeVisible();
     await expect(page.locator("article")).toHaveCount(0);
-    await page.getByRole("link", { name: "À valider 3", exact: true }).click();
+    await page.getByRole("link", { name: "Productions 3", exact: true }).click();
     await expect(page.locator("article")).toHaveCount(3);
     await expect(page.getByRole("link", { name: "Productions 3", exact: true }).first()).toBeVisible();
     await expect(page.getByText("Risque élevé", { exact: true })).toHaveCount(3);
