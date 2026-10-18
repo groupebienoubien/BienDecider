@@ -20,7 +20,7 @@ export default async function DashboardPage({ searchParams }: {
   const company = await prisma.company.findUnique({ where: { ownerEmail } });
   if (!company || !company.name) redirect("/onboarding");
 
-  const [planItems, recentAgentRuns, proposals, leads, diagnosticCount, riskSettings, facebookConnection] = await Promise.all([
+  const [planItems, recentAgentRuns, proposals, leads, leadStages, diagnosticCount, riskSettings, facebookConnection] = await Promise.all([
     prisma.actionPlanItem.findMany({
       where: { companyId: company.id },
       orderBy: [{ priority: "asc" }, { createdAt: "asc" }],
@@ -40,6 +40,7 @@ export default async function DashboardPage({ searchParams }: {
       orderBy: { createdAt: "desc" },
     }),
     prisma.lead.findMany({ where: { companyId: company.id, proposalId: { not: null } }, select: { proposalId: true, source: true } }),
+    prisma.lead.findMany({ where: { companyId: company.id }, select: { stage: true } }),
     prisma.auditFinding.count({ where: { companyId: company.id } }),
     getConfiguredRiskLevels(),
     prisma.channelConnection.findUnique({ where: { companyId_channel: { companyId: company.id, channel: "facebook" } } }),
@@ -53,13 +54,17 @@ export default async function DashboardPage({ searchParams }: {
     : view === "validation" || view === "historique" || view === "plan" ? view : "today";
 
   return (
-    <AppShell companyName={company.name} pendingCount={countPendingDecisions(proposals, facebookPageName)}>
+    <AppShell companyName={company.name} companyTrade={company.trade} companyArea={company.servingArea} pendingCount={countPendingDecisions(proposals, facebookPageName)}>
       <DashboardClient
         company={omitPasswordHash(company)}
         initialPlanItems={planItems}
         initialAgentRuns={recentAgentRuns}
         initialProposals={proposals}
         leadSources={Object.fromEntries(leads.map((lead) => [lead.proposalId!, lead.source]))}
+        initialLeadStats={{
+          active: leadStages.filter((lead) => !["gagne", "perdu", "ecarte"].includes(lead.stage)).length,
+          appointments: leadStages.filter((lead) => lead.stage === "rdv").length,
+        }}
         initialDiagnosticCount={diagnosticCount}
         riskSettings={riskSettings}
         facebookPageName={facebookPageName}

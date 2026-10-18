@@ -4,13 +4,13 @@ import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 
 const ITEMS = [
-  { href: "/dashboard", label: "À décider", group: "Activité" },
-  { href: "/diagnostic", label: "Diagnostic", group: "Activité" },
-  { href: "/dashboard?view=plan", label: "Plan d’action", group: "Activité" },
-  { href: "/dashboard?view=validation", label: "Productions", group: "Activité", pending: true },
-  { href: "/dashboard?view=historique", label: "Historique", group: "Activité" },
-  { href: "/prospection", label: "Prospection", group: "Activité" },
-  { href: "/rapport", label: "Résultats", group: "Activité" },
+  { href: "/dashboard", label: "À décider", group: "Mon activité" },
+  { href: "/diagnostic", label: "Diagnostic", group: "Mon activité" },
+  { href: "/dashboard?view=plan", label: "Plan d’action", group: "Mon activité" },
+  { href: "/dashboard?view=validation", label: "Productions", group: "Mon activité", pending: true },
+  { href: "/prospection", label: "Prospection", group: "Mon activité" },
+  { href: "/dashboard?view=historique", label: "Historique", group: "Mon activité" },
+  { href: "/rapport", label: "Résultats", group: "Mon activité" },
   { href: "/entreprise", label: "Mon entreprise", group: "Organisation" },
   { href: "/compte", label: "Mon compte", group: "Organisation" },
   { href: "/admin", label: "Administration", group: "Organisation" },

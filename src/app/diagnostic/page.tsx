@@ -14,5 +14,5 @@ export default async function DiagnosticPage() {
   if (!company || !company.name) redirect("/onboarding");
   const findings = await prisma.auditFinding.findMany({ where: { companyId: company.id }, orderBy: { createdAt: "desc" } });
   const pendingCount = await getPendingDecisionCount(company.id);
-  return <AppShell companyName={company.name} pendingCount={pendingCount}><DiagnosticClient initialFindings={findings} /></AppShell>;
+  return <AppShell companyName={company.name} companyTrade={company.trade} companyArea={company.servingArea} pendingCount={pendingCount}><DiagnosticClient initialFindings={findings} /></AppShell>;
 }
