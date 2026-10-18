@@ -2,33 +2,9 @@
 
 import { useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
 import { dictationErrorMessage } from "@/lib/voice";
+import { finalTranscript, recognitionConstructor, SPEECH_LANG, supportsDictation, supportsReadAloud, type Recognition } from "@/lib/speech";
 
-// La reconnaissance vocale n'est pas dans les types DOM standard.
-type RecognitionResult = ArrayLike<{ transcript: string }> & { isFinal: boolean };
-type Recognition = {
-  lang: string;
-  interimResults: boolean;
-  continuous: boolean;
-  maxAlternatives: number;
-  onresult: ((event: { results: ArrayLike<RecognitionResult> }) => void) | null;
-  onerror: ((event: { error: string }) => void) | null;
-  onend: (() => void) | null;
-  start(): void;
-  stop(): void;
-  abort(): void;
-};
-type RecognitionConstructor = new () => Recognition;
-
-const SPEECH_LANG = "fr-FR";
 const subscribeNothing = () => () => undefined;
-
-function recognitionConstructor(): RecognitionConstructor | null {
-  const speech = window as unknown as { SpeechRecognition?: RecognitionConstructor; webkitSpeechRecognition?: RecognitionConstructor };
-  return speech.SpeechRecognition ?? speech.webkitSpeechRecognition ?? null;
-}
-
-const supportsDictation = () => recognitionConstructor() !== null;
-const supportsReadAloud = () => "speechSynthesis" in window && typeof SpeechSynthesisUtterance !== "undefined";
 
 /**
  * Dictée : le texte reconnu est transmis à l'appelant, qui décide où l'insérer.
@@ -60,8 +36,8 @@ export function DictationButton({ onTranscript, label }: { onTranscript: (text: 
     recognition.continuous = false;
     recognition.maxAlternatives = 1;
     recognition.onresult = (event) => {
-      const text = Array.from(event.results).filter((result) => result.isFinal).map((result) => result[0].transcript).join(" ");
-      if (text.trim()) callbackRef.current(text);
+      const text = finalTranscript(event.results);
+      if (text) callbackRef.current(text);
     };
     recognition.onerror = (event) => setMessage(dictationErrorMessage(event.error));
     recognition.onend = () => {

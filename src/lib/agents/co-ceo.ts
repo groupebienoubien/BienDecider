@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { betaZodTool } from "@anthropic-ai/sdk/helpers/beta/zod";
 import type Anthropic from "@anthropic-ai/sdk";
+import type { BetaToolRunnerParams } from "@anthropic-ai/sdk/lib/tools/BetaToolRunner";
 import { anthropic, AGENT_MODEL } from "@/lib/anthropic";
 import { prisma } from "@/lib/prisma";
 import { getRejectionContext } from "@/lib/agents/rejection-context";
@@ -8,7 +9,7 @@ import { agentFailureMessage } from "@/lib/agents/agent-errors";
 import { PERSONAS, objectiveLine, directionLine, companyProfileLines } from "@/lib/agents/personas";
 import { enqueuePlanRun } from "@/lib/agent-runs";
 import { createChatPlanItem, findLaunchablePlanItem, type PlanAgent } from "@/lib/agents/plan-items";
-import { recordUsage, runToolLoop } from "@/lib/usage";
+import { recordUsage, runStreamingToolLoop, runToolLoop } from "@/lib/usage";
 import { getFunnelStats, funnelLines } from "@/lib/funnel";
 import { CAPABILITY_CATALOG, recordUncoveredRequest } from "@/lib/agents/capabilities";
 import { getChatInstructionsForPlan, getPlanAndFunnelStatus, loadRecentChatHistory } from "@/lib/agents/chat-context";
@@ -44,7 +45,14 @@ function uncoveredRequestTool(companyId: string, source: "chat" | "plan") {
  * Garde-fou inchangé : déléguer ne fait que créer des propositions (ou des
  * constats), jamais d'exécution réelle.
  */
-export async function runCoCeoTurn(companyId: string, userMessage: string, reservationId?: string, pageContext?: string) {
+export async function runCoCeoTurn(
+  companyId: string,
+  userMessage: string,
+  reservationId?: string,
+  pageContext?: string,
+  // Si fourni, la réponse est produite en flux : le texte de chaque tour est transmis au fur et à mesure.
+  stream?: { onTurnStart: () => void; onText: (delta: string) => void },
+) {
   const company = await prisma.company.findUniqueOrThrow({
     where: { id: companyId },
   });
@@ -189,7 +197,7 @@ export async function runCoCeoTurn(companyId: string, userMessage: string, reser
     run: (input) => delegateThroughPlan("demarchage", input, { prospectDescription: input.prospectDescription }),
   });
 
-  const { finalMessage, usage } = await runToolLoop(anthropic.beta.messages.toolRunner({
+  const runnerParams: BetaToolRunnerParams = {
     model: AGENT_MODEL,
     max_tokens: 2000,
     tools: [getCurrentStatus, delegateMarketing, delegateContenu, delegateDemarchage, recordUncovered],
@@ -222,7 +230,10 @@ Règles strictes, non négociables :
       },
     ],
     messages,
-  }));
+  };
+  const { finalMessage, usage } = stream
+    ? await runStreamingToolLoop(anthropic.beta.messages.toolRunner({ ...runnerParams, stream: true as const }), stream)
+    : await runToolLoop(anthropic.beta.messages.toolRunner({ ...runnerParams, stream: false as const }));
 
   const assistantText = finalMessage.content
     .filter((block): block is Anthropic.TextBlock => block.type === "text")

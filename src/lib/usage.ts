@@ -88,6 +88,47 @@ export async function runToolLoop<
   };
 }
 
+/**
+ * Même boucle que runToolLoop, en flux : chaque tour du runner est un flux dont
+ * le texte est transmis au fur et à mesure, et dont l'usage est sommé à la fin.
+ */
+export async function runStreamingToolLoop<
+  T extends {
+    usage: {
+      input_tokens: number;
+      output_tokens: number;
+      cache_creation_input_tokens?: number | null;
+      cache_read_input_tokens?: number | null;
+    };
+  },
+>(
+  runner: AsyncIterable<{ on(event: "text", listener: (delta: string) => void): unknown; finalMessage(): Promise<T> }>,
+  handlers: { onTurnStart: () => void; onText: (delta: string) => void },
+): Promise<{ finalMessage: T; usage: Required<UsageLike> }> {
+  let input_tokens = 0;
+  let output_tokens = 0;
+  let cache_creation_input_tokens = 0;
+  let cache_read_input_tokens = 0;
+  let finalMessage: T | undefined;
+  for await (const stream of runner) {
+    handlers.onTurnStart();
+    stream.on("text", (delta) => handlers.onText(delta));
+    const message = await stream.finalMessage();
+    input_tokens += message.usage.input_tokens;
+    output_tokens += message.usage.output_tokens;
+    cache_creation_input_tokens += message.usage.cache_creation_input_tokens ?? 0;
+    cache_read_input_tokens += message.usage.cache_read_input_tokens ?? 0;
+    finalMessage = message;
+  }
+  if (!finalMessage) {
+    throw new Error("Le modèle n'a renvoyé aucun message.");
+  }
+  return {
+    finalMessage,
+    usage: { input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens },
+  };
+}
+
 /** Enregistre le coût mesuré ; les appels soumis à un budget ne peuvent ignorer un échec d'écriture. */
 export async function recordUsage(params: {
   companyId: string;

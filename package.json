@@ -17,7 +17,7 @@
     "test:engine": "playwright test tests/engine.spec.ts --workers=1",
     "test:security": "playwright test tests/security.spec.ts --workers=1",
     "test:session": "node --experimental-strip-types --test tests/session-token.test.mjs",
-    "test:voice": "node --experimental-strip-types --test tests/voice.test.mjs",
+    "test:voice": "node --experimental-strip-types --test tests/voice.test.mjs tests/chat-stream.test.mjs",
     "test:database-url": "node --experimental-strip-types --test tests/database-url.test.mjs",
     "postinstall": "prisma generate"
   },
