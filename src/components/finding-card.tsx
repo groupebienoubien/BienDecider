@@ -41,6 +41,7 @@ export function FindingCard({ finding }: { finding: AuditFinding }) {
         <span className="text-xs uppercase text-slate-600">{CATEGORY_LABELS[finding.category] ?? finding.category}</span>
         <h3 className="font-medium">{finding.title}</h3>
         <p className="mt-1 line-clamp-2 text-sm text-slate-600">{finding.content}</p>
+        {finding.sourceUrl && <p className="mt-1 text-xs text-slate-500">Source {finding.sourceStatus ?? "à vérifier"}</p>}
         <span className="mt-1 inline-block text-xs text-indigo-600">Voir le détail →</span>
       </button>
       <AskPaulButton element={{ type: "finding", id: finding.id, title: finding.title }} />
@@ -56,6 +57,7 @@ export function FindingCard({ finding }: { finding: AuditFinding }) {
               </button>
             </div>
             <ReadAloudButton text={findingSpeech} label="Écouter ce constat" />
+            {finding.sourceUrl && <p className="mt-3 break-all text-xs text-slate-600">Source ({finding.sourceStatus ?? "à vérifier"}) : <a href={finding.sourceUrl} target="_blank" rel="noreferrer" className="underline">{finding.sourceUrl}</a></p>}
 
             {hasStructure ? (
               <div className="mt-4 space-y-4">
@@ -100,7 +102,7 @@ function ActionItemRow({ item }: { item: FindingActionItem }) {
       const res = await fetch("/api/action-plan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ agent: item.agent, title: item.title, rationale: item.rationale }),
+        body: JSON.stringify({ agent: item.agent, title: item.title, rationale: item.rationale, theme: item.theme, priority: item.priority }),
       });
       if (!res.ok) throw new Error();
       setStatus("done");

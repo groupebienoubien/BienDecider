@@ -11,7 +11,7 @@ import { isPlanAgent, type PlanAgent } from "@/lib/agents/plan-items";
 import { agentFailureMessage } from "@/lib/agents/agent-errors";
 import { PERSONAS } from "@/lib/agents/personas";
 
-export const AGENT_RUN_MAX_DURATION_SECONDS = 60;
+export const AGENT_RUN_MAX_DURATION_SECONDS = 300;
 export const AGENT_RUN_COST_RESERVATION_USD = 1;
 const STALE_GRACE_SECONDS = 10;
 const DIRECT_DEDUPE_SECONDS = 5 * 60;
@@ -79,6 +79,7 @@ async function persistRun(params: {
           where: { id: existing.id, status: "failed" },
           data: {
             status: "queued", activeDedupeKey: params.activeDedupeKey, reservedCostUsd: AGENT_RUN_COST_RESERVATION_USD,
+            maxDurationSeconds: AGENT_RUN_MAX_DURATION_SECONDS,
             startedAt: null, finishedAt: null, resultCount: 0, errorMessage: null,
           },
         });

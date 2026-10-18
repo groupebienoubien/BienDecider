@@ -113,7 +113,7 @@ export function ProspectionClient({
     .sort((a, b) => b.counts.contactes - a.counts.contactes);
 
   return (
-    <div className="mx-auto max-w-4xl">
+    <div className="w-full">
       <h1 className="text-2xl font-semibold">Prospection</h1>
       <p className="mt-1 text-sm text-slate-500">
         {PERSONAS.demarchage.name} identifie des organisations correspondant à votre cible ; vous décidez lesquelles contacter

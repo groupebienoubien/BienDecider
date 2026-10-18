@@ -5,7 +5,7 @@ import { AgentRunConflictError, AgentRunQuotaError, enqueuePlanRun } from "@/lib
 import { isPlanAgent } from "@/lib/agents/plan-items";
 import { getSessionCompany } from "@/lib/session";
 
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 const launchSchema = z.object({ retryRunId: z.string().cuid().optional() }).strict();
 

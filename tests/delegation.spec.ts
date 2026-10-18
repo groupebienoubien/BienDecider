@@ -11,6 +11,8 @@ import { decideProposalReview, reviewProposal, reviewPublishedSiteHtml } from ".
 import { describePage } from "../src/lib/paul-context";
 import { buildOutreachDraft, dayToDate, formatDay, hasPlaceholders, leadReadiness, pickNextLead } from "../src/lib/lead-followup";
 import { describeRunProgress, finishedRunMessage, formatDuration, recentSucceededRuns, runResultHref } from "../src/lib/agent-run-progress";
+import { groupPlanItems } from "../src/lib/action-plan-view";
+import { facebookAuditSource } from "../src/lib/facebook-audit-source";
 
 test("risk rules use registered kinds and contextual factors, then fail closed", () => {
   expect(assessActionRisk("piste_croissance").level).toBe("modere");
@@ -220,7 +222,7 @@ test("the next prospect is the oldest usable one, skips deferred ones, and the d
 
 test("run progress gives indicative steps from elapsed time, flags overruns and announces the end per agent", () => {
   const t0 = Date.parse("2026-10-15T10:00:00Z");
-  const queued = { id: "r", agent: "contenu", planItemId: null, status: "queued", attempts: 0, maxDurationSeconds: 60, queuedAt: new Date(t0).toISOString(), startedAt: null, finishedAt: null, resultCount: 0, errorMessage: null };
+  const queued = { id: "r", agent: "contenu", planItemId: null, status: "queued", attempts: 0, maxDurationSeconds: 300, queuedAt: new Date(t0).toISOString(), startedAt: null, finishedAt: null, resultCount: 0, errorMessage: null };
   const running = { ...queued, status: "running", startedAt: new Date(t0).toISOString() };
   const states = (progress: ReturnType<typeof describeRunProgress>) => progress.steps.map((step) => step.state);
 
@@ -237,7 +239,7 @@ test("run progress gives indicative steps from elapsed time, flags overruns and 
   const late = describeRunProgress(running, t0 + 50000);
   expect(late.overrun).toBe(true);
   expect(states(late)).toEqual(["done", "active"]);
-  expect(late.hint).toContain("60 s");
+  expect(late.hint).toContain("300 s");
   expect(describeRunProgress({ ...running, agent: "inconnu" }, t0 + 5000).steps).toHaveLength(1);
   expect(describeRunProgress(running, t0 - 5000).elapsedSeconds).toBe(0);
 
@@ -251,4 +253,22 @@ test("run progress gives indicative steps from elapsed time, flags overruns and 
 
   const done = (id: string, minutesAgo: number) => ({ ...running, id, status: "succeeded", finishedAt: new Date(t0 - minutesAgo * 60_000).toISOString() });
   expect(recentSucceededRuns([done("a", 5), done("b", 120), running, { ...done("c", 1), status: "failed" }], t0).map((run) => run.id)).toEqual(["a"]);
+});
+
+test("action plan groups by business theme and sorts by priority rather than agent", () => {
+  const items = [
+    { id: "low", theme: "Visibilité", priority: 4, createdAt: "2026-10-15T10:00:00Z" },
+    { id: "prospect", theme: "Prospection", priority: 1, createdAt: "2026-10-15T09:00:00Z" },
+    { id: "urgent", theme: "Visibilité", priority: 1, createdAt: "2026-10-15T11:00:00Z" },
+    { id: "legacy", theme: null, priority: null, createdAt: "2026-10-15T08:00:00Z" },
+  ];
+  expect(groupPlanItems(items).map(({ theme, items: group }) => [theme, group.map((item) => item.id)])).toEqual([
+    ["Visibilité", ["urgent", "low"]], ["Prospection", ["prospect"]], ["À classer", ["legacy"]],
+  ]);
+});
+
+test("Facebook audit source uses a declared page or the Raygine anchor only for Raygine", () => {
+  expect(facebookAuditSource("Coiffure Raygine Cabriès", null)).toBe("https://www.facebook.com/Raygine/");
+  expect(facebookAuditSource("Atelier Test", "Instagram @atelier, https://www.facebook.com/atelier.test/")).toBe("https://www.facebook.com/atelier.test/");
+  expect(facebookAuditSource("Atelier Test", "@atelier_test")).toBeNull();
 });

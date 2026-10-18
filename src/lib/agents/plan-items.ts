@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import type { PlanTheme } from "@/lib/plan-themes";
 
 export const PLAN_AGENTS = ["marketing", "contenu", "demarchage"] as const;
 export type PlanAgent = (typeof PLAN_AGENTS)[number];
@@ -19,9 +20,9 @@ export const CHAT_REQUEST_TIMING = "Demandé dans le chat";
  * elle, les productions demandées en conversation n'étaient rattachées à
  * rien et le dirigeant suivait deux fils, le chat et le plan.
  */
-export async function createChatPlanItem(companyId: string, agent: PlanAgent, title: string, brief: string) {
+export async function createChatPlanItem(companyId: string, agent: PlanAgent, title: string, brief: string, theme: PlanTheme, priority: number) {
   return prisma.actionPlanItem.create({
-    data: { companyId, agent, title: title.trim(), rationale: brief.trim(), timing: CHAT_REQUEST_TIMING },
+    data: { companyId, agent, title: title.trim(), rationale: brief.trim(), timing: CHAT_REQUEST_TIMING, theme, priority },
   });
 }
 

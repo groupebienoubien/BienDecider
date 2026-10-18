@@ -27,7 +27,7 @@ export default async function RapportPage() {
 
   return (
     <AppShell companyName={company.name} pendingCount={pendingCount}>
-      <div className="mx-auto max-w-4xl">
+      <div className="w-full">
         <header className="flex flex-wrap items-start justify-between gap-3">
           <h1 className="text-2xl font-semibold">Résultats</h1>
           <Link href="/dashboard" className="text-sm font-medium text-indigo-600 underline">Revenir aux actions</Link>

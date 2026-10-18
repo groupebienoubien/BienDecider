@@ -6,7 +6,7 @@ import { AgentRunQuotaError, reserveUsageBudget } from "@/lib/agent-runs";
 import { getSessionCompany } from "@/lib/session";
 import { encodeStreamEvent, NDJSON_CONTENT_TYPE, type PaulStreamEvent } from "@/lib/chat-stream";
 
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 const bodySchema = z.object({
   message: z.string().trim().min(1).max(4000),

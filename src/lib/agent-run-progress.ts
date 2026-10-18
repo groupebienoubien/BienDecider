@@ -46,7 +46,7 @@ export function describeRunProgress(run: AgentRunView, now: number) {
   const hint = queued
     ? "En attente de démarrage."
     : overrun
-      ? `Plus long que d'habitude. L'exécution s'arrête d'elle-même après ${run.maxDurationSeconds} s ; vous pourrez alors la relancer.`
+      ? `L'exécution dépasse la durée habituelle. Limite de la plateforme : ${run.maxDurationSeconds} s ; vous pourrez ensuite la relancer.`
       : `Durée habituelle : environ ${spec.expectedSeconds} s.`;
   return {
     headline: queued ? "Dans la file" : steps[activeIndex].label,

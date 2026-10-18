@@ -5,7 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { AgentRunQuotaError, enqueuePlanGeneration } from "@/lib/agent-runs";
 import { getSessionCompany } from "@/lib/session";
 
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 const requestSchema = z.object({ requestId: z.string().uuid().optional() }).strict();
 
@@ -16,7 +16,7 @@ export async function GET() {
   }
   const items = await prisma.actionPlanItem.findMany({
     where: { companyId: company.id },
-    orderBy: { createdAt: "asc" },
+    orderBy: [{ priority: "asc" }, { createdAt: "asc" }],
     include: {
       proposals: { orderBy: { createdAt: "desc" } },
       agentRuns: { orderBy: { createdAt: "desc" }, take: 1, select: { id: true, agent: true, planItemId: true, status: true, attempts: true, maxDurationSeconds: true, queuedAt: true, startedAt: true, finishedAt: true, resultCount: true, errorMessage: true } },
