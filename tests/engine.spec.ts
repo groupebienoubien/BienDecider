@@ -164,6 +164,29 @@ test("a failed launch shows an error, keeps the action to launch and creates no 
   expect(await prisma.agentProposal.count({ where: { companyId: company.id } })).toBe(0);
 });
 
+test("simultaneous plan launches reuse one run and reserve one attempt", async ({ company, request }) => {
+  if (!process.env.SESSION_SECRET) throw new Error("SESSION_SECRET is required for engine tests.");
+  const { prisma } = await import("../src/lib/prisma");
+  const baseURL = process.env.UX_TEST_BASE_URL ?? "http://localhost:3000";
+  const headers = { Cookie: `pepito_session=${createSessionToken(company.ownerEmail, company.sessionVersion, process.env.SESSION_SECRET)}`, Origin: baseURL };
+  const item = await prisma.actionPlanItem.create({ data: {
+    companyId: company.id, agent: "contenu", title: "Action double-clic", rationale: "Vérifier le verrou concurrent", timing: "Aujourd'hui",
+  } });
+
+  const launch = () => request.post(`${baseURL}/api/action-plan/${item.id}/launch`, { headers, data: {} });
+  const [firstResponse, secondResponse] = await Promise.all([launch(), launch()]);
+  expect([200, 202, 409]).toContain(firstResponse.status());
+  expect([200, 202, 409]).toContain(secondResponse.status());
+
+  const responses = await Promise.all([firstResponse.json(), secondResponse.json()]);
+  const runIds = responses.map((response) => response.run?.id);
+  expect(runIds[0]).toBeTruthy();
+  expect(runIds[1]).toBe(runIds[0]);
+  const runId = runIds[0];
+  expect(await prisma.agentRun.count({ where: { companyId: company.id, planItemId: item.id } })).toBe(1);
+  expect(await prisma.agentRunAttempt.count({ where: { companyId: company.id, agentRunId: runId } })).toBe(1);
+});
+
 test("agent launch quotas block daily and monthly limits before creating a run", async ({ company, request }) => {
   if (!process.env.SESSION_SECRET) throw new Error("SESSION_SECRET is required for engine tests.");
   const { prisma } = await import("../src/lib/prisma");
