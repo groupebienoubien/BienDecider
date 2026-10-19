@@ -61,7 +61,7 @@ export function GmailPanel({ configured, authorized, failed, senderEmail }: { co
   }
 
   return (
-    <section aria-labelledby="gmail-heading" className="mt-6 border-y border-slate-200 py-5">
+    <section aria-labelledby="gmail-heading" className="setting-section">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 flex-1 basis-48">
           <h2 id="gmail-heading" className="font-medium">Gmail · envoi de messages</h2>
@@ -69,21 +69,21 @@ export function GmailPanel({ configured, authorized, failed, senderEmail }: { co
           {senderEmail && <p className="mt-1 break-all text-sm font-medium">{senderEmail}</p>}
           <p className="mt-2 text-sm text-slate-600">{CHANNEL_CAPABILITIES.gmail.nextStep} BienDecider ne lit pas votre boîte de réception.</p>
         </div>
-        {configured ? <a href="/api/oauth/gmail/start" className="rounded-lg bg-slate-900 px-3 py-2 text-sm text-white">{authorized || failed ? "Relier de nouveau Gmail" : "Relier Gmail"}</a> : <span className="text-sm text-amber-700">L&apos;envoi Gmail n&apos;est pas disponible sur cette version.</span>}
+        {configured ? <a href="/api/oauth/gmail/start" className="btn primary">{authorized || failed ? "Relier de nouveau Gmail" : "Relier Gmail"}</a> : <span className="text-sm text-amber-700">L&apos;envoi Gmail n&apos;est pas disponible sur cette version.</span>}
       </div>
-      {notice && <p role="status" className="mt-3 rounded-lg bg-emerald-50 p-3 text-sm text-emerald-800">{notice}</p>}
-      {error && <p role="alert" className="mt-3 rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}
+      {notice && <p role="status" className="notice">{notice}</p>}
+      {error && <p role="alert" className="warning">{error}</p>}
       {authorized && configured && (
         <details className="mt-4">
-          <summary className="cursor-pointer text-sm font-medium text-indigo-600">Écrire un email</summary>
+          <summary className="text-link">Écrire un email</summary>
           <form onSubmit={send} className="mt-4 space-y-3">
             <fieldset disabled={busy} className="space-y-3 disabled:opacity-60">
-              <label className="block text-sm">Destinataire<input type="email" required maxLength={254} value={to} onChange={(event) => { setTo(event.target.value); edited(); }} className="mt-1 block w-full rounded-lg border px-3 py-2" /></label>
-              <label className="block text-sm">Objet<input required maxLength={200} value={subject} onChange={(event) => { setSubject(event.target.value); edited(); }} className="mt-1 block w-full rounded-lg border px-3 py-2" /></label>
-              <label className="block text-sm">Message<textarea required maxLength={20000} rows={6} value={text} onChange={(event) => { setText(event.target.value); edited(); }} className="mt-1 block w-full rounded-lg border px-3 py-2" /></label>
-                <p className="rounded-lg bg-rose-50 p-3 text-sm text-rose-900"><span className="font-semibold">Le message partira à l&apos;extérieur et ne pourra pas être rappelé.</span> Destinataire : {to || "à préciser"}. Expéditeur : {senderEmail ?? "le compte Gmail relié"}.</p>
+              <label className="field">Destinataire<input type="email" required maxLength={254} value={to} onChange={(event) => { setTo(event.target.value); edited(); }} /></label>
+              <label className="field">Objet<input required maxLength={200} value={subject} onChange={(event) => { setSubject(event.target.value); edited(); }} /></label>
+              <label className="field">Message<textarea required maxLength={20000} rows={6} value={text} onChange={(event) => { setText(event.target.value); edited(); }} /></label>
+                <p className="warning"><span className="font-semibold">Le message partira à l&apos;extérieur et ne pourra pas être rappelé.</span> Destinataire : {to || "à préciser"}. Expéditeur : {senderEmail ?? "le compte Gmail relié"}.</p>
               <label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} className="mt-1" /><span>Je confirme le destinataire et le contenu de cet envoi.</span></label>
-              <button disabled={!confirmed || busy} className="rounded-lg bg-indigo-600 px-4 py-2 text-sm text-white disabled:opacity-50">{busy ? "Envoi en cours…" : "Envoyer avec Gmail"}</button>
+              <button disabled={!confirmed || busy} className="primary">{busy ? "Envoi en cours…" : "Envoyer avec Gmail"}</button>
             </fieldset>
           </form>
         </details>
@@ -92,7 +92,7 @@ export function GmailPanel({ configured, authorized, failed, senderEmail }: { co
         <summary className="cursor-pointer text-xs text-slate-500">Déconnecter Gmail</summary>
         <p className="mt-2 text-xs text-slate-600">La révocation Google peut retirer les autres autorisations du même projet Google. Les jetons Gmail seront supprimés de BienDecider.</p>
         <label className="mt-3 flex items-start gap-2 text-sm"><input type="checkbox" checked={disconnectConfirmed} onChange={(event) => setDisconnectConfirmed(event.target.checked)} /><span>Je confirme le retrait de l&apos;autorisation.</span></label>
-        <button onClick={disconnect} disabled={busy || !disconnectConfirmed} className="mt-3 rounded-lg border px-3 py-2 text-sm disabled:opacity-50">Déconnecter</button>
+        <button onClick={disconnect} disabled={busy || !disconnectConfirmed}>Déconnecter</button>
       </details>}
     </section>
   );

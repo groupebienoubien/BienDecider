@@ -85,20 +85,20 @@ export function useAgentProfileCompletion() {
 
   const profileDialog = <>
     {!pending && error && <p role="alert" className="mt-3 text-sm text-red-700">{error}</p>}
-    <dialog ref={dialog} aria-labelledby={titleId} onCancel={(event) => { if (saving) event.preventDefault(); else setPending(null); }} className="m-auto max-h-[90dvh] w-[calc(100%_-_2rem)] max-w-lg overflow-y-auto rounded-lg border border-slate-200 p-5 backdrop:bg-black/40">
-      {pending && <form onSubmit={(event) => { event.preventDefault(); void continueRequest(true); }}>
-        <h2 id={titleId} className="text-lg font-medium">Compléments pour {PERSONAS[pending.agent].name}</h2>
-        <div className="mt-4 space-y-3">
-          {pending.fields.map((field) => <label key={field} className="block text-sm font-medium text-slate-700">
+    <dialog ref={dialog} aria-labelledby={titleId} onCancel={(event) => { if (saving) event.preventDefault(); else setPending(null); }}>
+      {pending && <form className="modal-content" onSubmit={(event) => { event.preventDefault(); void continueRequest(true); }}>
+        <h2 id={titleId}>Compléments pour {PERSONAS[pending.agent].name}</h2>
+        <div>
+          {pending.fields.map((field) => <label key={field} className="field">
             {DETAILS[field].label} (facultatif)
-            <input value={values[field] ?? ""} onChange={(event) => setValues({ ...values, [field]: event.target.value })} maxLength={DETAILS[field].maxLength} disabled={saving} className="mt-1 block w-full rounded border border-slate-300 px-3 py-2 text-sm" />
+            <input value={values[field] ?? ""} onChange={(event) => setValues({ ...values, [field]: event.target.value })} maxLength={DETAILS[field].maxLength} disabled={saving} />
           </label>)}
         </div>
         {error && <p role="alert" className="mt-3 text-sm text-red-700">{error}</p>}
         <div className="mt-5 flex flex-wrap gap-2">
-          <button type="submit" disabled={saving} className="rounded bg-slate-900 px-3 py-2 text-sm text-white disabled:opacity-50">{saving ? "Enregistrement…" : "Enregistrer et continuer"}</button>
-          <button type="button" onClick={() => void continueRequest(false)} disabled={saving} className="rounded border px-3 py-2 text-sm disabled:opacity-50">Continuer sans complément</button>
-          <button type="button" onClick={() => { setPending(null); setError(null); }} disabled={saving} className="px-3 py-2 text-sm text-slate-600 disabled:opacity-50">Annuler</button>
+          <button type="submit" disabled={saving} className="primary">{saving ? "Enregistrement…" : "Enregistrer et continuer"}</button>
+          <button type="button" onClick={() => void continueRequest(false)} disabled={saving}>Continuer sans complément</button>
+          <button type="button" onClick={() => { setPending(null); setError(null); }} disabled={saving} className="quiet">Annuler</button>
         </div>
       </form>}
     </dialog>

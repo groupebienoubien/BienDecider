@@ -57,7 +57,7 @@ export function FacebookPanel({ configured, view }: { configured: boolean; view:
   }
 
   return (
-    <section aria-label="Facebook · Page" className="mt-6 rounded-lg border border-gray-200 p-4">
+    <section aria-label="Facebook · Page" className="setting-section">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 flex-1 basis-64">
           <h2 className="font-medium">Facebook · Page</h2>
@@ -67,7 +67,7 @@ export function FacebookPanel({ configured, view }: { configured: boolean; view:
           <p className="mt-2 text-xs text-slate-600">{CHANNEL_CAPABILITIES.facebook.nextStep} {CHANNEL_CAPABILITIES.instagram.label} : {CHANNEL_CAPABILITIES.instagram.availability.charAt(0).toLowerCase() + CHANNEL_CAPABILITIES.instagram.availability.slice(1)}</p>
           {!configured && <p className="mt-2 text-xs text-amber-700">La liaison Facebook n&apos;est pas disponible sur cette version.</p>}
         </div>
-        {configured && <a href="/api/oauth/meta/start" className="rounded bg-black px-3 py-2 text-sm text-white">{view.status === "disconnected" ? "Autoriser Facebook" : "Réautoriser Facebook"}</a>}
+        {configured && <a href="/api/oauth/meta/start" className="btn primary">{view.status === "disconnected" ? "Autoriser Facebook" : "Réautoriser Facebook"}</a>}
       </div>
 
       {view.status === "selection" && (
@@ -87,12 +87,12 @@ export function FacebookPanel({ configured, view }: { configured: boolean; view:
             </div>
           </fieldset>
           {selectablePages.length === 0 && <p className="text-xs text-amber-700">Aucune de ces Pages ne vous permet de créer du contenu. Demandez ce droit à un administrateur de la Page, puis réautorisez Facebook.</p>}
-          <button type="submit" disabled={!pageId || busy} className="rounded bg-black px-3 py-2 text-sm text-white disabled:opacity-50">{busy ? "Vérification…" : "Connecter cette Page"}</button>
+          <button type="submit" disabled={!pageId || busy} className="primary">{busy ? "Vérification…" : "Connecter cette Page"}</button>
         </form>
       )}
 
-      {notice && <p role="status" className="mt-3 text-sm text-emerald-800">{notice}</p>}
-      {error && <p role="alert" className="mt-3 text-sm text-red-700">{error}</p>}
+      {notice && <p role="status" className="notice">{notice}</p>}
+      {error && <p role="alert" className="warning">{error}</p>}
 
       {view.status !== "disconnected" && <details className="mt-3">
         <summary className="cursor-pointer text-sm text-slate-600">Déconnecter Facebook</summary>
@@ -102,7 +102,7 @@ export function FacebookPanel({ configured, view }: { configured: boolean; view:
             <input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} disabled={busy} className="mt-1" />
             Je confirme le retrait de ma Page Facebook.
           </label>
-          <button type="submit" disabled={!confirmed || busy} className="rounded border border-slate-300 px-3 py-2 text-sm disabled:opacity-50">{busy ? "Retrait…" : "Confirmer le retrait Facebook"}</button>
+          <button type="submit" disabled={!confirmed || busy}>{busy ? "Retrait…" : "Confirmer le retrait Facebook"}</button>
         </form>
       </details>}
     </section>

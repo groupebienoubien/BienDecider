@@ -2,10 +2,9 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getSessionEmail } from "@/lib/session";
 import { AppShell } from "@/components/app-shell";
-import { getPendingDecisionCount } from "@/lib/pending-decisions-server";
+import { getShellProps } from "@/lib/shell-data";
 import { EquipeClient } from "./equipe-client";
 import type { AgentRunView } from "@/lib/agent-run-types";
-import { CompanySections } from "@/components/company-sections";
 
 export const dynamic = "force-dynamic";
 
@@ -21,11 +20,9 @@ export default async function EquipePage() {
     take: 12,
     select: { id: true, agent: true, planItemId: true, status: true, attempts: true, maxDurationSeconds: true, queuedAt: true, startedAt: true, finishedAt: true, resultCount: true, errorMessage: true },
   });
-  const pendingCount = await getPendingDecisionCount(company.id);
 
   return (
-    <AppShell companyName={company.name} companyTrade={company.trade} companyArea={company.servingArea} pendingCount={pendingCount}>
-      <CompanySections active="equipe" />
+    <AppShell {...await getShellProps(company)}>
       <EquipeClient initialAgentRuns={initialAgentRuns} />
     </AppShell>
   );

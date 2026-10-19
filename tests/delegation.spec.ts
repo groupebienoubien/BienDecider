@@ -93,11 +93,12 @@ test("approval consequence is stated per kind and never promises a publication",
 test("production states use one glossary, an icon next to the colour, and manual publication only when BienDecider does not publish", () => {
   expect(proposalStatusView("en_attente", "social_post").label).toBe("À relire");
   expect(proposalStatusView("validee", "social_post", null).label).toBe("À publier manuellement");
-  expect(proposalStatusView("validee", "social_post", "Page").label).toBe("Approuvée");
+  expect(proposalStatusView("validee", "social_post", "Page").label).toBe("Prêt à publier");
   expect(proposalStatusView("modifiee", "gbp_update", "Page").label).toBe("À publier manuellement");
-  expect(proposalStatusView("validee", "site_web_content").label).toBe("Approuvée");
-  expect(proposalStatusView("executee", "site_web_content").label).toBe("Publiée");
-  expect(proposalStatusView("executee", "gmail_email").label).toBe("Envoyée");
+  expect(proposalStatusView("validee", "site_web_content").label).toBe("Prêt à publier");
+  expect(proposalStatusView("validee", "prospect").label).toBe("Approuvée");
+  expect(proposalStatusView("executee", "site_web_content").label).toBe("En ligne");
+  expect(proposalStatusView("executee", "gmail_email").label).toBe("Envoyé");
   const statuses = ["en_attente", "validee", "modifiee", "rejetee", "executee", "envoi_en_cours", "envoi_incertain", "publication_en_cours", "publication_incertaine"];
   for (const status of statuses) {
     const view = proposalStatusView(status, "social_post");

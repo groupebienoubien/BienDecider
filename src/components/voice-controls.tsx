@@ -129,7 +129,7 @@ export function ReadAloudButton({ text, label = "Écouter", variant = "link" }: 
   }
 
   return (
-    <button type="button" onClick={toggle} className="min-h-11 text-sm text-indigo-700 underline">
+    <button type="button" onClick={toggle} className="text-link">
       {speaking ? "Arrêter la lecture" : label}
     </button>
   );
