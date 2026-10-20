@@ -134,6 +134,7 @@ export async function runCoCeoTurn(
   const planActionFields = {
     actionTitle: z.string().describe("Titre court et concret de l'action demandée, tel qu'il apparaîtra dans le plan, ex: 'Trois posts sur les chantiers terminés'"),
     brief: z.string().describe("Ce que le dirigeant a demandé et pourquoi, en une ou deux phrases : c'est la consigne que l'agent devra réaliser"),
+    outcome: z.string().max(160).describe("Résultat attendu, en une phrase courte écrite pour le dirigeant, sans consigne technique ni nom d'agent : c'est ce qu'il lira dans son plan"),
     theme: z.enum(PLAN_THEMES).describe("But principal : Visibilité, Conversion ou Prospection ; ne pas utiliser le nom de l'agent ou du canal"),
     priority: z.number().int().min(1).max(5).describe("Priorité de 1 (la plus urgente) à 5"),
     planItemId: z
@@ -144,13 +145,13 @@ export async function runCoCeoTurn(
 
   async function delegateThroughPlan(
     agent: PlanAgent,
-    input: { actionTitle: string; brief: string; theme: PlanTheme; priority: number; planItemId?: string },
+    input: { actionTitle: string; brief: string; outcome: string; theme: PlanTheme; priority: number; planItemId?: string },
     extras: { newsContext?: string; prospectDescription?: string } = {},
   ) {
     const agentName = PERSONAS[agent].name;
     const item = input.planItemId
       ? await findLaunchablePlanItem(companyId, agent, input.planItemId)
-      : await createChatPlanItem(companyId, agent, input.actionTitle, input.brief, input.theme, input.priority);
+      : await createChatPlanItem(companyId, agent, input.actionTitle, input.brief, input.theme, input.priority, input.outcome);
     if (!item) {
       return `ÉCHEC, rien n'a été lancé : aucune action à lancer avec cet identifiant pour ${agentName}. Relis le plan avec get_current_status.`;
     }
@@ -309,6 +310,10 @@ export async function runCoCeoPlanning(companyId: string, agentRunId?: string) {
       rationale: z
         .string()
         .describe("Pourquoi cette action, en lien avec l'objectif business du dirigeant"),
+      outcome: z
+        .string()
+        .max(160)
+        .describe("Résultat attendu, en une phrase courte écrite pour le dirigeant, sans consigne technique ni nom d'agent, ex: 'Les clients du quartier voient vos chantiers récents chaque semaine'"),
       timing: z.string().describe("Quand, en langage naturel : 'aujourd'hui', 'cette semaine', 'dès que le site est en ligne'"),
       theme: z.enum(PLAN_THEMES).describe("But principal : Visibilité, Conversion ou Prospection ; agent et canal ne sont pas des thèmes"),
       priority: z.number().int().min(1).max(5).describe("Priorité de 1 (la plus urgente) à 5"),
@@ -320,6 +325,7 @@ export async function runCoCeoPlanning(companyId: string, agentRunId?: string) {
           agent: input.agent,
           title: input.title,
           rationale: input.rationale,
+          outcome: input.outcome.trim(),
           timing: input.timing,
           theme: input.theme,
           priority: input.priority,
