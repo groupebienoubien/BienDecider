@@ -5,10 +5,9 @@ import { useState } from "react";
 import type { AuditFinding } from "@prisma/client";
 import { Icon, type IconName } from "@/components/icon";
 import { Modal } from "@/components/modal";
-import { Tag } from "@/components/mockup-ui";
+import { AgentByline, Tag } from "@/components/mockup-ui";
 import { ReadAloudButton } from "@/components/voice-controls";
 import { spokenText } from "@/lib/voice";
-import { PERSONAS, type AgentKey } from "@/lib/agents/personas";
 import { openPaul } from "@/lib/paul-context";
 import { parseFindingActionItems, type FindingActionItem } from "@/lib/finding-shared";
 
@@ -80,7 +79,6 @@ export function FindingCard({ finding }: { finding: AuditFinding }) {
 
 function ActionItemRow({ item }: { item: FindingActionItem }) {
   const [status, setStatus] = useState<"idle" | "saving" | "done" | "error">("idle");
-  const persona = PERSONAS[item.agent as Exclude<AgentKey, "co_ceo">];
 
   async function addToPlan() {
     setStatus("saving");
@@ -100,7 +98,7 @@ function ActionItemRow({ item }: { item: FindingActionItem }) {
   return (
     <div className="activity-row">
       <div>
-        <small>{persona?.name ?? item.agent}</small>
+        <small><AgentByline agent={item.agent}>propose</AgentByline></small>
         <strong>{item.title}</strong>
         <small>{item.rationale}</small>
         {status === "done" && <Link className="text-link" href="/dashboard?view=plan">Voir dans le plan d’action</Link>}

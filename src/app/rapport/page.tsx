@@ -3,9 +3,8 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getSessionEmail } from "@/lib/session";
 import { AppShell } from "@/components/app-shell";
-import { PageHeading, SectionTitle } from "@/components/mockup-ui";
+import { AgentByline, PageHeading, SectionTitle } from "@/components/mockup-ui";
 import { getShellProps } from "@/lib/shell-data";
-import { PERSONAS, type AgentKey } from "@/lib/agents/personas";
 import { computeBusinessTarget, formatEuros } from "@/lib/business-target";
 import { getFunnelStats } from "@/lib/funnel";
 
@@ -70,7 +69,7 @@ export default async function RapportPage() {
         </div> : (
           <div className="table-scroll"><table className="data-table">
             <thead><tr><th>Réalisation</th><th>Agent</th></tr></thead>
-            <tbody>{executed.map((proposal) => <tr key={proposal.id}><td><strong>{proposal.title}</strong></td><td>{PERSONAS[proposal.agent as AgentKey]?.name ?? proposal.agent}</td></tr>)}</tbody>
+            <tbody>{executed.map((proposal) => <tr key={proposal.id}><td><strong>{proposal.title}</strong></td><td><AgentByline agent={proposal.agent} /></td></tr>)}</tbody>
           </table></div>
         )}
       </section>

@@ -649,6 +649,12 @@ test("the home page shows the objective, declared progress and at most three pre
     await expect(hero.getByRole("progressbar")).toHaveAttribute("value", "67");
     await expect(hero.locator(".objective-week")).toContainText("Cette semaine : 1 prospect contacté");
     await expect(page.locator(".decision-cards .decision-card")).toHaveCount(3);
+    // Charte : le travail est présenté comme celui d'une personne, avec son nom (jamais la couleur seule).
+    await expect(page.locator(".decision-card").first()).toContainText("Camille vous propose un post Facebook");
+    await page.goto(`${baseURL}/dashboard?view=validation`);
+    await expect(page.locator(".production-list button").first()).toContainText("Camille vous propose un post Facebook");
+    await expect(page.locator(".production-head")).toContainText("Camille vous propose un post Facebook");
+    await page.goto(`${baseURL}/dashboard`);
     await expect(page.getByRole("link", { name: "Toutes les décisions (4) →" })).toHaveAttribute("href", "/dashboard?view=validation");
     await expect(page.locator("main .primary:visible")).toHaveCount(1);
 

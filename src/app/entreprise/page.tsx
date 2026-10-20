@@ -4,6 +4,7 @@ import { AppShell } from "@/components/app-shell";
 import { CompanyProfileForm } from "@/components/company-profile-form";
 import { OpenPaulButton } from "@/components/open-paul-button";
 import { PageHeading } from "@/components/mockup-ui";
+import { PersonaAvatar } from "@/components/persona-avatar";
 import { PERSONAS, type AgentKey } from "@/lib/agents/personas";
 import { facebookConnectionView } from "@/lib/oauth/meta";
 import { prisma } from "@/lib/prisma";
@@ -52,7 +53,7 @@ export default async function EntreprisePage({ searchParams }: { searchParams: P
           <h2>Votre équipe</h2>
           {TEAM.map(({ key, role }) => (
             <div key={key} className="connection">
-              <span><strong>{PERSONAS[key].name}</strong><small>{role}</small></span>
+              <span className="team-member"><PersonaAvatar agentKey={key} size={36} /><span><strong style={{ color: `var(--bd-agent-${key})` }}>{PERSONAS[key].name}</strong><small>{role}</small></span></span>
               {key === "co_ceo" ? <OpenPaulButton>Échanger</OpenPaulButton> : <Link className="btn" href={key === "marketing" ? "/diagnostic" : "/equipe"}>{key === "marketing" ? "Diagnostic" : "Demande"}</Link>}
             </div>
           ))}

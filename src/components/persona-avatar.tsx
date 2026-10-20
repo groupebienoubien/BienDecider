@@ -65,7 +65,9 @@ export function PersonaAvatar({
       width={size}
       height={size}
       viewBox="0 0 40 40"
-      className="shrink-0 rounded-full"
+      className="persona-avatar shrink-0 rounded-full"
+      // Taille explicite : la feuille de la maquette fixe toutes les icônes SVG à 18 px.
+      style={{ width: size, height: size }}
       aria-hidden="true"
     >
       <circle cx="20" cy="20" r="20" style={{ fill: color }} />
