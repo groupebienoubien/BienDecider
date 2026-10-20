@@ -2,56 +2,81 @@
 
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
-import { Icon, type IconName } from "@/components/icon";
+import { Icon } from "@/components/icon";
+import { JOURNEY, SETTINGS_PAGES, locateJourney } from "@/lib/journey-nav";
 
-const ITEMS: { href: string; label: string; icon: IconName; counter?: boolean }[] = [
-  { href: "/dashboard", label: "À décider", icon: "inbox", counter: true },
-  { href: "/diagnostic", label: "Diagnostic", icon: "scan-line" },
-  { href: "/dashboard?view=plan", label: "Plan d’action", icon: "list-ordered" },
-  { href: "/dashboard?view=validation", label: "Productions", icon: "panels-top-left" },
-  { href: "/prospection", label: "Prospection", icon: "contact-round" },
-  { href: "/dashboard?view=historique", label: "Historique", icon: "history" },
-];
-
-const SETTINGS: { href: string; label: string; icon: IconName; paths: string[] }[] = [
-  { href: "/entreprise", label: "Mon entreprise", icon: "settings-2", paths: ["/entreprise", "/equipe", "/connexions"] },
-  { href: "/compte", label: "Mon compte", icon: "circle-user-round", paths: ["/compte"] },
-  { href: "/admin", label: "Administration", icon: "shield-check", paths: ["/admin"] },
-];
-
-/** Navigation principale de la maquette : six étapes du parcours, le compteur indique les décisions attendues. */
-export function SidebarNav({ decisionCount = 0 }: { decisionCount?: number }) {
+function useJourneyLocation() {
   const pathname = usePathname();
   const view = useSearchParams().get("view") ?? "";
+  return { pathname, located: locateJourney(pathname, view) };
+}
+
+function DecisionCount({ count, className }: { count: number; className: string }) {
+  if (count <= 0) return null;
+  return <span className={className}>{count}<span className="sr-only"> décision(s) en attente</span></span>;
+}
+
+/** Navigation principale : les quatre temps du parcours (charte, section 2), chacun avec ses pages. */
+export function SidebarNav({ decisionCount = 0 }: { decisionCount?: number }) {
+  const { located } = useJourneyLocation();
   return (
-    <nav aria-label="Navigation principale">
-      {ITEMS.map((item) => {
-        const [itemPath, query] = item.href.split("?");
-        const itemView = new URLSearchParams(query).get("view") ?? "";
-        const active = itemPath === "/dashboard"
-          ? pathname === itemPath && view === itemView
-          : pathname === itemPath || pathname.startsWith(itemPath + "/");
-        const current = active || (item.label === "Historique" && pathname === "/rapport");
-        return (
-          <Link key={item.href} href={item.href} className={current ? "active" : undefined} aria-current={current ? "page" : undefined}>
-            <Icon name={item.icon} />
-            {item.label}
-            {item.counter && decisionCount > 0 && <span className="nav-count">{decisionCount}<span className="sr-only"> décision(s) en attente</span></span>}
-          </Link>
-        );
-      })}
-      <Link className="phone-only" href="/entreprise">Entreprise</Link>
-      <Link className="phone-only" href="/compte">Compte</Link>
+    <nav aria-label="Navigation principale" className="journey-nav">
+      {JOURNEY.map((stage, index) => (
+        <div key={stage.key} className={`journey-stage${located?.stage.key === stage.key ? " current" : ""}`}>
+          <div className="journey-stage-label">
+            <span className="journey-step" aria-hidden="true">{index + 1}</span>
+            {stage.label}
+            {stage.counter && <DecisionCount count={decisionCount} className="nav-count" />}
+          </div>
+          {stage.pages.map((page) => {
+            const current = located?.page.href === page.href;
+            return <Link key={page.href} href={page.href} className={current ? "active" : undefined} aria-current={current ? "page" : undefined}>{page.label}</Link>;
+          })}
+        </div>
+      ))}
     </nav>
   );
 }
 
-/** Liens du bas de la barre latérale : entreprise, compte et administration. */
+/** Barre du bas sur téléphone : les quatre temps, utilisable d'une main. */
+export function JourneyTabBar({ decisionCount = 0 }: { decisionCount?: number }) {
+  const { located } = useJourneyLocation();
+  return (
+    <nav aria-label="Parcours" className="journey-tabbar">
+      {JOURNEY.map((stage) => {
+        const current = located?.stage.key === stage.key;
+        return (
+          <Link key={stage.key} href={stage.pages[0].href} aria-current={current ? "true" : undefined} className={current ? "active" : undefined}>
+            <Icon name={stage.icon} />
+            <span>{stage.label}</span>
+            {stage.counter && <DecisionCount count={decisionCount} className="tab-count" />}
+          </Link>
+        );
+      })}
+    </nav>
+  );
+}
+
+/** Onglets des pages du temps en cours, sur téléphone, quand ce temps en compte plusieurs. */
+export function StageTabs() {
+  const { located } = useJourneyLocation();
+  if (!located || located.stage.pages.length < 2) return null;
+  return (
+    <nav aria-label={`Pages : ${located.stage.label}`} className="stage-tabs">
+      {located.stage.pages.map((page) => {
+        const current = page.href === located.page.href;
+        return <Link key={page.href} href={page.href} className={current ? "active" : undefined} aria-current={current ? "page" : undefined}>{page.label}</Link>;
+      })}
+    </nav>
+  );
+}
+
+/** Réglages, hors du parcours : entreprise, compte et administration. */
 export function SidebarSettingsLinks() {
   const pathname = usePathname();
   return (
     <>
-      {SETTINGS.map((item) => {
+      {SETTINGS_PAGES.map((item) => {
         const current = item.paths.some((path) => pathname === path || pathname.startsWith(path + "/"));
         return (
           <Link key={item.href} href={item.href} aria-current={current ? "page" : undefined}>

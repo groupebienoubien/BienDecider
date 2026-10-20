@@ -1,13 +1,14 @@
 import Link from "next/link";
 import { Suspense } from "react";
-import { SidebarNav, SidebarSettingsLinks } from "@/components/sidebar-nav";
+import { JourneyTabBar, SidebarNav, SidebarSettingsLinks, StageTabs } from "@/components/sidebar-nav";
+import { Icon } from "@/components/icon";
 import { PaulPanel } from "@/components/paul-panel";
 import { BrandLogo } from "@/components/brand-logo";
 import { WorkspaceBreadcrumb } from "@/components/workspace-breadcrumb";
 
 const MONEY = new Intl.NumberFormat("fr-FR", { maximumFractionDigits: 2 });
 
-/** Coque commune des pages connectées, fidèle à la maquette : barre latérale, bandeau, contenu, pied de page et Paul. */
+/** Coque commune des pages connectées : parcours en quatre temps (barre latérale, ou barre du bas sur téléphone), bandeau, contenu, pied de page et Paul. */
 export function AppShell({
   companyName,
   companyTrade,
@@ -48,9 +49,9 @@ export function AppShell({
             <div><strong>{companyName}</strong>{companyDescriptor && <small>{companyDescriptor}</small>}</div>
           </div>
         )}
-        <div className="nav-label">MON ACTIVITÉ</div>
         <Suspense fallback={null}><SidebarNav decisionCount={decisionCount} /></Suspense>
         <div className="sidebar-bottom">
+          <div className="nav-label">Réglages</div>
           <Suspense fallback={null}><SidebarSettingsLinks /></Suspense>
           {budget && (
             <div className="credit">
@@ -69,9 +70,13 @@ export function AppShell({
           <div>
             {paul && <Suspense fallback={null}><PaulPanel /></Suspense>}
             {ownerEmail && <span className="user-avatar" title={ownerEmail}>{ownerEmail[0]}</span>}
+            {companyName && <Link className="icon-button phone-settings" href="/entreprise" aria-label="Réglages" title="Réglages"><Icon name="settings-2" /></Link>}
           </div>
         </header>
-        <main id="contenu" tabIndex={-1}>{children}</main>
+        <main id="contenu" tabIndex={-1}>
+          <Suspense fallback={null}><StageTabs /></Suspense>
+          {children}
+        </main>
         <footer className="workspace-footer">
           <span>{companyName ? `${companyName}${objective ? ` · Objectif : ${objective}` : ""}` : "BienDecider"}</span>
           <span className="footer-links">
@@ -83,6 +88,7 @@ export function AppShell({
           </span>
         </footer>
       </div>
+      {companyName && <Suspense fallback={null}><JourneyTabBar decisionCount={decisionCount} /></Suspense>}
     </div>
   );
 }
