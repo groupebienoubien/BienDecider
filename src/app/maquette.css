@@ -457,4 +457,13 @@
 .mq .objective-hero h1{font-size:25px}
 .mq .objective-actions .primary{width:100%}
 }
+
+/* Agents incarnés (#216) : avatar, nom à la couleur de l'agent, puis ce qu'il fait. */
+.mq .agent-byline{display:inline-flex;align-items:center;gap:7px;color:var(--muted)}
+.mq .agent-byline .agent-name,.mq .agent-line .agent-name{color:var(--agent,var(--ink));font-weight:700}
+.mq .agent-line{display:block;font-size:12px;color:var(--muted)}
+.mq .decision-card .agent-line .agent-name{display:inline}
+.mq .team-member{display:flex;align-items:center;gap:12px}
+.mq .production-choice .agent-byline{margin-top:4px;font-size:12px;line-height:1.35;align-items:flex-start}
+.mq .production-head .version-tag{color:var(--muted);font-size:12px}
 }

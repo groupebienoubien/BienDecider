@@ -25,18 +25,29 @@ export function SectionTitle({ title, children }: { title: string; children?: Re
  * visibles (qui, quoi, quelle décision), le reste replié dans `details`.
  * Le liseré et le nom prennent la couleur de l'agent.
  */
-export function DecisionCard({ agent, title, action, details, detailsLabel = "Détails" }: { agent: string; title: ReactNode; action: ReactNode; details?: ReactNode; detailsLabel?: string }) {
+export function DecisionCard({ agent, byline, title, action, details, detailsLabel = "Détails" }: { agent: string; byline?: string; title: ReactNode; action: ReactNode; details?: ReactNode; detailsLabel?: string }) {
   const key = agent in PERSONAS ? (agent as AgentKey) : null;
   return (
     <article className="decision-card" style={key ? ({ "--agent": `var(--bd-agent-${key})` } as CSSProperties) : undefined}>
       {key ? <PersonaAvatar agentKey={key} size={36} /> : <span aria-hidden="true" />}
       <div>
-        <span className="agent-name">{key ? PERSONAS[key].name : agent}</span>
+        <span className="agent-line"><span className="agent-name">{key ? PERSONAS[key].name : agent}</span>{byline && <> {byline}</>}</span>
         <h3>{title}</h3>
       </div>
       {action}
       {details && <details><summary>{detailsLabel}</summary>{details}</details>}
     </article>
+  );
+}
+
+/** Signature d'agent : avatar, nom à sa couleur, puis ce qu'il fait (« vous propose un post Facebook »). */
+export function AgentByline({ agent, children, size = 20 }: { agent: string; children?: ReactNode; size?: number }) {
+  const key = agent in PERSONAS ? (agent as AgentKey) : null;
+  return (
+    <span className="agent-byline" style={key ? ({ "--agent": `var(--bd-agent-${key})` } as CSSProperties) : undefined}>
+      {key && <PersonaAvatar agentKey={key} size={size} />}
+      <span><span className="agent-name">{key ? PERSONAS[key].name : agent}</span>{children && <> {children}</>}</span>
+    </span>
   );
 }
 

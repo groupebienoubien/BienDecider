@@ -345,7 +345,7 @@ export function PaulPanel() {
           className={`paul-panel ${wide ? "wide" : ""}`}
         >
           <header>
-            <span className="paul-avatar" aria-hidden="true">{persona.name[0]}</span>
+            <PersonaAvatar agentKey="co_ceo" size={32} />
             <div>
               <strong>{persona.name}</strong>
               <small>Votre copilote</small>
@@ -496,7 +496,7 @@ export function PaulPanel() {
         onClick={() => writePanel({ open: !panel.open })}
         className="paul-launch"
       >
-        <span className="paul-avatar" aria-hidden="true">{persona.name[0]}</span>
+        <PersonaAvatar agentKey="co_ceo" size={26} />
         <span>Échanger avec {persona.name}</span>
         <Icon name="message-circle" />
       </button>

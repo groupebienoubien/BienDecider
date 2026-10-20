@@ -15,7 +15,9 @@ import { JourneyProgress } from "@/components/journey-progress";
 import { useAgentProfileCompletion } from "@/components/agent-profile-completion";
 import { Icon, type IconName } from "@/components/icon";
 import { Modal } from "@/components/modal";
-import { DecisionCard, PageHeading, SectionTitle, Tag } from "@/components/mockup-ui";
+import { AgentByline, DecisionCard, PageHeading, SectionTitle, Tag } from "@/components/mockup-ui";
+import { PersonaAvatar } from "@/components/persona-avatar";
+import { productionNoun } from "@/lib/agent-voice";
 import { ObjectiveHero, type ObjectiveProgress } from "@/components/objective-hero";
 import { describeProgress, summarizeProposals } from "@/lib/proposal-progress";
 import { countByFilter, FILTER_LABELS, matchesFilter, type QueueFilter } from "@/lib/validation-queue";
@@ -324,6 +326,7 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
                 return <DecisionCard
                   key={decision.key}
                   agent={decision.item.agent}
+                  byline="vous propose une action à valider"
                   title={decision.item.title}
                   action={<Link className={`btn ${first ? "primary" : ""}`} href={`/dashboard?view=plan#plan-item-${decision.item.id}`}>Examiner l’action <Icon name="arrow-right" /></Link>}
                   details={<p>Action à valider{decision.item.theme ? ` · ${decision.item.theme}` : ""} · {decision.item.timing}. La valider lancera la préparation d’une production par {persona?.name ?? "l’agent"} ; rien ne sera publié ni envoyé.</p>}
@@ -336,6 +339,7 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
               return <DecisionCard
                 key={decision.key}
                 agent={proposal.agent}
+                byline={`vous propose ${productionNoun(proposal.kind)}`}
                 title={proposal.title}
                 action={<Link className={`btn ${first ? "primary" : ""}`} href={`/dashboard?view=validation&proposal=${encodeURIComponent(proposal.id)}#proposal-${encodeURIComponent(proposal.id)}`}>{approved ? "Préparer la diffusion" : "Examiner"} <Icon name="arrow-right" /></Link>}
                 details={<p>{status.label} · {proposalChannel(proposal.kind)}{plan?.theme ? ` · ${plan.theme}` : ""}. {approved ? "Version approuvée : la diffusion attend votre confirmation." : proposal.status === "publication_incertaine" ? "Le canal n’a pas confirmé le résultat. Vérifier avant toute nouvelle tentative." : plan?.title ?? "Une production à examiner, reliée à votre objectif."}</p>}
@@ -359,7 +363,7 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
             </div>)}
           </section>
           <aside className="paul-note">
-            <header><span className="paul-avatar" aria-hidden="true">P</span><div><strong>Le point de Paul</strong><small>{topTheme ? `Priorité à ${topTheme.toLowerCase()}` : "Votre copilote"}</small></div></header>
+            <header><PersonaAvatar agentKey="co_ceo" size={30} /><div><strong>Le point de Paul</strong><small>{topTheme ? `Priorité à ${topTheme.toLowerCase()}` : "Votre copilote"}</small></div></header>
             <p>{actionable.length > 0 ? "Des productions sont prêtes pour votre relecture. Examinons-les avant de préparer la suite, sans multiplier les contenus." : "Faisons le point sur votre objectif et les prochains sujets à confier à l’équipe."}</p>
             <button type="button" onClick={() => openPaul()}>Parler des priorités <Icon name="arrow-right" /></button>
           </aside>
@@ -386,7 +390,6 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
           {planGroups.map(({ theme, items }) => <section key={theme} aria-label={`Thème ${theme}`}>
             <div className="theme-heading"><Icon name={THEME_ICONS[theme] ?? "list-checks"} />{theme}</div>
             {items.map((item) => {
-              const persona = PERSONAS[item.agent as AgentKey];
               const count = proposals.filter((proposal) => proposal.planItemId === item.id && needsAttention(proposal, facebookPageName)).length;
               const progress = summarizeProposals(proposals.filter((proposal) => proposal.planItemId === item.id));
               const progressParts = describeProgress(progress);
@@ -398,7 +401,7 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
                     <div className="tags">{item.priority && <Tag color={item.priority === 1 ? "orange" : "gray"}>Priorité {item.priority}</Tag>}<Tag color={proposed ? "orange" : "green"}>{proposed ? "À valider" : item.status === "en_cours" ? "En cours" : "Lancée"}</Tag></div>
                     <h3>{item.title}</h3>
                     <p>{item.rationale}</p>
-                    <small>{persona?.name ?? item.agent} · {item.timing}</small>
+                    <small><AgentByline agent={item.agent}>s’en charge · {item.timing}</AgentByline></small>
                     {progressParts.length > 0 && <small>Avancement : {progressParts.join(" · ")}.</small>}
                     {progress.total > 0 && progress.rejected === progress.total && <small>Rien n’a été retenu : l’action reste ouverte. Précisez votre consigne à l’équipe pour obtenir une autre proposition.</small>}
                   </div>
@@ -464,7 +467,7 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
                   return <button key={proposal.id} type="button" className={`production-choice ${proposal.id === selectedProposal.id ? "active" : ""}`} aria-pressed={proposal.id === selectedProposal.id} onClick={() => setSelectedId(proposal.id)}>
                     <Tag color={STATUS_TAG_COLORS[status.tone]}>{status.label}</Tag>
                     <strong>{proposal.title}</strong>
-                    <small>{proposalChannel(proposal.kind)} · {PERSONAS[proposal.agent as AgentKey]?.name ?? proposal.agent} · v{proposal.version}</small>
+                    <small><AgentByline agent={proposal.agent} size={18}>vous propose {productionNoun(proposal.kind)}</AgentByline></small>
                   </button>;
                 })}
               </aside>
@@ -496,7 +499,7 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
             <tbody>{visibleHistory.map((proposal) => <tr key={proposal.id} id={`proposal-${proposal.id}`}>
               <td><strong>{eventLabel(proposal)}</strong><small>{proposal.title} · v{proposal.version}</small></td>
               <td><Tag color="blue">{proposalChannel(proposal.kind)}</Tag></td>
-              <td>{proposal.status === "executee" ? "Exécution enregistrée" : "Décision enregistrée"}<small>Version {proposal.version} · {PERSONAS[proposal.agent as AgentKey]?.name ?? proposal.agent}</small></td>
+              <td>{proposal.status === "executee" ? "Exécution enregistrée" : "Décision enregistrée"}<small><AgentByline agent={proposal.agent} size={18}>· version {proposal.version}</AgentByline></small></td>
               <td>{eventTime(proposal)}</td>
               <td><button type="button" onClick={() => setInspectedId(proposal.id)}><Icon name="eye" /> Voir<span className="sr-only"> : {proposal.title}</span></button></td>
             </tr>)}</tbody>

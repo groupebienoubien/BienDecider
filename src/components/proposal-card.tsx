@@ -6,7 +6,8 @@ import { useState } from "react";
 import { Icon } from "@/components/icon";
 import { Modal } from "@/components/modal";
 import { ProductionPreview } from "@/components/production-preview";
-import { Tag } from "@/components/mockup-ui";
+import { AgentByline, Tag } from "@/components/mockup-ui";
+import { productionNoun } from "@/lib/agent-voice";
 import { ReadAloudButton } from "@/components/voice-controls";
 import { spokenText } from "@/lib/voice";
 import { PERSONAS, type AgentKey } from "@/lib/agents/personas";
@@ -154,7 +155,7 @@ export function ProposalCard({
             <Tag color={STATUS_TAG_COLORS[statusView.tone]}>{statusView.label}</Tag>
           </div>
           <h2>{proposal.title}</h2>
-          <p>{persona?.name ?? proposal.agent} · Version {proposal.version} · {channel}</p>
+          <p><AgentByline agent={proposal.agent} size={24}>vous propose {productionNoun(proposal.kind)}</AgentByline> <span className="version-tag">· version {proposal.version}</span></p>
         </div>
         <button type="button" className="icon-button" onClick={() => openPaul({ type: "proposal", id: proposal.id, title: proposal.title })} aria-label="Échanger avec Paul sur cette production" title="Échanger avec Paul"><Icon name="message-circle" /></button>
       </div>
