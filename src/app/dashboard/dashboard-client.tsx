@@ -16,6 +16,7 @@ import { useAgentProfileCompletion } from "@/components/agent-profile-completion
 import { Icon, type IconName } from "@/components/icon";
 import { Modal } from "@/components/modal";
 import { DecisionCard, PageHeading, SectionTitle, Tag } from "@/components/mockup-ui";
+import { ObjectiveHero, type ObjectiveProgress } from "@/components/objective-hero";
 import { describeProgress, summarizeProposals } from "@/lib/proposal-progress";
 import { countByFilter, FILTER_LABELS, matchesFilter, type QueueFilter } from "@/lib/validation-queue";
 import { needsAttention } from "@/lib/pending-decisions";
@@ -50,7 +51,7 @@ function productionStage(status: string) {
   return 4;
 }
 
-export function DashboardClient({ company, initialPlanItems, initialAgentRuns, initialProposals, leadSources, initialLeadStats, initialDiagnosticCount, initialView, riskSettings, facebookPageName, todayLabel, focusProposalId }: {
+export function DashboardClient({ company, initialPlanItems, initialAgentRuns, initialProposals, leadSources, initialLeadStats, initialDiagnosticCount, progress, initialView, riskSettings, facebookPageName, todayLabel, focusProposalId }: {
   company: SafeCompany;
   initialPlanItems: PlanItemWithProposals[];
   initialAgentRuns: AgentRunView[];
@@ -58,6 +59,7 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
   leadSources: Record<string, string | null>;
   initialLeadStats: { active: number; appointments: number };
   initialDiagnosticCount: number;
+  progress: ObjectiveProgress;
   initialView: View;
   riskSettings: Record<string, string>;
   facebookPageName: string | null;
@@ -286,23 +288,19 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
     {error && <p role="alert" className="warning">{error}</p>}
     {notice && <p role="status" className="notice">{notice}</p>}
   </>;
+  const hasObjective = Boolean(company.objective?.trim());
+  const weekHistory = history.filter((proposal) => new Date(proposal.decidedAt ?? proposal.createdAt) >= new Date(progress.weekStart));
   const goalLine = (extra: string) => <div className="goal-line"><Icon name="target" /><span>{company.objective ? <>Mon objectif : <strong>{company.objective}</strong></> : "Mon objectif : à définir"}{extra}</span><Link href="/entreprise?tab=objectifs">{company.objective ? "Ajuster l’objectif" : "Définir l’objectif"} →</Link></div>;
 
   return (
     <div>
       {initialView === "today" && <>
-        <PageHeading
-          kicker={todayLabel}
-          title="Chaque décision fait avancer votre activité."
-          description="Bonjour. Voici ce qui mérite votre attention aujourd’hui."
-          actions={<button type="button" onClick={() => setRefreshOpen(true)}><Icon name="refresh-cw" /> Actualiser</button>}
+        <ObjectiveHero
+          objective={company.objective}
+          progress={progress}
+          dateLabel={todayLabel}
+          actions={<button type="button" className="quiet" onClick={() => setRefreshOpen(true)}><Icon name="refresh-cw" /> Actualiser</button>}
         />
-        {goalLine("")}
-        <div className="metrics">
-          <div className="metric"><div className="metric-label"><span className="dot orange" /> À décider</div><div className="metric-value">{String(decisions.length).padStart(2, "0")}<small>Votre validation attendue</small></div><small>Classées par priorité</small></div>
-          <div className="metric"><div className="metric-label"><span className="dot green" /> Productions diffusées</div><div className="metric-value">{String(proposals.filter((proposal) => proposal.status === "executee").length).padStart(2, "0")}<small>Historique disponible</small></div><small>Site, publications et mails</small></div>
-          <div className="metric"><div className="metric-label"><span className="dot blue" /> Prospects actifs</div><div className="metric-value">{String(initialLeadStats.active).padStart(2, "0")}<small>{initialLeadStats.appointments} rendez-vous déclaré(s)</small></div><small>Pas de vente attribuée automatiquement</small></div>
-        </div>
         {notices}
         {needsFirstDiagnostic && <JourneyProgress
           objectiveComplete={Boolean(company.objective?.trim())}
@@ -315,11 +313,12 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
           onPreparePlan={() => void handleGeneratePlan()}
         />}
         <AgentRunTracker runs={agentRuns} onCheck={(runId) => void checkRun(runId)} onRetry={() => void handleGeneratePlan(true)} retryDisabled={planLoading} />
-        <SectionTitle title="Votre prochaine décision"><Link href="/dashboard?view=plan">Tout le plan →</Link></SectionTitle>
+        <SectionTitle title="Ce que l’équipe vous a préparé">{decisions.length > 3 && <Link href="/dashboard?view=validation">Toutes les décisions ({decisions.length}) →</Link>}</SectionTitle>
         {decisions.length > 0 ? (
           <div className="decision-cards" aria-label="Vos prochaines décisions" role="region">
-            {decisions.slice(0, 5).map((decision, index) => {
-              const first = index === 0;
+            {decisions.slice(0, 3).map((decision, index) => {
+              // Charte : une seule action principale ; sans objectif, c'est « En parler avec Paul ».
+              const first = index === 0 && hasObjective;
               if (decision.item) {
                 const persona = PERSONAS[decision.item.agent as AgentKey];
                 return <DecisionCard
@@ -352,8 +351,8 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
         )}
         <div className="two-column band">
           <section>
-            <SectionTitle title="Ce qui a été fait"><Link href="/dashboard?view=historique">Voir l’historique →</Link></SectionTitle>
-            {history.length === 0 ? <p className="legend">Vos décisions apparaîtront ici après la première relecture.</p> : history.slice(0, 3).map((proposal) => <div key={proposal.id} className="activity-row">
+            <SectionTitle title="Ce qui a été fait cette semaine"><Link href="/dashboard?view=historique">Tout l’historique →</Link></SectionTitle>
+            {weekHistory.length === 0 ? <p className="legend">{history.length === 0 ? "Vos décisions apparaîtront ici après la première relecture." : "Rien de nouveau depuis sept jours."}</p> : weekHistory.slice(0, 4).map((proposal) => <div key={proposal.id} className="activity-row">
               <span className="activity-icon"><Icon name="check" /></span>
               <div><strong>{eventLabel(proposal)} · {proposalChannel(proposal.kind)}</strong><small>{proposal.title} · {eventTime(proposal)}</small></div>
               <Link className="icon-button" href={`/dashboard?view=historique&proposal=${encodeURIComponent(proposal.id)}`} aria-label={`Voir : ${proposal.title}`} title="Voir la production"><Icon name="arrow-up-right" /></Link>

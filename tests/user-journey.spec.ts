@@ -590,7 +590,7 @@ test("diagnostic to plan, keyboard dialog and responsive navigation", async ({ p
     for (const width of [320, 390, 768, 1440]) {
       await page.setViewportSize({ width, height: 900 });
       for (const [path, title] of [
-        ["/dashboard", "Chaque décision fait avancer votre activité."],
+        ["/dashboard", "Développer les demandes de devis"],
         ["/dashboard?view=validation", "Du brouillon à la diffusion."],
         ["/diagnostic", "Une lecture claire de votre activité."],
         ["/equipe", "Votre équipe."],
@@ -630,6 +630,34 @@ test("workspace sections track the active view and account budget is company sco
     await expect(page.locator("main")).toContainText("1,25 $");
     await expect(page.locator("main")).toContainText(company.ownerEmail);
     await expect(page.getByRole("link", { name: "Politique de confidentialité" })).toHaveAttribute("href", "/confidentialite");
+  } finally { await prisma.$disconnect(); }
+});
+
+test("the home page shows the objective, declared progress and at most three prepared decisions", async ({ page, company }) => {
+  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }) });
+  try {
+    await prisma.agentProposal.createMany({ data: ["Premier post", "Deuxième post", "Troisième post", "Quatrième post"].map((title) => ({
+      companyId: company.id, agent: "contenu", kind: "social_post", title, content: "Texte à relire",
+    })) });
+    await prisma.lead.create({ data: { companyId: company.id, name: "Syndic test", reason: "Cible", stage: "contacte", contactedAt: new Date() } });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`${baseURL}/dashboard`);
+    const hero = page.getByRole("region", { name: "Mon objectif" });
+    await expect(hero.getByRole("heading", { level: 1, name: "Développer les demandes de devis" })).toBeVisible();
+    // Progression strictement déclarative : chiffres saisis par le dirigeant et échanges enregistrés.
+    await expect(hero.getByText(/Chiffre d’affaires mensuel déclaré/)).toContainText(/4\s000/);
+    await expect(hero.getByRole("progressbar")).toHaveAttribute("value", "67");
+    await expect(hero.locator(".objective-week")).toContainText("Cette semaine : 1 prospect contacté");
+    await expect(page.locator(".decision-cards .decision-card")).toHaveCount(3);
+    await expect(page.getByRole("link", { name: "Toutes les décisions (4) →" })).toHaveAttribute("href", "/dashboard?view=validation");
+    await expect(page.locator("main .primary:visible")).toHaveCount(1);
+
+    await prisma.company.update({ where: { id: company.id }, data: { objective: null } });
+    await page.reload();
+    await expect(hero.getByRole("heading", { level: 1, name: "Quel résultat voulez-vous atteindre ?" })).toBeVisible();
+    await expect(page.locator("main .primary:visible")).toHaveText(["En parler avec Paul"]);
+    await hero.getByRole("button", { name: "En parler avec Paul" }).click();
+    await expect(page.getByRole("dialog", { name: "Discussion avec Paul" })).toBeVisible();
   } finally { await prisma.$disconnect(); }
 });
 

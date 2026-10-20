@@ -24,7 +24,7 @@ export function describePage(path: string, view?: string | null): string {
   if (path === "/dashboard") {
     if (view === "validation") return "Productions à valider";
     if (view === "historique") return "Historique des productions";
-    return view === "plan" ? "Plan d'action" : "À décider";
+    return view === "plan" ? "Plan d'action" : "Mon objectif (accueil)";
   }
   return PAGE_LABELS[path] ?? "une page de BienDecider";
 }
