@@ -8,8 +8,15 @@ import { getConfiguredRiskLevels } from "@/lib/delegation-policy";
 import { facebookConnectionView } from "@/lib/oauth/meta";
 import { needsAttention } from "@/lib/pending-decisions";
 import { getShellProps } from "@/lib/shell-data";
+import { computeBusinessTarget } from "@/lib/business-target";
+import { getWeeklyDelta } from "@/lib/funnel";
 
 export const dynamic = "force-dynamic";
+
+/** Début de la fenêtre « cette semaine » de l'accueil : les sept derniers jours. */
+function startOfRollingWeek() {
+  return new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+}
 
 export default async function DashboardPage({ searchParams }: {
   searchParams: Promise<{ view?: string; proposal?: string }>;
@@ -21,7 +28,8 @@ export default async function DashboardPage({ searchParams }: {
   const company = await prisma.company.findUnique({ where: { ownerEmail } });
   if (!company || !company.name) redirect("/onboarding");
 
-  const [planItems, recentAgentRuns, proposals, leads, leadStages, diagnosticCount, riskSettings, facebookConnection] = await Promise.all([
+  const weekStart = startOfRollingWeek();
+  const [planItems, recentAgentRuns, proposals, leads, leadStages, diagnosticCount, riskSettings, facebookConnection, week] = await Promise.all([
     prisma.actionPlanItem.findMany({
       where: { companyId: company.id },
       orderBy: [{ priority: "asc" }, { createdAt: "asc" }],
@@ -45,6 +53,7 @@ export default async function DashboardPage({ searchParams }: {
     prisma.auditFinding.count({ where: { companyId: company.id } }),
     getConfiguredRiskLevels(),
     prisma.channelConnection.findUnique({ where: { companyId_channel: { companyId: company.id, channel: "facebook" } } }),
+    getWeeklyDelta(company.id, weekStart),
   ]);
   // Seul le nom de la Page connectée est transmis au navigateur, jamais un jeton.
   const facebook = facebookConnectionView(facebookConnection ?? undefined, company.id);
@@ -67,6 +76,7 @@ export default async function DashboardPage({ searchParams }: {
           appointments: leadStages.filter((lead) => lead.stage === "rdv").length,
         }}
         initialDiagnosticCount={diagnosticCount}
+        progress={{ target: computeBusinessTarget(company), week, weekStart: weekStart.toISOString() }}
         riskSettings={riskSettings}
         facebookPageName={facebookPageName}
         initialView={initialView}

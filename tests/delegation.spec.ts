@@ -179,7 +179,7 @@ test("publication review separates unsupported claims, absent prices, changed co
 });
 
 test("Paul is told the page by name, never by the raw address the browser sent", () => {
-  expect(describePage("/dashboard")).toBe("À décider");
+  expect(describePage("/dashboard")).toBe("Mon objectif (accueil)");
   expect(describePage("/dashboard", "plan")).toBe("Plan d'action");
   expect(describePage("/compte")).toBe("Mon compte");
   expect(describePage("/dashboard", "validation")).toBe("Productions à valider");
