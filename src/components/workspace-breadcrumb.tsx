@@ -1,52 +1,28 @@
 "use client";
 
 import { usePathname, useSearchParams } from "next/navigation";
+import { locateJourney } from "@/lib/journey-nav";
 
-const ACTIVITY_LABELS: Record<string, string> = {
-  "": "À décider",
-  plan: "Plan d’action",
-  validation: "Productions",
-  historique: "Historique",
+/** Pages hors parcours : réglages et informations. */
+const OTHER_PAGES: Record<string, [string, string]> = {
+  "/entreprise": ["Réglages", "Mon entreprise"],
+  "/equipe": ["Mon entreprise", "Équipe"],
+  "/connexions": ["Mon entreprise", "Connexions"],
+  "/compte": ["Réglages", "Mon compte"],
+  "/admin": ["Réglages", "Administration"],
+  "/admin/risques": ["Administration", "Risques"],
+  "/cgu": ["Informations", "Conditions générales"],
+  "/confidentialite": ["Informations", "Confidentialité"],
+  "/mentions-legales": ["Informations", "Mentions légales"],
 };
 
 export function WorkspaceBreadcrumb({ fallback }: { fallback: string }) {
   const pathname = usePathname();
-  const searchParams = useSearchParams();
-  const view = searchParams.get("view") ?? "";
-
-  let parent = "Mon activité";
-  let current = fallback;
-
-  if (pathname === "/dashboard") {
-    current = ACTIVITY_LABELS[view] ?? "À décider";
-  } else if (pathname === "/diagnostic") {
-    current = "Diagnostic";
-  } else if (pathname === "/prospection") {
-    current = "Prospection";
-  } else if (pathname === "/rapport") {
-    current = "Résultats";
-  } else if (pathname === "/entreprise") {
-    current = "Mon entreprise";
-  } else if (pathname === "/equipe" || pathname === "/connexions") {
-    parent = "Mon entreprise";
-    current = pathname === "/equipe" ? "Équipe" : "Connexions";
-  } else if (pathname === "/compte") {
-    current = "Mon compte";
-  } else if (pathname === "/admin") {
-    current = "Administration";
-  } else if (pathname === "/admin/risques") {
-    parent = "Administration";
-    current = "Risques";
-  } else if (pathname === "/cgu") {
-    parent = "Informations";
-    current = "Conditions générales";
-  } else if (pathname === "/confidentialite") {
-    parent = "Informations";
-    current = "Confidentialité";
-  } else if (pathname === "/mentions-legales") {
-    parent = "Informations";
-    current = "Mentions légales";
-  }
+  const view = useSearchParams().get("view") ?? "";
+  const located = locateJourney(pathname, view);
+  const [parent, current] = located
+    ? [located.stage.label, located.page.label]
+    : OTHER_PAGES[pathname] ?? ["Mon activité", fallback];
 
   return (
     <span role="navigation" aria-label="Fil d’Ariane" className="breadcrumb">

@@ -602,7 +602,9 @@ test("diagnostic to plan, keyboard dialog and responsive navigation", async ({ p
       }
     }
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.getByRole("link", { name: "Diagnostic", exact: true }).first().click();
+    // Sur téléphone : barre du bas (les quatre temps), puis onglets des pages du temps choisi.
+    await page.getByRole("navigation", { name: "Parcours" }).getByRole("link", { name: "Objectif" }).click();
+    await page.getByRole("navigation", { name: "Pages : Objectif" }).getByRole("link", { name: "Diagnostic", exact: true }).click();
     await expect(page.getByRole("heading", { level: 1, name: "Une lecture claire de votre activité." })).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath("diagnostic-mobile.png"), fullPage: true });
   } finally { await prisma.$disconnect(); }
@@ -613,12 +615,16 @@ test("workspace sections track the active view and account budget is company sco
   try {
     await prisma.usageEvent.create({ data: { companyId: company.id, agent: "contenu", model: "test", inputTokens: 100, outputTokens: 20, costUsd: 1.25 } });
     await page.setViewportSize({ width: 1440, height: 900 });
-    for (const [view, label] of [["", "À décider"], ["?view=plan", "Plan d’action"], ["?view=validation", "Productions"], ["?view=historique", "Historique"]]) {
+    for (const [view, label] of [["", "Mon objectif"], ["?view=plan", "Plan d’action"], ["?view=validation", "Productions"], ["?view=historique", "Historique"]]) {
       await page.goto(`${baseURL}/dashboard${view}`);
       const navigation = page.locator("aside").getByRole("navigation", { name: "Navigation principale" });
       await expect(navigation.locator('[aria-current="page"]')).toHaveCount(1);
       await expect(navigation.getByRole("link", { name: label, exact: true })).toHaveAttribute("aria-current", "page");
     }
+    // Charte : la navigation suit les quatre temps du parcours, les réglages restent à part.
+    const journey = page.locator("aside").getByRole("navigation", { name: "Navigation principale" });
+    await expect(journey.locator(".journey-stage-label")).toHaveText([/Objectif/, /Plan/, /Décisions/, /Résultats/]);
+    await expect(journey.getByRole("link", { name: "Mon entreprise" })).toHaveCount(0);
     await page.goto(`${baseURL}/compte`);
     await expect(page.getByRole("heading", { name: "Crédits & limites", exact: true })).toBeVisible();
     await expect(page.locator("main")).toContainText("1,25 $");
