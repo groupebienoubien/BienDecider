@@ -60,7 +60,7 @@ Chaude, claire, posée. Le vert reste la marque, il n'est plus la seule couleur.
 | Encre | `#202824` | texte |
 | Texte secondaire | `#65716a` | métadonnées, au plus une ligne par carte |
 | **Marque** | `#176b50` (vert) | logo, bouton principal, confirmation |
-| **Accent chaud** | `#e8743b` (corail) | ce qui attend le dirigeant, moments de réussite, mise en avant ; jamais pour une erreur ni pour du petit texte (contraste insuffisant), à utiliser en aplat, pastille ou liseré |
+| **Accent chaud** | `#e06a30` (corail) | ce qui attend le dirigeant, moments de réussite, mise en avant ; jamais pour une erreur ni pour du petit texte (contraste insuffisant), à utiliser en aplat, pastille ou liseré |
 | Attention | `#a04d26` | à vérifier, résultat incertain |
 | Erreur | `#aa3d3d` | échec uniquement |
 

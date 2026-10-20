@@ -66,7 +66,7 @@ export default async function RapportPage() {
         <SectionTitle title="Dernières réalisations">{company.siteSlug && <Link href={`/site/${company.siteSlug}`} target="_blank" rel="noopener noreferrer">Voir le site publié →</Link>}</SectionTitle>
         {executed.length === 0 ? <div className="empty" role="region" aria-label="Résultats à venir">
           <p>Aucune publication ou exécution enregistrée. Seules les actions effectivement réalisées par BienDecider apparaissent ici ; une proposition approuvée ne compte pas comme exécutée.</p>
-          <Link className="btn primary" href="/dashboard?view=validation">Examiner les productions</Link>
+          <Link className={`btn ${target ? "primary" : ""}`} href="/dashboard?view=validation">Examiner les productions</Link>
         </div> : (
           <div className="table-scroll"><table className="data-table">
             <thead><tr><th>Réalisation</th><th>Agent</th></tr></thead>

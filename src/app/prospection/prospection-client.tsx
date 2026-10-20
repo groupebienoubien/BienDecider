@@ -130,7 +130,7 @@ export function ProspectionClient({
         kicker="RELATIONS COMMERCIALES"
         title="Les contacts deviennent des échanges."
         description="Les événements du canal et vos déclarations restent identifiables."
-        actions={<Link className="btn primary" href="/equipe"><Icon name="plus" /> Confier une recherche</Link>}
+        actions={<Link className={`btn ${leads.length > 0 ? "primary" : ""}`} href="/equipe"><Icon name="plus" /> Confier une recherche</Link>}
       />
       <div className="sync-line">
         <span>{t.identifies} identifiés · {t.contactes} contactés · {t.reponses} réponses · {t.rdv} RDV · {t.clients} clients</span>

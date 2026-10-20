@@ -1,4 +1,6 @@
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
+import { PERSONAS, type AgentKey } from "@/lib/agents/personas";
+import { PersonaAvatar } from "@/components/persona-avatar";
 
 /** En-tête de page de la maquette : surtitre, titre Sora, description et actions. */
 export function PageHeading({ kicker, title, description, actions }: { kicker: string; title: string; description?: ReactNode; actions?: ReactNode }) {
@@ -16,6 +18,26 @@ export function PageHeading({ kicker, title, description, actions }: { kicker: s
 
 export function SectionTitle({ title, children }: { title: string; children?: ReactNode }) {
   return <div className="section-title"><h2>{title}</h2>{children}</div>;
+}
+
+/**
+ * Carte de décision de la charte (docs/charte.md, section 6) : trois informations
+ * visibles (qui, quoi, quelle décision), le reste replié dans `details`.
+ * Le liseré et le nom prennent la couleur de l'agent.
+ */
+export function DecisionCard({ agent, title, action, details, detailsLabel = "Détails" }: { agent: string; title: ReactNode; action: ReactNode; details?: ReactNode; detailsLabel?: string }) {
+  const key = agent in PERSONAS ? (agent as AgentKey) : null;
+  return (
+    <article className="decision-card" style={key ? ({ "--agent": `var(--bd-agent-${key})` } as CSSProperties) : undefined}>
+      {key ? <PersonaAvatar agentKey={key} size={36} /> : <span aria-hidden="true" />}
+      <div>
+        <span className="agent-name">{key ? PERSONAS[key].name : agent}</span>
+        <h3>{title}</h3>
+      </div>
+      {action}
+      {details && <details><summary>{detailsLabel}</summary>{details}</details>}
+    </article>
+  );
 }
 
 export type TagColor = "green" | "orange" | "blue" | "gray" | "red";
