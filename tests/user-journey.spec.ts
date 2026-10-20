@@ -694,6 +694,27 @@ test("Paul has a single conversation: the home summary opens it and the team ins
   } finally { await prisma.$disconnect(); }
 });
 
+test("the plan shows the expected result and folds the agent instruction away", async ({ page, company }) => {
+  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }) });
+  try {
+    await prisma.actionPlanItem.create({ data: {
+      companyId: company.id, agent: "demarchage", title: "Contacter les syndics du secteur", theme: "Prospection", priority: 1,
+      timing: "Demandé dans le chat", outcome: "Des syndics pensent à vous pour leurs petites interventions.",
+      rationale: "Consigne technique : préparer 15 fiches, ton professionnel, sans promesse de délai.",
+    } });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`${baseURL}/dashboard?view=plan`);
+    const card = page.locator(".plan-row").filter({ hasText: "Contacter les syndics du secteur" });
+    await expect(card).toContainText("Jean-Claude s’en charge");
+    await expect(card).toContainText("Résultat attendu : Des syndics pensent à vous pour leurs petites interventions.");
+    // La consigne donnée à l'agent n'est jamais affichée d'office.
+    await expect(card.getByText(/Consigne technique/)).toBeHidden();
+    await card.getByText("Détails", { exact: true }).click();
+    await expect(card.getByText(/Consigne donnée à Jean-Claude/)).toBeVisible();
+    await expect(page.getByText("La diffusion reste une décision distincte.")).toHaveCount(0);
+  } finally { await prisma.$disconnect(); }
+});
+
 test("explicit admin can tune global risk level but cannot lower the effective floor", async ({ page, company }) => {
   test.skip(!adminFixture, "Requires an isolated local server with ADMIN_EMAILS for the fixture admin.");
   expect(company.ownerEmail).toBe("ux-admin-settings-test@example.invalid");

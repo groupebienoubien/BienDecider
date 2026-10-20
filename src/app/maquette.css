@@ -473,4 +473,12 @@
 .mq .paul-summary header small{font-size:12px}
 .mq .paul-summary p{font-size:14px;line-height:1.65;margin:14px 0 16px;white-space:pre-line}
 .mq .paul-summary button{font-size:12px;background:var(--surface)}
+
+/* Plan lisible (#218) : résultat attendu visible, consigne et suivi repliés. */
+.mq .plan-row .agent-byline{font-size:12px}
+.mq .plan-row .plan-outcome{font-size:13px;color:var(--ink);margin:0 0 6px}
+.mq .plan-row .plan-outcome span{color:var(--muted)}
+.mq .plan-details{font-size:12px;color:var(--muted)}
+.mq .plan-details summary{cursor:pointer;width:max-content;min-height:24px}
+.mq .plan-details p{margin:6px 0 0}
 }

@@ -160,6 +160,7 @@ model ActionPlanItem {
   agent       String // marketing, contenu, demarchage
   title       String
   rationale   String
+  outcome     String? // résultat attendu, une phrase écrite pour le dirigeant (charte, #218) ; null pour les actions antérieures
   timing      String // ex: "cette semaine", "aujourd'hui"
   theme       String?
   priority    Int?

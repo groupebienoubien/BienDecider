@@ -16,7 +16,8 @@ import { useAgentProfileCompletion } from "@/components/agent-profile-completion
 import { Icon, type IconName } from "@/components/icon";
 import { Modal } from "@/components/modal";
 import { AgentByline, DecisionCard, PageHeading, SectionTitle, Tag } from "@/components/mockup-ui";
-import { productionNoun } from "@/lib/agent-voice";
+import { agentName, productionNoun } from "@/lib/agent-voice";
+import { CHAT_REQUEST_TIMING } from "@/lib/agents/plan-item-shared";
 import { ObjectiveHero, type ObjectiveProgress } from "@/components/objective-hero";
 import { PaulSummary } from "@/components/paul-summary";
 import { describeProgress, summarizeProposals } from "@/lib/proposal-progress";
@@ -359,7 +360,7 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
         <PageHeading
           kicker="DU DIAGNOSTIC À L’ACTION"
           title={planTitle}
-          description="Une action validée autorise la préparation. La diffusion reste une décision distincte."
+          description="Les actions que l’équipe propose pour atteindre votre objectif."
           actions={<button type="button" onClick={() => openPaul()}><Icon name="message-circle" /> Revoir avec Paul</button>}
         />
         {goalLine("")}
@@ -383,12 +384,15 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
                 <article key={item.id} id={`plan-item-${item.id}`} className="plan-row">
                   <span className="priority">{item.priority ? String(item.priority).padStart(2, "0") : "–"}</span>
                   <div>
-                    <div className="tags">{item.priority && <Tag color={item.priority === 1 ? "orange" : "gray"}>Priorité {item.priority}</Tag>}<Tag color={proposed ? "orange" : "green"}>{proposed ? "À valider" : item.status === "en_cours" ? "En cours" : "Lancée"}</Tag></div>
+                    <AgentByline agent={item.agent}>s’en charge · {item.timing}</AgentByline>
                     <h3>{item.title}</h3>
-                    <p>{item.rationale}</p>
-                    <small><AgentByline agent={item.agent}>s’en charge · {item.timing}</AgentByline></small>
-                    {progressParts.length > 0 && <small>Avancement : {progressParts.join(" · ")}.</small>}
-                    {progress.total > 0 && progress.rejected === progress.total && <small>Rien n’a été retenu : l’action reste ouverte. Précisez votre consigne à l’équipe pour obtenir une autre proposition.</small>}
+                    {item.outcome && <p className="plan-outcome"><span>Résultat attendu :</span> {item.outcome}</p>}
+                    {progress.total > 0 && progress.rejected === progress.total && <small>Rien n’a été retenu : l’action reste ouverte. Précisez votre demande à Paul pour obtenir une autre proposition.</small>}
+                    <details className="plan-details">
+                      <summary>Détails</summary>
+                      <p>{proposed ? "À valider" : item.status === "en_cours" ? "En cours" : "Lancée"}{item.priority ? ` · priorité ${item.priority}` : ""}{progressParts.length > 0 ? ` · ${progressParts.join(" · ")}` : ""}</p>
+                      <p><strong>{item.timing === CHAT_REQUEST_TIMING ? `Consigne donnée à ${agentName(item.agent)}` : "Pourquoi cette action"} :</strong> {item.rationale}</p>
+                    </details>
                   </div>
                   {item.status === "en_cours" ? (
                     item.agentRuns[0] ? <button type="button" onClick={() => void checkRun(item.agentRuns[0].id)}>Vérifier l’état</button> : <span role="status">En cours</span>

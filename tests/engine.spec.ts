@@ -390,6 +390,11 @@ test("a request made in the chat becomes a plan action that can only be launched
     companyId: company.id, agent: "contenu", status: "propose", timing: CHAT_REQUEST_TIMING, theme: "Visibilité", priority: 2,
     title: "Trois posts sur les chantiers", rationale: "Demande du dirigeant : montrer les réalisations récentes.",
   });
+  // Résultat attendu (#218) : absent par défaut, nettoyé quand Paul le fournit.
+  expect(item.outcome).toBeNull();
+  const withOutcome = await createChatPlanItem(company.id, "contenu", "Un post", "Consigne", "Visibilité", 3, "  Plus de visites sur la page  ");
+  expect(withOutcome.outcome).toBe("Plus de visites sur la page");
+  await prisma.actionPlanItem.delete({ where: { id: withOutcome.id } });
   // Les productions de l'agent sont rattachées à l'action par planItemId, comme pour une action du plan de Paul.
   const proposal = await prisma.agentProposal.create({ data: { companyId: company.id, agent: "contenu", kind: "social_post", title: "Post 1", content: "Texte", planItemId: item.id } });
   const withProposals = await prisma.actionPlanItem.findUniqueOrThrow({ where: { id: item.id }, include: { proposals: true } });
