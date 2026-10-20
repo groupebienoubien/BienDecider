@@ -29,7 +29,7 @@ export default async function DashboardPage({ searchParams }: {
   if (!company || !company.name) redirect("/onboarding");
 
   const weekStart = startOfRollingWeek();
-  const [planItems, recentAgentRuns, proposals, leads, leadStages, diagnosticCount, riskSettings, facebookConnection, week] = await Promise.all([
+  const [planItems, recentAgentRuns, proposals, leads, leadStages, diagnosticCount, riskSettings, facebookConnection, week, lastPaulMessage] = await Promise.all([
     prisma.actionPlanItem.findMany({
       where: { companyId: company.id },
       orderBy: [{ priority: "asc" }, { createdAt: "asc" }],
@@ -54,6 +54,7 @@ export default async function DashboardPage({ searchParams }: {
     getConfiguredRiskLevels(),
     prisma.channelConnection.findUnique({ where: { companyId_channel: { companyId: company.id, channel: "facebook" } } }),
     getWeeklyDelta(company.id, weekStart),
+    prisma.chatMessage.findFirst({ where: { companyId: company.id, role: "assistant" }, orderBy: { createdAt: "desc" }, select: { content: true, createdAt: true } }),
   ]);
   // Seul le nom de la Page connectée est transmis au navigateur, jamais un jeton.
   const facebook = facebookConnectionView(facebookConnection ?? undefined, company.id);
@@ -77,6 +78,7 @@ export default async function DashboardPage({ searchParams }: {
         }}
         initialDiagnosticCount={diagnosticCount}
         progress={{ target: computeBusinessTarget(company), week, weekStart: weekStart.toISOString() }}
+        lastPaulMessage={lastPaulMessage ? { content: lastPaulMessage.content, createdAt: lastPaulMessage.createdAt.toISOString() } : null}
         riskSettings={riskSettings}
         facebookPageName={facebookPageName}
         initialView={initialView}

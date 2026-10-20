@@ -5,6 +5,7 @@ import { CompanyProfileForm } from "@/components/company-profile-form";
 import { OpenPaulButton } from "@/components/open-paul-button";
 import { PageHeading } from "@/components/mockup-ui";
 import { PersonaAvatar } from "@/components/persona-avatar";
+import { DirectionForm } from "@/components/direction-form";
 import { PERSONAS, type AgentKey } from "@/lib/agents/personas";
 import { facebookConnectionView } from "@/lib/oauth/meta";
 import { prisma } from "@/lib/prisma";
@@ -57,6 +58,9 @@ export default async function EntreprisePage({ searchParams }: { searchParams: P
               {key === "co_ceo" ? <OpenPaulButton>Échanger</OpenPaulButton> : <Link className="btn" href={key === "marketing" ? "/diagnostic" : "/equipe"}>{key === "marketing" ? "Diagnostic" : "Demande"}</Link>}
             </div>
           ))}
+          <h2>Consigne durable</h2>
+          <p>Relue par Paul et les agents à chaque préparation. Pour une question ou un échange, utilisez la conversation avec Paul.</p>
+          <DirectionForm initialDirection={company.direction} />
         </section>
         <section className="setting-section">
           <h2>Connexions</h2>

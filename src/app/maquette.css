@@ -466,4 +466,11 @@
 .mq .team-member{display:flex;align-items:center;gap:12px}
 .mq .production-choice .agent-byline{margin-top:4px;font-size:12px;line-height:1.35;align-items:flex-start}
 .mq .production-head .version-tag{color:var(--muted);font-size:12px}
+
+/* Paul à un seul endroit (#217) : l'accueil résume la conversation et ouvre le panneau. */
+.mq .paul-summary{--agent:var(--bd-agent-co_ceo);border-top:3px solid var(--agent);background:var(--bd-cream-deep);border-radius:0 0 10px 10px;padding:20px;margin-top:26px;align-self:start}
+.mq .paul-summary header{display:flex;align-items:center;gap:10px;font-size:13px}
+.mq .paul-summary header small{font-size:12px}
+.mq .paul-summary p{font-size:14px;line-height:1.65;margin:14px 0 16px;white-space:pre-line}
+.mq .paul-summary button{font-size:12px;background:var(--surface)}
 }

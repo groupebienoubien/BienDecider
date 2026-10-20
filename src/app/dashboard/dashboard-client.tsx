@@ -16,9 +16,9 @@ import { useAgentProfileCompletion } from "@/components/agent-profile-completion
 import { Icon, type IconName } from "@/components/icon";
 import { Modal } from "@/components/modal";
 import { AgentByline, DecisionCard, PageHeading, SectionTitle, Tag } from "@/components/mockup-ui";
-import { PersonaAvatar } from "@/components/persona-avatar";
 import { productionNoun } from "@/lib/agent-voice";
 import { ObjectiveHero, type ObjectiveProgress } from "@/components/objective-hero";
+import { PaulSummary } from "@/components/paul-summary";
 import { describeProgress, summarizeProposals } from "@/lib/proposal-progress";
 import { countByFilter, FILTER_LABELS, matchesFilter, type QueueFilter } from "@/lib/validation-queue";
 import { needsAttention } from "@/lib/pending-decisions";
@@ -53,7 +53,7 @@ function productionStage(status: string) {
   return 4;
 }
 
-export function DashboardClient({ company, initialPlanItems, initialAgentRuns, initialProposals, leadSources, initialLeadStats, initialDiagnosticCount, progress, initialView, riskSettings, facebookPageName, todayLabel, focusProposalId }: {
+export function DashboardClient({ company, initialPlanItems, initialAgentRuns, initialProposals, leadSources, initialLeadStats, initialDiagnosticCount, progress, lastPaulMessage, initialView, riskSettings, facebookPageName, todayLabel, focusProposalId }: {
   company: SafeCompany;
   initialPlanItems: PlanItemWithProposals[];
   initialAgentRuns: AgentRunView[];
@@ -62,6 +62,7 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
   initialLeadStats: { active: number; appointments: number };
   initialDiagnosticCount: number;
   progress: ObjectiveProgress;
+  lastPaulMessage: { content: string; createdAt: string } | null;
   initialView: View;
   riskSettings: Record<string, string>;
   facebookPageName: string | null;
@@ -78,8 +79,6 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [direction, setDirection] = useState(company.direction ?? "");
-  const [directionSaving, setDirectionSaving] = useState(false);
   const [planModalId, setPlanModalId] = useState<string | null>(null);
   const [discarding, setDiscarding] = useState(false);
   const [discardReason, setDiscardReason] = useState("");
@@ -245,15 +244,6 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
     }
   }
 
-  async function handleSaveDirection() {
-    setDirectionSaving(true);
-    setError(null);
-    try {
-      await request("/api/companies/direction", "POST", { direction });
-      setNotice("Consigne enregistrée pour les prochaines actions.");
-    } catch (error) { reportError(error); }
-    finally { setDirectionSaving(false); }
-  }
 
   const activeItems = planItems.filter((item) => item.status !== "ecarte" && item.status !== "termine");
   const planGroups = groupPlanItems(activeItems);
@@ -285,7 +275,6 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
   const inspected = proposals.find((proposal) => proposal.id === inspectedId);
   const planCount = activeItems.length;
   const planTitle = planCount === 0 ? "Un plan à préparer." : `Un plan, ${COUNT_WORDS[planCount] ?? planCount} ${planCount > 1 ? "priorités" : "priorité"}.`;
-  const topTheme = proposedItems[0]?.theme ?? planItems.find((item) => item.theme)?.theme;
   const notices = <>
     {error && <p role="alert" className="warning">{error}</p>}
     {notice && <p role="status" className="notice">{notice}</p>}
@@ -362,11 +351,7 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
               <Link className="icon-button" href={`/dashboard?view=historique&proposal=${encodeURIComponent(proposal.id)}`} aria-label={`Voir : ${proposal.title}`} title="Voir la production"><Icon name="arrow-up-right" /></Link>
             </div>)}
           </section>
-          <aside className="paul-note">
-            <header><PersonaAvatar agentKey="co_ceo" size={30} /><div><strong>Le point de Paul</strong><small>{topTheme ? `Priorité à ${topTheme.toLowerCase()}` : "Votre copilote"}</small></div></header>
-            <p>{actionable.length > 0 ? "Des productions sont prêtes pour votre relecture. Examinons-les avant de préparer la suite, sans multiplier les contenus." : "Faisons le point sur votre objectif et les prochains sujets à confier à l’équipe."}</p>
-            <button type="button" onClick={() => openPaul()}>Parler des priorités <Icon name="arrow-right" /></button>
-          </aside>
+          <PaulSummary lastMessage={lastPaulMessage} />
         </div>
       </>}
 
@@ -418,14 +403,6 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
           </section>)}
           {closedItems.length > 0 && <p className="legend"><Link href="/dashboard?view=historique">{closedItems.length} action(s) traitée(s) ou écartée(s)</Link></p>}
           <div className="notice">Prochaine réévaluation : après un nouveau retour prospect ou à votre demande. Les actions déjà validées ne sont pas remplacées automatiquement. {!needsFirstDiagnostic && <button type="button" className="text-link" onClick={() => void handleGeneratePlan()} disabled={locked}>{planLoading ? "Préparation…" : "Compléter le plan"}</button>}</div>
-        </section>
-        <section className="setting-section">
-          <h2>Faire le point avec Paul</h2>
-          <label className="field" htmlFor="direction">Consigne pour l’équipe
-            <textarea id="direction" value={direction} onChange={(event) => setDirection(event.target.value)} placeholder="Priorités, contraintes, actualités…" rows={4} />
-          </label>
-          <button type="button" onClick={handleSaveDirection} disabled={directionSaving}>{directionSaving ? "Enregistrement…" : "Enregistrer la consigne"}</button>
-          <p>Paul est disponible sur chaque page avec le bouton « Échanger avec Paul ». La conversation et votre brouillon sont conservés d’une page à l’autre.</p>
         </section>
       </>}
 
