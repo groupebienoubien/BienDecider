@@ -15,7 +15,7 @@ import { JourneyProgress } from "@/components/journey-progress";
 import { useAgentProfileCompletion } from "@/components/agent-profile-completion";
 import { Icon, type IconName } from "@/components/icon";
 import { Modal } from "@/components/modal";
-import { PageHeading, SectionTitle, Tag } from "@/components/mockup-ui";
+import { DecisionCard, PageHeading, SectionTitle, Tag } from "@/components/mockup-ui";
 import { describeProgress, summarizeProposals } from "@/lib/proposal-progress";
 import { countByFilter, FILTER_LABELS, matchesFilter, type QueueFilter } from "@/lib/validation-queue";
 import { needsAttention } from "@/lib/pending-decisions";
@@ -253,6 +253,8 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
 
   const activeItems = planItems.filter((item) => item.status !== "ecarte" && item.status !== "termine");
   const planGroups = groupPlanItems(activeItems);
+  // Charte : une seule action principale par écran, la première action à valider dans l'ordre affiché.
+  const firstProposedId = planGroups.flatMap(({ items }) => items).find((item) => item.status === "propose")?.id;
   const closedItems = planItems.filter((item) => item.status === "ecarte" || item.status === "termine");
   const actionable = proposals.filter((proposal) => needsAttention(proposal, facebookPageName));
   const validationItems = proposals.filter((proposal) => needsAttention(proposal, facebookPageName) || decidedIds.includes(proposal.id));
@@ -315,34 +317,30 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
         <AgentRunTracker runs={agentRuns} onCheck={(runId) => void checkRun(runId)} onRetry={() => void handleGeneratePlan(true)} retryDisabled={planLoading} />
         <SectionTitle title="Votre prochaine décision"><Link href="/dashboard?view=plan">Tout le plan →</Link></SectionTitle>
         {decisions.length > 0 ? (
-          <div className="decision-list" aria-label="Vos prochaines décisions" role="region">
+          <div className="decision-cards" aria-label="Vos prochaines décisions" role="region">
             {decisions.slice(0, 5).map((decision, index) => {
               const first = index === 0;
               if (decision.item) {
                 const persona = PERSONAS[decision.item.agent as AgentKey];
-                return <article key={decision.key} className="decision-row">
-                  <span className="priority">{String(index + 1).padStart(2, "0")}</span>
-                  <div>
-                    <div className="tags"><Tag color="orange">À valider</Tag>{decision.item.theme && <Tag color="blue">{decision.item.theme}</Tag>}<small>{persona?.name ?? decision.item.agent} · {decision.item.timing}</small></div>
-                    <h3>{decision.item.title}</h3>
-                    <p>Valider cette action lancera la préparation d’une production par {persona?.name ?? "l’agent"}. Rien ne sera publié ni envoyé.</p>
-                  </div>
-                  <Link className={`btn ${first ? "primary" : ""}`} href={`/dashboard?view=plan#plan-item-${decision.item.id}`}>Examiner l’action <Icon name="arrow-right" /></Link>
-                </article>;
+                return <DecisionCard
+                  key={decision.key}
+                  agent={decision.item.agent}
+                  title={decision.item.title}
+                  action={<Link className={`btn ${first ? "primary" : ""}`} href={`/dashboard?view=plan#plan-item-${decision.item.id}`}>Examiner l’action <Icon name="arrow-right" /></Link>}
+                  details={<p>Action à valider{decision.item.theme ? ` · ${decision.item.theme}` : ""} · {decision.item.timing}. La valider lancera la préparation d’une production par {persona?.name ?? "l’agent"} ; rien ne sera publié ni envoyé.</p>}
+                />;
               }
               const proposal = decision.proposal!;
               const status = proposalStatusView(proposal.status, proposal.kind, facebookPageName);
               const plan = planOf(proposal);
               const approved = proposal.status === "validee" || proposal.status === "modifiee";
-              return <article key={decision.key} className="decision-row">
-                <span className="priority">{String(index + 1).padStart(2, "0")}</span>
-                <div>
-                  <div className="tags"><Tag color={STATUS_TAG_COLORS[status.tone]}>{status.label}</Tag>{plan?.theme && <Tag color="blue">{plan.theme}</Tag>}<small>{PERSONAS[proposal.agent as AgentKey]?.name ?? proposal.agent} · {proposalChannel(proposal.kind)}</small></div>
-                  <h3>{proposal.title}</h3>
-                  <p>{approved ? "Version approuvée. La diffusion attend votre confirmation." : proposal.status === "publication_incertaine" ? "Le canal n’a pas confirmé le résultat. Vérifier avant toute nouvelle tentative." : plan?.title ?? "Une production à examiner, reliée à votre objectif."}</p>
-                </div>
-                <Link className={`btn ${first ? "primary" : ""}`} href={`/dashboard?view=validation&proposal=${encodeURIComponent(proposal.id)}#proposal-${encodeURIComponent(proposal.id)}`}>{approved ? "Préparer la diffusion" : "Examiner"} <Icon name="arrow-right" /></Link>
-              </article>;
+              return <DecisionCard
+                key={decision.key}
+                agent={proposal.agent}
+                title={proposal.title}
+                action={<Link className={`btn ${first ? "primary" : ""}`} href={`/dashboard?view=validation&proposal=${encodeURIComponent(proposal.id)}#proposal-${encodeURIComponent(proposal.id)}`}>{approved ? "Préparer la diffusion" : "Examiner"} <Icon name="arrow-right" /></Link>}
+                details={<p>{status.label} · {proposalChannel(proposal.kind)}{plan?.theme ? ` · ${plan.theme}` : ""}. {approved ? "Version approuvée : la diffusion attend votre confirmation." : proposal.status === "publication_incertaine" ? "Le canal n’a pas confirmé le résultat. Vérifier avant toute nouvelle tentative." : plan?.title ?? "Une production à examiner, reliée à votre objectif."}</p>}
+              />;
             })}
           </div>
         ) : runningItem ? (
@@ -352,7 +350,7 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
         ) : (
           <div className="empty"><Icon name="circle-check" /><h3>Toutes les décisions sont à jour</h3><p>Les prochains signaux alimenteront votre diagnostic.</p><button type="button" onClick={() => void handleGeneratePlan()} disabled={locked}>{planLoading ? "Paul réfléchit…" : "Préparer le plan"}</button></div>
         )}
-        <div className="two-column">
+        <div className="two-column band">
           <section>
             <SectionTitle title="Ce qui a été fait"><Link href="/dashboard?view=historique">Voir l’historique →</Link></SectionTitle>
             {history.length === 0 ? <p className="legend">Vos décisions apparaîtront ici après la première relecture.</p> : history.slice(0, 3).map((proposal) => <div key={proposal.id} className="activity-row">
@@ -408,7 +406,7 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
                   {item.status === "en_cours" ? (
                     item.agentRuns[0] ? <button type="button" onClick={() => void checkRun(item.agentRuns[0].id)}>Vérifier l’état</button> : <span role="status">En cours</span>
                   ) : proposed ? (
-                    <button type="button" className="primary" onClick={() => { setDiscarding(false); setDiscardReason(""); setPlanModalId(item.id); }} disabled={locked}>{item.agentRuns[0]?.status === "failed" ? "Relancer l’action" : "Examiner et valider"}</button>
+                    <button type="button" className={item.id === firstProposedId ? "primary" : undefined} onClick={() => { setDiscarding(false); setDiscardReason(""); setPlanModalId(item.id); }} disabled={locked}>{item.agentRuns[0]?.status === "failed" ? "Relancer l’action" : "Examiner et valider"}</button>
                   ) : (
                     <Link className="btn" href={count > 0 ? "/dashboard?view=validation" : "/dashboard?view=historique"}>{count > 0 ? `${count} à examiner` : "Voir la production"}</Link>
                   )}
@@ -424,7 +422,7 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
           <label className="field" htmlFor="direction">Consigne pour l’équipe
             <textarea id="direction" value={direction} onChange={(event) => setDirection(event.target.value)} placeholder="Priorités, contraintes, actualités…" rows={4} />
           </label>
-          <button type="button" className="primary" onClick={handleSaveDirection} disabled={directionSaving}>{directionSaving ? "Enregistrement…" : "Enregistrer la consigne"}</button>
+          <button type="button" onClick={handleSaveDirection} disabled={directionSaving}>{directionSaving ? "Enregistrement…" : "Enregistrer la consigne"}</button>
           <p>Paul est disponible sur chaque page avec le bouton « Échanger avec Paul ». La conversation et votre brouillon sont conservés d’une page à l’autre.</p>
         </section>
       </>}

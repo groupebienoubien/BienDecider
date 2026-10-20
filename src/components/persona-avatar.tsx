@@ -7,9 +7,10 @@ import type { AgentKey } from "@/lib/agents/personas";
  * fausse photo de personne pour une IA serait trompeuse si elle sort un
  * jour du dashboard (cf. docs/backlog.md, décision actée avec le CEO).
  */
+// Couleurs : jetons --bd-agent-* de globals.css (charte, section 3).
 const STYLE: Record<AgentKey, { color: string; icon: React.ReactNode }> = {
   co_ceo: {
-    color: "#111827",
+    color: "var(--bd-agent-co_ceo)",
     // Boussole : donne la direction
     icon: (
       <g fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -19,7 +20,7 @@ const STYLE: Record<AgentKey, { color: string; icon: React.ReactNode }> = {
     ),
   },
   marketing: {
-    color: "#0f766e",
+    color: "var(--bd-agent-marketing)",
     // Loupe : diagnostic, analyse
     icon: (
       <g fill="none" stroke="white" strokeWidth="2.2" strokeLinecap="round">
@@ -29,7 +30,7 @@ const STYLE: Record<AgentKey, { color: string; icon: React.ReactNode }> = {
     ),
   },
   contenu: {
-    color: "#be185d",
+    color: "var(--bd-agent-contenu)",
     // Stylo : création de contenu
     icon: (
       <g fill="white">
@@ -39,7 +40,7 @@ const STYLE: Record<AgentKey, { color: string; icon: React.ReactNode }> = {
     ),
   },
   demarchage: {
-    color: "#b45309",
+    color: "var(--bd-agent-demarchage)",
     // Mallette : prospection, business
     icon: (
       <g fill="none" stroke="white" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
@@ -67,7 +68,7 @@ export function PersonaAvatar({
       className="shrink-0 rounded-full"
       aria-hidden="true"
     >
-      <circle cx="20" cy="20" r="20" fill={color} />
+      <circle cx="20" cy="20" r="20" style={{ fill: color }} />
       {icon}
     </svg>
   );
