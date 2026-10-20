@@ -667,6 +667,33 @@ test("the home page shows the objective, declared progress and at most three pre
   } finally { await prisma.$disconnect(); }
 });
 
+test("Paul has a single conversation: the home summary opens it and the team instruction is a company setting", async ({ page, company }) => {
+  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }) });
+  try {
+    await prisma.chatMessage.createMany({ data: [
+      { companyId: company.id, role: "user", content: "Que faire cette semaine ?" },
+      { companyId: company.id, role: "assistant", content: "Commencez par relire les **deux posts** préparés par Camille." },
+    ] });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`${baseURL}/dashboard`);
+    const summary = page.getByRole("complementary", { name: "Conversation avec Paul" });
+    await expect(summary).toContainText("Commencez par relire les deux posts préparés par Camille.");
+    await summary.getByRole("button", { name: "Reprendre la conversation" }).click();
+    const panel = page.getByRole("dialog", { name: "Discussion avec Paul" });
+    await expect(panel.getByText("Que faire cette semaine ?")).toBeVisible();
+    expect(await prisma.chatMessage.count({ where: { companyId: company.id } })).toBe(2);
+
+    await page.goto(`${baseURL}/dashboard?view=plan`);
+    await expect(page.getByLabel("Consigne pour l’équipe")).toHaveCount(0);
+
+    await page.goto(`${baseURL}/entreprise`);
+    await page.getByLabel("Consigne pour l’équipe").fill("Priorité aux syndics du 3e arrondissement");
+    await page.getByRole("button", { name: "Enregistrer la consigne" }).click();
+    await expect(page.getByRole("status").filter({ hasText: "Consigne enregistrée" })).toBeVisible();
+    expect((await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).direction).toBe("Priorité aux syndics du 3e arrondissement");
+  } finally { await prisma.$disconnect(); }
+});
+
 test("explicit admin can tune global risk level but cannot lower the effective floor", async ({ page, company }) => {
   test.skip(!adminFixture, "Requires an isolated local server with ADMIN_EMAILS for the fixture admin.");
   expect(company.ownerEmail).toBe("ux-admin-settings-test@example.invalid");
@@ -733,7 +760,7 @@ test("clearing optional company profile fields removes them from storage and age
     await page.getByRole("button", { name: "Objectifs", exact: true }).click();
     await page.getByPlaceholder("ex: 10 nouveaux clients par mois").fill("");
     await page.getByRole("button", { name: "Informations", exact: true }).click();
-    await page.locator("textarea").fill("");
+    await page.locator("#profile-description").fill("");
     await page.getByPlaceholder("Téléphone affiché aux clients (optionnel)").fill("");
     await page.getByPlaceholder("Certifications / labels (ex: RGE, optionnel)").fill("");
     await page.getByPlaceholder("Horaires d'ouverture (optionnel)").fill("");
