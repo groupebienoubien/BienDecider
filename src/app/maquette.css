@@ -535,4 +535,27 @@
 .mq .lead-details summary{cursor:pointer;width:max-content;min-height:24px}
 .mq .lead-details p{margin:6px 0 0}
 @media(max-width:760px){.mq .lead-tiles{grid-template-columns:1fr}}
+
+/* États vides incarnés et réussites (#222). Le corail sert aux réussites, jamais aux erreurs. */
+.mq .empty-agent{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:32px 24px}
+.mq .empty-illustration{display:inline-grid;place-items:center;width:84px;height:84px;margin-bottom:6px;border-radius:50%;background:var(--bd-cream-deep);box-shadow:0 0 0 6px var(--accent-light)}
+.mq .empty-says{max-width:520px;margin:6px auto 0;font-size:14px;line-height:1.6;color:var(--ink)}
+.mq .empty-says .agent-name{color:var(--agent);font-weight:700}
+.mq .empty-actions{display:flex;flex-wrap:wrap;justify-content:center;gap:8px;margin-top:18px}
+.mq .empty-actions>p{width:100%;margin:0;font-size:12px;color:var(--muted)}
+.mq .celebration{position:fixed;top:88px;left:50%;z-index:60;display:flex;align-items:center;gap:12px;width:min(520px,calc(100% - 32px));padding:14px 14px 14px 18px;transform:translateX(-50%);background:var(--accent-light);border:1px solid var(--accent);border-left:6px solid var(--accent);border-radius:12px;box-shadow:var(--shadow);animation:celebrate-in .45s cubic-bezier(.2,1.4,.4,1)}
+.mq .celebration p{flex:1;margin:0;font-size:14px;color:var(--ink)}
+.mq .celebration .icon-button{background:transparent;border-color:transparent}
+.mq .celebration-burst{position:absolute;left:38px;top:50%;width:0;height:0}
+.mq .celebration-burst i{position:absolute;width:7px;height:7px;border-radius:50%;background:var(--accent);opacity:0;animation:burst .9s ease-out .1s}
+.mq .celebration-burst i:nth-child(2){--dx:28px;--dy:-26px;background:var(--green)}
+.mq .celebration-burst i:nth-child(1){--dx:-26px;--dy:-24px}
+.mq .celebration-burst i:nth-child(3){--dx:34px;--dy:6px}
+.mq .celebration-burst i:nth-child(4){--dx:-32px;--dy:10px;background:var(--bd-agent-contenu)}
+.mq .celebration-burst i:nth-child(5){--dx:8px;--dy:-34px}
+.mq .celebration-burst i:nth-child(6){--dx:-6px;--dy:30px;background:var(--green)}
+@keyframes celebrate-in{from{opacity:0;transform:translate(-50%,-14px) scale(.96)}to{opacity:1;transform:translate(-50%,0) scale(1)}}
+@keyframes burst{0%{opacity:1;transform:translate(0,0) scale(.6)}100%{opacity:0;transform:translate(var(--dx,20px),var(--dy,-20px)) scale(1)}}
+@media(prefers-reduced-motion:reduce){.mq .celebration{animation:none}.mq .celebration-burst{display:none}}
+@media(max-width:760px){.mq .celebration{top:56px}}
 }

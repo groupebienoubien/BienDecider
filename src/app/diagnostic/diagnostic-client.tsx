@@ -6,7 +6,7 @@ import type { AuditFinding } from "@prisma/client";
 import { CATEGORY_ICONS, FindingCard } from "@/components/finding-card";
 import { groupFindings } from "@/lib/diagnostic-groups";
 import { Icon } from "@/components/icon";
-import { PageHeading, SectionTitle } from "@/components/mockup-ui";
+import { EmptyState, PageHeading, SectionTitle } from "@/components/mockup-ui";
 import { useAgentProfileCompletion } from "@/components/agent-profile-completion";
 
 const ANALYSIS_DATE = new Intl.DateTimeFormat("fr-FR", { day: "numeric", month: "long", timeZone: "Europe/Paris" });
@@ -63,12 +63,7 @@ export function DiagnosticClient({ initialFindings, feedback, leadCount }: { ini
       {error && <p role="alert" className="warning">{error}</p>}
       {done && <p role="status" className="notice">Diagnostic actualisé. <Link href="/dashboard?view=validation">Voir les productions à valider</Link></p>}
       {findings.length === 0 && (
-        <div className="empty" aria-label="Diagnostic à préparer">
-          <Icon name="scan-line" />
-          <h3>Repérer les premières opportunités</h3>
-          <p>Aucun diagnostic disponible pour le moment. Martine peut examiner votre présence en ligne et votre positionnement pour proposer des priorités liées à votre objectif.</p>
-          <p>Lancez le diagnostic pour obtenir les premiers constats. Vous déciderez ensuite des actions à confier.</p>
-        </div>
+        <EmptyState agent="marketing" label="Diagnostic à préparer" title="Repérer les premières opportunités" says="J’examine votre présence en ligne et vos concurrents, puis je vous dis par où commencer. Lancez le diagnostic quand vous voulez." />
       )}
       {groups.length > 0 && <div className="diagnostic-groups">
         {groups.map((group) => (

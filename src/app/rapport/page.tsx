@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getSessionEmail } from "@/lib/session";
 import { AppShell } from "@/components/app-shell";
-import { AgentByline, PageHeading, SectionTitle } from "@/components/mockup-ui";
+import { AgentByline, EmptyState, PageHeading, SectionTitle } from "@/components/mockup-ui";
 import { getShellProps } from "@/lib/shell-data";
 import { computeBusinessTarget, formatEuros } from "@/lib/business-target";
 import { getFunnelStats } from "@/lib/funnel";
@@ -41,7 +41,7 @@ export default async function RapportPage() {
             <div className="metric"><div className="metric-label">Écart à combler</div><div className="metric-value">{formatEuros(Math.max(0, target.gap))}</div></div>
             <div className="metric"><div className="metric-label">Clients supplémentaires / mois</div><div className="metric-value">{target.extraClientsPerMonth ?? "Non renseigné"}</div></div>
           </div>
-        ) : <div className="empty"><p>Aucun objectif chiffré renseigné.</p><Link className="btn primary" href="/entreprise?tab=objectifs#modifier">Renseigner mon objectif chiffré</Link></div>}
+        ) : <EmptyState agent="co_ceo" title="Aucun objectif chiffré renseigné" says="Donnez-moi un chiffre d’affaires à atteindre et je suivrai l’écart avec vous."><Link className="btn primary" href="/entreprise?tab=objectifs#modifier">Renseigner mon objectif chiffré</Link></EmptyState>}
       </section>
       <section>
         <SectionTitle title="Prospection · ce mois-ci"><Link href="/prospection">Suivre les contacts →</Link></SectionTitle>
@@ -63,10 +63,9 @@ export default async function RapportPage() {
       </section>
       <section>
         <SectionTitle title="Dernières réalisations">{company.siteSlug && <Link href={`/site/${company.siteSlug}`} target="_blank" rel="noopener noreferrer">Voir le site publié →</Link>}</SectionTitle>
-        {executed.length === 0 ? <div className="empty" role="region" aria-label="Résultats à venir">
-          <p>Aucune publication ou exécution enregistrée. Seules les actions effectivement réalisées par BienDecider apparaissent ici ; une proposition approuvée ne compte pas comme exécutée.</p>
+        {executed.length === 0 ? <EmptyState agent="co_ceo" role="region" label="Résultats à venir" title="Rien de publié pour l’instant" says="Ce qui est réellement publié ou envoyé apparaîtra ici. Une production approuvée ne compte pas tant qu’elle n’est pas diffusée.">
           <Link className={`btn ${target ? "primary" : ""}`} href="/dashboard?view=validation">Examiner les productions</Link>
-        </div> : (
+        </EmptyState> : (
           <div className="table-scroll"><table className="data-table">
             <thead><tr><th>Réalisation</th><th>Agent</th></tr></thead>
             <tbody>{executed.map((proposal) => <tr key={proposal.id}><td><strong>{proposal.title}</strong></td><td><AgentByline agent={proposal.agent} /></td></tr>)}</tbody>
