@@ -175,10 +175,10 @@ export function ProposalCard({
           {!modal && <ReadAloudButton text={spokenText(`${proposal.title}. ${displayContent}`)} label={`Écouter la production de ${persona?.name ?? "l'agent"}`} />}
         </div>
         <aside className="review-context">
-          <div className="context-block">
-            <h3>Pourquoi cette action</h3>
+          <details className="context-block why-block">
+            <summary><h3>Pourquoi cette action</h3></summary>
             <p>{plan?.rationale ?? "Demande ponctuelle à l’équipe, hors plan d’action."}</p>
-          </div>
+          </details>
           <div className="context-block">
             <h3>Destination</h3>
             <p>{destination}</p>
@@ -273,9 +273,9 @@ export function ProposalCard({
         {canPublish && <button type="button" className="primary" onClick={() => setModal("confirm")} disabled={busy}>Préparer la publication <Icon name="arrow-right" /></button>}
       </div>
       {copyNotice && <p role="status" className="version-line">{copyNotice}</p>}
-      <div className="version-line">
-        {proposal.status === "executee" ? "Version conservée dans l’historique." : proposal.status === "rejetee" ? "Rien n’a été publié ni envoyé : vous pouvez revenir sur ce rejet." : "Les modifications créent une nouvelle version et annulent l’approbation précédente."}
-      </div>
+      {(proposal.status === "executee" || proposal.status === "rejetee") && <div className="version-line">
+        {proposal.status === "executee" ? "Version conservée dans l’historique." : "Rien n’a été publié ni envoyé : vous pouvez revenir sur ce rejet."}
+      </div>}
 
       <Modal
         open={modal === "edit"}

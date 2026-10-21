@@ -444,6 +444,9 @@ test("single validation queue, persistent decisions, publishing and error recove
     await expect(page.getByText("Dans ce prototype, toute action réelle reste soumise à votre validation.", { exact: true }).first()).toBeVisible();
     const planCard = await openProduction(page, "Publication issue du plan");
     await expect(planCard.getByText("Exposition publique", { exact: true })).toBeVisible();
+    // Charte : la justification est repliée dans la file de relecture.
+    await expect(planCard.getByText("Attirer des demandes qualifiées")).toBeHidden();
+    await planCard.getByText("Pourquoi cette action", { exact: true }).click();
     await expect(planCard.getByText("Attirer des demandes qualifiées")).toBeVisible();
     const unapprovedSite = await prisma.agentProposal.create({ data: {
       companyId: company.id, agent: "contenu", kind: "site_web_content", title: "Site encore en attente", content: "Proposition non validée",
@@ -462,6 +465,7 @@ test("single validation queue, persistent decisions, publishing and error recove
     await page.getByRole("button", { name: "Afficher toutes les productions" }).click();
     await expect(page.locator("article")).toHaveCount(1);
     const manual = await openProduction(page, "Demande manuelle");
+    await manual.getByText("Pourquoi cette action", { exact: true }).click();
     await expect(manual.getByText("Demande ponctuelle à l’équipe, hors plan d’action.")).toBeVisible();
     await expect(manual.getByText(/^Valider approuve ce contenu\./)).toBeVisible();
     await expect(manual.getByText("Contenu manuel")).toBeVisible();
@@ -480,8 +484,11 @@ test("single validation queue, persistent decisions, publishing and error recove
     const planned = await openProduction(page, "Publication issue du plan");
     await planned.getByRole("button", { name: "Rejeter", exact: true }).click();
     await planned.getByRole("button", { name: "Rejeter cette version", exact: true }).click();
-    await expect(planned.getByText("À repenser", { exact: true })).toBeVisible();
+    // File de relecture : après un rejet, la production suivante encore à traiter s'affiche d'elle-même.
+    await expect(page.locator(".production-head h2")).toHaveText("Site approuvé à publier");
     await expect(page.locator("nav .nav-count")).toContainText("1");
+    const reopened = await openProduction(page, "Publication issue du plan");
+    await expect(reopened.getByText("À repenser", { exact: true })).toBeVisible();
     const site = await prisma.agentProposal.findFirstOrThrow({ where: { companyId: company.id, kind: "site_web_content" } });
     await page.route(`**/api/proposals/${site.id}/execute`, async (route) => {
       expect(route.request().postDataJSON()).toEqual({ expectedVersion: site.version, confirmed: true, acknowledgedReviewIds: [] });
@@ -591,7 +598,7 @@ test("diagnostic to plan, keyboard dialog and responsive navigation", async ({ p
       await page.setViewportSize({ width, height: 900 });
       for (const [path, title] of [
         ["/dashboard", "Développer les demandes de devis"],
-        ["/dashboard?view=validation", "Du brouillon à la diffusion."],
+        ["/dashboard?view=validation", "Vos productions à relire."],
         ["/diagnostic", "Ce que Martine a constaté."],
         ["/equipe", "Votre équipe."],
         ["/rapport", "Résultats"],
@@ -690,7 +697,7 @@ test("Paul has a single conversation: the home summary opens it and the team ins
     await page.getByLabel("Consigne pour l’équipe").fill("Priorité aux syndics du 3e arrondissement");
     await page.getByRole("button", { name: "Enregistrer la consigne" }).click();
     await expect(page.getByRole("status").filter({ hasText: "Consigne enregistrée" })).toBeVisible();
-    expect((await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).direction).toBe("Priorité aux syndics du 3e arrondissement");
+    await expect.poll(async () => (await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).direction).toBe("Priorité aux syndics du 3e arrondissement");
   } finally { await prisma.$disconnect(); }
 });
 
@@ -734,6 +741,34 @@ test("the diagnostic is grouped by topic with a one-line summary, and a link to 
     await expect(site.getByText("Aucun formulaire.")).toBeHidden();
     await page.goto(`${baseURL}/diagnostic#finding-${competitor.id}`);
     await expect(page.locator(`#finding-${competitor.id}`)).toBeVisible();
+  } finally { await prisma.$disconnect(); }
+});
+
+test("the review queue shows one production at a time, moves forward and filters by agent", async ({ page, company }) => {
+  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }) });
+  try {
+    await prisma.agentProposal.createMany({ data: [
+      { companyId: company.id, agent: "contenu", kind: "social_post", title: "Post de Camille", content: "Texte" },
+      { companyId: company.id, agent: "demarchage", kind: "prospecting_email", title: "Email de Jean-Claude", content: "Bonjour" },
+    ] });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`${baseURL}/dashboard?view=validation`);
+    await expect(page.locator("main article")).toHaveCount(1);
+    await expect(page.locator(".queue-position")).toContainText("Production 1 sur 2");
+    const first = await page.locator(".production-head h2").textContent();
+    await page.getByRole("button", { name: "Suivante →" }).click();
+    await expect(page.locator(".queue-position")).toContainText("Production 2 sur 2");
+    await expect(page.locator(".production-head h2")).not.toHaveText(first ?? "");
+    const filters = page.getByRole("group", { name: "Filtrer par agent" });
+    await filters.getByRole("button", { name: "Jean-Claude" }).click();
+    await expect(page.locator(".production-list button")).toHaveCount(1);
+    await expect(page.locator(".production-head h2")).toHaveText("Email de Jean-Claude");
+    await filters.getByRole("button", { name: "Toute l’équipe" }).click();
+    await expect(page.locator(".production-list button")).toHaveCount(2);
+    await expect(page.getByText("Approuver ou rejeter ne publie ni n’envoie rien.")).toHaveCount(0);
+    await page.setViewportSize({ width: 320, height: 720 });
+    await expect(page.getByRole("button", { name: "Suivante →" })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   } finally { await prisma.$disconnect(); }
 });
 
