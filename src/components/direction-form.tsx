@@ -5,13 +5,14 @@ import { useState } from "react";
 /**
  * Consigne durable pour l'équipe : un réglage relu par Paul et les agents à chaque
  * préparation. Ce n'est pas une conversation : on parle à Paul dans son panneau.
+ * Champ non contrôlé, lu à l'envoi : une saisie faite avant l'hydratation n'est pas effacée.
  */
 export function DirectionForm({ initialDirection }: { initialDirection: string | null }) {
-  const [direction, setDirection] = useState(initialDirection ?? "");
   const [state, setState] = useState<"idle" | "saving" | "saved" | "error">("idle");
 
-  async function save(event: React.FormEvent) {
+  async function save(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const direction = String(new FormData(event.currentTarget).get("direction") ?? "");
     setState("saving");
     try {
       const response = await fetch("/api/companies/direction", {
@@ -28,7 +29,7 @@ export function DirectionForm({ initialDirection }: { initialDirection: string |
   return (
     <form onSubmit={save}>
       <label className="field" htmlFor="direction">Consigne pour l’équipe
-        <textarea id="direction" value={direction} onChange={(event) => { setDirection(event.target.value); setState("idle"); }} placeholder="Priorités, contraintes, actualités…" rows={4} maxLength={2000} />
+        <textarea id="direction" name="direction" defaultValue={initialDirection ?? ""} onChange={() => setState("idle")} placeholder="Priorités, contraintes, actualités…" rows={4} maxLength={2000} />
       </label>
       <button type="submit" disabled={state === "saving"}>{state === "saving" ? "Enregistrement…" : "Enregistrer la consigne"}</button>
       {state === "saved" && <p role="status" className="notice">Consigne enregistrée pour les prochaines actions.</p>}
