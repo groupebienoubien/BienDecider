@@ -701,6 +701,11 @@ test("Paul has a single conversation: the home summary opens it and the team ins
     await expect(page.getByLabel("Consigne pour l’équipe")).toHaveCount(0);
 
     await page.goto(`${baseURL}/entreprise`);
+    // La page est diffusée en streaming : on attend que React ait pris la main sur le champ avant de saisir.
+    await page.waitForFunction(() => {
+      const field = document.querySelector("#direction");
+      return Boolean(field && Object.keys(field).some((key) => key.startsWith("__reactFiber")));
+    });
     await page.getByLabel("Consigne pour l’équipe").fill("Priorité aux syndics du 3e arrondissement");
     await page.getByRole("button", { name: "Enregistrer la consigne" }).click();
     await expect(page.getByRole("status").filter({ hasText: "Consigne enregistrée" })).toBeVisible();
