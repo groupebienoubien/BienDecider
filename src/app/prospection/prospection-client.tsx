@@ -6,7 +6,7 @@ import type { Lead } from "@prisma/client";
 import { Icon } from "@/components/icon";
 import { LeadCard, NEXT_LEAD_STAGES, type LeadMode, type LeadPatch } from "@/components/lead-card";
 import { Modal } from "@/components/modal";
-import { PageHeading, SectionTitle, Tag } from "@/components/mockup-ui";
+import { EmptyState, PageHeading, SectionTitle, Tag } from "@/components/mockup-ui";
 import { PERSONAS } from "@/lib/agents/personas";
 import { countLeads, MIN_CONTACTS_TO_CONCLUDE } from "@/lib/funnel-shared";
 import { pickNextLead } from "@/lib/lead-followup";
@@ -164,13 +164,10 @@ export function ProspectionClient({
       {error && <p role="alert" className="warning">{error}</p>}
 
       {leads.length === 0 ? (
-        <div className="empty" role="region" aria-label="Prospection à préparer">
-          <Icon name="contact-round" />
-          <h3>Choisir les organisations à contacter</h3>
-          <p>Aucun prospect validé pour l’instant. {PERSONAS.demarchage.name} prépare des propositions ; vous choisissez les organisations à contacter. Les contacts retenus apparaîtront ici pour suivre les échanges et les rendez-vous.</p>
-          <Link className="btn primary" href="/dashboard?view=validation">Examiner les prospects proposés</Link>{" "}
+        <EmptyState agent="demarchage" role="region" label="Prospection à préparer" title="Choisir les organisations à contacter" says="Je repère des organisations qui correspondent à votre cible ; vous choisissez lesquelles contacter.">
+          <Link className="btn primary" href="/dashboard?view=validation">Examiner les prospects proposés</Link>
           <Link className="btn" href="/equipe">Confier une recherche à {PERSONAS.demarchage.name}</Link>
-        </div>
+        </EmptyState>
       ) : visibleLeads.length === 0 ? (
         <div role="status" className="empty">{search ? <>Aucun prospect ne correspond à « {search} ».</> : "Aucun prospect à cette étape."}</div>
       ) : (

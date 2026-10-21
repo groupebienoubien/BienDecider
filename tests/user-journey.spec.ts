@@ -499,6 +499,10 @@ test("single validation queue, persistent decisions, publishing and error recove
     await siteCard.getByRole("button", { name: "Préparer la publication" }).click();
     await siteCard.getByRole("dialog").getByRole("button", { name: "Confirmer la publication" }).click();
     await expect(page.locator("article").filter({ hasText: site.title }).getByText("En ligne", { exact: true })).toBeVisible();
+    // Charte : une diffusion confirmée est saluée par l'agent qui l'a préparée.
+    await expect(page.locator(".celebration")).toContainText("Camille : « C’est fait ! Votre page est en ligne. »");
+    await page.locator(".celebration").getByRole("button", { name: "Fermer" }).click();
+    await expect(page.locator(".celebration")).toHaveCount(0);
     await expect(page.getByRole("link", { name: "Productions", exact: true })).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath("validation-desktop.png"), fullPage: true });
     await page.reload();

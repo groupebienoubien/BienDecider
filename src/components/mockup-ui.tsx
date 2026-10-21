@@ -51,6 +51,21 @@ export function AgentByline({ agent, children, size = 20 }: { agent: string; chi
   );
 }
 
+/**
+ * État vide incarné (charte, section 5) : l'illustration de l'agent concerné, sa phrase
+ * à la première personne, puis l'action utile.
+ */
+export function EmptyState({ agent, title, says, label, role, children }: { agent: AgentKey; title: ReactNode; says: ReactNode; label?: string; role?: string; children?: ReactNode }) {
+  return (
+    <div className="empty empty-agent" role={role} aria-label={label} style={{ "--agent": `var(--bd-agent-${agent})` } as CSSProperties}>
+      <span className="empty-illustration"><PersonaAvatar agentKey={agent} size={56} /></span>
+      <h3>{title}</h3>
+      <p className="empty-says"><span className="agent-name">{PERSONAS[agent].name}</span> « {says} »</p>
+      {children && <div className="empty-actions">{children}</div>}
+    </div>
+  );
+}
+
 export type TagColor = "green" | "orange" | "blue" | "gray" | "red";
 
 export function Tag({ color = "gray", children }: { color?: TagColor; children: ReactNode }) {

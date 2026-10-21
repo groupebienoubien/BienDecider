@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState, type CSSProperties } from "react";
+import { useCallback, useState, type CSSProperties } from "react";
 import type { AgentProposal, ActionPlanItem } from "@prisma/client";
 import type { AgentRunView } from "@/lib/agent-run-types";
 import { AgentRunTracker, useAgentRunMonitor } from "@/components/agent-run-tracker";
@@ -15,11 +15,12 @@ import { JourneyProgress } from "@/components/journey-progress";
 import { useAgentProfileCompletion } from "@/components/agent-profile-completion";
 import { Icon, type IconName } from "@/components/icon";
 import { Modal } from "@/components/modal";
-import { AgentByline, DecisionCard, PageHeading, SectionTitle, Tag } from "@/components/mockup-ui";
+import { AgentByline, DecisionCard, EmptyState, PageHeading, SectionTitle, Tag } from "@/components/mockup-ui";
 import { agentName, productionNoun } from "@/lib/agent-voice";
 import { CHAT_REQUEST_TIMING } from "@/lib/agents/plan-item-shared";
 import { ObjectiveHero, type ObjectiveProgress } from "@/components/objective-hero";
 import { PaulSummary } from "@/components/paul-summary";
+import { Celebration } from "@/components/celebration";
 import { describeProgress, summarizeProposals } from "@/lib/proposal-progress";
 import { countByFilter, FILTER_LABELS, matchesFilter, type QueueFilter } from "@/lib/validation-queue";
 import { needsAttention } from "@/lib/pending-decisions";
@@ -82,6 +83,8 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
   const [decidedIds, setDecidedIds] = useState<string[]>([]);
   const [queueFilter, setQueueFilter] = useState<QueueFilter>("all");
   const [agentFilter, setAgentFilter] = useState<string>("all");
+  const [celebration, setCelebration] = useState<{ agent: string; kind: string } | null>(null);
+  const closeCelebration = useCallback(() => setCelebration(null), []);
   const [selectedId, setSelectedId] = useState<string | undefined>(focusProposalId);
   const [historyFilter, setHistoryFilter] = useState("Tout l’historique");
   const monitorRun = useAgentRunMonitor(initialAgentRuns, {
@@ -214,7 +217,9 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
     try {
       const result = await request(`/api/proposals/${proposalId}/execute`, "POST", { expectedVersion, confirmed, acknowledgedReviewIds });
       setDecidedIds((previous) => [...previous, proposalId]);
-      await refresh();
+      const published = (await refresh()).find((proposal) => proposal.id === proposalId);
+      // Seule une diffusion confirmée par le canal est célébrée, jamais un résultat incertain.
+      if (published?.status === "executee") setCelebration({ agent: published.agent, kind: published.kind });
       setNotice(result?.message ?? "Publication effectuée. Elle figure dans les résultats.");
     } catch (error) {
       reportError(error);
@@ -302,6 +307,7 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
 
   return (
     <div>
+      {celebration && <Celebration agent={celebration.agent} kind={celebration.kind} onClose={closeCelebration} />}
       {initialView === "today" && <>
         <ObjectiveHero
           objective={company.objective}
@@ -353,11 +359,11 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
             })}
           </div>
         ) : runningItem ? (
-          <div className="empty"><Icon name="refresh-cw" /><h3>En cours : {runningItem.title}</h3><p role="status">L’agent prépare le résultat…</p></div>
+          <EmptyState agent={runningItem.agent as AgentKey} title={<>En cours : {runningItem.title}</>} says="Je m’en occupe. Le résultat arrivera ici, à relire."><p role="status" className="sr-only">L’agent prépare le résultat…</p></EmptyState>
         ) : needsFirstDiagnostic ? (
-          <div className="empty"><Icon name="scan-line" /><h3>Repérer les premières opportunités</h3><p>Lancez le diagnostic pour obtenir les premiers constats. Vous déciderez ensuite des actions à confier.</p><Link className="btn primary" href="/diagnostic">Commencer par le diagnostic</Link></div>
+          <EmptyState agent="marketing" title="Repérer les premières opportunités" says="Je n’ai pas encore examiné votre présence en ligne. Lancez le diagnostic et je vous dirai par où commencer."><Link className="btn primary" href="/diagnostic">Commencer par le diagnostic</Link></EmptyState>
         ) : (
-          <div className="empty"><Icon name="circle-check" /><h3>Toutes les décisions sont à jour</h3><p>Les prochains signaux alimenteront votre diagnostic.</p><button type="button" onClick={() => void handleGeneratePlan()} disabled={locked}>{planLoading ? "Paul réfléchit…" : "Préparer le plan"}</button></div>
+          <EmptyState agent="co_ceo" title="Toutes les décisions sont à jour" says="Tout est relu. Je vous préviens dès que l’équipe a du nouveau."><button type="button" onClick={() => void handleGeneratePlan()} disabled={locked}>{planLoading ? "Paul réfléchit…" : "Préparer le plan"}</button></EmptyState>
         )}
         <div className="two-column band">
           <section>
@@ -383,12 +389,9 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
         {notices}
         <AgentRunTracker runs={agentRuns} onCheck={(runId) => void checkRun(runId)} onRetry={() => void handleGeneratePlan(true)} retryDisabled={planLoading} />
         <section id="plan-actions" aria-label="Plan d'action">
-          {activeItems.length === 0 && <div className="empty" aria-label="Plan à préparer">
-            <Icon name="list-checks" />
-            <h3>Choisir les prochaines activités à confier</h3>
-            <p>Aucune action à lancer pour le moment. Le plan rassemble les priorités proposées par Paul ; vous choisissez celles à confier à l’équipe.</p>
-            {needsFirstDiagnostic ? <Link className="btn primary" href="/diagnostic">Commencer par le diagnostic</Link> : <p>Préparez le plan avec Paul pour obtenir de nouvelles propositions. Aucune action externe ne sera exécutée à cette étape.</p>}
-          </div>}
+          {activeItems.length === 0 && <EmptyState agent="co_ceo" label="Plan à préparer" title="Choisir les prochaines activités à confier" says={needsFirstDiagnostic ? "Je proposerai des priorités dès que Martine aura fait le diagnostic." : "Je peux proposer de nouvelles priorités ; vous choisirez celles à confier à l’équipe."}>
+            {needsFirstDiagnostic ? <Link className="btn primary" href="/diagnostic">Commencer par le diagnostic</Link> : <p>Aucune action externe ne sera exécutée à cette étape.</p>}
+          </EmptyState>}
           {planGroups.map(({ theme, items }) => <section key={theme} aria-label={`Thème ${theme}`}>
             <div className="theme-heading"><Icon name={THEME_ICONS[theme] ?? "list-checks"} />{theme}</div>
             {items.map((item) => {
@@ -431,12 +434,9 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
         {notices}
         <AgentRunTracker runs={agentRuns} onCheck={(runId) => void checkRun(runId)} onRetry={() => void handleGeneratePlan(true)} retryDisabled={planLoading} />
         <section aria-label="Productions à valider">
-          {validationItems.length === 0 && <div className="empty" aria-label="Validation à venir">
-            <Icon name="circle-check" />
-            <h3>Tout est à jour.</h3>
-            <p>Aucune production à valider ou à publier. Les brouillons de l’équipe apparaissent ici pour être relus, corrigés ou refusés avant toute action externe.</p>
+          {validationItems.length === 0 && <EmptyState agent="co_ceo" label="Validation à venir" title="Tout est à jour." says="Rien à relire pour l’instant. Les prochaines productions de l’équipe arriveront ici.">
             <Link className="btn primary" href={emptyNextHref}>{emptyNextLabel}</Link>
-          </div>}
+          </EmptyState>}
           {validationItems.length > 1 && (
             <div className="tabs" role="group" aria-label="Filtrer les productions">
               {(Object.keys(FILTER_LABELS) as QueueFilter[]).map((filter) => (
@@ -497,12 +497,9 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
           {history.length > 0 && <div className="tabs" role="group" aria-label="Filtrer l’historique par canal">
             {["Tout l’historique", "Site", "Facebook", "Gmail", "Google"].map((channel) => <button key={channel} type="button" aria-pressed={historyFilter === channel} className={historyFilter === channel ? "selected" : undefined} onClick={() => setHistoryFilter(channel)}>{channel}</button>)}
           </div>}
-          {history.length === 0 && <div className="empty" role="region" aria-label="Historique à venir">
-            <Icon name="history" />
-            <h3>Aucune production traitée</h3>
-            <p>Vos validations et refus resteront ici pour retrouver vos décisions.</p>
+          {history.length === 0 && <EmptyState agent="co_ceo" role="region" label="Historique à venir" title="Aucune production traitée" says="Vos décisions et ce qui a été publié resteront ici, pour les retrouver.">
             <Link className="btn primary" href={actionable.length > 0 ? "/dashboard?view=validation" : emptyNextHref}>{actionable.length > 0 ? "Examiner les productions" : emptyNextLabel}</Link>
-          </div>}
+          </EmptyState>}
           {history.length > 0 && visibleHistory.length === 0 && <div role="status" className="empty">Aucun événement sur ce canal.</div>}
           {visibleHistory.length > 0 && <div className="table-scroll"><table className="data-table">
             <thead><tr><th>Événement / production</th><th>Canal</th><th>Source</th><th>Date</th><th>Consulter</th></tr></thead>
