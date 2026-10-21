@@ -44,18 +44,22 @@ test("unknown pages offer a French return route on desktop and mobile", async ({
     await page.screenshot({ path: testInfo.outputPath(`not-found-${width}.png`), fullPage: true });
   }
   await page.getByRole("link", { name: "Retour à l'accueil", exact: true }).click();
-  await expect(page.getByRole("heading", { level: 1, name: "BienDecider", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Vous décidez. Votre activité avance.", exact: true })).toBeVisible();
 });
 
 test("BienDecider public identity, metadata, contact and responsive pages", async ({ page }, testInfo) => {
   await page.goto(baseURL);
   await expect(page).toHaveTitle("BienDecider");
   await expect(page.locator("html")).toHaveAttribute("lang", "fr");
-  await expect(page.getByRole("heading", { level: 1, name: "BienDecider", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Vous décidez. Votre activité avance.", exact: true })).toBeVisible();
   await expect(page.getByText("Vous décidez. Votre activité avance.", { exact: true })).toBeVisible();
-  await expect(page.getByText("BienDecider", { exact: true }).first()).toBeVisible();
-  await expect(page.getByRole("link", { name: "Créer mon compte", exact: true })).toHaveAttribute("href", "/signup");
-  await expect(page.getByRole("link", { name: "J'ai déjà un compte", exact: true })).toHaveAttribute("href", "/login");
+  // La marque est portée par le logo ; le titre principal est la promesse (#86).
+  await expect(page.getByRole("link", { name: "BienDecider, accueil" })).toBeVisible();
+  // Un appel à l'action en haut et en bas de l'accueil (#86).
+  const signups = page.getByRole("link", { name: "Créer mon compte", exact: true });
+  await expect(signups).toHaveCount(2);
+  for (const link of await signups.all()) await expect(link).toHaveAttribute("href", "/signup");
+  await expect(page.getByRole("link", { name: "J'ai déjà un compte", exact: true }).first()).toHaveAttribute("href", "/login");
   await expect(page.getByText("Exemple fictif, aucune donnée client")).toBeVisible();
   await expect(page.getByRole("img", { name: /Aperçu BienDecider/ })).toBeVisible();
   await expect(page.locator('link[rel="icon"][href="/brand/symbol.svg"]')).toHaveCount(1);
