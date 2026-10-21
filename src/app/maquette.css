@@ -571,4 +571,9 @@
 .mq .results-item small{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:4px}
 .mq .results-icon{display:grid;place-items:center;width:30px;height:30px;border-radius:50%;flex:none;background:var(--bd-cream-deep);color:var(--muted)}
 .mq .results-item.diffusion .results-icon{background:var(--accent-light);color:var(--accent-ink)}
+
+/* Historique aligné sur la synthèse : une ligne par événement, détail au clic. */
+.mq .history-item{align-items:center}
+.mq .history-item>div{flex:1;min-width:0}
+.mq .history-item strong{overflow-wrap:anywhere}
 }
