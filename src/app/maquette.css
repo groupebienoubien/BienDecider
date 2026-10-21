@@ -501,4 +501,24 @@
 .mq .diagnostic-group>summary{padding:14px}
 .mq .finding-row{grid-template-columns:1fr;padding:14px}
 }
+
+/* File de relecture (#220) : une production à la fois, file en bandeau, filtre par agent. */
+.mq .review-queue{grid-template-columns:minmax(0,1fr)}
+.mq .review-queue .production-list{flex-direction:row;overflow-x:auto;padding:2px 1px 8px}
+.mq .review-queue .production-choice{flex:none;width:220px}
+.mq .queue-position{display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:13px;font-weight:600}
+.mq .queue-position>span:last-child{display:flex;gap:4px}
+.mq .queue-position button{font-size:12px;min-height:36px;white-space:nowrap;padding-inline:8px}
+.mq .queue-position>span:first-child{white-space:nowrap}
+.mq .agent-filters{display:flex;flex-wrap:wrap;gap:8px;margin:-8px 0 20px}
+.mq .agent-filters button{min-height:36px;padding:6px 12px;border-radius:999px;font-size:12px;font-weight:600}
+.mq .agent-filters button.selected{border-color:var(--agent,var(--green));box-shadow:inset 0 0 0 1px var(--agent,var(--green));background:var(--surface)}
+.mq .why-block>summary{cursor:pointer;list-style:none}
+.mq .why-block>summary::-webkit-details-marker{display:none}
+.mq .why-block>summary h3::after{content:" ▸";color:var(--muted)}
+.mq .why-block[open]>summary h3::after{content:" ▾"}
+@media(max-width:760px){
+.mq .review-queue .production-choice{width:200px}
+.mq .review-queue .production-actions{position:sticky;bottom:76px;z-index:5;margin:24px -18px 0;padding:12px 18px;background:var(--surface);border-top:1px solid var(--line);box-shadow:0 -6px 16px #3a2a1410}
+}
 }

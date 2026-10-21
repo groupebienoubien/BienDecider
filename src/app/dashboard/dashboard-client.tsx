@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useState, type CSSProperties } from "react";
 import type { AgentProposal, ActionPlanItem } from "@prisma/client";
 import type { AgentRunView } from "@/lib/agent-run-types";
 import { AgentRunTracker, useAgentRunMonitor } from "@/components/agent-run-tracker";
@@ -23,6 +23,7 @@ import { PaulSummary } from "@/components/paul-summary";
 import { describeProgress, summarizeProposals } from "@/lib/proposal-progress";
 import { countByFilter, FILTER_LABELS, matchesFilter, type QueueFilter } from "@/lib/validation-queue";
 import { needsAttention } from "@/lib/pending-decisions";
+import { getProposalGuidance } from "@/lib/channel-capabilities";
 import { proposalStatusView, STATUS_TAG_COLORS } from "@/lib/proposal-status";
 import { proposalChannel } from "@/lib/proposal-channel";
 import { openPaul } from "@/lib/paul-context";
@@ -34,7 +35,6 @@ type View = "today" | "plan" | "validation" | "historique";
 const EVENT_TIME = new Intl.DateTimeFormat("fr-FR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "Europe/Paris" });
 const COUNT_WORDS = ["aucune", "une", "deux", "trois", "quatre", "cinq", "six", "sept", "huit", "neuf", "dix"];
 const THEME_ICONS: Record<string, IconName> = { Visibilité: "megaphone", Conversion: "panel-top", Prospection: "contact-round" };
-const CYCLE_STEPS = ["Action validée", "Production à relire", "Confirmation", "Suivi & historique"];
 
 function eventLabel(proposal: AgentProposal) {
   if (proposal.status === "executee") return proposal.kind === "gmail_email" ? "Mail envoyé" : proposal.kind === "site_web_content" ? "Page publiée" : "Production publiée";
@@ -46,12 +46,6 @@ function eventLabel(proposal: AgentProposal) {
 
 function eventTime(proposal: AgentProposal) {
   return EVENT_TIME.format(new Date(proposal.decidedAt ?? proposal.createdAt));
-}
-
-function productionStage(status: string) {
-  if (status === "en_attente" || status === "rejetee") return 2;
-  if (status === "validee" || status === "modifiee") return 3;
-  return 4;
 }
 
 export function DashboardClient({ company, initialPlanItems, initialAgentRuns, initialProposals, leadSources, initialLeadStats, initialDiagnosticCount, progress, lastPaulMessage, initialView, riskSettings, facebookPageName, todayLabel, focusProposalId }: {
@@ -87,6 +81,7 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
   const [inspectedId, setInspectedId] = useState<string | null>(initialView === "historique" && focusProposalId ? focusProposalId : null);
   const [decidedIds, setDecidedIds] = useState<string[]>([]);
   const [queueFilter, setQueueFilter] = useState<QueueFilter>("all");
+  const [agentFilter, setAgentFilter] = useState<string>("all");
   const [selectedId, setSelectedId] = useState<string | undefined>(focusProposalId);
   const [historyFilter, setHistoryFilter] = useState("Tout l’historique");
   const monitorRun = useAgentRunMonitor(initialAgentRuns, {
@@ -254,8 +249,29 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
   const actionable = proposals.filter((proposal) => needsAttention(proposal, facebookPageName));
   const validationItems = proposals.filter((proposal) => needsAttention(proposal, facebookPageName) || decidedIds.includes(proposal.id));
   const queueCounts = countByFilter(validationItems);
-  const queueItems = validationItems.filter((proposal) => matchesFilter(proposal.status, queueFilter));
+  const queueAgents = [...new Set(validationItems.map((proposal) => proposal.agent))];
+  // File de relecture : ce qui attend une décision d'abord, puis ce qui vient d'être décidé.
+  const queueItems = validationItems
+    .filter((proposal) => matchesFilter(proposal.status, queueFilter) && (agentFilter === "all" || proposal.agent === agentFilter))
+    .sort((a, b) => Number(needsAttention(b, facebookPageName)) - Number(needsAttention(a, facebookPageName)));
   const selectedProposal = queueItems.find((proposal) => proposal.id === selectedId) ?? queueItems[0];
+  const selectedIndex = selectedProposal ? queueItems.indexOf(selectedProposal) : -1;
+
+  /** Décision prise dans la file : on passe à la suivante quand plus rien n'est à faire sur cette production. */
+  async function decideInQueue(proposalId: string, decision: ProposalDecision) {
+    const decided = queueItems.find((proposal) => proposal.id === proposalId);
+    const ok = await handleDecision(proposalId, decision);
+    if (!ok || !decided) return ok;
+    const after = { ...decided, status: decision.status === "rejetee" ? "rejetee" : decision.status === "modifiee" ? "modifiee" : decision.status === "validee" ? "validee" : decided.status };
+    const nothingLeft = decision.status === "rejetee" ||
+      ((decision.status === "validee" || decision.status === "modifiee") && !needsAttention(after, facebookPageName) && !getProposalGuidance(decided.kind, facebookPageName).canCopy);
+    if (nothingLeft) {
+      const position = queueItems.indexOf(decided);
+      const next = [...queueItems.slice(position + 1), ...queueItems.slice(0, position)].find((proposal) => needsAttention(proposal, facebookPageName));
+      if (next) setSelectedId(next.id);
+    }
+    return ok;
+  }
   const history = proposals.filter((proposal) => !needsAttention(proposal, facebookPageName));
   const visibleHistory = history.filter((proposal) => historyFilter === "Tout l’historique" || proposalChannel(proposal.kind) === historyFilter);
   const proposedItems = activeItems.filter((item) => item.status === "propose");
@@ -411,8 +427,7 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
       </>}
 
       {initialView === "validation" && <>
-        <PageHeading kicker="ATELIER DE PRODUCTION" title="Du brouillon à la diffusion." description="Chaque version conserve son contenu, vos retours et votre décision." />
-        <div className="sync-line"><span>{actionable.length > 0 ? `${actionable.length} production(s) attendent votre décision. Approuver ou rejeter ne publie ni n’envoie rien.` : "Aucune production n’attend votre décision."}</span><Link href="/dashboard?view=plan">Voir le plan associé →</Link></div>
+        <PageHeading kicker="DÉCISIONS" title="Vos productions à relire." description={actionable.length > 0 ? `${actionable.length} production(s) attendent votre décision.` : "Aucune production n’attend votre décision."} />
         {notices}
         <AgentRunTracker runs={agentRuns} onCheck={(runId) => void checkRun(runId)} onRetry={() => void handleGeneratePlan(true)} retryDisabled={planLoading} />
         <section aria-label="Productions à valider">
@@ -421,9 +436,6 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
             <h3>Tout est à jour.</h3>
             <p>Aucune production à valider ou à publier. Les brouillons de l’équipe apparaissent ici pour être relus, corrigés ou refusés avant toute action externe.</p>
             <Link className="btn primary" href={emptyNextHref}>{emptyNextLabel}</Link>
-          </div>}
-          {validationItems.length > 0 && <div className="cycle" aria-label="Étapes de la production">
-            {CYCLE_STEPS.map((label, index) => <span key={label} className={selectedProposal && productionStage(selectedProposal.status) === index + 1 ? "current" : undefined}><b>{index + 1}</b>{label}</span>)}
           </div>}
           {validationItems.length > 1 && (
             <div className="tabs" role="group" aria-label="Filtrer les productions">
@@ -434,14 +446,31 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
               ))}
             </div>
           )}
+          {queueAgents.length > 1 && (
+            <div className="agent-filters" role="group" aria-label="Filtrer par agent">
+              <button type="button" aria-pressed={agentFilter === "all"} className={agentFilter === "all" ? "selected" : undefined} onClick={() => setAgentFilter("all")}>Toute l’équipe</button>
+              {queueAgents.map((agent) => (
+                <button key={agent} type="button" aria-pressed={agentFilter === agent} className={agentFilter === agent ? "selected" : undefined} style={{ "--agent": `var(--bd-agent-${agent})` } as CSSProperties} onClick={() => setAgentFilter(agent)}>
+                  <AgentByline agent={agent} size={20} />
+                </button>
+              ))}
+            </div>
+          )}
           {validationItems.length > 0 && queueItems.length === 0 && (
             <div role="status" className="empty">
               <p>Aucune production ne correspond à ce filtre. {queueCounts.all} production(s) restent dans la file.</p>
-              <button type="button" onClick={() => setQueueFilter("all")}>Afficher toutes les productions</button>
+              <button type="button" onClick={() => { setQueueFilter("all"); setAgentFilter("all"); }}>Afficher toutes les productions</button>
             </div>
           )}
           {queueItems.length > 0 && selectedProposal && (
-            <div className="studio">
+            <div className="studio review-queue">
+              <div className="queue-position">
+                <span>Production {selectedIndex + 1} sur {queueItems.length}</span>
+                <span>
+                  <button type="button" className="quiet" disabled={selectedIndex <= 0} onClick={() => setSelectedId(queueItems[selectedIndex - 1]?.id)}>← Précédente</button>
+                  <button type="button" className="quiet" disabled={selectedIndex >= queueItems.length - 1} onClick={() => setSelectedId(queueItems[selectedIndex + 1]?.id)}>Suivante →</button>
+                </span>
+              </div>
               <aside className="production-list" aria-label="Productions">
                 {queueItems.map((proposal) => {
                   const status = proposalStatusView(proposal.status, proposal.kind, facebookPageName);
@@ -453,7 +482,7 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
                 })}
               </aside>
               <section>
-                <ProposalCard key={selectedProposal.id} proposal={selectedProposal} onDecision={handleDecision} onExecute={handleExecute} onSetLeadSource={handleSetLeadSource} busy={locked} riskSettings={riskSettings} facebookPageName={facebookPageName} siteDestination={company.siteSlug ? `/site/${company.siteSlug}` : null} companyName={company.name} companyPhone={company.phone} companyCertifications={company.certifications} leadSource={currentLeadSources[selectedProposal.id]} plan={planOf(selectedProposal)} />
+                <ProposalCard key={selectedProposal.id} proposal={selectedProposal} onDecision={decideInQueue} onExecute={handleExecute} onSetLeadSource={handleSetLeadSource} busy={locked} riskSettings={riskSettings} facebookPageName={facebookPageName} siteDestination={company.siteSlug ? `/site/${company.siteSlug}` : null} companyName={company.name} companyPhone={company.phone} companyCertifications={company.certifications} leadSource={currentLeadSources[selectedProposal.id]} plan={planOf(selectedProposal)} />
               </section>
             </div>
           )}
