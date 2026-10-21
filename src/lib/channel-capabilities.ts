@@ -1,36 +1,49 @@
+/**
+ * Source unique de ce que BienDecider fait réellement sur chaque canal : la page publique
+ * « Ce que fait chaque canal » (/canaux), l'accueil et la fiche de production en dérivent.
+ * `publishedBy` dit qui diffuse : BienDecider (toujours après votre confirmation) ou vous.
+ * À mettre à jour à chaque connecteur livré, jamais avant.
+ */
 export const CHANNEL_CAPABILITIES = {
   site: {
     label: "Site vitrine",
+    publishedBy: "biendecider",
     availability: "Publication disponible après approbation et confirmation.",
     nextStep: "Vous relisez le brief puis confirmez la mise en ligne. BienDecider génère la page à partir du brief approuvé.",
   },
   facebook: {
     label: "Page Facebook",
+    publishedBy: "biendecider",
     availability: "Publication disponible sur une Page reliée et vérifiée.",
     nextStep: "Après votre approbation et une confirmation séparée, BienDecider publie sur la Page choisie.",
   },
   googleBusiness: {
     label: "Fiche établissement Google",
+    publishedBy: "vous",
     availability: "La publication des changements n'est pas disponible.",
     nextStep: "Les propositions restent à copier et à appliquer vous-même dans Google.",
   },
   gmail: {
     label: "Email avec Gmail",
+    publishedBy: "biendecider",
     availability: "Envoi manuel disponible après autorisation du compte.",
     nextStep: "Vous choisissez le destinataire et confirmez chaque envoi depuis votre compte Gmail.",
   },
   linkedin: {
     label: "Profil LinkedIn",
+    publishedBy: "vous",
     availability: "La connexion concerne votre profil personnel ; la publication n'est pas disponible.",
     nextStep: "Vous pouvez copier un contenu préparé et le publier vous-même.",
   },
   instagram: {
     label: "Instagram",
+    publishedBy: "vous",
     availability: "La connexion et la publication ne sont pas disponibles.",
     nextStep: "Vous pouvez copier un contenu préparé et le publier vous-même.",
   },
   prospecting: {
     label: "Prospection",
+    publishedBy: "vous",
     availability: "Les pistes et les modèles de message sont préparés, aucun message n'est envoyé automatiquement.",
     nextStep: "Vous vérifiez la source, choisissez qui contacter et envoyez vous-même le message.",
   },

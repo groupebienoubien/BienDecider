@@ -65,7 +65,7 @@ test("BienDecider public identity, metadata, contact and responsive pages", asyn
   await expect(page.getByRole("link", { name: "Contact", exact: true })).toHaveAttribute("href", "mailto:contact@biendecider.com");
   for (const width of [320, 390, 1440]) {
     await page.setViewportSize({ width, height: 900 });
-    for (const path of ["/", "/login", "/signup", "/cgu", "/confidentialite", "/mentions-legales"]) {
+    for (const path of ["/", "/login", "/signup", "/canaux", "/cgu", "/confidentialite", "/mentions-legales"]) {
       await page.goto(`${baseURL}${path}`);
       await expect(page.locator("h1").filter({ hasNotText: /^Chargement en cours$/ })).toBeVisible();
       await expect(page).toHaveTitle("BienDecider");
@@ -113,7 +113,7 @@ test("the privacy policy distinguishes processing from publication and is reacha
 test("public pages keep named fields, a visible focus ring and readable text", async ({ page }) => {
   for (const width of [320, 1440]) {
     await page.setViewportSize({ width, height: 900 });
-    for (const path of ["/", "/login", "/signup", "/cgu", "/confidentialite", "/mentions-legales"]) {
+    for (const path of ["/", "/login", "/signup", "/canaux", "/cgu", "/confidentialite", "/mentions-legales"]) {
       await page.goto(`${baseURL}${path}`);
       const unnamed = await page.evaluate(() => [...document.querySelectorAll("input:not([type=hidden]), select, textarea")]
         .filter((field) => !(field.getAttribute("aria-label") || field.getAttribute("aria-labelledby") || (field as HTMLInputElement).labels?.length))
@@ -166,3 +166,17 @@ test("public pages keep named fields, a visible focus ring and readable text", a
   expect(outline.style).not.toBe("none");
   expect(outline.width).toBeGreaterThanOrEqual(2);
 });
+
+test("the channels page says, channel by channel, what BienDecider publishes and what the owner does", async ({ page }) => {
+  await page.goto(`${baseURL}/`);
+  await page.getByRole("link", { name: "Ce que fait chaque canal" }).first().click();
+  await expect(page).toHaveURL(`${baseURL}/canaux`);
+  await expect(page.getByRole("heading", { level: 1, name: "Ce que fait chaque canal" })).toBeVisible();
+  for (const channel of ["Site vitrine", "Page Facebook", "Email avec Gmail", "Instagram", "Profil LinkedIn", "Fiche établissement Google"]) {
+    await expect(page.getByRole("heading", { level: 2, name: channel })).toBeVisible();
+  }
+  const card = (name: string) => page.locator(".channel-card").filter({ has: page.getByRole("heading", { name, exact: true }) });
+  await expect(card("Page Facebook")).toContainText("Diffusé par BienDecider, après votre confirmation");
+  await expect(card("Instagram")).toContainText("Préparé par l’équipe, publié par vous");
+});
+
