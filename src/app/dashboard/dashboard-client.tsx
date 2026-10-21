@@ -29,10 +29,12 @@ import { proposalStatusView, STATUS_TAG_COLORS } from "@/lib/proposal-status";
 import { proposalChannel } from "@/lib/proposal-channel";
 import { openPaul } from "@/lib/paul-context";
 import { groupPlanItems } from "@/lib/action-plan-view";
+import { weekStart } from "@/lib/results-timeline";
 
 type PlanItemWithProposals = ActionPlanItem & { proposals: AgentProposal[]; agentRuns: AgentRunView[] };
 type View = "today" | "plan" | "validation" | "historique";
 
+const WEEK_LABEL = new Intl.DateTimeFormat("fr-FR", { day: "numeric", month: "long", timeZone: "Europe/Paris" });
 const EVENT_TIME = new Intl.DateTimeFormat("fr-FR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "Europe/Paris" });
 const COUNT_WORDS = ["aucune", "une", "deux", "trois", "quatre", "cinq", "six", "sept", "huit", "neuf", "dix"];
 const THEME_ICONS: Record<string, IconName> = { Visibilité: "megaphone", Conversion: "panel-top", Prospection: "contact-round" };
@@ -279,6 +281,15 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
   }
   const history = proposals.filter((proposal) => !needsAttention(proposal, facebookPageName));
   const visibleHistory = history.filter((proposal) => historyFilter === "Tout l’historique" || proposalChannel(proposal.kind) === historyFilter);
+  // Même lecture que la synthèse : une carte par semaine, du plus récent au plus ancien.
+  const historyWeeks = [...visibleHistory]
+    .sort((a, b) => new Date(b.decidedAt ?? b.createdAt).getTime() - new Date(a.decidedAt ?? a.createdAt).getTime())
+    .reduce<{ start: number; items: AgentProposal[] }[]>((weeks, proposal) => {
+      const start = weekStart(new Date(proposal.decidedAt ?? proposal.createdAt)).getTime();
+      const week = weeks.find((entry) => entry.start === start);
+      if (week) week.items.push(proposal); else weeks.push({ start, items: [proposal] });
+      return weeks;
+    }, []);
   const proposedItems = activeItems.filter((item) => item.status === "propose");
   const runningItem = activeItems.find((item) => item.status === "en_cours");
   const needsFirstDiagnostic = initialDiagnosticCount === 0 && planItems.length === 0;
@@ -490,7 +501,7 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
       </>}
 
       {initialView === "historique" && <>
-        <PageHeading kicker="REGISTRE DE L’ACTIVITÉ" title="Ce qui a été fait. Et ce qui est en ligne." description="Versions, confirmations et preuves de diffusion, au même endroit." />
+        <PageHeading kicker="RÉSULTATS" title="Historique de vos décisions." description="Chaque version, chaque décision et chaque diffusion, semaine par semaine." />
         {notices}
         <AgentRunTracker runs={agentRuns} onCheck={(runId) => void checkRun(runId)} onRetry={() => void handleGeneratePlan(true)} retryDisabled={planLoading} />
         <section aria-label="Historique">
@@ -501,24 +512,44 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
             <Link className="btn primary" href={actionable.length > 0 ? "/dashboard?view=validation" : emptyNextHref}>{actionable.length > 0 ? "Examiner les productions" : emptyNextLabel}</Link>
           </EmptyState>}
           {history.length > 0 && visibleHistory.length === 0 && <div role="status" className="empty">Aucun événement sur ce canal.</div>}
-          {visibleHistory.length > 0 && <div className="table-scroll"><table className="data-table">
-            <thead><tr><th>Événement / production</th><th>Canal</th><th>Source</th><th>Date</th><th>Consulter</th></tr></thead>
-            <tbody>{visibleHistory.map((proposal) => <tr key={proposal.id} id={`proposal-${proposal.id}`}>
-              <td><strong>{eventLabel(proposal)}</strong><small>{proposal.title} · v{proposal.version}</small></td>
-              <td><Tag color="blue">{proposalChannel(proposal.kind)}</Tag></td>
-              <td>{proposal.status === "executee" ? "Exécution enregistrée" : "Décision enregistrée"}<small><AgentByline agent={proposal.agent} size={18}>· version {proposal.version}</AgentByline></small></td>
-              <td>{eventTime(proposal)}</td>
-              <td><button type="button" onClick={() => setInspectedId(proposal.id)}><Icon name="eye" /> Voir<span className="sr-only"> : {proposal.title}</span></button></td>
-            </tr>)}</tbody>
-          </table></div>}
+          {visibleHistory.length > 0 && <div className="results-weeks">
+            {historyWeeks.map((week) => (
+              <section key={week.start} className="results-week" aria-label={`Semaine du ${WEEK_LABEL.format(new Date(week.start))}`}>
+                <header>
+                  <h3>Semaine du {WEEK_LABEL.format(new Date(week.start))}</h3>
+                  <small>{week.items.length} événement{week.items.length > 1 ? "s" : ""}</small>
+                </header>
+                <ul>
+                  {week.items.map((proposal) => (
+                    <li key={proposal.id} id={`proposal-${proposal.id}`} className={`results-item history-item ${proposal.status === "executee" ? "diffusion" : ""}`}>
+                      <span className="results-icon" aria-hidden="true"><Icon name={proposal.status === "executee" ? "check" : proposal.status === "rejetee" ? "x" : "history"} /></span>
+                      <div>
+                        <strong>{eventLabel(proposal)} · {proposal.title}</strong>
+                        <small><Tag color="blue">{proposalChannel(proposal.kind)}</Tag> <AgentByline agent={proposal.agent} size={16}>· version {proposal.version}</AgentByline> · {eventTime(proposal)}</small>
+                      </div>
+                      <button type="button" className="icon-button" onClick={() => setInspectedId(proposal.id)} aria-label={`Voir : ${proposal.title}`} title="Voir le détail"><Icon name="eye" /></button>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ))}
+          </div>}
           {closedItems.length > 0 && <>
             <SectionTitle title="Actions terminées et écartées" />
-            <div className="table-scroll"><table className="data-table">
-              <thead><tr><th>Action</th><th>État</th><th>Retour</th></tr></thead>
-              <tbody>{closedItems.map((item) => <tr key={item.id}><td><strong>{item.title}</strong></td><td><Tag color={item.status === "ecarte" ? "gray" : "green"}>{item.status === "ecarte" ? "Écartée" : "Traitée"}</Tag></td><td>{item.feedback ?? "—"}</td></tr>)}</tbody>
-            </table></div>
+            <section className="results-week" aria-label="Actions terminées et écartées">
+              <ul>
+                {closedItems.map((item) => (
+                  <li key={item.id} className="results-item">
+                    <span className="results-icon" aria-hidden="true"><Icon name={item.status === "ecarte" ? "x" : "circle-check"} /></span>
+                    <div>
+                      <strong>{item.title}</strong>
+                      <small><Tag color={item.status === "ecarte" ? "gray" : "green"}>{item.status === "ecarte" ? "Écartée" : "Traitée"}</Tag> <AgentByline agent={item.agent} size={16} />{item.feedback ? <> · {item.feedback}</> : null}</small>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </section>
           </>}
-          <p className="legend">Une génération, une approbation et une publication sont trois événements distincts. Aucun résultat commercial n’est attribué sans preuve. <Link href="/rapport">Voir les résultats</Link> · <Link href="/diagnostic">Consulter le diagnostic</Link></p>
         </section>
       </>}
 

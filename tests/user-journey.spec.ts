@@ -559,7 +559,7 @@ test("rejection reasons are optional, persisted in history and available to agen
 
     await page.goto(`${baseURL}/dashboard?view=historique`);
     await page.reload();
-    await page.getByRole("row").filter({ hasText: proposal.title }).getByRole("button", { name: /Voir/ }).click();
+    await page.locator(".history-item").filter({ hasText: proposal.title }).getByRole("button", { name: /Voir/ }).click();
     await expect(page.getByRole("dialog")).toContainText("Raison du rejet : Autre : Hors de ma zone d'intervention");
 
     // Un rejet se rouvre tant que rien n'a été exécuté : retour à relire, motif effacé, prospect de nouveau proposé.
