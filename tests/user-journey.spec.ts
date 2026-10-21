@@ -508,8 +508,11 @@ test("single validation queue, persistent decisions, publishing and error recove
     await page.reload();
     await expect(page.getByText("Tout est à jour.", { exact: false })).toBeVisible();
     await page.goto(`${baseURL}/rapport`);
-    await expect(page.getByRole("heading", { name: "Résultats", exact: true })).toBeVisible();
-    await expect(page.getByRole("cell", { name: site.title })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Ce que vos actions ont donné." })).toBeVisible();
+    // Une diffusion confirmée apparaît dans sa semaine, distinguée des déclarations.
+    const diffusion = page.locator(".results-item.diffusion").filter({ hasText: site.title });
+    await expect(diffusion).toContainText("Page mise en ligne");
+    await expect(diffusion).toContainText("Confirmé par le canal");
     await expect(page.getByRole("button", { name: "Approuver cette version", exact: true })).toHaveCount(0);
     await page.goto(`${baseURL}/equipe`);
     await expect(page.locator("article")).toHaveCount(0);
@@ -605,7 +608,7 @@ test("diagnostic to plan, keyboard dialog and responsive navigation", async ({ p
         ["/dashboard?view=validation", "Vos productions à relire."],
         ["/diagnostic", "Ce que Martine a constaté."],
         ["/equipe", "Votre équipe."],
-        ["/rapport", "Résultats"],
+        ["/rapport", "Ce que vos actions ont donné."],
       ]) {
         await page.goto(`${baseURL}${path}`);
         await expect(page.getByRole("heading", { level: 1, name: title, exact: true })).toBeVisible();
