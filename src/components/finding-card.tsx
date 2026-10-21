@@ -10,6 +10,7 @@ import { ReadAloudButton } from "@/components/voice-controls";
 import { spokenText } from "@/lib/voice";
 import { openPaul } from "@/lib/paul-context";
 import { parseFindingActionItems, type FindingActionItem } from "@/lib/finding-shared";
+import { isPositiveFinding } from "@/lib/diagnostic-groups";
 
 const CATEGORY_LABELS: Record<string, string> = {
   site_web: "Site web",
@@ -17,7 +18,7 @@ const CATEGORY_LABELS: Record<string, string> = {
   concurrence: "Concurrence",
 };
 
-const CATEGORY_ICONS: Record<string, IconName> = {
+export const CATEGORY_ICONS: Record<string, IconName> = {
   site_web: "panel-top",
   reseaux_sociaux: "messages-square",
   concurrence: "eye",
@@ -36,24 +37,20 @@ export function FindingCard({ finding }: { finding: AuditFinding }) {
     ? [finding.title, finding.whatWorks && `Ce qui est bien : ${finding.whatWorks}`, finding.toImprove && `Ce qu'il faut améliorer : ${finding.toImprove}`, ...actionItems.map((item) => `Recommandation : ${item.title}`)].filter(Boolean).join(". ")
     : `${finding.title}. ${finding.content}`);
   const category = CATEGORY_LABELS[finding.category] ?? finding.category;
-  const positive = Boolean(finding.whatWorks) && !finding.toImprove;
+  const positive = isPositiveFinding(finding);
   const safeSource = finding.sourceUrl && /^https?:\/\//i.test(finding.sourceUrl) ? finding.sourceUrl : null;
 
   return (
     <>
-      <article id={`finding-${finding.id}`} className="diagnostic-row">
-        <span className="activity-icon"><Icon name={CATEGORY_ICONS[finding.category] ?? "eye"} /></span>
+      {/* Charte : le titre et son état visibles ; texte, source et recommandations dans le détail. */}
+      <article id={`finding-${finding.id}`} className="finding-row">
         <div>
-          <div className="tags"><Tag color="blue">{category}</Tag>{positive ? <Tag color="green">Point positif</Tag> : finding.toImprove ? <Tag color="orange">À renforcer</Tag> : null}</div>
+          <Tag color={positive ? "green" : "orange"}>{positive ? "Point positif" : "À renforcer"}</Tag>
           <h3>{finding.title}</h3>
-          <p>{finding.content}</p>
-          {finding.sourceUrl && <small>Source {finding.sourceStatus ?? "à vérifier"}</small>}
         </div>
-        <div>
-          <strong>{positive ? "À mesurer" : actionItems.length > 0 ? "À traiter" : "À examiner"}</strong>
-          <small>{actionItems[0]?.title ?? "Voir le détail du constat"}</small>
-          <button type="button" className="text-link" onClick={() => setOpen(true)}>Voir le détail<span className="sr-only"> : {finding.title}</span></button>
-          <button type="button" className="text-link" onClick={() => openPaul({ type: "finding", id: finding.id, title: finding.title })}>Demander à Paul<span className="sr-only"> : {finding.title}</span></button>
+        <div className="finding-actions">
+          <button type="button" onClick={() => setOpen(true)}>Voir le détail<span className="sr-only"> : {finding.title}</span></button>
+          <button type="button" className="icon-button" onClick={() => openPaul({ type: "finding", id: finding.id, title: finding.title })} aria-label={`Demander à Paul : ${finding.title}`} title="Demander à Paul"><Icon name="message-circle" /></button>
         </div>
       </article>
 
@@ -62,6 +59,7 @@ export function FindingCard({ finding }: { finding: AuditFinding }) {
         {safeSource && <p>Source ({finding.sourceStatus ?? "à vérifier"}) : <a href={safeSource} target="_blank" rel="noreferrer" className="break-all">{safeSource}</a></p>}
         {hasStructure ? (
           <>
+            <p className="whitespace-pre-wrap">{finding.content}</p>
             {finding.whatWorks && <><h3>Ce qui est bien</h3><p className="whitespace-pre-wrap">{finding.whatWorks}</p></>}
             {finding.toImprove && <><h3>Ce qu’il faut améliorer</h3><p className="whitespace-pre-wrap">{finding.toImprove}</p></>}
             {actionItems.length > 0 && <>

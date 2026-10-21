@@ -323,7 +323,7 @@
 .mq .topbar .paul-launch>span:not(.paul-avatar){display:none}
 }
 @media(max-width:760px){
-.mq .topbar .paul-launch>.paul-avatar{display:none}
+.mq .topbar .paul-launch>.paul-avatar,.mq .topbar .paul-launch>.persona-avatar{display:none}
 .mq .topbar .paul-launch{width:36px;height:36px}
 .mq .topbar .prototype{margin-right:auto}
 .mq .topbar>div{gap:8px}
@@ -481,4 +481,24 @@
 .mq .plan-details{font-size:12px;color:var(--muted)}
 .mq .plan-details summary{cursor:pointer;width:max-content;min-height:24px}
 .mq .plan-details p{margin:6px 0 0}
+
+/* Diagnostic groupé (#219) : un bloc par sujet, synthèse en une ligne, constats repliés. */
+.mq .diagnostic-groups{display:grid;gap:12px}
+.mq .diagnostic-group{background:var(--surface);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.mq .diagnostic-group>summary{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:14px;padding:18px 20px;cursor:pointer;list-style:none}
+.mq .diagnostic-group>summary::-webkit-details-marker{display:none}
+.mq .diagnostic-group>summary .activity-icon{background:var(--blue-light);color:var(--blue)}
+.mq .diagnostic-group>summary strong{display:block;font:600 16px/1.3 var(--font-sora),Sora,sans-serif}
+.mq .diagnostic-group>summary small{display:block;margin-top:3px;font-size:13px;color:var(--muted)}
+.mq .diagnostic-group .group-count{min-width:28px;padding:2px 8px;border-radius:999px;background:var(--bd-cream-deep);font-size:12px;font-weight:700;text-align:center}
+.mq .diagnostic-group[open]>summary{border-bottom:1px solid var(--line)}
+.mq .finding-row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:16px;padding:14px 20px 14px 68px;border-bottom:1px solid var(--line)}
+.mq .finding-row:last-child{border-bottom:0}
+.mq .finding-row h3{font-size:14px;margin:6px 0 0}
+.mq .finding-actions{display:flex;align-items:center;gap:6px}
+.mq .finding-actions button{font-size:12px;min-height:36px}
+@media(max-width:760px){
+.mq .diagnostic-group>summary{padding:14px}
+.mq .finding-row{grid-template-columns:1fr;padding:14px}
+}
 }
