@@ -592,7 +592,7 @@ test("diagnostic to plan, keyboard dialog and responsive navigation", async ({ p
       for (const [path, title] of [
         ["/dashboard", "Développer les demandes de devis"],
         ["/dashboard?view=validation", "Du brouillon à la diffusion."],
-        ["/diagnostic", "Une lecture claire de votre activité."],
+        ["/diagnostic", "Ce que Martine a constaté."],
         ["/equipe", "Votre équipe."],
         ["/rapport", "Résultats"],
       ]) {
@@ -605,7 +605,7 @@ test("diagnostic to plan, keyboard dialog and responsive navigation", async ({ p
     // Sur téléphone : barre du bas (les quatre temps), puis onglets des pages du temps choisi.
     await page.getByRole("navigation", { name: "Parcours" }).getByRole("link", { name: "Objectif" }).click();
     await page.getByRole("navigation", { name: "Pages : Objectif" }).getByRole("link", { name: "Diagnostic", exact: true }).click();
-    await expect(page.getByRole("heading", { level: 1, name: "Une lecture claire de votre activité." })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Ce que Martine a constaté." })).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath("diagnostic-mobile.png"), fullPage: true });
   } finally { await prisma.$disconnect(); }
 });
@@ -712,6 +712,28 @@ test("the plan shows the expected result and folds the agent instruction away", 
     await card.getByText("Détails", { exact: true }).click();
     await expect(card.getByText(/Consigne donnée à Jean-Claude/)).toBeVisible();
     await expect(page.getByText("La diffusion reste une décision distincte.")).toHaveCount(0);
+  } finally { await prisma.$disconnect(); }
+});
+
+test("the diagnostic is grouped by topic with a one-line summary, and a link to a finding opens its topic", async ({ page, company }) => {
+  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }) });
+  try {
+    const [, , competitor] = await Promise.all([
+      prisma.auditFinding.create({ data: { companyId: company.id, category: "site_web", title: "Pas de page de contact", content: "Aucun formulaire.", toImprove: "Ajouter un formulaire." } }),
+      prisma.auditFinding.create({ data: { companyId: company.id, category: "site_web", title: "Numéro bien visible", content: "Le numéro est cliquable.", whatWorks: "Numéro cliquable." } }),
+      prisma.auditFinding.create({ data: { companyId: company.id, category: "concurrence", title: "Concurrents mieux notés", content: "Plus d'avis chez eux.", toImprove: "Collecter des avis." } }),
+    ]);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`${baseURL}/diagnostic`);
+    const site = page.locator("details.diagnostic-group").filter({ hasText: "Site web" });
+    await expect(site.locator("summary")).toContainText("1 point à renforcer · 1 point positif");
+    // Plusieurs sujets : repliés d'office, on creuse seulement ce qui intéresse.
+    await expect(site.getByRole("heading", { name: "Pas de page de contact" })).toBeHidden();
+    await site.locator("summary").click();
+    await expect(site.getByRole("heading", { name: "Pas de page de contact" })).toBeVisible();
+    await expect(site.getByText("Aucun formulaire.")).toBeHidden();
+    await page.goto(`${baseURL}/diagnostic#finding-${competitor.id}`);
+    await expect(page.locator(`#finding-${competitor.id}`)).toBeVisible();
   } finally { await prisma.$disconnect(); }
 });
 

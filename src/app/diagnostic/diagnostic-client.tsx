@@ -1,9 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { AuditFinding } from "@prisma/client";
-import { FindingCard } from "@/components/finding-card";
+import { CATEGORY_ICONS, FindingCard } from "@/components/finding-card";
+import { groupFindings } from "@/lib/diagnostic-groups";
 import { Icon } from "@/components/icon";
 import { PageHeading, SectionTitle } from "@/components/mockup-ui";
 import { useAgentProfileCompletion } from "@/components/agent-profile-completion";
@@ -38,19 +39,26 @@ export function DiagnosticClient({ initialFindings, feedback, leadCount }: { ini
   }
 
   const latest = findings[0] ? new Date(findings[0].createdAt) : null;
+  const groups = groupFindings(findings);
+  // Un seul sujet : ouvert d'office. Un lien vers un constat (#finding-…) ouvre son sujet.
+  const [openGroups, setOpenGroups] = useState<string[]>(() => groups.length === 1 ? [groups[0].category] : []);
+  useEffect(() => {
+    const id = window.location.hash.replace(/^#finding-/, "");
+    const row = id ? document.getElementById(`finding-${id}`) : null;
+    const group = row?.closest("details");
+    if (!row || !group) return;
+    group.open = true; // l'événement toggle met à jour openGroups
+    requestAnimationFrame(() => row.scrollIntoView({ block: "center" }));
+  }, []);
 
   return (
     <div>
       <PageHeading
         kicker={`DIAGNOSTIC · ${findings.length} CONSTAT${findings.length > 1 ? "S" : ""}`}
-        title="Une lecture claire de votre activité."
-        description={<>{latest ? <>Dernière analyse : {ANALYSIS_DATE.format(latest)} à {ANALYSIS_TIME.format(latest)} · </> : null}À partir de vos informations et des signaux disponibles.</>}
+        title="Ce que Martine a constaté."
+        description={latest ? <>Dernière analyse le {ANALYSIS_DATE.format(latest)} à {ANALYSIS_TIME.format(latest)} · {leadCount} prospect(s) suivi(s)</> : "Martine examine votre présence en ligne et vos concurrents."}
         actions={<button type="button" className="primary" onClick={() => void requestProfile("marketing", run)} disabled={running || checking}><Icon name="refresh-cw" /> {running ? "Analyse en cours…" : findings.length ? "Actualiser le diagnostic" : "Lancer le diagnostic"}</button>}
       />
-      <div className="sync-line">
-        <span>{findings.length > 0 ? "Diagnostic à jour avec les signaux retenus" : "Aucun diagnostic disponible pour le moment"} · {leadCount} prospect(s) suivi(s)</span>
-        {findings.length > 0 && <Link href="/dashboard?view=plan">Voir le plan associé →</Link>}
-      </div>
       {profileDialog}
       {error && <p role="alert" className="warning">{error}</p>}
       {done && <p role="status" className="notice">Diagnostic actualisé. <Link href="/dashboard?view=validation">Voir les productions à valider</Link></p>}
@@ -62,7 +70,22 @@ export function DiagnosticClient({ initialFindings, feedback, leadCount }: { ini
           <p>Lancez le diagnostic pour obtenir les premiers constats. Vous déciderez ensuite des actions à confier.</p>
         </div>
       )}
-      {findings.map((finding) => <FindingCard key={finding.id} finding={finding} />)}
+      {groups.length > 0 && <div className="diagnostic-groups">
+        {groups.map((group) => (
+          <details key={group.category} className="diagnostic-group" open={openGroups.includes(group.category)} onToggle={(event) => {
+            const isOpen = (event.currentTarget as HTMLDetailsElement).open;
+            setOpenGroups((current) => isOpen ? [...new Set([...current, group.category])] : current.filter((category) => category !== group.category));
+          }}>
+            <summary>
+              <span className="activity-icon"><Icon name={CATEGORY_ICONS[group.category] ?? "eye"} /></span>
+              <span><strong>{group.label}</strong><small>{group.summary}</small></span>
+              <span className="group-count" aria-label={`${group.findings.length} constat(s)`}>{group.findings.length}</span>
+            </summary>
+            {group.findings.map((finding) => <FindingCard key={finding.id} finding={finding} />)}
+          </details>
+        ))}
+      </div>}
+      {findings.length > 0 && <p className="legend"><Link href="/dashboard?view=plan">Voir le plan d’action qui en découle →</Link></p>}
       <SectionTitle title="Ce que votre équipe retient" />
       <div className="notice">{feedback.length ? `${feedback.length} retour(s) explicite(s) pris en compte dans la prochaine préparation.` : "Aucune préférence nouvelle enregistrée. Vos corrections ne changent pas votre objectif sans votre accord."}</div>
       {feedback.length > 0 && <ul className="feedback-list">{feedback.map((item, index) => <li key={index}>{item}</li>)}</ul>}

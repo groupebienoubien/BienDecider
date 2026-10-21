@@ -273,3 +273,18 @@ test("Facebook audit source uses a declared page or the Raygine anchor only for 
   expect(facebookAuditSource("Atelier Test", "Instagram @atelier, https://www.facebook.com/atelier.test/")).toBe("https://www.facebook.com/atelier.test/");
   expect(facebookAuditSource("Atelier Test", "@atelier_test")).toBeNull();
 });
+
+test("diagnostic groups follow the charter order and summarise counts without a model", async () => {
+  const { groupFindings } = await import("../src/lib/diagnostic-groups");
+  const at = (day: number) => new Date(2026, 9, day);
+  const groups = groupFindings([
+    { id: "a", category: "concurrence", title: "Concurrent", whatWorks: null, toImprove: "x", createdAt: at(1) },
+    { id: "b", category: "site_web", title: "Ancien", whatWorks: null, toImprove: "x", createdAt: at(1) },
+    { id: "c", category: "site_web", title: "Récent", whatWorks: "y", toImprove: null, createdAt: at(5) },
+    { id: "d", category: "autre_sujet", title: "Hors catalogue", whatWorks: null, toImprove: null, createdAt: at(2) },
+  ]);
+  expect(groups.map((group) => group.category)).toEqual(["site_web", "concurrence", "autre_sujet"]);
+  expect(groups[0].findings.map((finding) => finding.id)).toEqual(["c", "b"]);
+  expect(groups[0].summary).toBe("1 point à renforcer · 1 point positif — dernier constat : Récent");
+  expect(groups[2].label).toBe("autre_sujet");
+});
