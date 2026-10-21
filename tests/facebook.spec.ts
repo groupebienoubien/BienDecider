@@ -385,7 +385,7 @@ test("the dashboard names the Page and asks for an explicit confirmation before 
     // Sans Page connectée, aucune commande de publication n'est proposée.
     await page.goto(`${baseURL}/dashboard?view=historique`);
     const card = page.locator("article").filter({ hasText: proposal.title });
-    await expect(page.getByRole("row").filter({ hasText: proposal.title })).toBeVisible();
+    await expect(page.locator(".history-item").filter({ hasText: proposal.title })).toBeVisible();
     await expect(page.getByRole("button", { name: "Préparer la publication" })).toHaveCount(0);
 
     await prisma.channelConnection.create({ data: { companyId: company.id, channel: "facebook", status: "connecte",
