@@ -288,3 +288,22 @@ test("diagnostic groups follow the charter order and summarise counts without a 
   expect(groups[0].summary).toBe("1 point à renforcer · 1 point positif — dernier constat : Récent");
   expect(groups[2].label).toBe("autre_sujet");
 });
+
+test("the results story groups by week and never mixes channel proof with owner declarations", async () => {
+  const { buildResultsTimeline } = await import("../src/lib/results-timeline");
+  const monday = new Date(2026, 9, 12, 10); // lundi 12 octobre
+  const day = (offset: number) => new Date(monday.getTime() + offset * 24 * 60 * 60 * 1000);
+  const weeks = buildResultsTimeline(
+    [{ title: "Post du lundi", agent: "contenu", kind: "social_post", at: day(0) }, { title: "Trop ancien", agent: "contenu", kind: "social_post", at: day(-60) }],
+    [
+      { name: "Régie A", stage: "gagne", contactedAt: day(1), repliedAt: day(8), meetingAt: null, closedAt: day(9) },
+      { name: "Régie B", stage: "perdu", contactedAt: null, repliedAt: null, meetingAt: null, closedAt: day(2) },
+    ],
+    day(-14),
+  );
+  expect(weeks.map((week) => [week.start.getDate(), week.diffusions, week.declarations])).toEqual([[19, 0, 2], [12, 1, 1]]);
+  expect(weeks[0].items.map((item) => item.text)).toEqual(["Régie A est devenu client", "Réponse de Régie A"]);
+  expect(weeks[1].items.find((item) => item.kind === "diffusion")?.text).toBe("Post publié sur Facebook : Post du lundi");
+  // « Sans suite » n'est pas un résultat ; une publication n'est jamais transformée en vente.
+  expect(weeks.flatMap((week) => week.items).some((item) => item.text.includes("Régie B"))).toBe(false);
+});

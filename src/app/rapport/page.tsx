@@ -3,12 +3,26 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getSessionEmail } from "@/lib/session";
 import { AppShell } from "@/components/app-shell";
-import { AgentByline, EmptyState, PageHeading, SectionTitle } from "@/components/mockup-ui";
+import { Icon } from "@/components/icon";
+import { AgentByline, EmptyState, PageHeading, SectionTitle, Tag } from "@/components/mockup-ui";
 import { getShellProps } from "@/lib/shell-data";
 import { computeBusinessTarget, formatEuros } from "@/lib/business-target";
-import { getFunnelStats } from "@/lib/funnel";
+import { buildResultsTimeline } from "@/lib/results-timeline";
 
 export const dynamic = "force-dynamic";
+
+/** Fenêtre du récit : les huit dernières semaines. */
+const WEEKS_SHOWN = 8;
+const WEEK_LABEL = new Intl.DateTimeFormat("fr-FR", { day: "numeric", month: "long", timeZone: "Europe/Paris" });
+const ITEM_DAY = new Intl.DateTimeFormat("fr-FR", { weekday: "short", day: "numeric", month: "short", timeZone: "Europe/Paris" });
+
+function storySince() {
+  return new Date(Date.now() - WEEKS_SHOWN * 7 * 24 * 60 * 60 * 1000);
+}
+
+function plural(count: number, singular: string, pluralForm: string) {
+  return `${count} ${count > 1 ? pluralForm : singular}`;
+}
 
 export default async function RapportPage() {
   const ownerEmail = await getSessionEmail();
@@ -16,24 +30,34 @@ export default async function RapportPage() {
   const company = await prisma.company.findUnique({ where: { ownerEmail } });
   if (!company || !company.name) redirect("/onboarding");
 
-  const [approvedCount, executedCount, executed, funnel] = await Promise.all([
-    prisma.agentProposal.count({ where: { companyId: company.id, status: { in: ["validee", "modifiee"] } } }),
-    prisma.agentProposal.count({ where: { companyId: company.id, status: "executee" } }),
-    prisma.agentProposal.findMany({ where: { companyId: company.id, status: "executee" }, orderBy: { decidedAt: "desc" }, take: 10 }),
-    getFunnelStats(company.id),
+  const since = storySince();
+  const [executed, leads] = await Promise.all([
+    prisma.agentProposal.findMany({
+      where: { companyId: company.id, status: "executee" },
+      select: { title: true, agent: true, kind: true, decidedAt: true, createdAt: true, executionLog: { select: { executedAt: true } } },
+    }),
+    prisma.lead.findMany({
+      where: { companyId: company.id, OR: [{ contactedAt: { gte: since } }, { repliedAt: { gte: since } }, { meetingAt: { gte: since } }, { closedAt: { gte: since } }] },
+      select: { name: true, stage: true, contactedAt: true, repliedAt: true, meetingAt: true, closedAt: true },
+    }),
   ]);
+  const weeks = buildResultsTimeline(
+    executed.map((proposal) => ({ title: proposal.title, agent: proposal.agent, kind: proposal.kind, at: proposal.executionLog?.executedAt ?? proposal.decidedAt ?? proposal.createdAt })),
+    leads,
+    since,
+  );
   const target = computeBusinessTarget(company);
 
   return (
     <AppShell {...await getShellProps(company)}>
       <PageHeading
-        kicker="RÉSULTATS COMMERCIAUX"
-        title="Résultats"
-        description="Seuls les faits enregistrés ou déclarés par vous sont comptés : aucun résultat commercial n’est attribué sans preuve."
-        actions={<Link className="btn" href="/dashboard">Revenir aux actions</Link>}
+        kicker="RÉSULTATS"
+        title="Ce que vos actions ont donné."
+        description="Ce qui a été diffusé, confirmé par le canal, et ce que vous avez déclaré, semaine par semaine."
+        actions={<Link className="btn" href="/dashboard?view=historique"><Icon name="history" /> Historique détaillé</Link>}
       />
       <section aria-labelledby="results-target">
-        <SectionTitle title="Objectif de chiffre d’affaires"><Link href="/entreprise">Actualiser ma situation →</Link></SectionTitle>
+        <SectionTitle title="Objectif de chiffre d’affaires"><Link href="/entreprise?tab=objectifs">Actualiser ma situation →</Link></SectionTitle>
         {target ? (
           <div className="metrics metrics-4">
             <div className="metric"><div className="metric-label">CA mensuel déclaré</div><div className="metric-value">{formatEuros(target.current)}</div></div>
@@ -43,33 +67,37 @@ export default async function RapportPage() {
           </div>
         ) : <EmptyState agent="co_ceo" title="Aucun objectif chiffré renseigné" says="Donnez-moi un chiffre d’affaires à atteindre et je suivrai l’écart avec vous."><Link className="btn primary" href="/entreprise?tab=objectifs#modifier">Renseigner mon objectif chiffré</Link></EmptyState>}
       </section>
-      <section>
-        <SectionTitle title="Prospection · ce mois-ci"><Link href="/prospection">Suivre les contacts →</Link></SectionTitle>
-        <div className="metrics metrics-4">
-          {([
-            ["Prospects contactés", funnel.thisMonth.contactes],
-            ["Réponses reçues", funnel.thisMonth.reponses],
-            ["Rendez-vous", funnel.thisMonth.rdv],
-            ["Clients gagnés déclarés", funnel.thisMonth.clients],
-          ] as const).map(([label, count]) => <div key={label} className="metric"><div className="metric-label">{label}</div><div className="metric-value">{String(count).padStart(2, "0")}</div></div>)}
-        </div>
-      </section>
-      <section>
-        <SectionTitle title="Productions · depuis le début"><Link href="/dashboard?view=historique">Consulter l’historique des décisions →</Link></SectionTitle>
-        <div className="metrics" style={{ gridTemplateColumns: "repeat(2, 1fr)" }}>
-          <div className="metric"><div className="metric-label"><span className="dot orange" /> Approuvées, pas encore publiées ni envoyées</div><div className="metric-value">{String(approvedCount).padStart(2, "0")}</div></div>
-          <div className="metric"><div className="metric-label"><span className="dot green" /> Exécutées par BienDecider</div><div className="metric-value">{String(executedCount).padStart(2, "0")}</div></div>
-        </div>
-      </section>
-      <section>
-        <SectionTitle title="Dernières réalisations">{company.siteSlug && <Link href={`/site/${company.siteSlug}`} target="_blank" rel="noopener noreferrer">Voir le site publié →</Link>}</SectionTitle>
-        {executed.length === 0 ? <EmptyState agent="co_ceo" role="region" label="Résultats à venir" title="Rien de publié pour l’instant" says="Ce qui est réellement publié ou envoyé apparaîtra ici. Une production approuvée ne compte pas tant qu’elle n’est pas diffusée.">
+      <section aria-label="Semaine par semaine">
+        <SectionTitle title="Semaine par semaine">{company.siteSlug && <Link href={`/site/${company.siteSlug}`} target="_blank" rel="noopener noreferrer">Voir le site publié →</Link>}</SectionTitle>
+        {weeks.length === 0 ? <EmptyState agent="co_ceo" role="region" label="Résultats à venir" title="Rien de publié pour l’instant" says="Ce qui est réellement publié ou envoyé apparaîtra ici. Une production approuvée ne compte pas tant qu’elle n’est pas diffusée.">
           <Link className={`btn ${target ? "primary" : ""}`} href="/dashboard?view=validation">Examiner les productions</Link>
         </EmptyState> : (
-          <div className="table-scroll"><table className="data-table">
-            <thead><tr><th>Réalisation</th><th>Agent</th></tr></thead>
-            <tbody>{executed.map((proposal) => <tr key={proposal.id}><td><strong>{proposal.title}</strong></td><td><AgentByline agent={proposal.agent} /></td></tr>)}</tbody>
-          </table></div>
+          <div className="results-weeks">
+            {weeks.map((week) => (
+              <section key={week.start.toISOString()} className="results-week" aria-label={`Semaine du ${WEEK_LABEL.format(week.start)}`}>
+                <header>
+                  <h3>Semaine du {WEEK_LABEL.format(week.start)}</h3>
+                  <small>{[week.diffusions > 0 && plural(week.diffusions, "diffusion", "diffusions"), week.declarations > 0 && plural(week.declarations, "déclaration", "déclarations")].filter(Boolean).join(" · ")}</small>
+                </header>
+                <ul>
+                  {week.items.map((item, index) => (
+                    <li key={index} className={`results-item ${item.kind}`}>
+                      <span className="results-icon" aria-hidden="true"><Icon name={item.kind === "diffusion" ? "check" : "contact-round"} /></span>
+                      <div>
+                        <strong>{item.text}</strong>
+                        <small>
+                          {ITEM_DAY.format(item.at)} · {item.kind === "diffusion"
+                            ? <><Tag color="green">Confirmé par le canal</Tag> {item.agent && <AgentByline agent={item.agent} size={16}>l’a préparé</AgentByline>}</>
+                            : <Tag color="gray">Déclaré par vous</Tag>}
+                        </small>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ))}
+            <p className="legend">Aucun chiffre d’affaires n’est déduit d’une publication. Les mesures avant / après (visites, avis, appels) s’afficheront ici quand elles seront relevées.</p>
+          </div>
         )}
       </section>
     </AppShell>
