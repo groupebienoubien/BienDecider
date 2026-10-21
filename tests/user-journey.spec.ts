@@ -766,6 +766,9 @@ test("the review queue shows one production at a time, moves forward and filters
     await filters.getByRole("button", { name: "Toute l’équipe" }).click();
     await expect(page.locator(".production-list button")).toHaveCount(2);
     await expect(page.getByText("Approuver ou rejeter ne publie ni n’envoie rien.")).toHaveCount(0);
+    await page.setViewportSize({ width: 320, height: 720 });
+    await expect(page.getByRole("button", { name: "Suivante →" })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   } finally { await prisma.$disconnect(); }
 });
 

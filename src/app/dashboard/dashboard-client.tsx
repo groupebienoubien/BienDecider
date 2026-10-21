@@ -466,10 +466,10 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
             <div className="studio review-queue">
               <div className="queue-position">
                 <span>Production {selectedIndex + 1} sur {queueItems.length}</span>
-                <span>
+                {queueItems.length > 1 && <span>
                   <button type="button" className="quiet" disabled={selectedIndex <= 0} onClick={() => setSelectedId(queueItems[selectedIndex - 1]?.id)}>← Précédente</button>
                   <button type="button" className="quiet" disabled={selectedIndex >= queueItems.length - 1} onClick={() => setSelectedId(queueItems[selectedIndex + 1]?.id)}>Suivante →</button>
-                </span>
+                </span>}
               </div>
               <aside className="production-list" aria-label="Productions">
                 {queueItems.map((proposal) => {
