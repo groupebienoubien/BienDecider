@@ -183,6 +183,7 @@ export function ProposalCard({
             <h3>Destination</h3>
             <p>{destination}</p>
             <p>{guidance.nextStep}</p>
+            <Link className="text-link" href="/canaux" target="_blank" rel="noopener noreferrer">Ce que fait chaque canal</Link>
             {(channel === "Facebook" || channel === "Site") && (
               <div className="connection">
                 <span>{channel === "Site" || facebookPageName ? <Tag color="green">Connecté</Tag> : <Tag color="orange">Non connecté</Tag>}</span>

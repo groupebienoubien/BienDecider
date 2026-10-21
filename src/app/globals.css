@@ -98,3 +98,11 @@ h1, h2 { font-family: var(--font-sora), sans-serif; letter-spacing: 0; }
   .landing-preview { height: 160px; }
   .landing-preview img { min-width: 650px; width: 650px; max-width: none; transform: translateX(-145px); object-position: 50% 50%; }
 }
+
+/* Page publique « Ce que fait chaque canal » (#224). */
+.channels-grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); list-style: none; padding: 0; }
+.channel-card { padding: 20px; background: var(--bd-surface); border: 1px solid var(--bd-line); border-radius: 12px; border-top: 4px solid var(--bd-line-strong); }
+.channel-card.by-us { border-top-color: var(--bd-brand); }
+.channel-badge { display: inline-block; margin-top: 8px; padding: 3px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; background: var(--bd-cream-deep); color: var(--bd-ink); }
+.channel-card.by-us .channel-badge { background: var(--bd-brand-light); color: var(--bd-brand); }
+
