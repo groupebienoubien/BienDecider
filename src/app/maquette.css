@@ -521,4 +521,18 @@
 .mq .review-queue .production-choice{width:200px}
 .mq .review-queue .production-actions{position:sticky;bottom:76px;z-index:5;margin:24px -18px 0;padding:12px 18px;background:var(--surface);border-top:1px solid var(--line);box-shadow:0 -6px 16px #3a2a1410}
 }
+
+/* Prospects en fiches (#221) : une fiche par organisation, la prochaine action en avant. */
+.mq .lead-tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px}
+.mq .lead-tile{display:flex;flex-direction:column;gap:10px;padding:18px;background:var(--surface);border:1px solid var(--line);border-radius:10px;border-left:4px solid var(--bd-agent-demarchage)}
+.mq .lead-tile:target{box-shadow:0 0 0 3px var(--accent-light)}
+.mq .lead-tile header{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
+.mq .lead-tile h3{margin:0;font-size:15px;line-height:1.35}
+.mq .lead-tile>p{margin:0;font-size:13px;color:var(--muted);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.mq .lead-next{display:flex;flex-wrap:wrap;gap:6px;margin-top:auto}
+.mq .lead-next button{font-size:12px;min-height:38px}
+.mq .lead-details{font-size:12px;color:var(--muted)}
+.mq .lead-details summary{cursor:pointer;width:max-content;min-height:24px}
+.mq .lead-details p{margin:6px 0 0}
+@media(max-width:760px){.mq .lead-tiles{grid-template-columns:1fr}}
 }

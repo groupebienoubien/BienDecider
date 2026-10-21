@@ -8,7 +8,7 @@ import { LeadCard, NEXT_LEAD_STAGES, type LeadMode, type LeadPatch } from "@/com
 import { Modal } from "@/components/modal";
 import { PageHeading, SectionTitle, Tag } from "@/components/mockup-ui";
 import { PERSONAS } from "@/lib/agents/personas";
-import { countLeads, MIN_CONTACTS_TO_CONCLUDE, type LeadStage } from "@/lib/funnel-shared";
+import { countLeads, MIN_CONTACTS_TO_CONCLUDE } from "@/lib/funnel-shared";
 import { pickNextLead } from "@/lib/lead-followup";
 
 const STAGE_LABELS: Record<string, string> = {
@@ -21,13 +21,24 @@ const STAGE_LABELS: Record<string, string> = {
   ecarte: "Écarté",
 };
 
-const ORDER: LeadStage[] = ["a_contacter", "contacte", "repondu", "rdv", "gagne", "perdu"];
 const DAY = new Intl.DateTimeFormat("fr-FR", { day: "numeric", month: "short", timeZone: "Europe/Paris" });
 
-/** Étapes que le menu peut déclarer directement ; « Contacté » depuis « À contacter » passe par la date du contact. */
-function reachableStages(stage: string): LeadStage[] {
-  return stage === "a_contacter" ? ["contacte"] : NEXT_LEAD_STAGES[stage] ?? [];
-}
+/** Ce que le dirigeant déclare ensuite, en un geste, sans menu déroulant (charte, section 6). */
+const NEXT_ACTION_LABELS: Record<string, string> = {
+  repondu: "Il a répondu",
+  rdv: "RDV pris",
+  gagne: "Devenu client",
+  perdu: "Sans suite",
+};
+
+/** Filtres par étape, regroupés pour rester lisibles. */
+const STAGE_FILTERS: { key: string; label: string; stages: string[] }[] = [
+  { key: "all", label: "Tous", stages: [] },
+  { key: "todo", label: "À contacter", stages: ["a_contacter"] },
+  { key: "ongoing", label: "En cours", stages: ["contacte", "repondu", "rdv"] },
+  { key: "won", label: "Clients", stages: ["gagne"] },
+  { key: "closed", label: "Sans suite", stages: ["perdu", "ecarte"] },
+];
 
 function lastSource(lead: Lead) {
   const declared = lead.stage !== "a_contacter" && lead.stage !== "propose";
@@ -52,6 +63,7 @@ export function ProspectionClient({
 }) {
   const [leads, setLeads] = useState(initialLeads);
   const [search, setSearch] = useState("");
+  const [stageFilter, setStageFilter] = useState("all");
   const [openedAt] = useState(() => Date.now());
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -99,16 +111,13 @@ export function ProspectionClient({
     }
   }
 
-  function declareStage(lead: Lead, next: LeadStage) {
-    if (lead.stage === "a_contacter" && next === "contacte") setManaged({ id: lead.id, mode: "contact" });
-    else void patchLead(lead.id, { stage: next });
-  }
 
   const nextLead = pickNextLead(leads, openedAt);
   const normalizedSearch = search.trim().toLocaleLowerCase("fr-FR");
   const matchesSearch = (lead: Lead) => !normalizedSearch || [lead.name, lead.reason, lead.segment, lead.publicContact, lead.source]
     .some((value) => value?.toLocaleLowerCase("fr-FR").includes(normalizedSearch));
-  const visibleLeads = leads.filter(matchesSearch);
+  const matchesStage = (lead: Lead) => stageFilter === "all" || (STAGE_FILTERS.find((filter) => filter.key === stageFilter)?.stages ?? []).includes(lead.stage);
+  const visibleLeads = leads.filter((lead) => matchesSearch(lead) && matchesStage(lead));
   const managedLead = leads.find((lead) => lead.id === managed?.id);
 
   // Recalculé depuis l'état local (pas depuis `funnel`, figé au chargement
@@ -127,15 +136,11 @@ export function ProspectionClient({
   return (
     <div>
       <PageHeading
-        kicker="RELATIONS COMMERCIALES"
-        title="Les contacts deviennent des échanges."
-        description="Les événements du canal et vos déclarations restent identifiables."
+        kicker="DÉCISIONS"
+        title="Vos prospects."
+        description={`${t.identifies} identifiés · ${t.contactes} contactés · ${t.reponses} réponses · ${t.rdv} RDV · ${t.clients} clients`}
         actions={<Link className={`btn ${leads.length > 0 ? "primary" : ""}`} href="/equipe"><Icon name="plus" /> Confier une recherche</Link>}
       />
-      <div className="sync-line">
-        <span>{t.identifies} identifiés · {t.contactes} contactés · {t.reponses} réponses · {t.rdv} RDV · {t.clients} clients</span>
-        <Link href="/rapport">Suivre les résultats →</Link>
-      </div>
 
       {nextLead && matchesSearch(nextLead) && (
         <section aria-label="Prochain prospect à traiter" className="notice">
@@ -148,6 +153,13 @@ export function ProspectionClient({
         <label htmlFor="lead-search">Rechercher</label>
         <input id="lead-search" type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Nom ou projet" />
       </div>
+      {leads.length > 0 && <div className="tabs" role="group" aria-label="Filtrer par étape">
+        {STAGE_FILTERS.map((filter) => (
+          <button key={filter.key} type="button" aria-pressed={stageFilter === filter.key} className={stageFilter === filter.key ? "selected" : undefined} onClick={() => setStageFilter(filter.key)}>
+            {filter.label} ({filter.key === "all" ? leads.length : leads.filter((lead) => filter.stages.includes(lead.stage)).length})
+          </button>
+        ))}
+      </div>}
 
       {error && <p role="alert" className="warning">{error}</p>}
 
@@ -160,27 +172,36 @@ export function ProspectionClient({
           <Link className="btn" href="/equipe">Confier une recherche à {PERSONAS.demarchage.name}</Link>
         </div>
       ) : visibleLeads.length === 0 ? (
-        <div role="status" className="empty">Aucun prospect ne correspond à « {search} ».</div>
+        <div role="status" className="empty">{search ? <>Aucun prospect ne correspond à « {search} ».</> : "Aucun prospect à cette étape."}</div>
       ) : (
-        <div className="table-scroll"><table className="data-table">
-          <thead><tr><th>Prospect</th><th>Projet</th><th>Étape</th><th>Dernière source</th><th>Détail</th></tr></thead>
-          <tbody>{visibleLeads.map((lead) => {
-            const source = lastSource(lead);
-            const reachable = reachableStages(lead.stage);
-            return <tr key={lead.id} data-search={`${lead.name} ${lead.reason}`.toLowerCase()}>
-              <td><strong>{lead.name}</strong>{lead.publicContact && <small>{lead.publicContact}</small>}</td>
-              <td>{lead.reason}{lead.segment && <small className="capitalize">{lead.segment}</small>}</td>
-              <td>
-                <select aria-label={`Étape de ${lead.name}`} value={lead.stage} disabled={busyId === lead.id || lead.stage === "ecarte" || reachable.length === 0} onChange={(event) => declareStage(lead, event.target.value as LeadStage)}>
-                  <option value={lead.stage}>{STAGE_LABELS[lead.stage] ?? lead.stage}</option>
-                  {ORDER.filter((stage) => reachable.includes(stage) && stage !== lead.stage).map((stage) => <option key={stage} value={stage}>{STAGE_LABELS[stage]}</option>)}
-                </select>
-              </td>
-              <td><Tag color="gray">{source.label}</Tag><small>{source.date}</small></td>
-              <td><button type="button" onClick={() => setManaged({ id: lead.id, mode: null })}><Icon name="eye" /> Gérer<span className="sr-only"> : {lead.name}</span></button></td>
-            </tr>;
-          })}</tbody>
-        </table></div>
+        <div className="lead-tiles">{visibleLeads.map((lead) => {
+          const source = lastSource(lead);
+          const nextStages = NEXT_LEAD_STAGES[lead.stage] ?? [];
+          return (
+            <article key={lead.id} id={`lead-${lead.id}`} aria-label={lead.name} className="lead-tile">
+              <header>
+                <h3>{lead.name}</h3>
+                <Tag color={lead.stage === "gagne" ? "green" : lead.stage === "perdu" || lead.stage === "ecarte" ? "gray" : lead.stage === "a_contacter" ? "orange" : "blue"}>{STAGE_LABELS[lead.stage] ?? lead.stage}</Tag>
+              </header>
+              <p>{lead.reason}</p>
+              <div className="lead-next">
+                {lead.stage === "a_contacter" && <>
+                  <button type="button" onClick={() => setManaged({ id: lead.id, mode: "draft" })}>Préparer un message</button>
+                  <button type="button" className="quiet" onClick={() => setManaged({ id: lead.id, mode: "contact" })}>J’ai déjà pris contact</button>
+                </>}
+                {nextStages.filter((stage) => NEXT_ACTION_LABELS[stage]).map((stage, index) => (
+                  <button key={stage} type="button" className={index === 0 ? undefined : "quiet"} disabled={busyId === lead.id} onClick={() => void patchLead(lead.id, { stage })}>{NEXT_ACTION_LABELS[stage]}</button>
+                ))}
+              </div>
+              <details className="lead-details">
+                <summary>Détails</summary>
+                <p>{[lead.segment, lead.publicContact].filter(Boolean).join(" · ") || "Aucun contact public renseigné"}</p>
+                <p>{source.label} · {source.date}</p>
+                <button type="button" className="text-link" onClick={() => setManaged({ id: lead.id, mode: null })}>Gérer ce prospect<span className="sr-only"> : {lead.name}</span></button>
+              </details>
+            </article>
+          );
+        })}</div>
       )}
       <p className="legend">{PERSONAS.demarchage.name} identifie des organisations correspondant à votre cible ; vous décidez lesquelles contacter et déclarez ce qui s’est passé. Chiffres calculés en base, jamais estimés par un agent. « Contacté » ne signifie ni « intéressé » ni « client ». Les rendez-vous et ventes sont déclarés par vous. Les prospects marqués « sans suite » restent comptés comme contactés.</p>
 
