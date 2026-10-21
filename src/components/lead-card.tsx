@@ -43,7 +43,8 @@ export function LeadCard({ lead, now, busy, companyName, trade, phone, onPatch, 
   initialMode?: LeadMode;
 }) {
   const [mode, setMode] = useState<LeadMode>(initialMode);
-  const [draft, setDraft] = useState("");
+  // Ouverte depuis « Préparer un message » sur la fiche : le message est prêt d'emblée.
+  const [draft, setDraft] = useState(() => initialMode === "draft" ? buildOutreachDraft({ lead, companyName, trade, phone }) : "");
   const [copyNotice, setCopyNotice] = useState<string | null>(null);
   const [day, setDay] = useState(initialMode === "contact" ? localDay() : "");
   const [reason, setReason] = useState("");
@@ -78,7 +79,7 @@ export function LeadCard({ lead, now, busy, companyName, trade, phone, onPatch, 
   }
 
   return (
-    <div id={`lead-${lead.id}`} tabIndex={-1}>
+    <div id={`lead-card-${lead.id}`} tabIndex={-1}>
       <p><strong>{lead.name}</strong><br />{lead.reason}</p>
       <small>
         {lead.segment && <span className="capitalize">{lead.segment} · </span>}

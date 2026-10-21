@@ -772,6 +772,29 @@ test("the review queue shows one production at a time, moves forward and filters
   } finally { await prisma.$disconnect(); }
 });
 
+test("prospects are contact cards whose next step is one click, filtered by stage", async ({ page, company }) => {
+  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }) });
+  try {
+    const contacted = await prisma.lead.create({ data: { companyId: company.id, name: "Régie du Centre", reason: "Petites interventions", stage: "contacte", contactedAt: new Date() } });
+    await prisma.lead.create({ data: { companyId: company.id, name: "Syndic du Parc", reason: "Copropriétés", stage: "a_contacter" } });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`${baseURL}/prospection`);
+    // Les personnes sont des fiches ; seul le bilan par type de cible reste un tableau.
+    await expect(page.locator("table").filter({ hasText: "Régie du Centre" })).toHaveCount(0);
+    await expect(page.locator("main select")).toHaveCount(0);
+    const card = page.getByRole("article", { name: "Régie du Centre" });
+    await card.getByRole("button", { name: "Il a répondu" }).click();
+    await expect.poll(async () => (await prisma.lead.findUniqueOrThrow({ where: { id: contacted.id } })).stage).toBe("repondu");
+    await expect(card.getByRole("button", { name: "RDV pris" })).toBeVisible();
+    const filters = page.getByRole("group", { name: "Filtrer par étape" });
+    await filters.getByRole("button", { name: /À contacter/ }).click();
+    await expect(page.locator(".lead-tile")).toHaveCount(1);
+    await expect(page.getByRole("article", { name: "Syndic du Parc" }).getByRole("button", { name: "Préparer un message" })).toBeVisible();
+    await page.getByRole("article", { name: "Syndic du Parc" }).getByRole("button", { name: "Préparer un message" }).click();
+    await expect(page.getByLabel(/Message préparé/)).toHaveValue(/Syndic du Parc/);
+  } finally { await prisma.$disconnect(); }
+});
+
 test("explicit admin can tune global risk level but cannot lower the effective floor", async ({ page, company }) => {
   test.skip(!adminFixture, "Requires an isolated local server with ADMIN_EMAILS for the fixture admin.");
   expect(company.ownerEmail).toBe("ux-admin-settings-test@example.invalid");
@@ -1004,7 +1027,9 @@ test("a prospect is verified, a message is prepared and copied without contact, 
     expect(await reload(bare.id)).toMatchObject({ stage: "ecarte", statusReason: "Hors zone" });
     await page.keyboard.press("Escape");
     await expect(next).toHaveCount(0);
-    await page.getByRole("row").filter({ hasText: "Association Sans Contact" }).getByRole("button", { name: /Gérer/ }).click();
+    const discarded = page.getByRole("article", { name: "Association Sans Contact" });
+    await discarded.getByText("Détails", { exact: true }).click();
+    await discarded.getByRole("button", { name: /Gérer/ }).click();
     await dialog.getByRole("button", { name: "Reprendre ce prospect" }).click();
     await expect.poll(async () => (await reload(bare.id)).stage).toBe("a_contacter");
     expect((await reload(bare.id)).statusReason).toBeNull();
@@ -1024,8 +1049,8 @@ test("the prospect follow-up API refuses invented progress, future contacts and 
     const patch = (id: string, data: object) => page.request.patch(`${baseURL}/api/leads/${id}`, { data });
     await page.goto(`${baseURL}/prospection`);
     await page.getByRole("searchbox", { name: "Rechercher" }).fill("Association A");
-    await expect(page.getByRole("row").filter({ hasText: "Association A" })).toBeVisible();
-    await expect(page.getByRole("row").filter({ hasText: "Association C" })).toHaveCount(0);
+    await expect(page.getByRole("article", { name: "Association A" })).toBeVisible();
+    await expect(page.getByRole("article", { name: "Association C" })).toHaveCount(0);
     await page.getByRole("searchbox", { name: "Rechercher" }).clear();
 
     expect((await patch(lead.id, { stage: "gagne" })).status()).toBe(409);
