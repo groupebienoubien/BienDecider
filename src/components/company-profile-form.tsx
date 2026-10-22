@@ -136,12 +136,7 @@ export function CompanyProfileForm({ guided = false, embedded = false, initialTa
       });
       if (!res.ok) throw new Error();
 
-      if (isNew) {
-        // Premier passage de Martine (audit) lancé automatiquement à la fin
-        // de l'onboarding (cf. docs/spec-contextualisation.md).
-        fetch("/api/agents/marketing/run", { method: "POST" }).catch(() => {});
-      }
-
+      // Le premier audit de Martine est créé au plan et lancé par le serveur à la première création du profil.
       router.push("/dashboard");
     } catch {
       setError("Impossible d'enregistrer ces informations, réessayez.");

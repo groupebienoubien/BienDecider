@@ -1,4 +1,5 @@
 import type { PaulReference } from "@/lib/paul-references";
+import type { RunFailureReason } from "@/lib/agents/agent-errors";
 
 export const NDJSON_CONTENT_TYPE = "application/x-ndjson";
 
@@ -7,7 +8,7 @@ export type PaulStreamEvent =
   | { type: "delta"; text: string }
   | { type: "reset" }
   | { type: "done"; reply: string; references: PaulReference[] }
-  | { type: "error"; error: string };
+  | { type: "error"; error: string; reason?: RunFailureReason };
 
 export function encodeStreamEvent(event: PaulStreamEvent): string {
   return `${JSON.stringify(event)}\n`;

@@ -22,3 +22,37 @@ export function groupPlanItems<T extends { theme: string | null; priority: numbe
     return [{ theme, items: groupedItems }];
   });
 }
+
+export type PlanItemStatus = "propose" | "en_cours" | "lance" | "termine" | "ecarte";
+
+export type PlanItemStatusView = {
+  label: "À lancer" | "En cours" | "À décider" | "Terminée" | "Écartée";
+  cta: { label: string; href?: string } | null;
+};
+
+const PLAN_ITEM_STATUSES: readonly string[] = ["propose", "en_cours", "lance", "termine", "ecarte"] satisfies PlanItemStatus[];
+
+function isPlanItemStatus(status: string): status is PlanItemStatus {
+  return PLAN_ITEM_STATUSES.includes(status);
+}
+
+// Glossaire validé : un seul libellé par statut d'action, partagé par l'accueil et le plan.
+// « Valider » reste réservé aux productions.
+export function planItemStatusView(status: string, lastRunStatus: string | null | undefined, pendingCount: number): PlanItemStatusView {
+  // Statut inconnu : libellé neutre, jamais « Terminée » par défaut.
+  if (!isPlanItemStatus(status)) return { label: "En cours", cta: null };
+  switch (status) {
+    case "propose":
+      return { label: "À lancer", cta: { label: lastRunStatus === "failed" ? "Relancer l’action" : "Examiner et lancer" } };
+    case "en_cours":
+      return { label: "En cours", cta: null };
+    case "lance":
+      return pendingCount > 0
+        ? { label: "À décider", cta: { label: `${pendingCount} à examiner`, href: "/dashboard?view=validation" } }
+        : { label: "Terminée", cta: { label: "Voir la production", href: "/dashboard?view=historique" } };
+    case "termine":
+      return { label: "Terminée", cta: null };
+    case "ecarte":
+      return { label: "Écartée", cta: null };
+  }
+}

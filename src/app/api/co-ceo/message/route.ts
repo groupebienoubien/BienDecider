@@ -5,6 +5,7 @@ import { buildPageContext, pageContextSchema } from "@/lib/agents/page-context";
 import { AgentRunQuotaError, reserveUsageBudget } from "@/lib/agent-runs";
 import { getSessionCompany } from "@/lib/session";
 import { encodeStreamEvent, NDJSON_CONTENT_TYPE, type PaulStreamEvent } from "@/lib/chat-stream";
+import { classifyRunError, failureMessage } from "@/lib/agents/agent-errors";
 
 export const maxDuration = 300;
 
@@ -46,7 +47,8 @@ export async function POST(request: NextRequest) {
           send({ type: "done", reply: reply.content, references: reply.references });
         } catch (error) {
           console.error("Erreur Co-CEO:", error);
-          send({ type: "error", error: error instanceof AgentRunQuotaError ? error.message : "Échec de la réponse" });
+          const reason = classifyRunError(error) ?? "outage";
+          send({ type: "error", error: error instanceof AgentRunQuotaError ? error.message : failureMessage(reason, "Paul"), reason });
         }
         try { controller.close(); } catch { /* client parti */ }
       },
@@ -55,7 +57,7 @@ export async function POST(request: NextRequest) {
       headers: { "Content-Type": `${NDJSON_CONTENT_TYPE}; charset=utf-8`, "Cache-Control": "no-store, no-transform" },
     });
   } catch (error) {
-    if (error instanceof AgentRunQuotaError) return NextResponse.json({ error: error.message }, { status: 429 });
+    if (error instanceof AgentRunQuotaError) return NextResponse.json({ error: error.message, reason: classifyRunError(error) }, { status: 429 });
     console.error("Erreur Co-CEO:", error);
     return NextResponse.json({ error: "Échec de la réponse" }, { status: 500 });
   }

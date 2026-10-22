@@ -11,7 +11,7 @@ import { decideProposalReview, reviewProposal, reviewPublishedSiteHtml } from ".
 import { describePage } from "../src/lib/paul-context";
 import { buildOutreachDraft, dayToDate, formatDay, hasPlaceholders, leadReadiness, pickNextLead } from "../src/lib/lead-followup";
 import { describeRunProgress, finishedRunMessage, formatDuration, recentSucceededRuns, runResultHref } from "../src/lib/agent-run-progress";
-import { groupPlanItems } from "../src/lib/action-plan-view";
+import { groupPlanItems, planItemStatusView } from "../src/lib/action-plan-view";
 import { facebookAuditSource } from "../src/lib/facebook-audit-source";
 
 test("risk rules use registered kinds and contextual factors, then fail closed", () => {
@@ -223,7 +223,7 @@ test("the next prospect is the oldest usable one, skips deferred ones, and the d
 
 test("run progress gives indicative steps from elapsed time, flags overruns and announces the end per agent", () => {
   const t0 = Date.parse("2026-10-15T10:00:00Z");
-  const queued = { id: "r", agent: "contenu", planItemId: null, status: "queued", attempts: 0, maxDurationSeconds: 300, queuedAt: new Date(t0).toISOString(), startedAt: null, finishedAt: null, resultCount: 0, errorMessage: null };
+  const queued = { id: "r", agent: "contenu", planItemId: null, status: "queued", attempts: 0, maxDurationSeconds: 300, queuedAt: new Date(t0).toISOString(), startedAt: null, finishedAt: null, resultCount: 0, errorMessage: null, failureReason: null };
   const running = { ...queued, status: "running", startedAt: new Date(t0).toISOString() };
   const states = (progress: ReturnType<typeof describeRunProgress>) => progress.steps.map((step) => step.state);
 
@@ -266,6 +266,41 @@ test("action plan groups by business theme and sorts by priority rather than age
   expect(groupPlanItems(items).map(({ theme, items: group }) => [theme, group.map((item) => item.id)])).toEqual([
     ["Visibilité", ["urgent", "low"]], ["Prospection", ["prospect"]], ["À classer", ["legacy"]],
   ]);
+});
+
+test("plan item never launched is to launch with an examine-and-launch button", () => {
+  expect(planItemStatusView("propose", undefined, 0)).toEqual({ label: "À lancer", cta: { label: "Examiner et lancer" } });
+});
+
+test("plan item whose last run failed is to launch with a relaunch button", () => {
+  expect(planItemStatusView("propose", "failed", 0)).toEqual({ label: "À lancer", cta: { label: "Relancer l’action" } });
+});
+
+test("plan item being run is in progress", () => {
+  expect(planItemStatusView("en_cours", "running", 0)).toEqual({ label: "En cours", cta: null });
+});
+
+test("launched plan item with pending productions is to decide and links to Decisions", () => {
+  expect(planItemStatusView("lance", "succeeded", 3)).toEqual({ label: "À décider", cta: { label: "3 à examiner", href: "/dashboard?view=validation" } });
+});
+
+test("launched plan item with every production decided links to the production", () => {
+  expect(planItemStatusView("lance", "succeeded", 0)).toEqual({ label: "Terminée", cta: { label: "Voir la production", href: "/dashboard?view=historique" } });
+});
+
+test("finished plan item is done and never offered on the home cards", () => {
+  expect(planItemStatusView("termine", "succeeded", 0)).toEqual({ label: "Terminée", cta: null });
+  expect(planItemStatusView("ecarte", null, 0)).toEqual({ label: "Écartée", cta: null });
+  expect(planItemStatusView("inconnu", null, 0)).toEqual({ label: "En cours", cta: null });
+  for (const status of ["propose", "en_cours", "lance", "termine", "ecarte"]) {
+    for (const lastRun of [null, "failed"]) {
+      for (const pending of [0, 2]) {
+        const view = planItemStatusView(status, lastRun, pending);
+        expect(view.label).not.toMatch(/valider/i);
+        expect(view.cta?.label ?? "").not.toMatch(/valider/i);
+      }
+    }
+  }
 });
 
 test("Facebook audit source uses a declared page or the Raygine anchor only for Raygine", () => {

@@ -4,6 +4,8 @@ import { getSessionEmail } from "@/lib/session";
 import { omitPasswordHash } from "@/lib/safe-company";
 import { z } from "zod";
 import { readJsonObject } from "@/lib/request-body";
+import { startOnboardingAudit } from "@/lib/agents/onboarding-audit";
+import { AgentRunConflictError, AgentRunQuotaError } from "@/lib/agents/agent-errors";
 
 // Les montants sont des entiers 32 bits en base : au-delà, la requête échouerait en erreur serveur.
 const MAX_AMOUNT = 1_000_000_000;
@@ -127,10 +129,25 @@ export async function POST(request: NextRequest) {
     newClientsPerMonth: toInt(newClientsPerMonth),
   };
 
+  // L'inscription crée la ligne sans profil (nom vide) : la première création du profil est ce passage-là.
+  const existing = await prisma.company.findUnique({ where: { ownerEmail }, select: { name: true } });
+  const isFirstCreation = !existing?.name;
   const company = await prisma.company.upsert({
     where: { ownerEmail },
     create: { ownerEmail, ...data },
     update: data,
   });
+  if (isFirstCreation) {
+    // Un lancement refusé (quota, budget, conflit) ne bloque pas l'onboarding : l'action reste « à lancer ».
+    try {
+      await startOnboardingAudit(company.id);
+    } catch (error) {
+      if (error instanceof AgentRunQuotaError || error instanceof AgentRunConflictError) {
+        console.error(`Premier audit refusé au lancement (${error.reason ?? "conflit"}) : ${error.message}`);
+      } else {
+        console.error("Erreur inattendue à la création du premier audit :", error);
+      }
+    }
+  }
   return NextResponse.json(omitPasswordHash(company), { status: 201 });
 }

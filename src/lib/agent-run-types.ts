@@ -1,4 +1,5 @@
 import type { AgentRun } from "@prisma/client";
+import { isRunFailureReason, type RunFailureReason } from "@/lib/agents/agent-errors";
 
 export type AgentRunView = {
   id: string;
@@ -12,12 +13,14 @@ export type AgentRunView = {
   finishedAt: Date | string | null;
   resultCount: number;
   errorMessage: string | null;
+  /** Motif typé d'une exécution échouée ; null tant qu'elle n'a pas échoué. */
+  failureReason: RunFailureReason | null;
 };
 
 /** Colonnes lues pour construire une AgentRunView (ni payload ni clés internes). */
 export const AGENT_RUN_VIEW_SELECT = {
   id: true, agent: true, planItemId: true, status: true, attempts: true, maxDurationSeconds: true,
-  queuedAt: true, startedAt: true, finishedAt: true, resultCount: true, errorMessage: true,
+  queuedAt: true, startedAt: true, finishedAt: true, resultCount: true, errorMessage: true, failureReason: true,
 } as const;
 
 export type AgentRunViewSource = Pick<AgentRun, keyof typeof AGENT_RUN_VIEW_SELECT>;
@@ -36,5 +39,6 @@ export function publicRun(run: AgentRunViewSource): AgentRunView {
     finishedAt: run.finishedAt,
     resultCount: run.resultCount,
     errorMessage: run.errorMessage,
+    failureReason: isRunFailureReason(run.failureReason) ? run.failureReason : null,
   };
 }

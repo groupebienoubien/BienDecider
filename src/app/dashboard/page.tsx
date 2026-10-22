@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
+import { AGENT_RUN_VIEW_SELECT, publicRun } from "@/lib/agent-run-types";
 import { getSessionEmail } from "@/lib/session";
 import { AppShell } from "@/components/app-shell";
 import { omitPasswordHash } from "@/lib/safe-company";
@@ -35,14 +36,14 @@ export default async function DashboardPage({ searchParams }: {
       orderBy: [{ priority: "asc" }, { createdAt: "asc" }],
       include: {
         proposals: { orderBy: { createdAt: "desc" } },
-        agentRuns: { orderBy: { createdAt: "desc" }, take: 1, select: { id: true, agent: true, planItemId: true, status: true, attempts: true, maxDurationSeconds: true, queuedAt: true, startedAt: true, finishedAt: true, resultCount: true, errorMessage: true } },
+        agentRuns: { orderBy: { createdAt: "desc" }, take: 1, select: AGENT_RUN_VIEW_SELECT },
       },
     }),
     prisma.agentRun.findMany({
       where: { companyId: company.id },
       orderBy: { createdAt: "desc" },
       take: 20,
-      select: { id: true, agent: true, planItemId: true, status: true, attempts: true, maxDurationSeconds: true, queuedAt: true, startedAt: true, finishedAt: true, resultCount: true, errorMessage: true },
+      select: AGENT_RUN_VIEW_SELECT,
     }),
     prisma.agentProposal.findMany({
       where: { companyId: company.id },
@@ -68,8 +69,8 @@ export default async function DashboardPage({ searchParams }: {
     <AppShell {...await getShellProps(company)}>
       <DashboardClient
         company={omitPasswordHash(company)}
-        initialPlanItems={planItems}
-        initialAgentRuns={recentAgentRuns}
+        initialPlanItems={planItems.map((item) => ({ ...item, agentRuns: item.agentRuns.map(publicRun) }))}
+        initialAgentRuns={recentAgentRuns.map(publicRun)}
         initialProposals={proposals}
         leadSources={Object.fromEntries(leads.map((lead) => [lead.proposalId!, lead.source]))}
         initialLeadStats={{

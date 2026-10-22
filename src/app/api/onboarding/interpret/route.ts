@@ -5,6 +5,7 @@ import { anthropic, AGENT_MODEL } from "@/lib/anthropic";
 import { getSessionCompany } from "@/lib/session";
 import { recordUsage } from "@/lib/usage";
 import { AgentRunQuotaError, reserveUsageBudget } from "@/lib/agent-runs";
+import { classifyRunError } from "@/lib/agents/agent-errors";
 
 export const maxDuration = 60;
 
@@ -67,7 +68,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ profile: parsed.data });
   } catch (error) {
-    if (error instanceof AgentRunQuotaError) return NextResponse.json({ error: error.message }, { status: 429 });
+    if (error instanceof AgentRunQuotaError) return NextResponse.json({ error: error.message, reason: classifyRunError(error) }, { status: 429 });
     return NextResponse.json({ error: "Interprétation indisponible. Vous pouvez compléter le formulaire manuellement." }, { status: 503 });
   }
 }

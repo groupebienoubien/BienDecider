@@ -8,7 +8,7 @@ import { runContenuAgent } from "@/lib/agents/contenu";
 import { runDemarchageAgent } from "@/lib/agents/demarchage";
 import { executePlanItem, type PlanRunExtras } from "@/lib/agents/plan-runner";
 import { isPlanAgent, type PlanAgent } from "@/lib/agents/plan-items";
-import { agentFailureMessage } from "@/lib/agents/agent-errors";
+import { AgentRunConflictError, AgentRunQuotaError, classifyRunError, failureMessage } from "@/lib/agents/agent-errors";
 import { PERSONAS } from "@/lib/agents/personas";
 
 export const AGENT_RUN_MAX_DURATION_SECONDS = 300;
@@ -21,19 +21,22 @@ type AgentRunPayload =
   | { kind: "plan_generation" }
   | { kind: "direct"; agent: PlanAgent; newsContext?: string; prospectDescription?: string };
 
-export class AgentRunConflictError extends Error {
-  constructor(message = "Cette action n'est plus disponible au lancement.") {
-    super(message);
-    this.name = "AgentRunConflictError";
-  }
-}
+// Classes déplacées dans agent-errors (point unique de conversion en motif), réexportées pour les imports existants.
+export { AgentRunConflictError, AgentRunQuotaError };
 
 function isUniqueConflict(error: unknown): boolean {
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
 }
 
-function isSerializationConflict(error: unknown): boolean {
-  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2034";
+/**
+ * Conflit d'une transaction sérialisable, à réessayer. Avec l'adaptateur pg,
+ * il arrive aussi brut, en DriverAdapterError de cause TransactionWriteConflict
+ * (code Postgres 40001), sans être converti en P2034.
+ */
+export function isSerializationConflict(error: unknown): boolean {
+  if (error instanceof Prisma.PrismaClientKnownRequestError) return error.code === "P2034";
+  return error instanceof Error && error.name === "DriverAdapterError" &&
+    (error.cause as { kind?: string } | undefined)?.kind === "TransactionWriteConflict";
 }
 
 function schedule(runId: string) {
@@ -44,6 +47,16 @@ function schedule(runId: string) {
       console.error("Erreur de traitement du run agent:", error);
     }
   });
+}
+
+/**
+ * Motif d'une action du plan qui n'a pas pu être réclamée : déjà en cours ou
+ * à décider, l'agent y a travaillé ; écartée, terminée ou introuvable, elle
+ * n'est pas lançable (null : erreur de l'appelant, pas un motif d'échec).
+ */
+async function conflictReasonForItem(tx: Prisma.TransactionClient, companyId: string, planItemId: string) {
+  const item = await tx.actionPlanItem.findFirst({ where: { id: planItemId, companyId }, select: { status: true } });
+  return item && ["en_cours", "lance"].includes(item.status) ? "already_running" as const : null;
 }
 
 async function findDuplicate(companyId: string, requestKey: string, activeDedupeKey: string, planItemId?: string) {
@@ -80,7 +93,7 @@ async function persistRun(params: {
           data: {
             status: "queued", activeDedupeKey: params.activeDedupeKey, reservedCostUsd: AGENT_RUN_COST_RESERVATION_USD,
             maxDurationSeconds: AGENT_RUN_MAX_DURATION_SECONDS,
-            startedAt: null, finishedAt: null, resultCount: 0, errorMessage: null,
+            startedAt: null, finishedAt: null, resultCount: 0, errorMessage: null, failureReason: null,
           },
         });
         if (retry.count === 0) return tx.agentRun.findUniqueOrThrow({ where: { id: existing.id } });
@@ -89,7 +102,9 @@ async function persistRun(params: {
             where: { id: params.planItemId, companyId: params.companyId, status: "propose" },
             data: { status: "en_cours" },
           });
-          if (claimed.count !== 1) throw new AgentRunConflictError("L'action n'est plus disponible pour une relance.");
+          if (claimed.count !== 1) {
+            throw new AgentRunConflictError("L'action n'est plus disponible pour une relance.", await conflictReasonForItem(tx, params.companyId, params.planItemId));
+          }
         }
         await tx.agentRunAttempt.create({ data: { companyId: params.companyId, agentRunId: existing.id, status: "queued" } });
         return tx.agentRun.findUniqueOrThrow({ where: { id: existing.id } });
@@ -116,7 +131,7 @@ async function persistRun(params: {
             orderBy: { createdAt: "desc" },
           });
           if (duplicate) return duplicate;
-          throw new AgentRunConflictError("Action déjà lancée ou écartée.");
+          throw new AgentRunConflictError("Action déjà lancée ou écartée.", await conflictReasonForItem(tx, params.companyId, params.planItemId));
         }
       }
 
@@ -140,7 +155,7 @@ async function persistRun(params: {
     if (!isUniqueConflict(error) && !isSerializationConflict(error)) throw error;
     const duplicate = await findDuplicate(params.companyId, params.requestKey, params.activeDedupeKey, params.planItemId);
     if (duplicate) return duplicate;
-    throw new AgentRunConflictError();
+    throw new AgentRunConflictError("Cette action n'est plus disponible au lancement.", "outage");
   }
 }
 
@@ -150,7 +165,7 @@ export async function enqueuePlanRun(params: {
   extras?: PlanRunExtras;
   retryRunId?: string;
 }) {
-  if (!isPlanAgent(params.item.agent)) throw new AgentRunConflictError("Agent inconnu.");
+  if (!isPlanAgent(params.item.agent)) throw new AgentRunConflictError("Agent inconnu.", "outage");
   const run = await persistRun({
     companyId: params.companyId,
     agent: params.item.agent,
@@ -220,6 +235,7 @@ export async function getAgentRun(companyId: string, runId: string) {
           activeDedupeKey: null,
           reservedCostUsd: 0,
           finishedAt: new Date(),
+          failureReason: "outage",
           errorMessage: stale.status === "queued"
             ? "L'agent n'a pas pu démarrer. Vous pouvez relancer l'action."
             : "Le délai maximal est dépassé. Vous pouvez relancer l'action.",
@@ -259,12 +275,12 @@ async function executeRun(run: AgentRun) {
   }
   if (payload.kind === "plan_item") {
     const item = await prisma.actionPlanItem.findFirst({ where: { id: payload.planItemId, companyId: run.companyId } });
-    if (!item || !isPlanAgent(item.agent)) throw new AgentRunConflictError("Action introuvable ou agent invalide.");
+    if (!item || !isPlanAgent(item.agent)) throw new AgentRunConflictError("Action introuvable ou agent invalide.", "outage");
     const result = await executePlanItem({ ...item, agent: item.agent }, payload.extras, run.id);
     return result.producedCount;
   }
 
-  if (payload.kind !== "direct" || payload.agent !== run.agent) throw new AgentRunConflictError("Demande de lancement invalide.");
+  if (payload.kind !== "direct" || payload.agent !== run.agent) throw new AgentRunConflictError("Demande de lancement invalide.", "outage");
   switch (payload.agent) {
     case "marketing": {
       const result = await runMarketingAgent(run.companyId, { agentRunId: run.id });
@@ -285,7 +301,7 @@ export async function processAgentRun(runId: string) {
   const attemptId = await prisma.$transaction(async (tx) => {
     const claim = await tx.agentRun.updateMany({
       where: { id: runId, status: "queued" },
-      data: { status: "running", startedAt: new Date(), attempts: { increment: 1 }, errorMessage: null },
+      data: { status: "running", startedAt: new Date(), attempts: { increment: 1 }, errorMessage: null, failureReason: null },
     });
     if (claim.count !== 1) return null;
     let attempt = await tx.agentRunAttempt.findFirst({ where: { agentRunId: runId, status: "queued" }, orderBy: { queuedAt: "desc" } });
@@ -307,14 +323,16 @@ export async function processAgentRun(runId: string) {
     }
   } catch (error) {
     console.error("Échec du run agent:", error);
-    const message = error instanceof AgentRunConflictError
+    const failureReason = classifyRunError(error) ?? "outage";
+    // Seul un doublon garde son propre texte : toute autre erreur est dite par son motif, sans détail technique.
+    const message = failureReason === "already_running" && error instanceof AgentRunConflictError
       ? error.message
-      : agentFailureMessage(error, PERSONAS[run.agent as PlanAgent]?.name ?? "L'agent");
+      : failureMessage(failureReason, PERSONAS[run.agent as PlanAgent]?.name ?? "L'agent");
     // Un seul commit : l'exécution ne doit jamais être lue échouée alors que son action reste « en cours ».
     await prisma.$transaction(async (tx) => {
       const failed = await tx.agentRun.updateMany({
         where: { id: run.id, status: "running", attempts: run.attempts },
-        data: { status: "failed", activeDedupeKey: null, reservedCostUsd: 0, errorMessage: message, finishedAt: new Date() },
+        data: { status: "failed", activeDedupeKey: null, reservedCostUsd: 0, errorMessage: message, failureReason, finishedAt: new Date() },
       });
       await tx.agentRunAttempt.updateMany({ where: { id: attemptId, status: "running" }, data: { status: "failed", finishedAt: new Date(), errorMessage: message } });
       if (failed.count === 1 && run.planItemId) {
@@ -324,13 +342,6 @@ export async function processAgentRun(runId: string) {
         });
       }
     });
-  }
-}
-
-export class AgentRunQuotaError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "AgentRunQuotaError";
   }
 }
 
@@ -358,17 +369,17 @@ async function assertRunQuota(tx: Prisma.TransactionClient, companyId: string, n
     tx.usageReservation.aggregate({ where: { companyId, expiresAt: { gt: now }, releasedAt: null }, _sum: { amountUsd: true } }),
   ]);
 
-  if (dailyRuns + dailyInlineCalls >= company.dailyAgentRunLimit) throw new AgentRunQuotaError("Le quota journalier de lancements est atteint. Réessayez demain ou contactez l'administrateur.");
-  if (monthlyRuns + monthlyInlineCalls >= company.monthlyAgentRunLimit) throw new AgentRunQuotaError("Le quota mensuel de lancements est atteint. Contactez l'administrateur.");
+  if (dailyRuns + dailyInlineCalls >= company.dailyAgentRunLimit) throw new AgentRunQuotaError("Le quota journalier de lancements est atteint. Réessayez demain ou contactez l'administrateur.", "quota_runs");
+  if (monthlyRuns + monthlyInlineCalls >= company.monthlyAgentRunLimit) throw new AgentRunQuotaError("Le quota mensuel de lancements est atteint. Contactez l'administrateur.", "quota_runs");
 
   const dailyCost = dailyUsage._sum.costUsd ?? 0;
   const monthlyCost = monthlyUsage._sum.costUsd ?? 0;
   const activeReservation = (reservedRuns._sum.reservedCostUsd ?? 0) + (reservedCalls._sum.amountUsd ?? 0);
   if (dailyCost + activeReservation + AGENT_RUN_COST_RESERVATION_USD > company.dailySpendLimitUsd) {
-    throw new AgentRunQuotaError("Le budget journalier est atteint ou réservé par une exécution en cours. Réessayez plus tard.");
+    throw new AgentRunQuotaError("Le budget journalier est atteint ou réservé par une exécution en cours. Réessayez plus tard.", "quota_budget");
   }
   if (monthlyCost + activeReservation + AGENT_RUN_COST_RESERVATION_USD > company.monthlySpendLimitUsd) {
-    throw new AgentRunQuotaError("Le budget mensuel est atteint ou réservé par une exécution en cours. Contactez l'administrateur.");
+    throw new AgentRunQuotaError("Le budget mensuel est atteint ou réservé par une exécution en cours. Contactez l'administrateur.", "quota_budget");
   }
   return company;
 }

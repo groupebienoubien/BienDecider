@@ -432,6 +432,8 @@ test("single validation queue, persistent decisions, publishing and error recove
     await page.setViewportSize({ width: 1440, height: 1000 });
     await page.goto(`${baseURL}/dashboard?view=plan`);
     await expect(page.getByRole("heading", { name: "Préparer la communication" })).toBeVisible();
+    // Story 1.4 : une action lancée avec une production en attente renvoie vers Décisions.
+    await expect(page.locator(`#plan-item-${item.id}`).getByRole("link", { name: "1 à examiner" })).toHaveAttribute("href", "/dashboard?view=validation");
     await expect(page.getByRole("button", { name: "Approuver cette version" })).toHaveCount(0);
     await page.getByRole("link", { name: "Productions", exact: true }).click();
     await expect(page.locator(".production-list button")).toHaveCount(3);
@@ -725,6 +727,7 @@ test("the plan shows the expected result and folds the agent instruction away", 
     await page.goto(`${baseURL}/dashboard?view=plan`);
     const card = page.locator(".plan-row").filter({ hasText: "Contacter les syndics du secteur" });
     await expect(card).toContainText("Jean-Claude s’en charge");
+    await expect(card.getByRole("button", { name: "Examiner et lancer" })).toBeVisible();
     await expect(card).toContainText("Résultat attendu : Des syndics pensent à vous pour leurs petites interventions.");
     // La consigne donnée à l'agent n'est jamais affichée d'office.
     await expect(card.getByText(/Consigne technique/)).toBeHidden();
@@ -950,8 +953,16 @@ test("guided onboarding starts with three fields and keeps the full company page
     await page.getByPlaceholder("Nom commercial").fill("Atelier Minimal");
     await page.getByPlaceholder("Votre métier (ex: plombier, restaurant...)").fill("Plomberie");
     await page.getByPlaceholder("Zone de chalandise (ex: Lyon et alentours)").fill("Lille");
+    // Le premier audit est lancé par le serveur : le navigateur n'appelle plus aucun agent.
+    let agentCalls = 0;
+    await page.route("**/api/agents/**", (route) => {
+      agentCalls += 1;
+      return route.continue();
+    });
     await page.getByRole("button", { name: "Valider et lancer mon audit" }).click();
     await expect(page).toHaveURL(`${baseURL}/dashboard`);
+    await page.unroute("**/api/agents/**");
+    expect(agentCalls).toBe(0);
     const saved = await prisma.company.findUniqueOrThrow({ where: { id: company.id } });
     expect(saved.name).toBe("Atelier Minimal");
     expect(saved.trade).toBe("Plomberie");
