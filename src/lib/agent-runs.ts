@@ -28,8 +28,15 @@ function isUniqueConflict(error: unknown): boolean {
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
 }
 
-function isSerializationConflict(error: unknown): boolean {
-  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2034";
+/**
+ * Conflit d'une transaction sérialisable, à réessayer. Avec l'adaptateur pg,
+ * il arrive aussi brut, en DriverAdapterError de cause TransactionWriteConflict
+ * (code Postgres 40001), sans être converti en P2034.
+ */
+export function isSerializationConflict(error: unknown): boolean {
+  if (error instanceof Prisma.PrismaClientKnownRequestError) return error.code === "P2034";
+  return error instanceof Error && error.name === "DriverAdapterError" &&
+    (error.cause as { kind?: string } | undefined)?.kind === "TransactionWriteConflict";
 }
 
 function schedule(runId: string) {

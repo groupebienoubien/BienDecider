@@ -1,6 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { enqueuePlanRun } from "@/lib/agent-runs";
+import { enqueuePlanRun, isSerializationConflict } from "@/lib/agent-runs";
 
 export const ONBOARDING_AUDIT_TITLE = "Audit de présence en ligne et fiche Google";
 export const ONBOARDING_AUDIT_TIMING = "Dès l'inscription";
@@ -18,7 +18,7 @@ export async function startOnboardingAudit(companyId: string) {
   let item = null;
   for (let attempt = 1; ; attempt++) {
     try {
-      // Sérialisable : deux envois simultanés lisent tous deux « pas d'audit » ; l'un échoue (P2034), relit et trouve l'audit.
+      // Sérialisable : deux envois simultanés lisent tous deux « pas d'audit » ; l'un échoue (conflit de sérialisation), relit et trouve l'audit.
       item = await prisma.$transaction(async (tx) => {
         const existing = await tx.actionPlanItem.findFirst({
           where: { companyId, agent: "marketing", timing: ONBOARDING_AUDIT_TIMING },
@@ -40,8 +40,7 @@ export async function startOnboardingAudit(companyId: string) {
       }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
       break;
     } catch (error) {
-      const retryable = error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2034";
-      if (!retryable || attempt >= MAX_SERIALIZATION_ATTEMPTS) throw error;
+      if (!isSerializationConflict(error) || attempt >= MAX_SERIALIZATION_ATTEMPTS) throw error;
     }
   }
   if (!item) return null;
