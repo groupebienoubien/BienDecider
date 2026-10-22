@@ -1,7 +1,7 @@
 import { after } from "next/server";
 import { Prisma, type AgentRun, type ActionPlanItem } from "@prisma/client";
 import { createHash, randomUUID } from "node:crypto";
-import type { AgentRunView } from "@/lib/agent-run-types";
+import { publicRun } from "@/lib/agent-run-types";
 import { prisma } from "@/lib/prisma";
 import { runMarketingAgent } from "@/lib/agents/marketing";
 import { runContenuAgent } from "@/lib/agents/contenu";
@@ -201,22 +201,6 @@ export async function enqueuePlanGeneration(companyId: string, requestKey: strin
   });
   schedule(run.id);
   return run;
-}
-
-function publicRun(run: AgentRun): AgentRunView {
-  return {
-    id: run.id,
-    agent: run.agent,
-    planItemId: run.planItemId,
-    status: run.status,
-    attempts: run.attempts,
-    maxDurationSeconds: run.maxDurationSeconds,
-    queuedAt: run.queuedAt,
-    startedAt: run.startedAt,
-    finishedAt: run.finishedAt,
-    resultCount: run.resultCount,
-    errorMessage: run.errorMessage,
-  };
 }
 
 export async function getAgentRun(companyId: string, runId: string) {

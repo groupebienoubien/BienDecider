@@ -1,5 +1,4 @@
 import { prisma } from "@/lib/prisma";
-import { getFunnelStats, funnelLines } from "@/lib/funnel";
 
 /** Nombre de messages de chat relus par Paul à chaque tour. */
 export const CHAT_HISTORY_MESSAGES = 40;
@@ -22,23 +21,6 @@ export async function loadRecentChatHistory(companyId: string, limit = CHAT_HIST
   const chronological = latest.reverse();
   const firstUser = chronological.findIndex((message) => message.role === "user");
   return firstUser === -1 ? [] : chronological.slice(firstUser);
-}
-
-/**
- * État du plan et du suivi des prospects, lu par Paul dans le chat via
- * get_current_status : calculé à la demande, jamais déduit d'un tour
- * précédent.
- */
-export async function getPlanAndFunnelStatus(companyId: string) {
-  const [plan, funnel] = await Promise.all([
-    prisma.actionPlanItem.findMany({
-      where: { companyId, status: { in: ["propose", "lance"] } },
-      orderBy: { createdAt: "asc" },
-      select: { id: true, agent: true, title: true, rationale: true, timing: true, status: true },
-    }),
-    getFunnelStats(companyId),
-  ]);
-  return { planEnCours: plan, suiviProspects: funnelLines(funnel) || "Aucun prospect suivi pour l'instant." };
 }
 
 /**
