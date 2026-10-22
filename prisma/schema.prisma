@@ -190,6 +190,7 @@ model AgentRun {
   finishedAt         DateTime?
   resultCount        Int            @default(0)
   errorMessage       String?
+  failureReason      String?
   createdAt          DateTime       @default(now())
   updatedAt          DateTime       @updatedAt
   attemptHistory      AgentRunAttempt[]

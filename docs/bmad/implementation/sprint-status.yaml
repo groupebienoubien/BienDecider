@@ -29,15 +29,15 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 10-22-2026 22:00
-last_updated: 10-22-2026 23:15
+last_updated: 10-22-2026 23:45
 project: BienDecider
 project_key: NOKEY
 tracking_system: file-system
 story_location: docs/bmad/implementation
 development_status:
   epic-1: in-progress
-  1-1-une-seule-lecture-de-l-état-de-l-équipe: review
-  1-2-motifs-d-échec-typés-et-dits-en-clair: backlog
+  1-1-une-seule-lecture-de-l-état-de-l-équipe: done
+  1-2-motifs-d-échec-typés-et-dits-en-clair: review
   1-3-le-premier-audit-naît-dans-le-plan: backlog
   1-4-une-action-terminée-renvoie-vers-ses-productions: backlog
   epic-1-retrospective: optional

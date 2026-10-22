@@ -7,3 +7,12 @@
 - source_spec: `docs/bmad/implementation/spec-1-1-une-seule-lecture-de-l-etat-de-l-equipe.md`
   summary: Tester le nombre affiché dans la fenêtre « Actualiser le diagnostic et le plan ».
   evidence: le compte est passé à actionable.length sans assertion.
+- source_spec: `docs/bmad/implementation/spec-1-2-motifs-d-echec-types-et-dits-en-clair.md`
+  summary: Une action en_cours sans exécution active renvoie already_running sans runId.
+  evidence: medium non vérifié ; à confirmer avec la détection des runs périmés (report de la story 1.1).
+- source_spec: `docs/bmad/implementation/spec-1-2-motifs-d-echec-types-et-dits-en-clair.md`
+  summary: Tester que processAgentRun enregistre no_result quand l'agent lève AgentNoResultError.
+  evidence: demande un modèle simulé dans les tests du moteur ; seule la classification est testée.
+- source_spec: `docs/bmad/implementation/spec-1-2-motifs-d-echec-types-et-dits-en-clair.md`
+  summary: Vérifier le champ reason des réponses 409 et de l'événement d'erreur du flux de Paul.
+  evidence: aucun écran ne lit encore reason ; à couvrir avec le premier consommateur (épopée 2).

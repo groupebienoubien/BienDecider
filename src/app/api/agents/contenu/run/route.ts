@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { AgentRunQuotaError, enqueueDirectRun } from "@/lib/agent-runs";
 import { getSessionCompany } from "@/lib/session";
+import { classifyRunError } from "@/lib/agents/agent-errors";
 
 export const maxDuration = 300;
 
@@ -20,9 +21,9 @@ export async function POST(request: NextRequest) {
   try {
     run = await enqueueDirectRun({ companyId: company.id, agent: "contenu", requestKey: parsed.data.requestId ?? randomUUID(), newsContext: parsed.data.newsContext });
   } catch (error) {
-    if (error instanceof AgentRunQuotaError) return NextResponse.json({ error: error.message }, { status: 429 });
+    if (error instanceof AgentRunQuotaError) return NextResponse.json({ error: error.message, reason: classifyRunError(error) }, { status: 429 });
     throw error;
   }
-  if (run.status === "failed") return NextResponse.json({ error: run.errorMessage ?? "L'agent a échoué. Relancez la demande.", run: { id: run.id, status: run.status } }, { status: 409 });
+  if (run.status === "failed") return NextResponse.json({ error: run.errorMessage ?? "L'agent a échoué. Relancez la demande.", reason: run.failureReason ?? "outage", run: { id: run.id, status: run.status } }, { status: 409 });
   return NextResponse.json({ run }, { status: run.status === "succeeded" ? 200 : 202 });
 }

@@ -23,6 +23,21 @@ const test = base.extend<{ company: Company }>({
   },
 });
 
+/** Portée de requête minimale pour after() : les exécutions restent en file, aucun agent n'est appelé. */
+async function inRequestScope<T>(scheduled: unknown[], fn: () => Promise<T>): Promise<T> {
+  const { workAsyncStorage } = await import("next/dist/server/app-render/work-async-storage.external");
+  const { workUnitAsyncStorage } = await import("next/dist/server/app-render/work-unit-async-storage.external");
+  return workAsyncStorage.run(
+    { afterContext: { after: (task: unknown) => { scheduled.push(task); } } } as never,
+    () => workUnitAsyncStorage.run({} as never, fn),
+  );
+}
+
+const DELEGATION_INPUT = {
+  actionTitle: "Trois posts sur les chantiers terminés", brief: "Le dirigeant veut montrer ses chantiers.", outcome: "Trois posts prêts à relire",
+  theme: "Visibilité", priority: 2,
+} as const;
+
 test("Paul rereads the most recent messages of a conversation longer than 40 messages", async ({ company }) => {
   const { prisma } = await import("../src/lib/prisma");
   const { loadRecentChatHistory, CHAT_HISTORY_MESSAGES } = await import("../src/lib/agents/chat-context");
@@ -193,15 +208,164 @@ test("the plan receives what the owner said in the chat, and only that", async (
 });
 
 test("an agent that produces nothing raises a displayable error, technical errors stay hidden", async () => {
-  const { AgentNoResultError, agentFailureMessage, ensureAgentProduced } = await import("../src/lib/agents/agent-errors");
+  const { AgentNoResultError, classifyRunError, failureMessage, ensureAgentProduced } = await import("../src/lib/agents/agent-errors");
   expect(() => ensureAgentProduced("Martine", 1, { stopReason: "end_turn", usage: {} })).not.toThrow();
   let failure: unknown;
   try { ensureAgentProduced("Martine", 0, { stopReason: "max_tokens", usage: {} }); } catch (error) { failure = error; }
   expect(failure).toBeInstanceOf(AgentNoResultError);
-  expect(agentFailureMessage(failure, "Martine")).toBe("Martine n'a pas pu produire de résultat exploitable cette fois-ci. Réessayez.");
-  const technical = agentFailureMessage(new Error("401 invalid x-api-key sk-ant-secret"), "Camille");
+  expect((failure as Error).message).toBe("Martine n'a pas pu produire de résultat exploitable cette fois-ci. Réessayez.");
+  const technical = failureMessage(classifyRunError(new Error("401 invalid x-api-key sk-ant-secret")) ?? "outage", "Camille");
   expect(technical).toBe("Camille est indisponible pour le moment. Réessayez dans quelques minutes.");
   expect(technical).not.toContain("sk-ant");
+});
+
+test("run errors are classified by type into one reason, each with a clear message", async () => {
+  const { AgentNoResultError, AgentRunConflictError, AgentRunQuotaError, classifyRunError, failureMessage, RUN_FAILURE_REASONS } = await import("../src/lib/agents/agent-errors");
+  const agentRuns = await import("../src/lib/agent-runs");
+  // Réexport : les imports existants depuis agent-runs désignent les mêmes classes.
+  expect(agentRuns.AgentRunQuotaError).toBe(AgentRunQuotaError);
+  expect(agentRuns.AgentRunConflictError).toBe(AgentRunConflictError);
+
+  expect(classifyRunError(new AgentRunConflictError("Déjà en cours", "already_running"))).toBe("already_running");
+  // Action écartée ou terminée : erreur de l'appelant, pas un motif d'échec.
+  expect(classifyRunError(new AgentRunConflictError("Action déjà lancée ou écartée.", null))).toBeNull();
+  expect(classifyRunError(new AgentRunConflictError("Demande de lancement invalide.", "outage"))).toBe("outage");
+  expect(classifyRunError(new AgentRunQuotaError("Quota", "quota_runs"))).toBe("quota_runs");
+  expect(classifyRunError(new AgentRunQuotaError("Budget", "quota_budget"))).toBe("quota_budget");
+  expect(classifyRunError(new AgentNoResultError("Martine"))).toBe("no_result");
+  // Le texte d'une erreur ne compte jamais : seule sa classe la classe.
+  expect(classifyRunError(new Error("Le quota journalier de lancements est atteint"))).toBe("outage");
+  expect(classifyRunError("fetch failed")).toBe("outage");
+
+  for (const reason of RUN_FAILURE_REASONS) {
+    const message = failureMessage(reason, "Martine");
+    expect(message, reason).not.toMatch(/ÉCHEC/i);
+    expect(message, reason).toMatch(/(Vous|Réessayez)/);
+  }
+  expect(failureMessage("already_running", "Martine")).toContain("y travaille déjà");
+  expect(failureMessage("quota_budget", "Martine")).toContain("budget du jour");
+  expect(failureMessage("quota_budget", "Martine")).toContain("Réessayez demain");
+  expect(failureMessage("no_result", "Martine")).toContain("n'a pas pu produire");
+  expect(failureMessage("outage", "Camille")).toBe("Camille est indisponible pour le moment. Réessayez dans quelques minutes.");
+});
+
+test("Paul delegating an action already in progress is told it is running and launches nothing", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { delegatePlanAction } = await import("../src/lib/agents/co-ceo");
+  const action = await prisma.actionPlanItem.create({ data: { companyId: company.id, agent: "marketing", title: "Audit en cours", rationale: "Raison", timing: "Aujourd'hui", status: "en_cours" } });
+  const run = await prisma.agentRun.create({ data: {
+    companyId: company.id, planItemId: action.id, agent: "marketing", requestKey: `plan:${action.id}`, payload: {}, status: "running", startedAt: new Date(),
+  } });
+
+  const result = await delegatePlanAction(company.id, "marketing", { ...DELEGATION_INPUT, planItemId: action.id });
+  expect(result).toMatchObject({ ok: false, reason: "already_running", runId: run.id, planItemId: action.id });
+  expect(result.message).toContain("Martine y travaille déjà");
+  expect(result.message).not.toContain("ÉCHEC");
+  expect(await prisma.agentRun.count({ where: { companyId: company.id } })).toBe(1);
+  expect(await prisma.actionPlanItem.count({ where: { companyId: company.id } })).toBe(1);
+});
+
+test("Paul delegating a dismissed, finished or unknown action gets an error without a failure reason", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { delegatePlanAction } = await import("../src/lib/agents/co-ceo");
+  const dismissed = await prisma.actionPlanItem.create({ data: { companyId: company.id, agent: "contenu", title: "Écartée", rationale: "R", timing: "Plus tard", status: "ecarte" } });
+  const finished = await prisma.actionPlanItem.create({ data: { companyId: company.id, agent: "contenu", title: "Terminée", rationale: "R", timing: "Hier", status: "termine" } });
+  for (const planItemId of [dismissed.id, finished.id, "inconnu"]) {
+    const result = await delegatePlanAction(company.id, "contenu", { ...DELEGATION_INPUT, planItemId });
+    expect(result.ok, planItemId).toBe(false);
+    expect(result, planItemId).not.toHaveProperty("reason");
+    expect(result.message, planItemId).toContain("get_current_status");
+    expect(result.message, planItemId).not.toContain("ÉCHEC");
+  }
+  expect(await prisma.agentRun.count({ where: { companyId: company.id } })).toBe(0);
+});
+
+test("Paul delegating under a reached quota or budget gets the typed reason and the action stays to launch", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { delegatePlanAction } = await import("../src/lib/agents/co-ceo");
+  const item = await prisma.actionPlanItem.create({ data: { companyId: company.id, agent: "contenu", title: "Posts de la semaine", rationale: "R", timing: "Aujourd'hui" } });
+
+  await prisma.company.update({ where: { id: company.id }, data: { dailyAgentRunLimit: 0 } });
+  const runs = await delegatePlanAction(company.id, "contenu", { ...DELEGATION_INPUT, planItemId: item.id });
+  expect(runs).toMatchObject({ ok: false, reason: "quota_runs", planItemId: item.id });
+  expect(runs.message).toContain("quota journalier de lancements");
+  expect(runs.message).not.toContain("ÉCHEC");
+
+  await prisma.company.update({ where: { id: company.id }, data: { dailyAgentRunLimit: 10, dailySpendLimitUsd: 0.5 } });
+  const budget = await delegatePlanAction(company.id, "contenu", { ...DELEGATION_INPUT, planItemId: item.id });
+  expect(budget).toMatchObject({ ok: false, reason: "quota_budget", planItemId: item.id });
+  expect(budget.message).toContain("budget journalier est atteint");
+  expect(budget.message).not.toContain("ÉCHEC");
+
+  expect(await prisma.agentRun.count({ where: { companyId: company.id } })).toBe(0);
+  expect((await prisma.actionPlanItem.findUniqueOrThrow({ where: { id: item.id } })).status).toBe("propose");
+});
+
+test("Paul delegating a launchable action gets ok with the run and the action", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { delegatePlanAction } = await import("../src/lib/agents/co-ceo");
+  const scheduled: unknown[] = [];
+  const result = await inRequestScope(scheduled, () => delegatePlanAction(company.id, "contenu", DELEGATION_INPUT));
+  expect(result).toMatchObject({ ok: true });
+  expect(result).not.toHaveProperty("reason");
+  expect(result.message).not.toContain("ÉCHEC");
+  const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: result.runId } });
+  expect(run).toMatchObject({ status: "queued", planItemId: result.planItemId, failureReason: null });
+  expect((await prisma.actionPlanItem.findUniqueOrThrow({ where: { id: result.planItemId } })).status).toBe("en_cours");
+  expect(scheduled).toHaveLength(1);
+});
+
+test("Paul delegating an action whose run failed relaunches that same run", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { delegatePlanAction } = await import("../src/lib/agents/co-ceo");
+  const item = await prisma.actionPlanItem.create({ data: { companyId: company.id, agent: "contenu", title: "Posts à relancer", rationale: "R", timing: "Aujourd'hui" } });
+  const failed = await prisma.agentRun.create({ data: {
+    companyId: company.id, planItemId: item.id, agent: "contenu", requestKey: `plan:${item.id}`, payload: { kind: "plan_item", planItemId: item.id, extras: {} },
+    status: "failed", attempts: 1, failureReason: "no_result", errorMessage: "Camille n'a pas pu produire de résultat exploitable cette fois-ci. Réessayez.", finishedAt: new Date(),
+    attemptHistory: { create: { companyId: company.id, status: "failed" } },
+  } });
+
+  const scheduled: unknown[] = [];
+  const result = await inRequestScope(scheduled, () => delegatePlanAction(company.id, "contenu", { ...DELEGATION_INPUT, planItemId: item.id }));
+  expect(result).toMatchObject({ ok: true, runId: failed.id, planItemId: item.id });
+  expect(result).not.toHaveProperty("reason");
+  expect(await prisma.agentRun.findUniqueOrThrow({ where: { id: failed.id } })).toMatchObject({ status: "queued", failureReason: null, errorMessage: null });
+  expect(await prisma.agentRun.count({ where: { companyId: company.id } })).toBe(1);
+  expect(await prisma.agentRunAttempt.count({ where: { agentRunId: failed.id } })).toBe(2);
+  expect((await prisma.actionPlanItem.findUniqueOrThrow({ where: { id: item.id } })).status).toBe("en_cours");
+  expect(scheduled).toHaveLength(1);
+});
+
+test("a failed run records its failure reason, read back by the team state", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { processAgentRun, getAgentRun } = await import("../src/lib/agent-runs");
+  const { getTeamState } = await import("../src/lib/team-state");
+  const item = await prisma.actionPlanItem.create({ data: { companyId: company.id, agent: "marketing", title: "Audit", rationale: "R", timing: "Aujourd'hui", status: "en_cours" } });
+  // Panne : la charge utile désigne une action introuvable ; l'erreur levée n'est ni un quota ni un doublon.
+  const broken = await prisma.agentRun.create({ data: {
+    companyId: company.id, planItemId: item.id, agent: "marketing", requestKey: `broken-${randomUUID()}`,
+    payload: { kind: "plan_item", planItemId: "introuvable", extras: {} },
+  } });
+  await processAgentRun(broken.id);
+  expect(await prisma.agentRun.findUniqueOrThrow({ where: { id: broken.id } })).toMatchObject({ status: "failed", failureReason: "outage" });
+  expect((await prisma.actionPlanItem.findUniqueOrThrow({ where: { id: item.id } })).status).toBe("propose");
+
+  // Délai dépassé : une exécution active périmée est classée en panne, avec le message de délai.
+  const stale = await prisma.agentRun.create({ data: {
+    companyId: company.id, agent: "contenu", requestKey: `stale-${randomUUID()}`, payload: {}, status: "running",
+    queuedAt: new Date(Date.now() - 20 * 60 * 1000), startedAt: new Date(Date.now() - 20 * 60 * 1000),
+  } });
+  const staleView = await getAgentRun(company.id, stale.id);
+  expect(staleView).toMatchObject({ status: "failed", failureReason: "outage" });
+  expect(staleView?.errorMessage).toContain("délai maximal");
+
+  const noResult = await prisma.agentRun.create({ data: {
+    companyId: company.id, agent: "demarchage", requestKey: `empty-${randomUUID()}`, payload: {}, status: "failed", failureReason: "no_result", finishedAt: new Date(),
+  } });
+  const { recentRuns } = await getTeamState(company.id);
+  expect(recentRuns.find((run) => run.id === broken.id)?.failureReason).toBe("outage");
+  expect(recentRuns.find((run) => run.id === stale.id)?.failureReason).toBe("outage");
+  expect(recentRuns.find((run) => run.id === noResult.id)?.failureReason).toBe("no_result");
 });
 
 test("a failed launch shows an error, keeps the action to launch and creates no placeholder finding", async ({ company, request }) => {
@@ -238,6 +402,7 @@ test("a failed launch shows an error, keeps the action to launch and creates no 
 
     const failedRun = await waitForFailedRun(firstRun.id);
     expect(failedRun.errorMessage, agent).toMatch(/(indisponible|n'a pas pu produire)/);
+    expect(failedRun.failureReason, agent).toMatch(/^(outage|no_result)$/);
     expect((await prisma.actionPlanItem.findUniqueOrThrow({ where: { id: item.id } })).status, agent).toBe("propose");
 
     const retry = await request.post(`${baseURL}/api/action-plan/${item.id}/launch`, { headers, data: { retryRunId: firstRun.id } });
@@ -299,14 +464,18 @@ test("agent launch quotas block daily and monthly limits before creating a run",
   await prisma.company.update({ where: { id: company.id }, data: { dailyAgentRunLimit: 0, monthlyAgentRunLimit: 100, dailySpendLimitUsd: 5, monthlySpendLimitUsd: 25 } });
   const dailyBlocked = await request.post(`${baseURL}/api/action-plan/${item.id}/launch`, { headers, data: {} });
   expect(dailyBlocked.status()).toBe(429);
-  expect((await dailyBlocked.json()).error).toContain("journalier");
+  const dailyBody = await dailyBlocked.json();
+  expect(dailyBody.error).toContain("journalier");
+  expect(dailyBody.reason).toBe("quota_runs");
   expect(await prisma.agentRun.count({ where: { companyId: company.id } })).toBe(0);
   expect((await prisma.actionPlanItem.findUniqueOrThrow({ where: { id: item.id } })).status).toBe("propose");
 
   await prisma.company.update({ where: { id: company.id }, data: { dailyAgentRunLimit: 10, monthlyAgentRunLimit: 0 } });
   const monthlyBlocked = await request.post(`${baseURL}/api/action-plan/${item.id}/launch`, { headers, data: {} });
   expect(monthlyBlocked.status()).toBe(429);
-  expect((await monthlyBlocked.json()).error).toContain("mensuel");
+  const monthlyBody = await monthlyBlocked.json();
+  expect(monthlyBody.error).toContain("mensuel");
+  expect(monthlyBody.reason).toBe("quota_runs");
   expect(await prisma.agentRunAttempt.count({ where: { companyId: company.id } })).toBe(0);
 });
 
@@ -321,7 +490,9 @@ test("an agent run reserves budget before queueing and rejects overspend", async
 
   const blocked = await request.post(`${baseURL}/api/action-plan/${item.id}/launch`, { headers, data: {} });
   expect(blocked.status()).toBe(429);
-  expect((await blocked.json()).error).toContain("budget journalier");
+  const blockedBody = await blocked.json();
+  expect(blockedBody.error).toContain("budget journalier");
+  expect(blockedBody.reason).toBe("quota_budget");
   expect(await prisma.agentRun.count({ where: { companyId: company.id } })).toBe(0);
   expect((await prisma.actionPlanItem.findUniqueOrThrow({ where: { id: item.id } })).status).toBe("propose");
 });
@@ -334,6 +505,7 @@ test("synchronous model calls reserve spend and release it only after recording 
   const reservation = await reserveUsageBudget(company.id, "unit-test");
 
   await expect(reserveUsageBudget(company.id, "parallel-test")).rejects.toBeInstanceOf(AgentRunQuotaError);
+  await expect(reserveUsageBudget(company.id, "parallel-test")).rejects.toMatchObject({ reason: "quota_budget" });
   expect(await prisma.usageReservation.findUniqueOrThrow({ where: { id: reservation.id } })).toMatchObject({ releasedAt: null, amountUsd: 1 });
 
   await recordUsage({

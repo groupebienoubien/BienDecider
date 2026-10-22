@@ -4,7 +4,7 @@ import { getSessionEmail } from "@/lib/session";
 import { AppShell } from "@/components/app-shell";
 import { getShellProps } from "@/lib/shell-data";
 import { EquipeClient } from "./equipe-client";
-import type { AgentRunView } from "@/lib/agent-run-types";
+import { AGENT_RUN_VIEW_SELECT, publicRun, type AgentRunView } from "@/lib/agent-run-types";
 
 export const dynamic = "force-dynamic";
 
@@ -14,12 +14,12 @@ export default async function EquipePage() {
 
   const company = await prisma.company.findUnique({ where: { ownerEmail } });
   if (!company || !company.name) redirect("/onboarding");
-  const initialAgentRuns: AgentRunView[] = await prisma.agentRun.findMany({
+  const initialAgentRuns: AgentRunView[] = (await prisma.agentRun.findMany({
     where: { companyId: company.id },
     orderBy: { createdAt: "desc" },
     take: 12,
-    select: { id: true, agent: true, planItemId: true, status: true, attempts: true, maxDurationSeconds: true, queuedAt: true, startedAt: true, finishedAt: true, resultCount: true, errorMessage: true },
-  });
+    select: AGENT_RUN_VIEW_SELECT,
+  })).map(publicRun);
 
   return (
     <AppShell {...await getShellProps(company)}>

@@ -223,7 +223,7 @@ test("the next prospect is the oldest usable one, skips deferred ones, and the d
 
 test("run progress gives indicative steps from elapsed time, flags overruns and announces the end per agent", () => {
   const t0 = Date.parse("2026-10-15T10:00:00Z");
-  const queued = { id: "r", agent: "contenu", planItemId: null, status: "queued", attempts: 0, maxDurationSeconds: 300, queuedAt: new Date(t0).toISOString(), startedAt: null, finishedAt: null, resultCount: 0, errorMessage: null };
+  const queued = { id: "r", agent: "contenu", planItemId: null, status: "queued", attempts: 0, maxDurationSeconds: 300, queuedAt: new Date(t0).toISOString(), startedAt: null, finishedAt: null, resultCount: 0, errorMessage: null, failureReason: null };
   const running = { ...queued, status: "running", startedAt: new Date(t0).toISOString() };
   const states = (progress: ReturnType<typeof describeRunProgress>) => progress.steps.map((step) => step.state);
 

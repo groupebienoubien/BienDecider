@@ -5,7 +5,7 @@ import type { BetaToolRunnerParams } from "@anthropic-ai/sdk/lib/tools/BetaToolR
 import { anthropic, AGENT_MODEL } from "@/lib/anthropic";
 import { prisma } from "@/lib/prisma";
 import { getRejectionContext } from "@/lib/agents/rejection-context";
-import { agentFailureMessage } from "@/lib/agents/agent-errors";
+import { AgentRunQuotaError, classifyRunError, failureMessage, isRunFailureReason, type RunFailureReason } from "@/lib/agents/agent-errors";
 import { PERSONAS, objectiveLine, directionLine, companyProfileLines } from "@/lib/agents/personas";
 import { enqueuePlanRun } from "@/lib/agent-runs";
 import { createChatPlanItem, findLaunchablePlanItem, type PlanAgent } from "@/lib/agents/plan-items";
@@ -85,6 +85,106 @@ export async function buildCurrentStatus(companyId: string) {
   };
 }
 
+export type DelegationResult = {
+  ok: boolean;
+  /** Motif typé quand rien n'a été lancé ; absent si l'identifiant d'action passé par Paul n'était pas lançable. */
+  reason?: RunFailureReason;
+  message: string;
+  runId?: string;
+  planItemId?: string;
+};
+
+export type DelegationInput = {
+  actionTitle: string;
+  brief: string;
+  outcome: string;
+  theme: PlanTheme;
+  priority: number;
+  planItemId?: string;
+};
+
+const ACTIVE_RUN_STATUSES = ["queued", "running"];
+
+/**
+ * Toute délégation de Paul passe par une action du plan : créée avec son
+ * brief (ou reprise si elle y figure déjà), puis lancée par le même chemin
+ * que le bouton "Lancer". Le résultat est structuré pour que Paul dise le
+ * vrai motif d'un lancement non fait, jamais une panne quand il n'y en a pas.
+ */
+export async function delegatePlanAction(
+  companyId: string,
+  agent: PlanAgent,
+  input: DelegationInput,
+  extras: { newsContext?: string; prospectDescription?: string } = {},
+): Promise<DelegationResult> {
+  const agentName = PERSONAS[agent].name;
+  const callStart = new Date();
+
+  if (input.planItemId) {
+    const existing = await prisma.actionPlanItem.findFirst({ where: { id: input.planItemId, companyId, agent } });
+    if (existing?.status === "en_cours") {
+      const activeRun = await prisma.agentRun.findFirst({
+        where: { companyId, planItemId: existing.id, status: { in: ACTIVE_RUN_STATUSES } },
+        orderBy: { createdAt: "desc" },
+      });
+      return {
+        ok: false, reason: "already_running", message: failureMessage("already_running", agentName),
+        ...(activeRun ? { runId: activeRun.id } : {}), planItemId: existing.id,
+      };
+    }
+  }
+
+  const item = input.planItemId
+    ? await findLaunchablePlanItem(companyId, agent, input.planItemId)
+    : await createChatPlanItem(companyId, agent, input.actionTitle, input.brief, input.theme, input.priority, input.outcome);
+  // Erreur de Paul (action écartée, terminée ou inconnue), pas un motif d'échec : pas de reason.
+  const notLaunchable: DelegationResult = {
+    ok: false,
+    message: `Aucune action à lancer avec cet identifiant pour ${agentName} : rien n'a été lancé. Relire le plan avec get_current_status avant de déléguer à nouveau.`,
+  };
+  if (!item) return notLaunchable;
+  const alreadyRunning = (runId: string): DelegationResult => ({
+    ok: false, reason: "already_running", message: failureMessage("already_running", agentName), runId, planItemId: item.id,
+  });
+  const stillOnPlan = ` L'action « ${item.title} » reste au plan, à lancer.`;
+  try {
+    const latest = await prisma.agentRun.findFirst({
+      where: { companyId, planItemId: item.id },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, status: true },
+    });
+    if (latest && ACTIVE_RUN_STATUSES.includes(latest.status)) return alreadyRunning(latest.id);
+    // Une exécution échouée est relancée, par le même chemin que le bouton « Relancer l'action ».
+    const retryRunId = latest?.status === "failed" ? latest.id : undefined;
+    const run = await enqueuePlanRun({ companyId, item: { ...item, agent }, extras, retryRunId });
+    // Une exécution active créée avant cet appel appartient à un autre lancement : l'agent y travaille déjà.
+    if (ACTIVE_RUN_STATUSES.includes(run.status) && run.id !== retryRunId && run.createdAt.getTime() < callStart.getTime()) {
+      return alreadyRunning(run.id);
+    }
+    if (run.status === "failed") {
+      const reason = isRunFailureReason(run.failureReason) ? run.failureReason : "outage";
+      return { ok: false, reason, message: failureMessage(reason, agentName) + stillOnPlan, runId: run.id, planItemId: item.id };
+    }
+    return {
+      ok: true,
+      message: `Action « ${item.title} » ${input.planItemId ? "du plan lancée" : "ajoutée au plan et mise en cours"}. ${agentName} travaille en arrière-plan ; le résultat apparaîtra dans le plan.`,
+      runId: run.id,
+      planItemId: item.id,
+    };
+  } catch (error) {
+    console.error(`Erreur délégation ${agent}:`, error);
+    const reason = classifyRunError(error);
+    if (reason === null) return notLaunchable;
+    // Le message d'un quota est déjà affichable et précise journalier, mensuel ou réservé.
+    const message = error instanceof AgentRunQuotaError ? error.message : failureMessage(reason, agentName);
+    return {
+      ok: false, reason,
+      message: message + (reason === "already_running" ? "" : stillOnPlan),
+      planItemId: item.id,
+    };
+  }
+}
+
 /**
  * Agent "Partenaire de croissance" (Paul, ex-"Co-CEO" — cf. docs/backlog.md) :
  * point de contact unique, orchestre les autres agents en les invoquant
@@ -142,9 +242,7 @@ export async function runCoCeoTurn(
 
   const recordUncovered = uncoveredRequestTool(companyId, "chat");
 
-  // Toute délégation depuis le chat passe par une action du plan : créée
-  // avec son brief (ou reprise si elle y figure déjà), puis lancée par le
-  // même chemin que le bouton "Lancer". Les propositions y sont rattachées.
+  // Toute délégation depuis le chat passe par une action du plan (delegatePlanAction).
   const planActionFields = {
     actionTitle: z.string().describe("Titre court et concret de l'action demandée, tel qu'il apparaîtra dans le plan, ex: 'Trois posts sur les chantiers terminés'"),
     brief: z.string().describe("Ce que le dirigeant a demandé et pourquoi, en une ou deux phrases : c'est la consigne que l'agent devra réaliser"),
@@ -157,34 +255,12 @@ export async function runCoCeoTurn(
       .describe("Identifiant d'une action déjà au plan avec le statut 'propose' (lu via get_current_status) si la demande y correspond — elle est alors lancée au lieu d'être créée en double"),
   };
 
-  async function delegateThroughPlan(
-    agent: PlanAgent,
-    input: { actionTitle: string; brief: string; outcome: string; theme: PlanTheme; priority: number; planItemId?: string },
-    extras: { newsContext?: string; prospectDescription?: string } = {},
-  ) {
-    const agentName = PERSONAS[agent].name;
-    const item = input.planItemId
-      ? await findLaunchablePlanItem(companyId, agent, input.planItemId)
-      : await createChatPlanItem(companyId, agent, input.actionTitle, input.brief, input.theme, input.priority, input.outcome);
-    if (!item) {
-      return `ÉCHEC, rien n'a été lancé : aucune action à lancer avec cet identifiant pour ${agentName}. Relis le plan avec get_current_status.`;
-    }
-    try {
-      const run = await enqueuePlanRun({ companyId, item: { ...item, agent }, extras });
-      if (run.status === "failed") return `ÉCHEC, rien de nouveau n'a été produit : ${run.errorMessage ?? "relancez l'action depuis le dashboard."}`;
-      return `Action « ${item.title} » ${input.planItemId ? "du plan lancée" : "ajoutée au plan et mise en cours"}. ${agentName} travaille en arrière-plan ; le résultat apparaîtra dans le dashboard (run ${run.id}).`;
-    } catch (error) {
-      console.error(`Erreur délégation ${agent}:`, error);
-      return `ÉCHEC, rien n'a été produit : ${agentFailureMessage(error, agentName)} L'action « ${item.title} » est au plan, à lancer : le dirigeant peut la relancer depuis le plan.`;
-    }
-  }
-
   const delegateMarketing = betaZodTool({
     name: "delegate_marketing",
     description:
       "Lance Martine (Marketing Officer) : audit de présence en ligne, positionnement concurrentiel, et pilotage de la fiche Google (infos, avis). Ne produit pas de contenu créatif. Crée l'action correspondante dans le plan.",
     inputSchema: z.object(planActionFields),
-    run: (input) => delegateThroughPlan("marketing", input),
+    run: async (input) => JSON.stringify(await delegatePlanAction(companyId, "marketing", input)),
   });
 
   const delegateContenu = betaZodTool({
@@ -198,7 +274,7 @@ export async function runCoCeoTurn(
         .optional()
         .describe("Actualité à communiquer, telle que mentionnée par l'utilisateur — omettre si aucune n'a été donnée"),
     }),
-    run: (input) => delegateThroughPlan("contenu", input, { newsContext: input.newsContext }),
+    run: async (input) => JSON.stringify(await delegatePlanAction(companyId, "contenu", input, { newsContext: input.newsContext })),
   });
 
   const delegateDemarchage = betaZodTool({
@@ -212,7 +288,7 @@ export async function runCoCeoTurn(
         .optional()
         .describe("Type de prospects visés, tel que mentionné par l'utilisateur — omettre si non précisé"),
     }),
-    run: (input) => delegateThroughPlan("demarchage", input, { prospectDescription: input.prospectDescription }),
+    run: async (input) => JSON.stringify(await delegatePlanAction(companyId, "demarchage", input, { prospectDescription: input.prospectDescription })),
   });
 
   const runnerParams: BetaToolRunnerParams = {
@@ -235,7 +311,7 @@ Règles strictes, non négociables :
 - RÈGLE ABSOLUE : ne dis JAMAIS qu'une action a été faite (proposition créée, audit relancé, fiche vue, contenu consulté) sans avoir réellement appelé l'outil correspondant DANS CE TOUR. Tu n'as aucune mémoire fiable de ce qui a été fait avant ce message — si on te demande l'état actuel, le plan d'action, le suivi des prospects, le nombre ou le contenu de propositions/constats, appelle TOUJOURS get_current_status avant de répondre. Ne devine jamais.
 - Avant de proposer une priorité ou de déléguer, appelle get_current_status pour partir du plan en cours et du suivi des prospects : ne propose pas ce qui est déjà au plan, et appuie-toi sur ce que le dirigeant t'a déjà dit dans cette conversation plutôt que de le lui redemander.
 - Une action au statut "en_cours" est déjà en train d'être réalisée (voir son exécution dans executionsRecentes) : ne la relance pas et ne crée pas d'action équivalente ; dis au dirigeant qu'elle est en cours.
-- Si un outil delegate_* répond « ÉCHEC », dis clairement au dirigeant que l'agent n'a rien produit et qu'il peut relancer : ne présente jamais un échec comme un travail fait.
+- Chaque outil delegate_* renvoie un JSON { ok, reason?, message, runId?, planItemId? }. Si ok vaut true, l'action est lancée. Si ok vaut false, rien de nouveau n'a été lancé : dis-le au dirigeant en reprenant le sens de message, sans présenter cela comme un travail fait ni comme une panne quand ce n'en est pas une. Selon reason : already_running = l'agent y travaille déjà (ce n'est pas un échec) ; quota_runs ou quota_budget = limite de lancements ou budget du jour atteint, à réessayer demain ; no_result = l'agent n'a rien produit, le dirigeant peut relancer ; outage = indisponibilité passagère, à réessayer plus tard. Sans reason, l'identifiant d'action passé n'était pas lançable : relis le plan avec get_current_status avant de répondre. N'écris jamais le mot « ÉCHEC ».
 - Tu ne fais JAMAIS exécuter une action réelle toi-même, même automatiquement : déléguer ne fait que créer des propositions, qui restent soumises à la validation du dirigeant dans le dashboard. Dis-le clairement si tu délègues.
 - Chaque délégation crée une action dans le plan, avec le brief que tu rédiges, et les productions y sont rattachées : dis au dirigeant qu'il la retrouvera dans son plan. Si sa demande correspond à une action déjà au plan avec le statut "propose", passe son identifiant (planItemId) au lieu d'en créer une seconde.
 - Tu ne construis pas de site web toi-même (${PERSONAS.contenu.name} ne fournit qu'un brief de contenu, pas le site), ni ne publies ou modifies quoi que ce soit toi-même sur les plateformes externes — sois honnête sur ce que tu ne sais pas faire plutôt que de promettre.

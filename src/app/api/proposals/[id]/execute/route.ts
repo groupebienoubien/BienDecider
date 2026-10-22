@@ -8,6 +8,7 @@ import { getConfiguredRiskLevels } from "@/lib/delegation-policy";
 import { AgentRunQuotaError } from "@/lib/agent-runs";
 import { syncPlanItemStatus } from "@/lib/plan-item-status";
 import { decideProposalReview, reviewProposal } from "@/lib/proposal-review";
+import { classifyRunError } from "@/lib/agents/agent-errors";
 
 export const maxDuration = 60;
 
@@ -79,7 +80,7 @@ export async function POST(
     return NextResponse.json({ url: `/site/${slug}`, message: "Site publié. La publication figure dans les résultats." });
   } catch (error) {
     console.error("Erreur exécution proposition:", error);
-    if (error instanceof AgentRunQuotaError) return NextResponse.json({ error: error.message }, { status: 429 });
+    if (error instanceof AgentRunQuotaError) return NextResponse.json({ error: error.message, reason: classifyRunError(error) }, { status: 429 });
     if (error instanceof PublishRefusedError) {
       return NextResponse.json({ error: error.message }, { status: error.status });
     }
