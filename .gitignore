@@ -45,3 +45,6 @@ next-env.d.ts
 # prisma (dev local SQLite)
 /dev.db
 /dev.db-journal
+
+# bmad : réponses d installation personnelles
+_bmad/config.user.toml

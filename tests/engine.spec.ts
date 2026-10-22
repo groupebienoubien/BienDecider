@@ -45,23 +45,125 @@ test("Paul rereads the most recent messages of a conversation longer than 40 mes
   expect(await loadRecentChatHistory(company.id, 3)).toHaveLength(3);
 });
 
-test("Paul's chat status covers the current plan and the prospect follow-up", async ({ company }) => {
+test("the prospect follow-up read by Paul summarizes the tracked leads", async ({ company }) => {
   const { prisma } = await import("../src/lib/prisma");
-  const { getPlanAndFunnelStatus } = await import("../src/lib/agents/chat-context");
-  expect((await getPlanAndFunnelStatus(company.id)).suiviProspects).toBe("Aucun prospect suivi pour l'instant.");
+  const { getFunnelStats } = await import("../src/lib/funnel");
+  const { funnelLines } = await import("../src/lib/funnel-shared");
+  expect(funnelLines(await getFunnelStats(company.id))).toBe("");
 
-  await prisma.actionPlanItem.createMany({ data: [
-    { companyId: company.id, agent: "contenu", title: "Action à lancer", rationale: "Raison A", timing: "Cette semaine" },
-    { companyId: company.id, agent: "demarchage", title: "Action lancée", rationale: "Raison B", timing: "Aujourd'hui", status: "lance" },
-    { companyId: company.id, agent: "marketing", title: "Action écartée", rationale: "Raison C", timing: "Plus tard", status: "ecarte" },
-    { companyId: company.id, agent: "marketing", title: "Action terminée", rationale: "Raison D", timing: "Hier", status: "termine" },
-  ] });
   await prisma.lead.create({ data: { companyId: company.id, name: "Association Test", reason: "Cible locale", stage: "contacte", segment: "associations" } });
+  const lines = funnelLines(await getFunnelStats(company.id));
+  expect(lines).toContain("1 contactés");
+  expect(lines).toContain("associations");
+});
 
-  const status = await getPlanAndFunnelStatus(company.id);
-  expect(status.planEnCours.map((item) => item.title).sort()).toEqual(["Action lancée", "Action à lancer"]);
-  expect(status.suiviProspects).toContain("1 contactés");
-  expect(status.suiviProspects).toContain("associations");
+test("the team state lists active actions, recent runs and pending decisions of the company only", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { getTeamState } = await import("../src/lib/team-state");
+  const now = new Date();
+  const ago = (seconds: number) => new Date(now.getTime() - seconds * 1000);
+
+  const empty = await getTeamState(company.id, now);
+  expect(empty).toEqual({ actions: [], recentRuns: [], pendingDecisions: 0 });
+
+  const running = await prisma.actionPlanItem.create({ data: { companyId: company.id, agent: "marketing", title: "Audit en cours", rationale: "Raison A", timing: "Aujourd'hui", status: "en_cours" } });
+  await prisma.actionPlanItem.createMany({ data: [
+    { companyId: company.id, agent: "contenu", title: "Action à lancer 1", rationale: "Raison B", timing: "Cette semaine" },
+    { companyId: company.id, agent: "contenu", title: "Action à lancer 2", rationale: "Raison C", timing: "Cette semaine" },
+    { companyId: company.id, agent: "demarchage", title: "Action à décider", rationale: "Raison D", timing: "Hier", status: "lance" },
+    { companyId: company.id, agent: "marketing", title: "Action écartée", rationale: "Raison E", timing: "Plus tard", status: "ecarte" },
+    { companyId: company.id, agent: "marketing", title: "Action terminée", rationale: "Raison F", timing: "Hier", status: "termine" },
+  ] });
+  await prisma.agentRun.create({ data: {
+    companyId: company.id, planItemId: running.id, agent: "marketing", requestKey: `running-${randomUUID()}`, payload: {}, status: "running",
+    queuedAt: ago(45), startedAt: ago(40), createdAt: ago(45),
+  } });
+  await prisma.agentRun.create({ data: {
+    companyId: company.id, agent: "demarchage", requestKey: `done-${randomUUID()}`, payload: {}, status: "succeeded", resultCount: 15,
+    queuedAt: ago(2 * 3600), startedAt: ago(2 * 3600), finishedAt: ago(2 * 3600 - 90), createdAt: ago(2 * 3600),
+  } });
+  await prisma.agentRun.create({ data: {
+    companyId: company.id, agent: "contenu", requestKey: `old-${randomUUID()}`, payload: {}, status: "succeeded", resultCount: 3,
+    queuedAt: ago(25 * 3600), startedAt: ago(25 * 3600), finishedAt: ago(25 * 3600 - 60), createdAt: ago(25 * 3600),
+  } });
+  await prisma.agentProposal.createMany({ data: [1, 2, 3].map((index) => ({ companyId: company.id, agent: "contenu", kind: "social_post", title: `Post ${index}`, content: "Texte" })) });
+
+  const other = await prisma.company.create({ data: { ownerEmail: `engine-other-${randomUUID()}@example.invalid`, name: "Autre", trade: "Artisan", servingArea: "Lyon" } });
+  try {
+    await prisma.actionPlanItem.create({ data: { companyId: other.id, agent: "marketing", title: "Action d'une autre entreprise", rationale: "X", timing: "Aujourd'hui", status: "en_cours" } });
+    await prisma.agentRun.create({ data: { companyId: other.id, agent: "marketing", requestKey: `other-${randomUUID()}`, payload: {}, status: "running", startedAt: ago(10) } });
+    await prisma.agentProposal.create({ data: { companyId: other.id, agent: "contenu", kind: "social_post", title: "Post d'une autre entreprise", content: "Texte" } });
+
+    const state = await getTeamState(company.id, now);
+    expect(state.actions.map((action) => action.title).sort()).toEqual(["Action à décider", "Action à lancer 1", "Action à lancer 2", "Audit en cours"]);
+    expect(state.actions.find((action) => action.id === running.id)).toMatchObject({ agent: "marketing", status: "en_cours", rationale: "Raison A", timing: "Aujourd'hui" });
+
+    expect(state.recentRuns.map((run) => run.agent)).toEqual(["marketing", "demarchage"]);
+    const [current, finished] = state.recentRuns;
+    expect(current).toMatchObject({ status: "running", planItemId: running.id });
+    expect(current.elapsedSeconds).toBeGreaterThanOrEqual(39);
+    expect(current.elapsedSeconds).toBeLessThanOrEqual(41);
+    expect(finished).toMatchObject({ status: "succeeded", resultCount: 15, elapsedSeconds: 90 });
+
+    // Décision du dirigeant : seules les productions qui l'attendent comptent, pas les actions à lancer.
+    expect(state.pendingDecisions).toBe(3);
+  } finally {
+    await prisma.company.delete({ where: { id: other.id } });
+  }
+});
+
+test("the team state keeps at most the ten most recent runs", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { getTeamState } = await import("../src/lib/team-state");
+  const now = new Date();
+  await prisma.agentRun.createMany({ data: Array.from({ length: 12 }, (_, index) => ({
+    companyId: company.id, agent: "contenu", requestKey: `run-${index}-${randomUUID()}`, payload: {}, status: "succeeded", resultCount: index,
+    createdAt: new Date(now.getTime() - (index + 1) * 60 * 1000),
+  })) });
+  const { recentRuns } = await getTeamState(company.id, now);
+  expect(recentRuns.map((run) => run.resultCount)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+});
+
+test("the team state keeps queued or running runs whatever their age, ahead of the ten-run cap", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { getTeamState } = await import("../src/lib/team-state");
+  const now = new Date();
+  await prisma.agentRun.createMany({ data: Array.from({ length: 10 }, (_, index) => ({
+    companyId: company.id, agent: "contenu", requestKey: `recent-${index}-${randomUUID()}`, payload: {}, status: "succeeded",
+    createdAt: new Date(now.getTime() - (index + 1) * 60 * 1000),
+  })) });
+  const stuck = await prisma.agentRun.create({ data: {
+    companyId: company.id, agent: "marketing", requestKey: `stuck-${randomUUID()}`, payload: {}, status: "running",
+    queuedAt: new Date(now.getTime() - 30 * 3600 * 1000), startedAt: new Date(now.getTime() - 30 * 3600 * 1000), createdAt: new Date(now.getTime() - 30 * 3600 * 1000),
+  } });
+  const { recentRuns } = await getTeamState(company.id, now);
+  expect(recentRuns).toHaveLength(10);
+  expect(recentRuns.at(-1)?.id).toBe(stuck.id);
+  expect(recentRuns.map((run) => run.id)).toContain(stuck.id);
+  expect(recentRuns[0]).not.toHaveProperty("payload");
+});
+
+test("the status Paul reads lists an action in progress with its running run", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { buildCurrentStatus } = await import("../src/lib/agents/co-ceo");
+  const action = await prisma.actionPlanItem.create({ data: { companyId: company.id, agent: "marketing", title: "Audit en cours", rationale: "Raison", timing: "Aujourd'hui", status: "en_cours" } });
+  const run = await prisma.agentRun.create({ data: {
+    companyId: company.id, planItemId: action.id, agent: "marketing", requestKey: `status-${randomUUID()}`, payload: {}, status: "running", startedAt: new Date(Date.now() - 40 * 1000),
+  } });
+
+  const status = JSON.parse(JSON.stringify(await buildCurrentStatus(company.id)));
+  expect(status.planEnCours).toEqual([expect.objectContaining({ id: action.id, status: "en_cours" })]);
+  expect(status.executionsRecentes).toEqual([expect.objectContaining({ id: run.id, planItemId: action.id, status: "running" })]);
+  expect(status.decisionsEnAttente).toBe(0);
+  expect(status.suiviProspects).toBe("Aucun prospect suivi pour l'instant.");
+});
+
+test("the menu badge counts productions awaiting the owner, not actions to launch", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { getShellProps } = await import("../src/lib/shell-data");
+  await prisma.agentProposal.createMany({ data: [1, 2].map((index) => ({ companyId: company.id, agent: "contenu", kind: "social_post", title: `Post ${index}`, content: "Texte" })) });
+  await prisma.actionPlanItem.create({ data: { companyId: company.id, agent: "contenu", title: "Action à lancer", rationale: "Raison", timing: "Cette semaine" } });
+  expect((await getShellProps(company)).decisionCount).toBe(2);
 });
 
 test("the plan receives what the owner said in the chat, and only that", async ({ company }) => {

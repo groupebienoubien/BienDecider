@@ -338,7 +338,7 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
           onPreparePlan={() => void handleGeneratePlan()}
         />}
         <AgentRunTracker runs={agentRuns} onCheck={(runId) => void checkRun(runId)} onRetry={() => void handleGeneratePlan(true)} retryDisabled={planLoading} />
-        <SectionTitle title="Ce que l’équipe vous a préparé">{decisions.length > 3 && <Link href="/dashboard?view=validation">Toutes les décisions ({decisions.length}) →</Link>}</SectionTitle>
+        <SectionTitle title="Ce que l’équipe vous a préparé">{decisions.length > 3 && <Link href="/dashboard?view=validation">Toutes les décisions ({actionable.length}) →</Link>}</SectionTitle>
         {decisions.length > 0 ? (
           <div className="decision-cards" aria-label="Vos prochaines décisions" role="region">
             {decisions.slice(0, 3).map((decision, index) => {
@@ -564,7 +564,7 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
           ? <Link className="btn primary" href="/diagnostic">Commencer par le diagnostic</Link>
           : <button type="button" className="primary" disabled={locked} onClick={() => { setRefreshOpen(false); void handleGeneratePlan(); }}>Actualiser sans remplacer mes décisions</button>}
       >
-        <p>{decisions.length} décision(s) en attente et {initialLeadStats.active} prospect(s) actif(s) disponibles.</p>
+        <p>{actionable.length} décision(s) en attente et {initialLeadStats.active} prospect(s) actif(s) disponibles.</p>
         <dl className="modal-details">
           <dt>À intégrer</dt><dd>Décisions prises, productions réalisées et suivi déclaré des prospects</dd>
           <dt>À préserver</dt><dd>Actions validées, versions approuvées et publications</dd>

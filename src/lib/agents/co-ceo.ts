@@ -13,7 +13,8 @@ import { PLAN_THEMES, type PlanTheme } from "@/lib/plan-themes";
 import { recordUsage, runStreamingToolLoop, runToolLoop } from "@/lib/usage";
 import { getFunnelStats, funnelLines } from "@/lib/funnel";
 import { CAPABILITY_CATALOG, recordUncoveredRequest } from "@/lib/agents/capabilities";
-import { getChatInstructionsForPlan, getPlanAndFunnelStatus, loadRecentChatHistory } from "@/lib/agents/chat-context";
+import { getChatInstructionsForPlan, loadRecentChatHistory } from "@/lib/agents/chat-context";
+import { getTeamState } from "@/lib/team-state";
 import { resolvePaulReferences } from "@/lib/paul-references";
 
 const PERSONA = PERSONAS.co_ceo;
@@ -36,6 +37,52 @@ function uncoveredRequestTool(companyId: string, source: "chat" | "plan") {
       return "Demande notée pour les fondateurs de BienDecider. Aucun délai ni résultat n'est promis : dis-le tel quel au dirigeant.";
     },
   });
+}
+
+/**
+ * État lu par Paul via get_current_status : actions et exécutions viennent
+ * de getTeamState, la lecture unique partagée avec le menu et l'accueil.
+ */
+export async function buildCurrentStatus(companyId: string) {
+  const [teamState, funnel, pending, findings, leads] = await Promise.all([
+    getTeamState(companyId),
+    getFunnelStats(companyId),
+    prisma.agentProposal.findMany({
+      where: { companyId, status: "en_attente" },
+      orderBy: { createdAt: "desc" },
+    }),
+    prisma.auditFinding.findMany({
+      where: { companyId },
+      orderBy: { createdAt: "desc" },
+      take: 5,
+    }),
+    prisma.lead.findMany({
+      where: { companyId, stage: { notIn: ["propose", "ecarte"] } },
+      orderBy: { updatedAt: "desc" },
+      take: 10,
+      select: { id: true, name: true, stage: true },
+    }),
+  ]);
+  return {
+    planEnCours: teamState.actions,
+    executionsRecentes: teamState.recentRuns,
+    decisionsEnAttente: teamState.pendingDecisions,
+    suiviProspects: funnelLines(funnel) || "Aucun prospect suivi pour l'instant.",
+    refusRecents: await getRejectionContext(companyId),
+    propositionsEnAttente: pending.map((p) => ({
+      id: p.id,
+      agent: p.agent,
+      kind: p.kind,
+      title: p.title,
+      content: p.content,
+    })),
+    derniersConstatsAudit: findings.map((f) => ({
+      id: f.id,
+      title: f.title,
+      content: f.content,
+    })),
+    prospectsSuivis: leads,
+  };
 }
 
 /**
@@ -86,43 +133,10 @@ export async function runCoCeoTurn(
   const getCurrentStatus = betaZodTool({
     name: "get_current_status",
     description:
-      "Récupère l'état réel actuel : plan d'action en cours, suivi des prospects, propositions en attente (avec leur contenu) et derniers constats d'audit. À utiliser systématiquement avant de répondre à toute question sur l'état, le plan, les prospects, le contenu ou le nombre de propositions/constats — ne jamais deviner ni se fier à ce qui a été dit dans un tour précédent.",
+      "Récupère l'état réel actuel : actions actives du plan (planEnCours), exécutions des dernières 24 h et celles encore en cours (executionsRecentes), nombre de décisions en attente, suivi des prospects, propositions en attente (avec leur contenu) et derniers constats d'audit. Statuts du plan : propose = à lancer, en_cours = en cours d'exécution, lance = exécuté, productions à décider. decisionsEnAttente est le nombre total de productions qui attendent le dirigeant : à relire, mais aussi validées en attente de mise en ligne ou de publication incertaine à vérifier. propositionsEnAttente ne détaille que les productions encore à relire (statut en_attente), avec leur contenu. À utiliser systématiquement avant de répondre à toute question sur l'état, le plan, les prospects, le contenu ou le nombre de propositions/constats — ne jamais deviner ni se fier à ce qui a été dit dans un tour précédent.",
     inputSchema: z.object({}),
     run: async () => {
-      const [pending, findings, leads] = await Promise.all([
-        prisma.agentProposal.findMany({
-          where: { companyId, status: "en_attente" },
-          orderBy: { createdAt: "desc" },
-        }),
-        prisma.auditFinding.findMany({
-          where: { companyId },
-          orderBy: { createdAt: "desc" },
-          take: 5,
-        }),
-        prisma.lead.findMany({
-          where: { companyId, stage: { notIn: ["propose", "ecarte"] } },
-          orderBy: { updatedAt: "desc" },
-          take: 10,
-          select: { id: true, name: true, stage: true },
-        }),
-      ]);
-      return JSON.stringify({
-        ...(await getPlanAndFunnelStatus(companyId)),
-        refusRecents: await getRejectionContext(companyId),
-        propositionsEnAttente: pending.map((p) => ({
-          id: p.id,
-          agent: p.agent,
-          kind: p.kind,
-          title: p.title,
-          content: p.content,
-        })),
-        derniersConstatsAudit: findings.map((f) => ({
-          id: f.id,
-          title: f.title,
-          content: f.content,
-        })),
-        prospectsSuivis: leads,
-      });
+      return JSON.stringify(await buildCurrentStatus(companyId));
     },
   });
 
@@ -220,6 +234,7 @@ Ton rôle concret : échanger avec le dirigeant, l'aider à prioriser, et délé
 Règles strictes, non négociables :
 - RÈGLE ABSOLUE : ne dis JAMAIS qu'une action a été faite (proposition créée, audit relancé, fiche vue, contenu consulté) sans avoir réellement appelé l'outil correspondant DANS CE TOUR. Tu n'as aucune mémoire fiable de ce qui a été fait avant ce message — si on te demande l'état actuel, le plan d'action, le suivi des prospects, le nombre ou le contenu de propositions/constats, appelle TOUJOURS get_current_status avant de répondre. Ne devine jamais.
 - Avant de proposer une priorité ou de déléguer, appelle get_current_status pour partir du plan en cours et du suivi des prospects : ne propose pas ce qui est déjà au plan, et appuie-toi sur ce que le dirigeant t'a déjà dit dans cette conversation plutôt que de le lui redemander.
+- Une action au statut "en_cours" est déjà en train d'être réalisée (voir son exécution dans executionsRecentes) : ne la relance pas et ne crée pas d'action équivalente ; dis au dirigeant qu'elle est en cours.
 - Si un outil delegate_* répond « ÉCHEC », dis clairement au dirigeant que l'agent n'a rien produit et qu'il peut relancer : ne présente jamais un échec comme un travail fait.
 - Tu ne fais JAMAIS exécuter une action réelle toi-même, même automatiquement : déléguer ne fait que créer des propositions, qui restent soumises à la validation du dirigeant dans le dashboard. Dis-le clairement si tu délègues.
 - Chaque délégation crée une action dans le plan, avec le brief que tu rédiges, et les productions y sont rattachées : dis au dirigeant qu'il la retrouvera dans son plan. Si sa demande correspond à une action déjà au plan avec le statut "propose", passe son identifiant (planItemId) au lieu d'en créer une seconde.
