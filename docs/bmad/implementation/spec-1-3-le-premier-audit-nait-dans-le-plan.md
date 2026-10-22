@@ -2,7 +2,8 @@
 title: 'Story 1.3 — Le premier audit naît dans le plan'
 type: 'bugfix'
 created: '2026-10-22'
-status: 'ready-for-dev'
+status: 'done'
+baseline_commit: '3d5f2b55dfc1ab063537b9567dd5cd312a3e6fdd'
 route: 'dispatch'
 review_loop_iteration: 0
 context:
@@ -47,9 +48,9 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `src/app/api/companies/route.ts` -- première création : action d'audit + `enqueuePlanRun`, erreurs de lancement attrapées et journalisées -- audit dans le plan (AD-11)
-- [ ] `src/components/company-profile-form.tsx` -- retirer le lancement détaché -- le client ne lance plus d'agent
-- [ ] `tests/engine.spec.ts` -- un test par ligne de la matrice -- non-régression
+- [x] `src/app/api/companies/route.ts` -- première création : action d'audit + `enqueuePlanRun`, erreurs de lancement attrapées et journalisées -- audit dans le plan (AD-11)
+- [x] `src/components/company-profile-form.tsx` -- retirer le lancement détaché -- le client ne lance plus d'agent
+- [x] `tests/engine.spec.ts` -- un test par ligne de la matrice -- non-régression
 
 **Acceptance Criteria:**
 - Étant donné un nouveau compte qui valide l'onboarding, quand l'accueil s'affiche, alors l'action « Audit de présence en ligne et fiche Google » est `en_cours` avec son exécution.
@@ -57,9 +58,32 @@ context:
 
 ## Implementation Notes
 
+- « Première création » = profil encore vide (`!existing?.name`), pas « aucun `Company` » : l'inscription crée déjà la ligne avec `name: ""` et `getSessionEmail` exige cette ligne, la route ne voit donc jamais d'entreprise absente. Même règle que `isNew` côté formulaire.
+- Logique dans `src/lib/agents/onboarding-audit.ts` (`startOnboardingAudit`) : création de l'action en transaction sérialisable (pas de seconde action `marketing` en cas de double envoi), puis `enqueuePlanRun`. La route attrape et journalise toute erreur de lancement et renvoie 201.
+
 ## Spec Change Log
 
 ## Review Triage Log
+
+| # | Source | Constat | Verdict | Preuve | Route |
+|---|--------|---------|---------|--------|-------|
+| 1 | blind, edge | La route attrape toutes les erreurs ; une erreur de base est journalisée comme `outage` et le repli « erreur inattendue » est mort | medium | `catch` nu et `classifyRunError(...) ?? ...` alors que seul un conflit renvoie `null` | patch |
+| 2 | blind, edge | Un P2034 dû à une autre écriture renvoie `null` : plus jamais d'audit | medium | `catch` P2034 → `null` sans nouvel essai ; P2002 impossible (pas de contrainte unique) | patch |
+| 3 | blind | Le garde-fou vérifie toute action `marketing`, pas l'audit d'inscription | low | correctif direct : filtrer sur l'échéance « Dès l'inscription » | patch |
+| 4 | edge | Un run direct de Martine (page Diagnostic) avant le profil donne un second audit | low | parcours improbable (le diagnostic suit l'onboarding) ; correctif ajoute une requête | rejeté |
+| 5 | blind | Aucun rattrapage si l'audit n'a pas été créé à la première création | low | ne reste possible qu'en cas de panne après les correctifs 1 et 2 | defer |
+| 6 | blind, edge | Le test nominal accepte un run `failed` ; le run réel tourne en tâche de fond pendant la suppression | false | `after()` s'exécute après la réponse : en CI sans clé, le run échoue vite et l'action revient à `propose` ; l'état strict n'est pas observable depuis le test | rejeté |
+| 7 | blind, edge, gap | Le test de double envoi ne force pas la concurrence | medium | les deux POST peuvent être traités l'un après l'autre ; le garde-fou sérialisable n'est pas exercé | patch |
+| 8 | blind | Le test de quota ne vérifie ni la journalisation ni le budget | low | refus déjà couvert par `quota_runs` | rejeté |
+| 9 | blind | Libellés recopiés dans les tests au lieu des constantes exportées | low | correctif direct | patch |
+| 10 | blind | Commentaire du formulaire mal placé | low | correctif direct | patch |
+| 11 | blind, edge | Pas de signal client quand l'audit n'a pas démarré | low | interdit par la spec (« pas de nouveau texte ») | rejeté |
+| 12 | blind | Lecture supplémentaire à chaque enregistrement du profil | low | une requête indexée par e-mail | rejeté |
+| 13 | edge | L'action renvoyée garde le statut `propose` | low | aucun appelant ne lit ce statut | rejeté |
+| 14 | edge | La génération du plan ignore les actions `en_cours` et peut reproposer un audit | medium | `runCoCeoPlanning` lit `status in [propose, lance]` (même défaut que la story 1.1) | patch |
+| 15 | edge | Paul déléguant sans `planItemId` peut créer un second audit | medium | dédoublonnage structurel prévu en story 2.4 (AD-16) | defer |
+| 16 | edge | La page Diagnostic lance encore Martine hors plan | low | lancement voulu par le dirigeant ; la spec garde la route | defer |
+| 17 | gap | Le parcours d'onboarding ne vérifie pas que le navigateur ne lance plus d'agent | medium | aucun compteur de requêtes `/api/agents/` dans les tests d'onboarding | patch |
 
 ## Verification
 

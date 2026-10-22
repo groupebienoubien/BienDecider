@@ -9,6 +9,21 @@ import { createSessionToken } from "../src/lib/session-token";
 // réponses générées.
 requireLocalDatabase("Engine tests");
 
+/** Suppression en fin de test : une exécution encore en arrière-plan peut provoquer un conflit d'écriture (P2034). */
+async function deleteCompany(id: string) {
+  const { prisma } = await import("../src/lib/prisma");
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await prisma.company.delete({ where: { id } });
+      return;
+    } catch (error) {
+      const conflict = typeof error === "object" && error !== null && "code" in error && error.code === "P2034";
+      if (!conflict || attempt >= 5) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+  }
+}
+
 const test = base.extend<{ company: Company }>({
   company: async ({}, runFixture) => {
     const { prisma } = await import("../src/lib/prisma");
@@ -18,15 +33,15 @@ const test = base.extend<{ company: Company }>({
     try {
       await runFixture(company);
     } finally {
-      await prisma.company.delete({ where: { id: company.id } });
+      await deleteCompany(company.id);
     }
   },
 });
 
 /** Portée de requête minimale pour after() : les exécutions restent en file, aucun agent n'est appelé. */
 async function inRequestScope<T>(scheduled: unknown[], fn: () => Promise<T>): Promise<T> {
-  const { workAsyncStorage } = await import("next/dist/server/app-render/work-async-storage.external");
-  const { workUnitAsyncStorage } = await import("next/dist/server/app-render/work-unit-async-storage.external");
+  const { workAsyncStorage } = await import("next/dist/server/app-render/work-async-storage.external.js");
+  const { workUnitAsyncStorage } = await import("next/dist/server/app-render/work-unit-async-storage.external.js");
   return workAsyncStorage.run(
     { afterContext: { after: (task: unknown) => { scheduled.push(task); } } } as never,
     () => workUnitAsyncStorage.run({} as never, fn),
@@ -721,4 +736,111 @@ test("a request outside the catalogue is recorded for the founders and shown onl
   const asOwner = await request.get(`${baseURL}/admin`, { headers: cookie(company.ownerEmail, company.sessionVersion) });
   expect(await asOwner.text()).not.toContain(marker);
   if (createdAdminCompany) await prisma.company.delete({ where: { id: adminCompany.id } });
+});
+
+/** Compte tel que l'inscription le crée : la ligne existe, le profil (nom) est encore vide. */
+async function withSignedUpCompany(fn: (company: Company, headers: Record<string, string>, baseURL: string) => Promise<void>, data: Record<string, unknown> = {}) {
+  if (!process.env.SESSION_SECRET) throw new Error("SESSION_SECRET is required for engine tests.");
+  const { prisma } = await import("../src/lib/prisma");
+  const baseURL = process.env.UX_TEST_BASE_URL ?? "http://localhost:3000";
+  const company = await prisma.company.create({ data: {
+    ownerEmail: `engine-signup-${randomUUID()}@example.invalid`, name: "", trade: "", servingArea: "", ...data,
+  } });
+  const headers = { Cookie: `pepito_session=${createSessionToken(company.ownerEmail, company.sessionVersion, process.env.SESSION_SECRET)}`, Origin: baseURL };
+  try {
+    await fn(company, headers, baseURL);
+  } finally {
+    await deleteCompany(company.id);
+  }
+}
+
+const ONBOARDING_PROFILE = { name: "Atelier Lumen", trade: "Électricien", servingArea: "Lyon" };
+
+test("the first profile creation puts Martine's audit in the plan, in progress with its queued run", async ({ request }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { ONBOARDING_AUDIT_TITLE, ONBOARDING_AUDIT_TIMING } = await import("../src/lib/agents/onboarding-audit");
+  await withSignedUpCompany(async (company, headers, baseURL) => {
+    const response = await request.post(`${baseURL}/api/companies`, { headers, data: ONBOARDING_PROFILE });
+    expect(response.status()).toBe(201);
+    const items = await prisma.actionPlanItem.findMany({ where: { companyId: company.id } });
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      agent: "marketing", theme: "Visibilité", priority: 1, title: ONBOARDING_AUDIT_TITLE,
+      timing: ONBOARDING_AUDIT_TIMING, status: "en_cours",
+    });
+    expect(items[0].outcome).toBeTruthy();
+    const runs = await prisma.agentRun.findMany({ where: { companyId: company.id } });
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({ agent: "marketing", planItemId: items[0].id });
+    expect(["queued", "running", "succeeded", "failed"]).toContain(runs[0].status);
+  });
+});
+
+test("updating an existing profile creates no audit action and no run", async ({ company, request }) => {
+  if (!process.env.SESSION_SECRET) throw new Error("SESSION_SECRET is required for engine tests.");
+  const { prisma } = await import("../src/lib/prisma");
+  const baseURL = process.env.UX_TEST_BASE_URL ?? "http://localhost:3000";
+  const headers = { Cookie: `pepito_session=${createSessionToken(company.ownerEmail, company.sessionVersion, process.env.SESSION_SECRET)}`, Origin: baseURL };
+  expect(company.name).not.toBe("");
+  const response = await request.post(`${baseURL}/api/companies`, { headers, data: { ...ONBOARDING_PROFILE, name: "Atelier Renommé" } });
+  expect(response.status()).toBe(201);
+  expect((await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).name).toBe("Atelier Renommé");
+  expect(await prisma.actionPlanItem.count({ where: { companyId: company.id } })).toBe(0);
+  expect(await prisma.agentRun.count({ where: { companyId: company.id } })).toBe(0);
+});
+
+test("a first profile creation under a reached quota still creates the company and leaves the audit to launch", async ({ request }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  await withSignedUpCompany(async (company, headers, baseURL) => {
+    const response = await request.post(`${baseURL}/api/companies`, { headers, data: ONBOARDING_PROFILE });
+    expect(response.status()).toBe(201);
+    expect((await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).name).toBe("Atelier Lumen");
+    const items = await prisma.actionPlanItem.findMany({ where: { companyId: company.id } });
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ agent: "marketing", status: "propose" });
+    expect(await prisma.agentRun.count({ where: { companyId: company.id } })).toBe(0);
+  }, { dailyAgentRunLimit: 0 });
+});
+
+test("two simultaneous first profile submissions create one audit action and one run", async ({ request }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  await withSignedUpCompany(async (company, headers, baseURL) => {
+    const submit = () => request.post(`${baseURL}/api/companies`, { headers, data: ONBOARDING_PROFILE });
+    const responses = await Promise.all([submit(), submit()]);
+    expect(responses.map((response) => response.status())).toEqual([201, 201]);
+    expect(await prisma.actionPlanItem.count({ where: { companyId: company.id, agent: "marketing" } })).toBe(1);
+    expect(await prisma.agentRun.count({ where: { companyId: company.id } })).toBe(1);
+  });
+});
+
+test("Paul delegating the onboarding audit while it runs is told it is already running", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { startOnboardingAudit } = await import("../src/lib/agents/onboarding-audit");
+  const { delegatePlanAction } = await import("../src/lib/agents/co-ceo");
+  const scheduled: unknown[] = [];
+  const started = await inRequestScope(scheduled, () => startOnboardingAudit(company.id));
+  expect(started?.item.status).toBe("propose");
+  expect((await prisma.actionPlanItem.findUniqueOrThrow({ where: { id: started!.item.id } })).status).toBe("en_cours");
+  expect(scheduled).toHaveLength(1);
+
+  // Un second appel (double envoi) ne crée pas de seconde action d'audit.
+  expect(await inRequestScope(scheduled, () => startOnboardingAudit(company.id))).toBeNull();
+
+  const result = await inRequestScope(scheduled, () => delegatePlanAction(company.id, "marketing", { ...DELEGATION_INPUT, planItemId: started!.item.id }));
+  expect(result).toMatchObject({ ok: false, reason: "already_running", runId: started!.run.id, planItemId: started!.item.id });
+  expect(await prisma.agentRun.count({ where: { companyId: company.id } })).toBe(1);
+  expect(await prisma.actionPlanItem.count({ where: { companyId: company.id } })).toBe(1);
+});
+
+test("two concurrent onboarding audit starts create one action and one run", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { startOnboardingAudit, ONBOARDING_AUDIT_TIMING } = await import("../src/lib/agents/onboarding-audit");
+  const scheduled: unknown[] = [];
+  const results = await Promise.all([
+    inRequestScope(scheduled, () => startOnboardingAudit(company.id)),
+    inRequestScope(scheduled, () => startOnboardingAudit(company.id)),
+  ]);
+  expect(results.filter((result) => result !== null)).toHaveLength(1);
+  expect(await prisma.actionPlanItem.count({ where: { companyId: company.id, agent: "marketing", timing: ONBOARDING_AUDIT_TIMING } })).toBe(1);
+  expect(await prisma.agentRun.count({ where: { companyId: company.id } })).toBe(1);
 });

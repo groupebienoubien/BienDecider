@@ -377,7 +377,7 @@ export async function runCoCeoPlanning(companyId: string, agentRunId?: string) {
       take: 6,
     }),
     prisma.actionPlanItem.findMany({
-      where: { companyId, status: { in: ["propose", "lance"] } },
+      where: { companyId, status: { in: ["propose", "en_cours", "lance"] } },
       orderBy: { createdAt: "desc" },
     }),
     prisma.actionPlanItem.findMany({

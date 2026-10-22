@@ -950,8 +950,16 @@ test("guided onboarding starts with three fields and keeps the full company page
     await page.getByPlaceholder("Nom commercial").fill("Atelier Minimal");
     await page.getByPlaceholder("Votre métier (ex: plombier, restaurant...)").fill("Plomberie");
     await page.getByPlaceholder("Zone de chalandise (ex: Lyon et alentours)").fill("Lille");
+    // Le premier audit est lancé par le serveur : le navigateur n'appelle plus aucun agent.
+    let agentCalls = 0;
+    await page.route("**/api/agents/**", (route) => {
+      agentCalls += 1;
+      return route.continue();
+    });
     await page.getByRole("button", { name: "Valider et lancer mon audit" }).click();
     await expect(page).toHaveURL(`${baseURL}/dashboard`);
+    await page.unroute("**/api/agents/**");
+    expect(agentCalls).toBe(0);
     const saved = await prisma.company.findUniqueOrThrow({ where: { id: company.id } });
     expect(saved.name).toBe("Atelier Minimal");
     expect(saved.trade).toBe("Plomberie");

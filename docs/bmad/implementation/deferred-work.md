@@ -16,3 +16,12 @@
 - source_spec: `docs/bmad/implementation/spec-1-2-motifs-d-echec-types-et-dits-en-clair.md`
   summary: Vérifier le champ reason des réponses 409 et de l'événement d'erreur du flux de Paul.
   evidence: aucun écran ne lit encore reason ; à couvrir avec le premier consommateur (épopée 2).
+- source_spec: `docs/bmad/implementation/spec-1-3-le-premier-audit-nait-dans-le-plan.md`
+  summary: Rattraper une entreprise dont le profil est rempli mais sans audit d'inscription.
+  evidence: possible seulement après une panne au moment de la création ; aucun mécanisme de reprise.
+- source_spec: `docs/bmad/implementation/spec-1-3-le-premier-audit-nait-dans-le-plan.md`
+  summary: Empêcher Paul de créer une seconde action d'audit en déléguant sans planItemId.
+  evidence: relève du dédoublonnage par agent et thème (story 2.4, AD-16).
+- source_spec: `docs/bmad/implementation/spec-1-3-le-premier-audit-nait-dans-le-plan.md`
+  summary: Faire passer le lancement de Martine depuis la page Diagnostic par le plan.
+  evidence: src/app/diagnostic/diagnostic-client.tsx appelle encore /api/agents/marketing/run (run direct hors plan).
