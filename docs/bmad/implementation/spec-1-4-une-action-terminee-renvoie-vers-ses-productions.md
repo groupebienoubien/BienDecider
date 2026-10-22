@@ -2,7 +2,8 @@
 title: 'Story 1.4 — Une action terminée renvoie vers ses productions'
 type: 'bugfix'
 created: '2026-10-22'
-status: 'ready-for-dev'
+status: 'done'
+baseline_commit: '72bfe9d14dfcce4b32b4a26ef52f777cbabc3a8b'
 route: 'dispatch'
 review_loop_iteration: 0
 context:
@@ -47,9 +48,9 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `src/lib/action-plan-view.ts` -- `planItemStatusView` -- libellé unique par statut
-- [ ] `src/app/dashboard/dashboard-client.tsx` -- accueil, plan et fenêtre de l'action utilisent `planItemStatusView` et le vocabulaire « lancer » -- cohérence
-- [ ] `tests/delegation.spec.ts` -- un test par ligne de la matrice -- non-régression
+- [x] `src/lib/action-plan-view.ts` -- `planItemStatusView` -- libellé unique par statut
+- [x] `src/app/dashboard/dashboard-client.tsx` -- accueil, plan et fenêtre de l'action utilisent `planItemStatusView` et le vocabulaire « lancer » -- cohérence
+- [x] `tests/delegation.spec.ts` -- un test par ligne de la matrice -- non-régression
 
 **Acceptance Criteria:**
 - Étant donné une action exécutée avec des productions en attente, quand l'accueil ou le plan l'affichent, alors elle est « À décider » avec un lien vers ses productions, jamais « à valider ».
@@ -60,6 +61,23 @@ context:
 ## Spec Change Log
 
 ## Review Triage Log
+
+| # | Source | Constat | Verdict | Preuve | Route |
+|---|--------|---------|---------|--------|-------|
+| 1 | edge, blind, gap | Un statut inconnu s'affiche « Terminée » (`default`) | medium | `status: string` et `default` → « Terminée » | patch |
+| 2 | gap, blind | La branche `ecarte` n'est pas testée, ni dans la boucle « jamais valider » | medium | aucun appel de test avec `ecarte` | patch |
+| 3 | gap | Aucun test d'écran ne vérifie les nouveaux libellés de l'accueil et du plan | medium | `user-journey.spec.ts:426` et `:715` ne vérifient que des titres | patch |
+| 4 | edge, blind | `lance` sans production en attente affiche « À décider » avec « Voir la production » | medium | libellé et bouton se contredisent ; tout est décidé | patch |
+| 5 | blind | `role="status"` sur un libellé fixe | low | correctif direct (span simple) | patch |
+| 6 | blind | Bouton de la fenêtre « Relancer » contre « Relancer l'action » dans le plan | low | correctif direct | patch |
+| 7 | edge | `agentRuns[0]` supposé le plus récent | false | la page lit `agentRuns` triés par `createdAt desc`, `take: 1` (`dashboard/page.tsx`) | rejeté |
+| 8 | edge | Le lien « N à examiner » n'est pas filtré sur l'action | low | comportement antérieur, hors intention | rejeté |
+| 9 | edge | L'accueil n'affiche jamais « À décider » pour une action exécutée | false | l'accueil montre les productions elles-mêmes (charte : un objet, une maison) ; le libellé d'action vit dans le plan | rejeté |
+| 10 | blind | La carte d'accueil construit sa phrase en minuscules à partir du libellé | low | seules les actions `propose` y arrivent ; correctif ajoute une branche | rejeté |
+| 11 | blind | Couleur de la liste des actions closes encore lue sur le statut brut | low | sans effet visible | rejeté |
+| 12 | blind | Type `cta` nullable pour tous les statuts | low | refonte de type sans effet visible | rejeté |
+| 13 | blind | La maquette `docs/maquette/maquette.js` garde l'ancien vocabulaire | low | document de référence, hors code | defer |
+| 14 | blind | Ligne vide manquante dans `action-plan-view.ts` | low | correctif direct | patch |
 
 ## Verification
 

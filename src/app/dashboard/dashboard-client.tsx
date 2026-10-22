@@ -28,7 +28,7 @@ import { getProposalGuidance } from "@/lib/channel-capabilities";
 import { proposalStatusView, STATUS_TAG_COLORS } from "@/lib/proposal-status";
 import { proposalChannel } from "@/lib/proposal-channel";
 import { openPaul } from "@/lib/paul-context";
-import { groupPlanItems } from "@/lib/action-plan-view";
+import { groupPlanItems, planItemStatusView } from "@/lib/action-plan-view";
 import { weekStart } from "@/lib/results-timeline";
 
 type PlanItemWithProposals = ActionPlanItem & { proposals: AgentProposal[]; agentRuns: AgentRunView[] };
@@ -250,7 +250,7 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
 
   const activeItems = planItems.filter((item) => item.status !== "ecarte" && item.status !== "termine");
   const planGroups = groupPlanItems(activeItems);
-  // Charte : une seule action principale par écran, la première action à valider dans l'ordre affiché.
+  // Charte : une seule action principale par écran, la première action à lancer dans l'ordre affiché.
   const firstProposedId = planGroups.flatMap(({ items }) => items).find((item) => item.status === "propose")?.id;
   const closedItems = planItems.filter((item) => item.status === "ecarte" || item.status === "termine");
   const actionable = proposals.filter((proposal) => needsAttention(proposal, facebookPageName));
@@ -346,13 +346,14 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
               const first = index === 0 && hasObjective;
               if (decision.item) {
                 const persona = PERSONAS[decision.item.agent as AgentKey];
+                const itemView = planItemStatusView(decision.item.status, decision.item.agentRuns[0]?.status, 0);
                 return <DecisionCard
                   key={decision.key}
                   agent={decision.item.agent}
-                  byline="vous propose une action à valider"
+                  byline={`vous propose une action ${itemView.label.toLowerCase()}`}
                   title={decision.item.title}
                   action={<Link className={`btn ${first ? "primary" : ""}`} href={`/dashboard?view=plan#plan-item-${decision.item.id}`}>Examiner l’action <Icon name="arrow-right" /></Link>}
-                  details={<p>Action à valider{decision.item.theme ? ` · ${decision.item.theme}` : ""} · {decision.item.timing}. La valider lancera la préparation d’une production par {persona?.name ?? "l’agent"} ; rien ne sera publié ni envoyé.</p>}
+                  details={<p>Action {itemView.label.toLowerCase()}{decision.item.theme ? ` · ${decision.item.theme}` : ""} · {decision.item.timing}. La lancer confiera la préparation d’une production à {persona?.name ?? "l’agent"} ; rien ne sera publié ni envoyé.</p>}
                 />;
               }
               const proposal = decision.proposal!;
@@ -410,6 +411,7 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
               const progress = summarizeProposals(proposals.filter((proposal) => proposal.planItemId === item.id));
               const progressParts = describeProgress(progress);
               const proposed = item.status === "propose";
+              const statusView = planItemStatusView(item.status, item.agentRuns[0]?.status, count);
               return (
                 <article key={item.id} id={`plan-item-${item.id}`} className="plan-row">
                   <span className="priority">{item.priority ? String(item.priority).padStart(2, "0") : "–"}</span>
@@ -420,16 +422,16 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
                     {progress.total > 0 && progress.rejected === progress.total && <small>Rien n’a été retenu : l’action reste ouverte. Précisez votre demande à Paul pour obtenir une autre proposition.</small>}
                     <details className="plan-details">
                       <summary>Détails</summary>
-                      <p>{proposed ? "À valider" : item.status === "en_cours" ? "En cours" : "Lancée"}{item.priority ? ` · priorité ${item.priority}` : ""}{progressParts.length > 0 ? ` · ${progressParts.join(" · ")}` : ""}</p>
+                      <p>{statusView.label}{item.priority ? ` · priorité ${item.priority}` : ""}{progressParts.length > 0 ? ` · ${progressParts.join(" · ")}` : ""}</p>
                       <p><strong>{item.timing === CHAT_REQUEST_TIMING ? `Consigne donnée à ${agentName(item.agent)}` : "Pourquoi cette action"} :</strong> {item.rationale}</p>
                     </details>
                   </div>
                   {item.status === "en_cours" ? (
-                    item.agentRuns[0] ? <button type="button" onClick={() => void checkRun(item.agentRuns[0].id)}>Vérifier l’état</button> : <span role="status">En cours</span>
+                    item.agentRuns[0] ? <button type="button" onClick={() => void checkRun(item.agentRuns[0].id)}>Vérifier l’état</button> : <span>{statusView.label}</span>
                   ) : proposed ? (
-                    <button type="button" className={item.id === firstProposedId ? "primary" : undefined} onClick={() => { setDiscarding(false); setDiscardReason(""); setPlanModalId(item.id); }} disabled={locked}>{item.agentRuns[0]?.status === "failed" ? "Relancer l’action" : "Examiner et valider"}</button>
+                    <button type="button" className={item.id === firstProposedId ? "primary" : undefined} onClick={() => { setDiscarding(false); setDiscardReason(""); setPlanModalId(item.id); }} disabled={locked}>{statusView.cta?.label}</button>
                   ) : (
-                    <Link className="btn" href={count > 0 ? "/dashboard?view=validation" : "/dashboard?view=historique"}>{count > 0 ? `${count} à examiner` : "Voir la production"}</Link>
+                    statusView.cta?.href ? <Link className="btn" href={statusView.cta.href}>{statusView.cta.label}</Link> : <span>{statusView.label}</span>
                   )}
                 </article>
               );
@@ -543,7 +545,7 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
                     <span className="results-icon" aria-hidden="true"><Icon name={item.status === "ecarte" ? "x" : "circle-check"} /></span>
                     <div>
                       <strong>{item.title}</strong>
-                      <small><Tag color={item.status === "ecarte" ? "gray" : "green"}>{item.status === "ecarte" ? "Écartée" : "Traitée"}</Tag> <AgentByline agent={item.agent} size={16} />{item.feedback ? <> · {item.feedback}</> : null}</small>
+                      <small><Tag color={item.status === "ecarte" ? "gray" : "green"}>{planItemStatusView(item.status, null, 0).label}</Tag> <AgentByline agent={item.agent} size={16} />{item.feedback ? <> · {item.feedback}</> : null}</small>
                     </div>
                   </li>
                 ))}
@@ -576,12 +578,12 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
         open={Boolean(planModalItem)}
         onClose={() => setPlanModalId(null)}
         kicker={planModalItem ? `${planModalItem.theme ?? "Action"} · Priorité ${planModalItem.priority ?? "–"}` : ""}
-        title="Valider l’action, puis préparer"
+        title="Lancer l’action, puis préparer"
         actions={planModalItem && (discarding
           ? <button type="button" className="danger" disabled={locked} onClick={() => void handleDiscard(planModalItem.id)}>Confirmer</button>
           : <>
             <button type="button" className="quiet" disabled={locked} onClick={() => setDiscarding(true)}>Écarter</button>
-            <button type="button" className="primary" disabled={locked || checking} onClick={() => void requestProfile(planModalItem.agent as AgentKey, () => handleLaunch(planModalItem, planModalItem.agentRuns[0]?.status === "failed" ? planModalItem.agentRuns[0].id : undefined))}>{busyId === planModalItem.id ? "Mise en file…" : planModalItem.agentRuns[0]?.status === "failed" ? "Relancer" : "Valider et générer le brouillon"}</button>
+            <button type="button" className="primary" disabled={locked || checking} onClick={() => void requestProfile(planModalItem.agent as AgentKey, () => handleLaunch(planModalItem, planModalItem.agentRuns[0]?.status === "failed" ? planModalItem.agentRuns[0].id : undefined))}>{busyId === planModalItem.id ? "Mise en file…" : planModalItem.agentRuns[0]?.status === "failed" ? "Relancer l’action" : "Lancer et générer le brouillon"}</button>
           </>)}
       >
         {planModalItem && <>
@@ -591,7 +593,7 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
             <dt>Agent</dt><dd>{PERSONAS[planModalItem.agent as AgentKey]?.name ?? planModalItem.agent}</dd>
             <dt>Échéance</dt><dd>{planModalItem.timing}</dd>
           </dl>
-          <p>Cette validation lance la génération d’un brouillon. Rien ne sera publié ou envoyé.</p>
+          <p>Ce lancement démarre la génération d’un brouillon. Rien ne sera publié ou envoyé.</p>
           {discarding && <label className="field">Raison de l’abandon
             <input placeholder="Pourquoi écarter cette action ?" value={discardReason} onChange={(event) => setDiscardReason(event.target.value)} maxLength={500} />
           </label>}

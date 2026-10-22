@@ -3,6 +3,13 @@ import type { Company } from "@prisma/client";
 import { createHash, randomUUID } from "node:crypto";
 import { requireLocalDatabase } from "./support/local-database";
 import { createSessionToken } from "../src/lib/session-token";
+import { AsyncLocalStorage } from "node:async_hooks";
+
+// Next n'utilise un vrai AsyncLocalStorage que s'il est exposé globalement au
+// chargement de ses modules (le serveur Next le fait au démarrage). Sans lui,
+// inRequestScope échoue : « AsyncLocalStorage accessed in runtime where it is
+// not available ». Les modules de l'application sont tous importés plus bas.
+(globalThis as { AsyncLocalStorage?: typeof AsyncLocalStorage }).AsyncLocalStorage ??= AsyncLocalStorage;
 
 // Tests du moteur (Paul et les agents) sans appel au modèle : ils vérifient
 // ce que le code lit et écrit en base autour des appels, pas la qualité des

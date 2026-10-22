@@ -39,7 +39,7 @@ development_status:
   1-1-une-seule-lecture-de-l-état-de-l-équipe: done
   1-2-motifs-d-échec-typés-et-dits-en-clair: review
   1-3-le-premier-audit-naît-dans-le-plan: review
-  1-4-une-action-terminée-renvoie-vers-ses-productions: backlog
+  1-4-une-action-terminée-renvoie-vers-ses-productions: review
   epic-1-retrospective: optional
 
   epic-2: backlog

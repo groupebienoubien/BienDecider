@@ -25,3 +25,6 @@
 - source_spec: `docs/bmad/implementation/spec-1-3-le-premier-audit-nait-dans-le-plan.md`
   summary: Faire passer le lancement de Martine depuis la page Diagnostic par le plan.
   evidence: src/app/diagnostic/diagnostic-client.tsx appelle encore /api/agents/marketing/run (run direct hors plan).
+- source_spec: `docs/bmad/implementation/spec-1-4-une-action-terminee-renvoie-vers-ses-productions.md`
+  summary: Aligner docs/maquette/maquette.js sur le vocabulaire « lancer » des actions.
+  evidence: la maquette garde « Examiner et valider », « Valider l'action, puis préparer », « À valider ».
