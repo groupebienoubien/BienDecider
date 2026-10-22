@@ -47,7 +47,8 @@ test("Paul rereads the most recent messages of a conversation longer than 40 mes
 
 test("the prospect follow-up read by Paul summarizes the tracked leads", async ({ company }) => {
   const { prisma } = await import("../src/lib/prisma");
-  const { getFunnelStats, funnelLines } = await import("../src/lib/funnel");
+  const { getFunnelStats } = await import("../src/lib/funnel");
+  const { funnelLines } = await import("../src/lib/funnel-shared");
   expect(funnelLines(await getFunnelStats(company.id))).toBe("");
 
   await prisma.lead.create({ data: { companyId: company.id, name: "Association Test", reason: "Cible locale", stage: "contacte", segment: "associations" } });
