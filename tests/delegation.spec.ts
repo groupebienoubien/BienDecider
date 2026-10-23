@@ -15,6 +15,7 @@ import { groupPlanItems, planItemStatusView } from "../src/lib/action-plan-view"
 import { facebookAuditSource } from "../src/lib/facebook-audit-source";
 import { businessTargetLines, clientGapLabel, clientsToMonthly, computeBusinessTarget, toMonthly } from "../src/lib/business-target";
 import { PROFILE_PAGE_ONLY_MESSAGE, decidedText, launchPlanItemPayloadSchema, describePendingAction, expiredMessage, mergeProfilePayloads, objectiveUpdateValues, profileUpdateToolSchema, profileUpdateValues, readProfileToolInput, toPendingActionView, updateObjectivePayloadSchema, updateProfilePayloadSchema } from "../src/lib/agents/pending-action-view";
+import { RUN_CAPS, capGroup, runCapReachedMessage, withRunCap } from "../src/lib/agents/run-caps";
 import { PROFILE_TEXT_LIMITS, clearableText, profileTextIssue } from "../src/lib/company-profile";
 
 test("risk rules use registered kinds and contextual factors, then fail closed", () => {
@@ -614,4 +615,63 @@ test("story 3.1: a follow-up draft signs with the owner's name, the company on t
   expect(signed.endsWith("Cordialement,\nSamuel Morel\nAtelier Lumen")).toBe(true);
   const unsigned = buildOutreachDraft({ lead, companyName: "Atelier Lumen", trade: null, phone: "0102030405" });
   expect(unsigned.endsWith("Cordialement,\n[Votre prénom et nom]\nAtelier Lumen\n0102030405")).toBe(true);
+});
+
+test("story 3.2: run caps group the proposal kinds, Google profile proposals together", () => {
+  expect(RUN_CAPS).toEqual({ prospect: 5, piste_croissance: 2, prospecting_email: 2, social_post: 3, site_web_content: 1, fiche_google: 2, audit_finding: 4 });
+  for (const kind of ["prospect", "piste_croissance", "prospecting_email", "social_post", "site_web_content"]) expect(capGroup(kind)).toBe(kind);
+  expect(capGroup("gbp_update")).toBe("fiche_google");
+  expect(capGroup("review_reply")).toBe("fiche_google");
+  expect(capGroup("audit_finding")).toBe("audit_finding");
+  expect(capGroup("gmail_email")).toBeNull();
+  expect(runCapReachedMessage("prospect")).toBe("Plafond atteint pour les prospects dans ce passage : n'en propose pas d'autre.");
+  expect(runCapReachedMessage("fiche_google")).toBe("Plafond atteint pour les propositions de fiche Google (mise à jour et réponse aux avis) dans ce passage : n'en propose pas d'autre.");
+  expect(runCapReachedMessage("audit_finding")).toBe("Plafond atteint pour les constats d'audit dans ce passage : n'en propose pas d'autre.");
+});
+
+test("story 3.2: a throwing write releases the run's lock and the next queued call runs", async () => {
+  const locks = new Map<string, Promise<unknown>>();
+  const check = async () => true;
+  const failing = withRunCap("run-a", "prospect", async () => { throw new Error("boom"); }, { check, locks });
+  const next = withRunCap("run-a", "prospect", async () => "écrit", { check, locks });
+  await expect(failing).rejects.toThrow("boom");
+  expect(await next).toBe("écrit");
+  expect(locks.size).toBe(0);
+});
+
+test("story 3.2: calls of one run are serialized, calls of different runs are not", async () => {
+  const locks = new Map<string, Promise<unknown>>();
+  const check = async () => true;
+  let release!: () => void;
+  const blocked = new Promise<void>((resolve) => { release = resolve; });
+  const order: string[] = [];
+  const first = withRunCap("run-a", "prospect", async () => { await blocked; order.push("a1"); return "a1"; }, { check, locks });
+  const sameRun = withRunCap("run-a", "prospect", async () => { order.push("a2"); return "a2"; }, { check, locks });
+  const otherRun = await withRunCap("run-b", "prospect", async () => { order.push("b1"); return "b1"; }, { check, locks });
+  expect(otherRun).toBe("b1");
+  expect(order).toEqual(["b1"]);
+  release();
+  expect(await Promise.all([first, sameRun])).toEqual(["a1", "a2"]);
+  expect(order).toEqual(["b1", "a1", "a2"]);
+});
+
+test("story 3.2: an uncapped kind or a call outside a run skips the lock and the count", async () => {
+  const locks = new Map<string, Promise<unknown>>();
+  let checks = 0;
+  const check = async () => { checks++; return true; };
+  let release!: () => void;
+  const blocked = new Promise<void>((resolve) => { release = resolve; });
+  const held = withRunCap("run-a", "prospect", async () => { await blocked; return "a1"; }, { check, locks });
+  expect(await withRunCap("run-a", "gmail_email", async () => "libre", { check, locks })).toBe("libre");
+  expect(await withRunCap(undefined, "prospect", async () => "hors passage", { check, locks })).toBe("hors passage");
+  release();
+  await held;
+  expect(checks).toBe(1);
+});
+
+test("story 3.2: a reached cap writes nothing and answers the group's message", async () => {
+  let writes = 0;
+  const answer = await withRunCap("run-a", "review_reply", async () => { writes++; return "écrit"; }, { check: async () => false, locks: new Map() });
+  expect(answer).toBe(runCapReachedMessage("fiche_google"));
+  expect(writes).toBe(0);
 });

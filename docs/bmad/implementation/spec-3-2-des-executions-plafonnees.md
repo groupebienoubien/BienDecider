@@ -2,7 +2,8 @@
 title: 'Story 3.2 — Des exécutions plafonnées'
 type: 'feature'
 created: '2026-10-23'
-status: 'ready-for-dev'
+status: 'done'
+baseline_commit: '410d613f00495c52493ed59235b3975419407968'
 route: 'dispatch'
 review_loop_iteration: 0
 context:
@@ -48,18 +49,44 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `src/lib/agents/run-caps.ts` -- plafonds et compteur -- règle unique
-- [ ] outils des trois agents et prompts -- application -- moins de décisions
-- [ ] tests -- une ligne de la matrice par test -- non-régression
+- [x] `src/lib/agents/run-caps.ts` -- plafonds et compteur -- règle unique
+- [x] outils des trois agents et prompts -- application -- moins de décisions
+- [x] tests -- une ligne de la matrice par test -- non-régression
 
 **Acceptance Criteria:**
 - Étant donné une exécution de Jean-Claude qui tente 9 prospects, quand elle se termine, alors 5 prospects au plus sont en attente.
 
 ## Implementation Notes
 
+- `withRunCap(agentRunId, kind, write)` enveloppe l'écriture de chaque outil ; le contrôle de doublon d'un rejet se fait dans `write`, sous le verrou : une écriture refusée pour doublon n'écrit rien, donc n'est pas comptée, et deux appels identiques simultanés sont sérialisés. Un `kind` sans groupe (ex. `gmail_email`) ou un appel sans `agentRunId` écrit sans plafond ni verrou.
+- Le Tool Runner exécute en parallèle les appels d'outils d'un même tour (`Promise.all`) : le contrôle et l'écriture sont sérialisés par `agentRunId` (verrou en mémoire, valable au sein d'un processus ; une exécution tourne aujourd'hui dans un seul processus). Le contrôle et le verrou sont injectables pour les tests sans base.
+- Une relance réutilise l'`agentRunId` : seules les écritures postérieures à `AgentRun.startedAt` (remis à jour par `processAgentRun` à chaque tentative) comptent. `startedAt` et `createdAt` sont tous deux posés côté application (Prisma génère `now()`).
+- Le message de plafond nomme le groupe en français (ex. « les propositions de fiche Google (mise à jour et réponse aux avis) »).
+- Le prospect et son `Lead` s'écrivent dans une même transaction.
+- Index `@@index([agentRunId])` sur `AgentProposal` et `AuditFinding` (migration `20261024100000_run_cap_indexes`).
+- Prompts et descriptions d'outils annoncent les plafonds, interpolés depuis `RUN_CAPS` : prospects « entre 3 et 5 », sinon « jusqu'à N, les meilleurs ».
+- `prisma` est importé à la demande dans `run-caps.ts` pour que `capGroup` et `withRunCap` restent testables dans `test:delegation`.
+
 ## Spec Change Log
 
 ## Review Triage Log
+
+| # | Source | Constat | Verdict | Preuve | Route |
+|---|--------|---------|---------|--------|-------|
+| 1 | blind, edge | Une relance réutilise l'identifiant d'exécution : les écritures de la tentative échouée épuisent le plafond | medium | `countRunWrites` filtre seulement sur `agentRunId` | patch |
+| 2 | blind, edge | Le message de refus nomme un code (`review_reply`) et pas le groupe | low | correctif direct (libellé français du groupe) | patch |
+| 3 | blind, edge | Prospect et fiche Lead écrits hors transaction | low | correctif direct | patch |
+| 4 | blind | Contrôle de doublon de rejet hors du verrou | low | deux appels parallèles identiques passent | patch |
+| 5 | blind | Verrou en mémoire d'un seul processus, non documenté | low | correctif direct (commentaire) | patch |
+| 6 | blind | Camille sans consigne de choix au plafond ; descriptions d'outils muettes | low | correctif direct | patch |
+| 7 | blind | « 1 à N » fragile ; plus de borne basse pour les prospects | low | correctif direct | patch |
+| 8 | blind | Nom de test inexact | low | correctif direct | patch |
+| 9 | blind | `withRunCap` sans test unitaire (libération du verrou, runs distincts) | low | correctif direct | patch |
+| 10 | gap | Plafonds jamais testés à travers l'exécution réelle (`agent-runs.ts`, `executePlanItem`) | medium | tous les tests appellent les agents directement | patch |
+| 11 | blind | Pas d'index sur `agentRunId` pour les comptages | low | migration additive simple | patch |
+| 12 | blind | Le test des 11 décisions ne vérifie pas la répartition par type | low | correctif direct | patch |
+| 13 | edge | Une écriture bloquée bloque les suivantes du même run | low | délai maximal du run déjà en place | rejeté |
+| 14 | edge | Identifiant de run vide ignoré | low | jamais vide en pratique | rejeté |
 
 ## Verification
 

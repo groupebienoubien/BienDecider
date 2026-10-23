@@ -1558,7 +1558,7 @@ test("delegatePlanAction reuses an active action of the same agent and theme: la
 });
 
 /** Paramètres donnés au modèle par Jean-Claude, sans appel au modèle : le lancement est intercepté. */
-async function captureDemarchageParams(companyId: string) {
+async function captureDemarchageParams(companyId: string, options: { agentRunId?: string } = {}) {
   const { anthropic } = await import("../src/lib/anthropic");
   const { runDemarchageAgent } = await import("../src/lib/agents/demarchage");
   type CapturedTool = { name: string; description?: string; run: (input: Record<string, unknown>) => Promise<string> };
@@ -1570,7 +1570,7 @@ async function captureDemarchageParams(companyId: string) {
     throw new Error("intercepted");
   };
   try {
-    await expect(runDemarchageAgent(companyId, "Syndics de copropriété")).rejects.toThrow("intercepted");
+    await expect(runDemarchageAgent(companyId, "Syndics de copropriété", options)).rejects.toThrow("intercepted");
   } finally {
     messages.toolRunner = original;
   }
@@ -1712,4 +1712,204 @@ test("story 3.1: the Entreprise page and the completion prompt store a cleaned o
   expect((await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).ownerName).toBe("Claire Durand");
   expect((await request.patch(`${baseURL}/api/companies`, { headers, data: { ownerName: "a".repeat(121) } })).status()).toBe(400);
   expect((await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).ownerName).toBe("Claire Durand");
+});
+
+/** Outils d'écriture d'un agent, sans appel au modèle : le lancement est intercepté. */
+async function captureAgentTools(launch: () => Promise<unknown>) {
+  const { anthropic } = await import("../src/lib/anthropic");
+  type CapturedTool = { name: string; run: (input: Record<string, unknown>) => Promise<string> };
+  const messages = anthropic.beta.messages as unknown as { toolRunner: (params: unknown) => unknown };
+  const original = messages.toolRunner;
+  const captured: { tools?: CapturedTool[] } = {};
+  messages.toolRunner = (params: unknown) => {
+    captured.tools = (params as { tools: CapturedTool[] }).tools;
+    throw new Error("intercepted");
+  };
+  try {
+    await expect(launch()).rejects.toThrow("intercepted");
+  } finally {
+    messages.toolRunner = original;
+  }
+  return (name: string) => captured.tools!.find((candidate) => candidate.name === name)!;
+}
+
+async function createCapTestRun(companyId: string, agent: string) {
+  const { prisma } = await import("../src/lib/prisma");
+  return prisma.agentRun.create({ data: { companyId, agent, requestKey: `caps-${randomUUID()}`, payload: {}, status: "running", startedAt: new Date() } });
+}
+
+const PROSPECT_INPUT = { reason: "Gère des copropriétés du quartier.", segment: "syndics", source: "https://example.invalid/syndic" };
+const CAP_LABELS = {
+  prospect: "les prospects",
+  prospecting_email: "les modèles d'email",
+  social_post: "les posts",
+  site_web_content: "le contenu de site",
+  fiche_google: "les propositions de fiche Google (mise à jour et réponse aux avis)",
+  audit_finding: "les constats d'audit",
+} as const;
+const capMessage = (group: keyof typeof CAP_LABELS) => `Plafond atteint pour ${CAP_LABELS[group]} dans ce passage : n'en propose pas d'autre.`;
+
+test("story 3.2: a run of Jean-Claude that tries 9 prospects writes 5, then refuses the other 4", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const run = await createCapTestRun(company.id, "demarchage");
+  const prospect = (await captureDemarchageParams(company.id, { agentRunId: run.id })).tool("propose_prospect");
+  const answers: string[] = [];
+  for (let index = 1; index <= 9; index++) answers.push(await prospect.run({ ...PROSPECT_INPUT, name: `Syndic ${index}` }));
+  for (const answer of answers.slice(0, 5)) expect(answer).toContain("Prospect enregistré");
+  for (const answer of answers.slice(5)) expect(answer).toBe(capMessage("prospect"));
+  expect(await prisma.agentProposal.count({ where: { companyId: company.id, kind: "prospect", status: "en_attente" } })).toBe(5);
+  // Au-delà du plafond, rien n'est écrit : ni proposition ni lead.
+  expect(await prisma.lead.count({ where: { companyId: company.id } })).toBe(5);
+});
+
+test("story 3.2: simultaneous tool calls of one run do not exceed the cap", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const run = await createCapTestRun(company.id, "demarchage");
+  const prospect = (await captureDemarchageParams(company.id, { agentRunId: run.id })).tool("propose_prospect");
+  const answers = await Promise.all(Array.from({ length: 8 }, (_, index) => prospect.run({ ...PROSPECT_INPUT, name: `Syndic simultané ${index}` })));
+  expect(answers.filter((answer) => answer === capMessage("prospect"))).toHaveLength(3);
+  expect(await prisma.agentProposal.count({ where: { agentRunId: run.id } })).toBe(5);
+});
+
+test("story 3.2: the cap counts per run, and a call outside a run has no cap", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const first = await createCapTestRun(company.id, "demarchage");
+  const second = await createCapTestRun(company.id, "demarchage");
+  await prisma.agentProposal.createMany({ data: Array.from({ length: 5 }, (_, index) => ({
+    companyId: company.id, agentRunId: first.id, agent: "demarchage", kind: "prospect", title: `Ancien ${index}`, content: `Déjà proposé ${index}`,
+  })) });
+  const inSecond = (await captureDemarchageParams(company.id, { agentRunId: second.id })).tool("propose_prospect");
+  expect(await inSecond.run({ ...PROSPECT_INPUT, name: "Syndic du second passage" })).toContain("Prospect enregistré");
+  const inFirst = (await captureDemarchageParams(company.id, { agentRunId: first.id })).tool("propose_prospect");
+  expect(await inFirst.run({ ...PROSPECT_INPUT, name: "Syndic de trop" })).toBe(capMessage("prospect"));
+  const outside = (await captureDemarchageParams(company.id)).tool("propose_prospect");
+  for (let index = 0; index < 6; index++) expect(await outside.run({ ...PROSPECT_INPUT, name: `Hors passage ${index}` })).toContain("Prospect enregistré");
+});
+
+test("story 3.2: a write refused as a duplicate of a rejection is not counted", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  await prisma.agentProposal.create({ data: {
+    companyId: company.id, agent: "demarchage", kind: "prospecting_email", title: "Offre aux syndics", content: "Ancien modèle refusé", status: "rejetee",
+  } });
+  const run = await createCapTestRun(company.id, "demarchage");
+  const email = (await captureDemarchageParams(company.id, { agentRunId: run.id })).tool("propose_prospecting_email");
+  const input = { subject: "Vos parties communes", body: "Bonjour [Prénom], voici notre offre." };
+  expect(await email.run({ ...input, title: "Offre aux syndics" })).toContain("déjà refusé");
+  expect(await email.run({ ...input, title: "Premier modèle" })).toContain("Proposition enregistrée");
+  expect(await email.run({ ...input, title: "Deuxième modèle", body: "Bonjour [Prénom], autre texte." })).toContain("Proposition enregistrée");
+  expect(await email.run({ ...input, title: "Troisième modèle", body: "Bonjour [Prénom], encore un." })).toBe(capMessage("prospecting_email"));
+});
+
+test("story 3.2: Martine's Google profile proposals share one cap, and a 5th finding is refused", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { runMarketingAgent } = await import("../src/lib/agents/marketing");
+  const run = await createCapTestRun(company.id, "marketing");
+  const tool = await captureAgentTools(() => runMarketingAgent(company.id, { agentRunId: run.id }));
+  const action = tool("propose_action");
+  expect(await action.run({ kind: "gbp_update", title: "Horaires", content: "Ajouter le samedi." })).toContain("Proposition enregistrée");
+  expect(await action.run({ kind: "gbp_update", title: "Catégorie", content: "Ajouter une catégorie." })).toContain("Proposition enregistrée");
+  expect(await action.run({ kind: "review_reply", title: "Réponse à Marie", content: "Merci Marie !" })).toBe(capMessage("fiche_google"));
+  const finding = tool("record_audit_finding");
+  const findingInput = { category: "site_web", summary: "Résumé.", whatWorks: "Rien de particulier.", toImprove: "À améliorer.", actionItems: [] };
+  for (let index = 1; index <= 4; index++) expect(await finding.run({ ...findingInput, title: `Constat ${index}` })).toContain("Constat enregistré");
+  expect(await finding.run({ ...findingInput, title: "Constat 5" })).toBe(capMessage("audit_finding"));
+  expect(await prisma.auditFinding.count({ where: { agentRunId: run.id } })).toBe(4);
+  expect(await prisma.agentProposal.count({ where: { agentRunId: run.id } })).toBe(2);
+});
+
+test("story 3.2: Camille stops at 3 posts and 1 site content per run", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { runContenuAgent } = await import("../src/lib/agents/contenu");
+  const run = await createCapTestRun(company.id, "contenu");
+  const content = (await captureAgentTools(() => runContenuAgent(company.id, undefined, { agentRunId: run.id })))("propose_content");
+  for (let index = 1; index <= 3; index++) expect(await content.run({ kind: "social_post", title: `Post ${index}`, content: `Légende ${index}` })).toContain("Proposition enregistrée");
+  expect(await content.run({ kind: "social_post", title: "Post 4", content: "Légende 4" })).toBe(capMessage("social_post"));
+  expect(await content.run({ kind: "site_web_content", title: "Site", content: "Brief du site" })).toContain("Proposition enregistrée");
+  expect(await content.run({ kind: "site_web_content", title: "Site bis", content: "Autre brief" })).toBe(capMessage("site_web_content"));
+  expect(await prisma.agentProposal.count({ where: { agentRunId: run.id } })).toBe(4);
+});
+
+test("story 3.2: one run of Jean-Claude and one of Martine leave at most 11 decisions pending", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { runMarketingAgent } = await import("../src/lib/agents/marketing");
+  const jeanClaudeRun = await createCapTestRun(company.id, "demarchage");
+  const martineRun = await createCapTestRun(company.id, "marketing");
+  const jeanClaude = await captureDemarchageParams(company.id, { agentRunId: jeanClaudeRun.id });
+  const martine = await captureAgentTools(() => runMarketingAgent(company.id, { agentRunId: martineRun.id }));
+  for (let index = 0; index < 9; index++) await jeanClaude.tool("propose_prospect").run({ ...PROSPECT_INPUT, name: `Syndic ${index}` });
+  for (let index = 0; index < 4; index++) {
+    await jeanClaude.tool("propose_growth_lead").run({ title: `Piste ${index}`, content: `Piste ${index}`, source: "https://example.invalid/piste", isEvent: false });
+    await jeanClaude.tool("propose_prospecting_email").run({ title: `Modèle ${index}`, subject: "Objet", body: `Bonjour [Prénom] ${index}` });
+    await martine("propose_action").run({ kind: index % 2 ? "review_reply" : "gbp_update", title: `Fiche ${index}`, content: `Fiche ${index}` });
+  }
+  expect(await prisma.agentProposal.count({ where: { companyId: company.id, status: "en_attente" } })).toBe(11);
+  const perKind = await prisma.agentProposal.groupBy({ by: ["kind"], where: { companyId: company.id, status: "en_attente" }, _count: true });
+  const counts = Object.fromEntries(perKind.map((row) => [row.kind, row._count]));
+  expect(counts).toEqual({ prospect: 5, piste_croissance: 2, prospecting_email: 2, gbp_update: 1, review_reply: 1 });
+});
+
+/** Lance une exécution en file par le worker ; le Tool Runner est remplacé par un scénario qui appelle les outils sans modèle. */
+async function processWithScenario(runId: string, scenario: (tool: (name: string) => { run: (input: Record<string, unknown>) => Promise<string> }) => Promise<void>) {
+  const { anthropic } = await import("../src/lib/anthropic");
+  const { processAgentRun } = await import("../src/lib/agent-runs");
+  type CapturedTool = { name: string; run: (input: Record<string, unknown>) => Promise<string> };
+  const messages = anthropic.beta.messages as unknown as { toolRunner: (params: unknown) => unknown };
+  const original = messages.toolRunner;
+  messages.toolRunner = (params: unknown) => {
+    const tools = (params as { tools: CapturedTool[] }).tools;
+    return (async function* () {
+      await scenario((name) => tools.find((candidate) => candidate.name === name)!);
+      yield { usage: { input_tokens: 0, output_tokens: 0 }, stop_reason: "end_turn", content: [] };
+    })();
+  };
+  try {
+    await processAgentRun(runId);
+  } finally {
+    messages.toolRunner = original;
+  }
+}
+
+async function queuePlanItemDemarchageRun(companyId: string) {
+  const { prisma } = await import("../src/lib/prisma");
+  const item = await prisma.actionPlanItem.create({ data: { companyId, agent: "demarchage", title: "Trouver des syndics", rationale: "Le dirigeant vise les copropriétés", timing: "Aujourd'hui", status: "en_cours" } });
+  return prisma.agentRun.create({ data: {
+    companyId, planItemId: item.id, agent: "demarchage", requestKey: `plan:${item.id}`,
+    payload: { kind: "plan_item", planItemId: item.id, extras: { prospectDescription: "Syndics de copropriété" } },
+  } });
+}
+
+test("story 3.2: a plan run processed by the worker refuses the 6th prospect", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const run = await queuePlanItemDemarchageRun(company.id);
+  const answers: string[] = [];
+  await processWithScenario(run.id, async (tool) => {
+    for (let index = 1; index <= 6; index++) answers.push(await tool("propose_prospect").run({ ...PROSPECT_INPUT, name: `Syndic ${index}` }));
+  });
+  for (const answer of answers.slice(0, 5)) expect(answer).toContain("Prospect enregistré");
+  expect(answers[5]).toBe(capMessage("prospect"));
+  expect(await prisma.agentProposal.count({ where: { agentRunId: run.id } })).toBe(5);
+  expect(await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })).toMatchObject({ status: "succeeded", resultCount: 5 });
+});
+
+test("story 3.2: a relaunched run counts only the writes of its current attempt", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const run = await queuePlanItemDemarchageRun(company.id);
+  await processWithScenario(run.id, async (tool) => {
+    for (let index = 1; index <= 5; index++) await tool("propose_prospect").run({ ...PROSPECT_INPUT, name: `Premier essai ${index}` });
+    throw new Error("échec simulé après les écritures");
+  });
+  expect((await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })).status).toBe("failed");
+  expect(await prisma.agentProposal.count({ where: { agentRunId: run.id } })).toBe(5);
+
+  // Relance : même exécution, nouvelle tentative ; les 5 écritures du premier essai ne comptent plus.
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  await prisma.agentRun.update({ where: { id: run.id }, data: { status: "queued" } });
+  const answers: string[] = [];
+  await processWithScenario(run.id, async (tool) => {
+    for (let index = 1; index <= 6; index++) answers.push(await tool("propose_prospect").run({ ...PROSPECT_INPUT, name: `Second essai ${index}` }));
+  });
+  for (const answer of answers.slice(0, 5)) expect(answer).toContain("Prospect enregistré");
+  expect(answers[5]).toBe(capMessage("prospect"));
+  expect(await prisma.agentProposal.count({ where: { agentRunId: run.id } })).toBe(10);
+  expect((await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })).status).toBe("succeeded");
 });
