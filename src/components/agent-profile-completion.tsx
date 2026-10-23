@@ -11,13 +11,14 @@ const DETAILS = {
   phone: { label: "Téléphone affiché aux clients", maxLength: 100 },
   certifications: { label: "Certifications et labels", maxLength: 500 },
   openingHours: { label: "Horaires d'ouverture", maxLength: 500 },
+  ownerName: { label: "Votre prénom et nom", maxLength: 120 },
 };
 type DetailKey = keyof typeof DETAILS;
 const AGENT_DETAILS: Record<AgentKey, DetailKey[]> = {
   co_ceo: ["objective"],
   marketing: ["objective", "website", "socialHandles"],
   contenu: ["objective", "description", "phone", "certifications", "openingHours"],
-  demarchage: ["objective", "description"],
+  demarchage: ["objective", "description", "ownerName"],
 };
 
 type PendingRequest = { agent: AgentKey; fields: DetailKey[]; proceed: () => Promise<void> };

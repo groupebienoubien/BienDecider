@@ -49,8 +49,8 @@ development_status:
   2-4-pas-d-action-en-double: done
   epic-2-retrospective: optional
 
-  epic-3: backlog
-  3-1-date-du-jour-et-nom-du-dirigeant-pour-tous-les-agents: backlog
+  epic-3: in-progress
+  3-1-date-du-jour-et-nom-du-dirigeant-pour-tous-les-agents: review
   3-2-des-exécutions-plafonnées: backlog
   3-3-faire-réviser-une-production-par-paul: backlog
   3-4-recette-du-scénario-atelier-lumen: backlog

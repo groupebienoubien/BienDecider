@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { clientsToMonthly, formatDecimal, formatEuros, toMonthly, type Period } from "@/lib/business-target";
 import { PERSONAS } from "@/lib/agents/personas";
-import { PAUL_PROFILE_FIELDS, PROFILE_FIELD_LABELS, PROFILE_TEXT_LIMITS, clearableText, profileTextIssue, type PaulProfileField } from "@/lib/company-profile";
+import { PAUL_PROFILE_FIELDS, PROFILE_FIELD_LABELS, PROFILE_TEXT_LIMITS, cleanProfileText, profileTextIssue, type PaulProfileField } from "@/lib/company-profile";
 
 /**
  * Partie pure des intentions de Paul (cartes de confirmation) : schémas,
@@ -121,12 +121,13 @@ export function objectiveUpdateValues(payload: UpdateObjectivePayload): Objectiv
 }
 
 /**
- * Saisie de l'outil de Paul : seuls site, comptes sociaux, téléphone, horaires
- * et description sont annoncés au modèle. null = non fourni. Les autres clés
+ * Saisie de l'outil de Paul : seuls prénom et nom du dirigeant, site, comptes
+ * sociaux, téléphone, horaires et description sont annoncés au modèle. null = non fourni. Les autres clés
  * sont tolérées par le schéma (pas d'erreur brute du SDK) puis écartées par
  * readProfileToolInput, qui signale nom, métier ou zone à Paul.
  */
 export const profileUpdateToolSchema = z.object({
+  ownerName: z.string().nullable().optional().describe(`${PROFILE_FIELD_LABELS.ownerName} : prénom et nom du dirigeant, tels qu'il les a dits (${PROFILE_TEXT_LIMITS.ownerName} caractères au plus)`),
   website: z.string().nullable().optional().describe(`${PROFILE_FIELD_LABELS.website} (adresse du site, ${PROFILE_TEXT_LIMITS.website} caractères au plus)`),
   socialHandles: z.string().nullable().optional().describe(`${PROFILE_FIELD_LABELS.socialHandles} (ex. @atelier, ${PROFILE_TEXT_LIMITS.socialHandles} caractères au plus)`),
   phone: z.string().nullable().optional().describe(`${PROFILE_FIELD_LABELS.phone} (${PROFILE_TEXT_LIMITS.phone} caractères au plus)`),
@@ -153,6 +154,7 @@ export function readProfileToolInput(input: Record<string, unknown>): { payload:
  * page Entreprise ; un texte vide efface le champ.
  */
 export const updateProfilePayloadSchema = z.object({
+  ownerName: z.string().optional(),
   website: z.string().optional(),
   socialHandles: z.string().optional(),
   phone: z.string().optional(),
@@ -178,7 +180,7 @@ export function mergeProfilePayloads(previous: UpdateProfilePayload, next: Updat
 export function profileUpdateValues(payload: UpdateProfilePayload): Partial<Record<PaulProfileField, string | null>> {
   const values: Partial<Record<PaulProfileField, string | null>> = {};
   for (const field of PAUL_PROFILE_FIELDS) {
-    const value = clearableText(payload[field]);
+    const value = cleanProfileText(field, payload[field]);
     if (value !== undefined) values[field] = value;
   }
   return values;

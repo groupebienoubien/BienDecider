@@ -12,6 +12,7 @@ import {
   directionLine,
   briefLine,
   companyProfileLines,
+  runtimeContextLines,
   type AgentRunOptions,
 } from "@/lib/agents/personas";
 
@@ -188,6 +189,8 @@ Règles strictes :
     ],
     system: [
       { type: "text", text: stableSystem, cache_control: { type: "ephemeral" } },
+      // Date du jour et nom du dirigeant : hors du bloc mis en cache.
+      { type: "text", text: runtimeContextLines(company, new Date()) },
       { type: "text", text: await getRejectionContext(companyId) },
       ...(options.brief ? [{ type: "text" as const, text: briefLine(options.brief) }] : []),
     ],

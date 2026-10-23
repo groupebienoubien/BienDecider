@@ -12,6 +12,7 @@ import {
   directionLine,
   briefLine,
   companyProfileLines,
+  runtimeContextLines,
   type AgentRunOptions,
 } from "@/lib/agents/personas";
 
@@ -95,7 +96,9 @@ Règles strictes :
 - Si aucune actualité n'est fournie, génère tes propres idées honnêtes (conseil pratique, présentation d'un service, FAQ) — jamais un faux événement présenté comme réel.
 - Une proposition = un contenu complet et directement utilisable, pas de placeholder "[à compléter]".`;
 
-  const dynamicSystem = `${await getRejectionContext(companyId)}
+  // Date du jour et nom du dirigeant : hors du bloc mis en cache.
+  const dynamicSystem = `${runtimeContextLines(company, new Date())}
+${await getRejectionContext(companyId)}
 ${briefLine(options.brief)}
 ${await getFindingsContextForContent(companyId)}`;
 

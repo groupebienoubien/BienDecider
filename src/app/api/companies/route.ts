@@ -6,7 +6,7 @@ import { z } from "zod";
 import { readJsonObject } from "@/lib/request-body";
 import { startOnboardingAudit } from "@/lib/agents/onboarding-audit";
 import { AgentRunConflictError, AgentRunQuotaError } from "@/lib/agents/agent-errors";
-import { PROFILE_TEXT_LIMITS, clearableText, profileTextIssue } from "@/lib/company-profile";
+import { PROFILE_TEXT_LIMITS, clearableText, cleanProfileText, profileTextIssue, type ProfileTextField } from "@/lib/company-profile";
 
 // Les montants sont des entiers 32 bits en base : au-delà, la requête échouerait en erreur serveur.
 const MAX_AMOUNT = 1_000_000_000;
@@ -18,6 +18,7 @@ const profileDetailsSchema = z.object({
   phone: z.string().trim().max(PROFILE_TEXT_LIMITS.phone).optional(),
   certifications: z.string().trim().max(PROFILE_TEXT_LIMITS.certifications).optional(),
   openingHours: z.string().trim().max(PROFILE_TEXT_LIMITS.openingHours).optional(),
+  ownerName: z.string().trim().max(PROFILE_TEXT_LIMITS.ownerName).optional(),
 }).strict();
 
 export async function PATCH(request: NextRequest) {
@@ -27,7 +28,7 @@ export async function PATCH(request: NextRequest) {
   if (!company) return NextResponse.json({ error: "Entreprise introuvable" }, { status: 404 });
   const parsed = profileDetailsSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "Compléments de profil invalides" }, { status: 400 });
-  const data = Object.fromEntries(Object.entries(parsed.data).map(([key, value]) => [key, value || null]));
+  const data = Object.fromEntries(Object.entries(parsed.data).map(([key, value]) => [key, cleanProfileText(key as ProfileTextField, value) ?? null]));
   const updated = await prisma.company.update({ where: { id: company.id }, data });
   return NextResponse.json(omitPasswordHash(updated));
 }
@@ -60,6 +61,7 @@ export async function POST(request: NextRequest) {
     phone,
     certifications,
     openingHours,
+    ownerName,
     monthlyRevenue,
     revenueTarget,
     targetDate,
@@ -93,7 +95,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: `newClientsPerMonth doit être un nombre positif avec une décimale au plus (${MAX_AMOUNT.toLocaleString("fr-FR")} maximum)` }, { status: 400 });
     }
   }
-  const optionalTextFields = { website, socialHandles, objective, description, phone, certifications, openingHours };
+  const optionalTextFields = { website, socialHandles, objective, description, phone, certifications, openingHours, ownerName };
   for (const [key, value] of Object.entries(optionalTextFields) as [keyof typeof optionalTextFields, unknown][]) {
     const issue = profileTextIssue(key, value);
     if (issue === "not_text") return NextResponse.json({ error: `${key} doit être du texte` }, { status: 400 });
@@ -119,6 +121,7 @@ export async function POST(request: NextRequest) {
     phone: clearableText(phone),
     certifications: clearableText(certifications),
     openingHours: clearableText(openingHours),
+    ownerName: cleanProfileText("ownerName", ownerName),
     monthlyRevenue: toInt(monthlyRevenue),
     revenueTarget: toInt(revenueTarget),
     targetDate: parsedTargetDate,

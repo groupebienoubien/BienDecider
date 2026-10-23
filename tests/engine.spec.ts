@@ -1556,3 +1556,160 @@ test("delegatePlanAction reuses an active action of the same agent and theme: la
   expect(await prisma.agentRun.count({ where: { companyId: company.id } })).toBe(1);
   expect(scheduled).toHaveLength(1);
 });
+
+/** Paramètres donnés au modèle par Jean-Claude, sans appel au modèle : le lancement est intercepté. */
+async function captureDemarchageParams(companyId: string) {
+  const { anthropic } = await import("../src/lib/anthropic");
+  const { runDemarchageAgent } = await import("../src/lib/agents/demarchage");
+  type CapturedTool = { name: string; description?: string; run: (input: Record<string, unknown>) => Promise<string> };
+  const messages = anthropic.beta.messages as unknown as { toolRunner: (params: unknown) => unknown };
+  const original = messages.toolRunner;
+  const captured: { params?: { tools: CapturedTool[]; system: { text: string; cache_control?: unknown }[] } } = {};
+  messages.toolRunner = (params: unknown) => {
+    captured.params = params as typeof captured.params;
+    throw new Error("intercepted");
+  };
+  try {
+    await expect(runDemarchageAgent(companyId, "Syndics de copropriété")).rejects.toThrow("intercepted");
+  } finally {
+    messages.toolRunner = original;
+  }
+  const params = captured.params!;
+  return { system: params.system, tool: (name: string) => params.tools.find((candidate) => candidate.name === name)! };
+}
+
+test("story 3.1: Paul's profile card with the owner's name writes it on confirmation", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { decidePendingAction } = await import("../src/lib/agents/pending-actions");
+  const paul = await capturePaulTools(company.id);
+  expect(await paul.tool("propose_profile_update").run({ ownerName: "Samuel Morel" })).toContain("Carte de confirmation affichée");
+  const card = await prisma.paulPendingAction.findFirstOrThrow({ where: { companyId: company.id, type: "update_profile" } });
+  expect((await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).ownerName).toBeNull();
+  const decided = await decidePendingAction(company.id, card.id, "confirm");
+  expect(decided).toMatchObject({ ok: true, action: { status: "confirmed", lines: ["Votre prénom et nom : Samuel Morel"] } });
+  expect((await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).ownerName).toBe("Samuel Morel");
+});
+
+test("story 3.1: Jean-Claude refuses a finished event and records an upcoming one", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { parisDateKey } = await import("../src/lib/agents/personas");
+  const day = 24 * 60 * 60 * 1000;
+  const jeanClaude = await captureDemarchageParams(company.id);
+  const lead = jeanClaude.tool("propose_growth_lead");
+  const base = { content: "Salon des artisans d'art", source: "https://example.invalid/salon", isEvent: true };
+  // Un événement sans date de fin est refusé : le modèle ne peut pas contourner le contrôle en l'omettant.
+  expect(await lead.run({ ...base, title: "Salon sans date" })).toContain("donne sa date de fin");
+  const past = await lead.run({ ...base, title: "Salon terminé", eventEndDate: parisDateKey(new Date(Date.now() - 2 * day)) });
+  expect(past).toContain("événement est terminé");
+  expect(await prisma.agentProposal.count({ where: { companyId: company.id } })).toBe(0);
+  const upcomingDate = parisDateKey(new Date(Date.now() + 9 * day));
+  const upcoming = await lead.run({ ...base, title: "Salon à venir", eventEndDate: upcomingDate });
+  expect(upcoming).toContain("Piste enregistrée");
+  const recorded = await prisma.agentProposal.findFirstOrThrow({ where: { companyId: company.id, kind: "piste_croissance" } });
+  expect(recorded.content).toContain(`Date de fin : ${upcomingDate}`);
+});
+
+test("story 3.1: the date and the owner's name reach Paul and Jean-Claude outside the cached block", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { formatParisDate } = await import("../src/lib/agents/personas");
+  await prisma.company.update({ where: { id: company.id }, data: { ownerName: "Samuel Morel" } });
+  const jeanClaude = await captureDemarchageParams(company.id);
+  const cached = jeanClaude.system.filter((block) => block.cache_control);
+  const uncached = jeanClaude.system.filter((block) => !block.cache_control).map((block) => block.text).join("\n");
+  expect(cached.length).toBeGreaterThan(0);
+  for (const block of cached) {
+    expect(block.text).not.toContain("Samuel Morel");
+    expect(block.text).not.toContain("Date du jour");
+  }
+  expect(uncached).toContain("signe « Samuel Morel »");
+  expect(uncached).toContain(formatParisDate(new Date()));
+  // La consigne de l'outil d'email renvoie au nom du dirigeant.
+  expect(JSON.stringify(jeanClaude.tool("propose_prospecting_email"))).toContain("Signe avec le nom donné dans « Nom du dirigeant »");
+
+  const { anthropic } = await import("../src/lib/anthropic");
+  const { runCoCeoTurn } = await import("../src/lib/agents/co-ceo");
+  const messages = anthropic.beta.messages as unknown as { toolRunner: (params: unknown) => unknown };
+  const original = messages.toolRunner;
+  const captured: { system?: { text: string; cache_control?: unknown }[]; messages?: { content: unknown }[] } = {};
+  messages.toolRunner = (params: unknown) => {
+    captured.system = (params as { system: { text: string; cache_control?: unknown }[] }).system;
+    captured.messages = (params as { messages: { content: unknown }[] }).messages;
+    throw new Error("intercepted");
+  };
+  try {
+    await expect(runCoCeoTurn(company.id, "Prépare-moi un email pour dans 8 jours")).rejects.toThrow("intercepted");
+  } finally {
+    messages.toolRunner = original;
+  }
+  // Paul : ni dans le système mis en cache ni dans le bloc du message marqué pour le cache, mais juste avant lui.
+  const paulSystem = captured.system!.map((block) => block.text).join("\n");
+  expect(paulSystem).not.toContain("Samuel Morel");
+  expect(paulSystem).not.toContain("Date du jour");
+  const last = captured.messages!.at(-1)!.content as { text: string; cache_control?: unknown }[];
+  const runtime = last.filter((block) => !block.cache_control).map((block) => block.text).join("\n");
+  expect(runtime).toContain("signe « Samuel Morel »");
+  expect(runtime).toContain(formatParisDate(new Date()));
+  for (const block of last.filter((candidate) => candidate.cache_control)) expect(block.text).not.toContain("Date du jour");
+});
+
+/** Blocs système donnés au modèle par un agent, sans appel au modèle : le lancement est intercepté. */
+async function captureSystemBlocks(launch: () => Promise<unknown>) {
+  const { anthropic } = await import("../src/lib/anthropic");
+  const messages = anthropic.beta.messages as unknown as { toolRunner: (params: unknown) => unknown };
+  const original = messages.toolRunner;
+  const captured: { system?: { text: string; cache_control?: unknown }[] } = {};
+  messages.toolRunner = (params: unknown) => {
+    captured.system = (params as { system: { text: string; cache_control?: unknown }[] }).system;
+    throw new Error("intercepted");
+  };
+  try {
+    await expect(launch()).rejects.toThrow("intercepted");
+  } finally {
+    messages.toolRunner = original;
+  }
+  return captured.system!;
+}
+
+test("story 3.1: Martine, Camille and the plan get the date and the owner's name in an uncached block only", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { formatParisDate } = await import("../src/lib/agents/personas");
+  const { runMarketingAgent } = await import("../src/lib/agents/marketing");
+  const { runContenuAgent } = await import("../src/lib/agents/contenu");
+  const { runCoCeoPlanning } = await import("../src/lib/agents/co-ceo");
+  await prisma.company.update({ where: { id: company.id }, data: { ownerName: "Samuel Morel" } });
+  const launches = { marketing: () => runMarketingAgent(company.id), contenu: () => runContenuAgent(company.id), plan: () => runCoCeoPlanning(company.id) };
+  for (const [agent, launch] of Object.entries(launches)) {
+    const system = await captureSystemBlocks(launch);
+    const cached = system.filter((block) => block.cache_control);
+    expect(cached.length, agent).toBeGreaterThan(0);
+    for (const block of cached) {
+      expect(block.text, agent).not.toContain("Samuel Morel");
+      expect(block.text, agent).not.toContain("Date du jour");
+    }
+    const uncached = system.filter((block) => !block.cache_control).map((block) => block.text).join("\n");
+    expect(uncached, agent).toContain("signe « Samuel Morel »");
+    expect(uncached, agent).toContain(formatParisDate(new Date()));
+  }
+});
+
+test("story 3.1: the Entreprise page and the completion prompt store a cleaned owner's name, limited to 120 characters", async ({ company, request }) => {
+  if (!process.env.SESSION_SECRET) throw new Error("SESSION_SECRET is required for engine tests.");
+  const { prisma } = await import("../src/lib/prisma");
+  const baseURL = process.env.UX_TEST_BASE_URL ?? "http://localhost:3000";
+  const headers = { Cookie: `pepito_session=${createSessionToken(company.ownerEmail, company.sessionVersion, process.env.SESSION_SECRET)}`, Origin: baseURL };
+  const created = await request.post(`${baseURL}/api/companies`, { headers, data: { ...ONBOARDING_PROFILE, ownerName: " Samuel Morel " } });
+  expect(created.status()).toBe(201);
+  expect((await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).ownerName).toBe("Samuel Morel");
+  expect(await (await request.get(`${baseURL}/api/companies`, { headers })).json()).toMatchObject({ ownerName: "Samuel Morel" });
+
+  const tooLong = await request.post(`${baseURL}/api/companies`, { headers, data: { ...ONBOARDING_PROFILE, ownerName: "a".repeat(121) } });
+  expect(tooLong.status()).toBe(400);
+  expect(await tooLong.json()).toEqual({ error: "ownerName est limité à 120 caractères" });
+
+  // Les compléments demandés avant un lancement passent par PATCH.
+  const patched = await request.patch(`${baseURL}/api/companies`, { headers, data: { ownerName: "Claire\nDurand" } });
+  expect(patched.status()).toBe(200);
+  expect((await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).ownerName).toBe("Claire Durand");
+  expect((await request.patch(`${baseURL}/api/companies`, { headers, data: { ownerName: "a".repeat(121) } })).status()).toBe(400);
+  expect((await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).ownerName).toBe("Claire Durand");
+});

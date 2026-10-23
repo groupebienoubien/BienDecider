@@ -25,6 +25,7 @@
  * générique.
  */
 import { businessTargetLines } from "@/lib/business-target";
+import { cleanOwnerName } from "@/lib/company-profile";
 
 export const PERSONAS = {
   co_ceo: {
@@ -101,6 +102,60 @@ export function directionLine(direction: string | null): string {
   return direction
     ? `CONSIGNE DU DIRIGEANT (prioritaire) : ${direction}`
     : "";
+}
+
+/** Fuseau de référence des dates données aux agents. */
+export const RUNTIME_TIME_ZONE = "Europe/Paris";
+/** Signature à laisser dans un email quand le dirigeant n'a pas donné son nom. */
+export const OWNER_NAME_PLACEHOLDER = "[Votre prénom et nom]";
+
+const LONG_DATE = new Intl.DateTimeFormat("fr-FR", { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: RUNTIME_TIME_ZONE });
+// en-CA formate en AAAA-MM-JJ.
+const DATE_KEY = new Intl.DateTimeFormat("en-CA", { year: "numeric", month: "2-digit", day: "2-digit", timeZone: RUNTIME_TIME_ZONE });
+
+/** Date du jour à Paris, au format « vendredi 23 octobre 2026 ». */
+export function formatParisDate(now: Date): string {
+  return LONG_DATE.format(now);
+}
+
+/** Date du jour à Paris, au format AAAA-MM-JJ (comparable comme texte). */
+export function parisDateKey(now: Date): string {
+  return DATE_KEY.format(now);
+}
+
+/**
+ * Contexte du moment donné à tous les agents : date du jour (Europe/Paris) et
+ * nom du dirigeant pour signer. Varie d'un jour à l'autre : toujours placé
+ * dans un bloc système sans cache_control, jamais dans le bloc mis en cache.
+ */
+export function runtimeContextLines(company: { ownerName?: string | null }, now: Date): string {
+  const owner = company.ownerName ? cleanOwnerName(company.ownerName) : "";
+  return [
+    `Date du jour : ${formatParisDate(now)} (heure de Paris). Calcule les échéances relatives (« dans 8 jours », « la semaine prochaine ») à partir de cette date, et ne propose jamais un événement déjà terminé.`,
+    owner
+      ? `Nom du dirigeant : ${owner} ; signe « ${owner} » les emails et messages rédigés en son nom, jamais avec le nom d'un agent ni seulement le nom de l'entreprise.`
+      : `Nom du dirigeant : non renseigné ; signe « ${OWNER_NAME_PLACEHOLDER} » les emails et messages rédigés en son nom, jamais avec le nom d'un agent ni seulement le nom de l'entreprise.`,
+  ].join("\n");
+}
+
+/** Une date de fin d'événement au-delà de cet horizon est refusée (date probablement erronée). */
+export const EVENT_END_MAX_MONTHS = 24;
+
+/** Date de fin d'un événement (AAAA-MM-JJ) : invalide, déjà passée à Paris, trop lointaine, ou acceptable (null). */
+export function eventEndDateIssue(value: string, now: Date): "invalid" | "past" | "too_far" | null {
+  const text = value.trim();
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+  if (!match) return "invalid";
+  const [year, month, day] = [Number(match[1]), Number(match[2]), Number(match[3])];
+  // setUTCFullYear : Date.UTC ramènerait les années 0 à 99 vers 1900 à 1999.
+  const date = new Date(0);
+  date.setUTCFullYear(year, month - 1, day);
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return "invalid";
+  const today = parisDateKey(now);
+  if (text < today) return "past";
+  const limit = new Date(0);
+  limit.setUTCFullYear(Number(today.slice(0, 4)), Number(today.slice(5, 7)) - 1 + EVENT_END_MAX_MONTHS, Number(today.slice(8, 10)));
+  return date.getTime() > limit.getTime() ? "too_far" : null;
 }
 
 /** Options communes de lancement d'un agent depuis le plan de Paul. */

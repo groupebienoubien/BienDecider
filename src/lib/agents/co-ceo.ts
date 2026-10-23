@@ -6,7 +6,7 @@ import { anthropic, AGENT_MODEL } from "@/lib/anthropic";
 import { prisma } from "@/lib/prisma";
 import { getRejectionContext } from "@/lib/agents/rejection-context";
 import { AgentRunQuotaError, classifyRunError, failureMessage, isRunFailureReason, type RunFailureReason } from "@/lib/agents/agent-errors";
-import { PERSONAS, objectiveLine, directionLine, companyProfileLines } from "@/lib/agents/personas";
+import { PERSONAS, objectiveLine, directionLine, companyProfileLines, runtimeContextLines } from "@/lib/agents/personas";
 import { enqueuePlanRun } from "@/lib/agent-runs";
 import { createChatPlanItem, findLaunchablePlanItem, type PlanAgent } from "@/lib/agents/plan-items";
 import { PLAN_THEMES, type PlanTheme } from "@/lib/plan-themes";
@@ -270,13 +270,15 @@ export async function runCoCeoTurn(
   // pour une entreprise donnée (aucune donnée recalculée par appel, Paul
   // passe par get_current_status plutôt que par un état injecté), donc mis
   // en cache en un seul bloc.
-  // Le contexte de page change à chaque tour : il précède le dernier message sans entrer dans le bloc mis en cache.
+  // Le contexte de page, la date du jour et le nom du dirigeant changent d'un tour ou d'un jour à l'autre :
+  // ils précèdent le dernier message, hors du système mis en cache (le cache de la conversation ne se réinitialise pas chaque jour).
   const messages: Anthropic.MessageParam[] = history.map((m, i) => ({
     role: m.role === "user" ? "user" : "assistant",
     content:
       i === history.length - 1
         ? [
             ...(pageContext ? [{ type: "text" as const, text: pageContext }] : []),
+            { type: "text" as const, text: runtimeContextLines(company, new Date()) },
             { type: "text" as const, text: m.content, cache_control: { type: "ephemeral" as const } },
           ]
         : m.content,
@@ -480,7 +482,7 @@ export async function runCoCeoTurn(
   const proposeProfileUpdate = betaZodTool({
     name: "propose_profile_update",
     description:
-      "Propose au dirigeant d'enregistrer dans son profil son site web, son compte Instagram ou Facebook, son téléphone, ses horaires ou sa description : crée une carte de confirmation sous ta réponse, rien n'est enregistré avant son clic sur « Confirmer ». Mets tous les champs donnés dans un seul appel (une seule carte par réponse) ; reprends chaque valeur telle qu'il l'a dite, une chaîne vide efface le champ. Le nom commercial, le métier et la zone de chalandise ne se modifient pas ici : ils se changent sur la page Entreprise.",
+      "Propose au dirigeant d'enregistrer dans son profil son prénom et nom, son site web, son compte Instagram ou Facebook, son téléphone, ses horaires ou sa description : crée une carte de confirmation sous ta réponse, rien n'est enregistré avant son clic sur « Confirmer ». Mets tous les champs donnés dans un seul appel (une seule carte par réponse) ; reprends chaque valeur telle qu'il l'a dite, une chaîne vide efface le champ. Le nom commercial, le métier et la zone de chalandise ne se modifient pas ici : ils se changent sur la page Entreprise.",
     inputSchema: profileUpdateToolSchema,
     run: async (input) => {
       // Drapeau posé avant tout await : deux appels dans le même message ne créent qu'une carte.
@@ -547,7 +549,8 @@ Règles strictes, non négociables :
 - Pour les pistes de prospection, seules des informations publiques et professionnelles sont acceptables — refuse poliment toute demande de cibler des particuliers avec leurs données personnelles.
 - Quand tu cites explicitement une production, un constat ou un prospect présent dans get_current_status ou dans le contexte de page, ajoute immédiatement après son nom le marqueur fourni [[bd:proposal:ID]], [[bd:finding:ID]] ou [[bd:lead:ID]]. Reprends uniquement un identifiant exact de ces données; ne crée jamais d'identifiant, de lien ou d'URL. N'ajoute pas de marqueur pour un objet absent de ces données.
 - Quand le dirigeant te donne son objectif de chiffre d'affaires (et éventuellement son chiffre actuel, la valeur d'un client, ses nouveaux clients, une échéance), appelle propose_objective_update : c'est lui qui confirme d'un clic sur la carte, tu n'enregistres rien toi-même et tu ne dis pas que c'est enregistré. Chaque montant garde la période dans laquelle il l'a dit (« 12 000 € par mois aujourd'hui, 200 000 € par an visés » : currentPeriod month, targetPeriod year) ; ne convertis rien toi-même. S'il ne précise pas la période de l'objectif, demande-lui « par mois ou par an ? » avant d'appeler l'outil. S'il ne donne pas son chiffre d'affaires actuel, demande-le aussi : sans lui, l'écart ne peut pas être calculé. S'il veut corriger, propose une nouvelle carte : elle remplace la précédente. cartesRecentes (get_current_status) te dit ce que sont devenues tes cartes.
-- Quand le dirigeant te donne son site web, son compte Instagram ou Facebook, son téléphone, ses horaires d'ouverture ou une description de son entreprise, appelle propose_profile_update avec tous ces champs en un seul appel : c'est lui qui confirme d'un clic sur la carte, tu ne dis pas que c'est enregistré. Si l'outil refuse un texte trop long, demande-lui une version plus courte. Le nom commercial, le métier et la zone de chalandise, tu ne les modifies jamais : dis-lui de les changer lui-même sur la page Entreprise.
+- Quand le dirigeant te donne son prénom et nom, son site web, son compte Instagram ou Facebook, son téléphone, ses horaires d'ouverture ou une description de son entreprise, appelle propose_profile_update avec tous ces champs en un seul appel : c'est lui qui confirme d'un clic sur la carte, tu ne dis pas que c'est enregistré. Si l'outil refuse un texte trop long, demande-lui une version plus courte. Le nom commercial, le métier et la zone de chalandise, tu ne les modifies jamais : dis-lui de les changer lui-même sur la page Entreprise.
+- La date du jour et le nom du dirigeant te sont donnés avec son dernier message. Quand un email, un message ou une signature est en jeu et que son nom n'est pas renseigné, propose-lui de l'enregistrer : demande son prénom et son nom, puis appelle propose_profile_update avec ownerName.
 - Ne calcule jamais toi-même un chiffre que tu affiches (conversion au mois, écart, nombre de clients nécessaires) : cite uniquement les chiffres calculés donnés plus haut dans ce message système. S'ils sont absents, dis que l'objectif chiffré n'est pas encore enregistré.
 - Réponds de façon brève et directe, comme un vrai point rapide entre dirigeants, pas un rapport formel.`,
       },
@@ -684,7 +687,8 @@ Règles :
 - ${CAPABILITY_CATALOG}
 - Si l'objectif du dirigeant, ou une partie de cet objectif, sort de ce catalogue : ne propose aucune action qui ferait croire le contraire. Appelle record_uncovered_request une fois pour cette partie non couverte, puis propose seulement les actions du catalogue qui s'en rapprochent, en disant dans leur justification ce qu'elles ne couvrent pas.`;
 
-  const dynamicSystem = `${await getRejectionContext(companyId)}
+  const dynamicSystem = `${runtimeContextLines(company, new Date())}
+${await getRejectionContext(companyId)}
 ${await getChatInstructionsForPlan(companyId)}
 Propositions déjà en attente de validation : ${pendingProposals.map((p) => `${p.agent}: ${p.title}`).join("; ") || "aucune"}.
 Derniers constats (audit, concurrence) : ${recentFindings.map((f) => f.title).join("; ") || "aucun"}.

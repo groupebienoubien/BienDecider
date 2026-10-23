@@ -1,4 +1,6 @@
 import type { Lead } from "@prisma/client";
+import { cleanOwnerName } from "@/lib/company-profile";
+import { OWNER_NAME_PLACEHOLDER } from "@/lib/agents/personas";
 
 type LeadView = Pick<Lead, "name" | "reason" | "publicContact" | "source" | "stage" | "createdAt" | "deferredUntil">;
 
@@ -29,8 +31,11 @@ export function buildOutreachDraft(params: {
   companyName: string;
   trade: string | null;
   phone: string | null;
+  /** Prénom et nom du dirigeant : signature du brouillon, sinon « [Votre prénom et nom] ». */
+  ownerName?: string | null;
 }): string {
   const { lead, companyName, trade, phone } = params;
+  const signature = (params.ownerName && cleanOwnerName(params.ownerName)) || OWNER_NAME_PLACEHOLDER;
   const who = trade ? `${companyName} (${trade})` : companyName;
   return [
     `Objet : ${companyName} — une idée pour ${lead.name}`,
@@ -44,6 +49,7 @@ export function buildOutreachDraft(params: {
     "Seriez-vous disponible pour un court échange cette semaine ?",
     "",
     "Cordialement,",
+    signature,
     companyName,
     ...(phone ? [phone] : []),
   ].join("\n");

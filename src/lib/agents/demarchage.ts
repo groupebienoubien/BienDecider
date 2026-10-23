@@ -12,6 +12,10 @@ import {
   directionLine,
   briefLine,
   companyProfileLines,
+  runtimeContextLines,
+  eventEndDateIssue,
+  EVENT_END_MAX_MONTHS,
+  OWNER_NAME_PLACEHOLDER,
   type AgentRunOptions,
 } from "@/lib/agents/personas";
 
@@ -39,11 +43,13 @@ export async function runDemarchageAgent(
   });
 
   const createdProposalIds: string[] = [];
+  // Un seul « maintenant » par exécution : la date du prompt et le contrôle des dates de fin concordent.
+  const now = new Date();
 
   const proposeLead = betaZodTool({
     name: "propose_growth_lead",
     description:
-      "Enregistre une piste de croissance trouvée via la recherche web (actualité locale, événement, opportunité, entreprise/contact professionnel public) — jamais une donnée personnelle d'un particulier.",
+      "Enregistre une piste de croissance trouvée via la recherche web (actualité locale, événement, opportunité, entreprise/contact professionnel public) — jamais une donnée personnelle d'un particulier. Pour un événement (salon, foire, marché…), indique isEvent et sa date de fin : un événement déjà terminé est refusé.",
     inputSchema: z.object({
       title: z.string().describe("Titre court de la piste"),
       content: z
@@ -52,10 +58,27 @@ export async function runDemarchageAgent(
       source: z
         .string()
         .describe("URL ou référence de la source ayant permis de trouver cette piste — jamais inventée"),
+      isEvent: z
+        .boolean()
+        .describe("true si la piste est un événement daté (salon, foire, marché, conférence…), false sinon"),
+      eventEndDate: z
+        .string()
+        .optional()
+        .describe("Date de fin de l'événement, au format AAAA-MM-JJ (ex. 2026-11-01) — obligatoire si isEvent vaut true"),
     }),
     run: async (input) => {
-      const content = `${input.content}\n\nSource : ${input.source}`;
-      const alreadyRejected = await rejectedDuplicateNotice(company.id, { kind: "piste_croissance", title: input.title, content: content });
+      const endDate = input.eventEndDate?.trim();
+      if (input.isEvent && !endDate) return "Piste non enregistrée : pour un événement, donne sa date de fin (eventEndDate, au format AAAA-MM-JJ). Si tu ne la trouves pas dans la source, ne propose pas cet événement.";
+      if (endDate) {
+        const issue = eventEndDateIssue(endDate, now);
+        if (issue === "invalid") return `Piste non enregistrée : la date de fin « ${endDate} » n'est pas au format AAAA-MM-JJ. Corrige-la.`;
+        if (issue === "past") return `Piste non enregistrée : cet événement est terminé (fin le ${endDate}, avant aujourd'hui). Ne le propose pas ; cherche un événement à venir.`;
+        if (issue === "too_far") return `Piste non enregistrée : la date de fin « ${endDate} » est à plus de ${EVENT_END_MAX_MONTHS} mois. Vérifie-la dans la source.`;
+      }
+      // Le doublon d'une piste refusée se compare sur le contenu d'origine, sans la ligne de date de fin.
+      const comparedContent = `${input.content}\n\nSource : ${input.source}`;
+      const content = `${input.content}${endDate ? `\n\nDate de fin : ${endDate}` : ""}\n\nSource : ${input.source}`;
+      const alreadyRejected = await rejectedDuplicateNotice(company.id, { kind: "piste_croissance", title: input.title, content: comparedContent });
       if (alreadyRejected) return alreadyRejected;
       const proposal = await prisma.agentProposal.create({
         data: {
@@ -134,7 +157,7 @@ export async function runDemarchageAgent(
       body: z
         .string()
         .describe(
-          "Corps du template, avec un placeholder [Prénom] pour la personnalisation manuelle — jamais de nom réel",
+          `Corps du template, avec un placeholder [Prénom] pour la personnalisation manuelle — jamais de nom réel de prospect. Signe avec le nom donné dans « Nom du dirigeant », ou « ${OWNER_NAME_PLACEHOLDER} » s'il n'est pas renseigné — jamais avec le nom d'un agent ni seulement le nom de l'entreprise`,
         ),
     }),
     run: async (input) => {
@@ -192,6 +215,8 @@ Règles strictes, non négociables :
     ],
     system: [
       { type: "text", text: stableSystem, cache_control: { type: "ephemeral" } },
+      // Date du jour et nom du dirigeant : hors du bloc mis en cache.
+      { type: "text", text: runtimeContextLines(company, now) },
       { type: "text", text: await getRejectionContext(companyId) },
       { type: "text", text: await getCompetitionContextForProspecting(companyId) },
       ...(options.brief ? [{ type: "text" as const, text: briefLine(options.brief) }] : []),

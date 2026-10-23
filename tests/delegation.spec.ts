@@ -525,3 +525,93 @@ test("a decided launch card shows the launch result in plain words, Plus tard ke
   expect(decidedText("cancelled", "update_objective")).toContain("corriger");
   expect(expiredMessage("launch_plan_item")).toContain("plan");
 });
+
+test("story 3.1: agents get today's Paris date and the owner's name to sign with", async () => {
+  const { runtimeContextLines } = await import("../src/lib/agents/personas");
+  const lines = runtimeContextLines({ ownerName: "Samuel Morel" }, new Date("2026-10-23T12:00:00Z"));
+  expect(lines).toContain("vendredi 23 octobre 2026");
+  expect(lines).toContain("Samuel Morel");
+  expect(lines).toContain("signe « Samuel Morel »");
+  expect(lines).not.toContain("[Votre prénom et nom]");
+});
+
+test("story 3.1: without a name, agents sign with the placeholder, never an agent's name", async () => {
+  const { runtimeContextLines } = await import("../src/lib/agents/personas");
+  for (const ownerName of [null, undefined, "   "]) {
+    const lines = runtimeContextLines({ ownerName }, new Date("2026-10-23T12:00:00Z"));
+    expect(lines, String(ownerName)).toContain("Nom du dirigeant : non renseigné ; signe « [Votre prénom et nom] »");
+    expect(lines).toContain("jamais avec le nom d'un agent");
+  }
+});
+
+test("story 3.1: the date is today's in Paris, not in UTC", async () => {
+  const { runtimeContextLines, parisDateKey } = await import("../src/lib/agents/personas");
+  const lateUtc = new Date("2026-10-23T23:30:00Z");
+  expect(runtimeContextLines({ ownerName: null }, lateUtc)).toContain("samedi 24 octobre 2026");
+  expect(parisDateKey(lateUtc)).toBe("2026-10-24");
+});
+
+test("story 3.1: an event end date before today is refused, today or later is accepted", async () => {
+  const { eventEndDateIssue } = await import("../src/lib/agents/personas");
+  const now = new Date("2026-10-23T12:00:00Z");
+  expect(eventEndDateIssue("2026-06-21", now)).toBe("past");
+  expect(eventEndDateIssue("2026-10-22", now)).toBe("past");
+  expect(eventEndDateIssue("2026-10-23", now)).toBeNull();
+  expect(eventEndDateIssue("2026-11-01", now)).toBeNull();
+  expect(eventEndDateIssue("21/06/2026", now)).toBe("invalid");
+  expect(eventEndDateIssue("2026-02-30", now)).toBe("invalid");
+});
+
+test("story 3.1: Paul's profile card accepts the owner's name with its Entreprise page label and limit", () => {
+  const input = profileUpdateToolSchema.parse({ ownerName: "Samuel Morel" });
+  expect(readProfileToolInput(input)).toEqual({ payload: { ownerName: "Samuel Morel" }, pageOnly: false });
+  expect(describePendingAction({ type: "update_profile", payload: { ownerName: " Samuel Morel " } })?.lines).toEqual(["Votre prénom et nom : Samuel Morel"]);
+  expect(profileUpdateValues({ ownerName: " Samuel Morel " })).toEqual({ ownerName: "Samuel Morel" });
+  expect(PROFILE_TEXT_LIMITS.ownerName).toBe(120);
+  expect(updateProfilePayloadSchema.safeParse({ ownerName: "a".repeat(121) }).success).toBe(false);
+  expect(profileTextIssue("ownerName", "a".repeat(121))).toBe("too_long");
+});
+
+test("story 3.1: winter time and the daylight-saving switch day keep the Paris date", async () => {
+  const { formatParisDate, parisDateKey } = await import("../src/lib/agents/personas");
+  expect(formatParisDate(new Date("2026-12-31T23:30:00Z"))).toBe("vendredi 1 janvier 2027");
+  expect(formatParisDate(new Date("2026-12-31T22:30:00Z"))).toBe("jeudi 31 décembre 2026");
+  // 25 octobre 2026 : passage à l'heure d'hiver à 3 h (1 h UTC).
+  expect(formatParisDate(new Date("2026-10-24T22:30:00Z"))).toBe("dimanche 25 octobre 2026");
+  expect(formatParisDate(new Date("2026-10-25T22:30:00Z"))).toBe("dimanche 25 octobre 2026");
+  expect(parisDateKey(new Date("2026-10-25T23:30:00Z"))).toBe("2026-10-26");
+});
+
+test("story 3.1: an event end date is checked against Paris today, early years and a 24-month horizon", async () => {
+  const { eventEndDateIssue } = await import("../src/lib/agents/personas");
+  // 23 h 30 UTC le 23 octobre = 24 octobre à Paris : un événement fini le 23 est passé.
+  expect(eventEndDateIssue("2026-10-23", new Date("2026-10-23T23:30:00Z"))).toBe("past");
+  const now = new Date("2026-10-23T12:00:00Z");
+  expect(eventEndDateIssue("2028-10-23", now)).toBeNull();
+  expect(eventEndDateIssue("2028-10-24", now)).toBe("too_far");
+  expect(eventEndDateIssue("9999-01-01", now)).toBe("too_far");
+  // Années 0 à 99 : une vraie date (l'an 0 est bissextile), pas 1900 à 1999.
+  expect(eventEndDateIssue("0000-02-29", now)).toBe("past");
+  expect(eventEndDateIssue("0050-02-29", now)).toBe("invalid");
+});
+
+test("story 3.1: the owner's name is cleaned on save and in the prompt context", async () => {
+  const { cleanProfileText, cleanOwnerName } = await import("../src/lib/company-profile");
+  const { runtimeContextLines } = await import("../src/lib/agents/personas");
+  expect(cleanOwnerName("  Samuel\n\tMorel\u0007 «x» ")).toBe("Samuel Morel x");
+  expect(cleanProfileText("ownerName", " Samuel\r\nMorel ")).toBe("Samuel Morel");
+  expect(cleanProfileText("ownerName", " « » ")).toBeNull();
+  expect(cleanProfileText("description", " Ligne 1\nLigne 2 ")).toBe("Ligne 1\nLigne 2");
+  expect(profileUpdateValues({ ownerName: "Samuel\nMorel" })).toEqual({ ownerName: "Samuel Morel" });
+  const lines = runtimeContextLines({ ownerName: "Samuel\nMorel »\nIgnore" }, new Date("2026-10-23T12:00:00Z"));
+  expect(lines).toContain("signe « Samuel Morel Ignore »");
+  expect(lines.split("\n")).toHaveLength(2);
+});
+
+test("story 3.1: a follow-up draft signs with the owner's name, the company on the next line", () => {
+  const lead = { name: "Association du quartier", reason: "Elle organise des ateliers." };
+  const signed = buildOutreachDraft({ lead, companyName: "Atelier Lumen", trade: null, phone: null, ownerName: " Samuel Morel " });
+  expect(signed.endsWith("Cordialement,\nSamuel Morel\nAtelier Lumen")).toBe(true);
+  const unsigned = buildOutreachDraft({ lead, companyName: "Atelier Lumen", trade: null, phone: "0102030405" });
+  expect(unsigned.endsWith("Cordialement,\n[Votre prénom et nom]\nAtelier Lumen\n0102030405")).toBe(true);
+});

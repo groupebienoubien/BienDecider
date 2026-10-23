@@ -53,6 +53,7 @@ export function ProspectionClient({
   companyName,
   trade,
   phone,
+  ownerName,
 }: {
   initialLeads: Lead[];
   initialAutoOutreach: boolean;
@@ -60,6 +61,7 @@ export function ProspectionClient({
   companyName: string;
   trade: string | null;
   phone: string | null;
+  ownerName: string | null;
 }) {
   const [leads, setLeads] = useState(initialLeads);
   const [search, setSearch] = useState("");
@@ -243,7 +245,7 @@ export function ProspectionClient({
         title={managedLead?.name ?? ""}
         cancelLabel="Fermer"
       >
-        {managedLead && <LeadCard key={managedLead.id} lead={managedLead} now={openedAt} busy={busyId === managedLead.id} companyName={companyName} trade={trade} phone={phone} onPatch={patchLead} initialMode={managed?.mode ?? null} />}
+        {managedLead && <LeadCard key={managedLead.id} lead={managedLead} now={openedAt} busy={busyId === managedLead.id} companyName={companyName} trade={trade} phone={phone} ownerName={ownerName} onPatch={patchLead} initialMode={managed?.mode ?? null} />}
       </Modal>
     </div>
   );

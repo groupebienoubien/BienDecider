@@ -21,6 +21,7 @@ model Company {
   failedLoginAttempts Int @default(0) // anti-force-brute, cf. docs/backlog.md
   lockedUntil     DateTime? // compte verrouillé jusqu'à cette date après trop d'échecs
   name            String
+  ownerName       String? // prénom et nom du dirigeant, facultatif : signature des emails rédigés par les agents (story 3.1)
   trade           String // métier, saisi via recherche libre (ex: Restaurant, Plombier...)
   servingArea     String // zone de chalandise
   website         String? // optionnel : beaucoup de TPE n'ont pas de site

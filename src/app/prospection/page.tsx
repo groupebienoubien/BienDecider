@@ -32,6 +32,7 @@ export default async function ProspectionPage() {
         companyName={company.name}
         trade={company.trade}
         phone={company.phone}
+        ownerName={company.ownerName}
       />
     </AppShell>
   );

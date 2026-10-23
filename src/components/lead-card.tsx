@@ -32,19 +32,20 @@ function localDay(offsetDays = 0) {
   return date.toLocaleDateString("sv-SE");
 }
 
-export function LeadCard({ lead, now, busy, companyName, trade, phone, onPatch, initialMode = null }: {
+export function LeadCard({ lead, now, busy, companyName, trade, phone, ownerName, onPatch, initialMode = null }: {
   lead: Lead;
   now: number;
   busy: boolean;
   companyName: string;
   trade: string | null;
   phone: string | null;
+  ownerName: string | null;
   onPatch: (id: string, patch: LeadPatch) => Promise<boolean>;
   initialMode?: LeadMode;
 }) {
   const [mode, setMode] = useState<LeadMode>(initialMode);
   // Ouverte depuis « Préparer un message » sur la fiche : le message est prêt d'emblée.
-  const [draft, setDraft] = useState(() => initialMode === "draft" ? buildOutreachDraft({ lead, companyName, trade, phone }) : "");
+  const [draft, setDraft] = useState(() => initialMode === "draft" ? buildOutreachDraft({ lead, companyName, trade, phone, ownerName }) : "");
   const [copyNotice, setCopyNotice] = useState<string | null>(null);
   const [day, setDay] = useState(initialMode === "contact" ? localDay() : "");
   const [reason, setReason] = useState("");
@@ -60,7 +61,7 @@ export function LeadCard({ lead, now, busy, companyName, trade, phone, onPatch, 
     if (next === "contact") setDay(localDay());
     if (next === "date") setDay(lead.contactedAt ? new Date(lead.contactedAt).toISOString().slice(0, 10) : localDay());
     if (next === "defer") setDay(localDay(7));
-    if (next === "draft" && !draft) setDraft(buildOutreachDraft({ lead, companyName, trade, phone }));
+    if (next === "draft" && !draft) setDraft(buildOutreachDraft({ lead, companyName, trade, phone, ownerName }));
     setMode(mode === next ? null : next);
   }
 
