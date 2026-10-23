@@ -34,3 +34,6 @@
 - source_spec: `docs/bmad/implementation/spec-2-1-dire-son-objectif-a-paul-et-le-confirmer.md`
   summary: Purger ou marquer expirées les cartes de Paul anciennes, et contraindre type et statut en base.
   evidence: expiration seulement à la lecture ; colonnes texte sans contrainte.
+- source_spec: `docs/bmad/implementation/spec-2-2-faire-enregistrer-son-profil-par-paul.md`
+  summary: Vérifier le format du site, du téléphone et du compte social avant de les enregistrer.
+  evidence: une phrase ou « atelierlumen point fr » serait enregistrée telle quelle puis transmise aux agents.

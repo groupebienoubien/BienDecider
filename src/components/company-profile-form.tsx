@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
 import { TradeCombobox } from "@/components/trade-combobox";
 import { PageHeading } from "@/components/mockup-ui";
+import { PROFILE_FIELD_LABELS } from "@/lib/company-profile";
 
 export function CompanyProfileForm({ guided = false, embedded = false, initialTab = "informations" }: { guided?: boolean; embedded?: boolean; initialTab?: "informations" | "objectifs" }) {
   const router = useRouter();
@@ -325,7 +326,7 @@ export function CompanyProfileForm({ guided = false, embedded = false, initialTa
 
           {!guided && <>
             <label htmlFor="profile-description" className="field">
-              Décrivez votre entreprise, votre savoir-faire et ce qui vous différencie
+              {PROFILE_FIELD_LABELS.description}
             </label>
             <textarea
               id="profile-description"
@@ -341,7 +342,7 @@ export function CompanyProfileForm({ guided = false, embedded = false, initialTa
 
             <div className="mt-2 grid gap-3 sm:grid-cols-2">
               <label htmlFor="profile-phone" className="field">
-                Téléphone affiché aux clients (facultatif)
+                {PROFILE_FIELD_LABELS.phone} (facultatif)
                 <input
                   id="profile-phone"
                   placeholder="Téléphone affiché aux clients (optionnel)"
@@ -361,7 +362,7 @@ export function CompanyProfileForm({ guided = false, embedded = false, initialTa
                 />
               </label>
             </div>
-            <label htmlFor="profile-hours" className="field">Horaires d&apos;ouverture (facultatif)</label>
+            <label htmlFor="profile-hours" className="field">{PROFILE_FIELD_LABELS.openingHours} (facultatif)</label>
             <input
               id="profile-hours"
               placeholder="Horaires d'ouverture (optionnel)"
@@ -369,7 +370,7 @@ export function CompanyProfileForm({ guided = false, embedded = false, initialTa
               onChange={(e) => setOpeningHours(e.target.value)}
              
             />
-            <label htmlFor="profile-website" className="field">Site web (facultatif)</label>
+            <label htmlFor="profile-website" className="field">{PROFILE_FIELD_LABELS.website} (facultatif)</label>
             <input
               id="profile-website"
               placeholder="Site web (optionnel — beaucoup de TPE n'en ont pas)"
@@ -377,7 +378,7 @@ export function CompanyProfileForm({ guided = false, embedded = false, initialTa
               onChange={(e) => setWebsite(e.target.value)}
              
             />
-            <label htmlFor="profile-social" className="field">Compte Instagram ou Facebook (facultatif)</label>
+            <label htmlFor="profile-social" className="field">{PROFILE_FIELD_LABELS.socialHandles} (facultatif)</label>
             <input
               id="profile-social"
               placeholder="Compte Instagram/Facebook (optionnel, ex: @cabinet_demo)"

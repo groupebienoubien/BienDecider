@@ -17,7 +17,7 @@ import { getChatInstructionsForPlan, loadRecentChatHistory } from "@/lib/agents/
 import { getTeamState } from "@/lib/team-state";
 import { resolvePaulReferences } from "@/lib/paul-references";
 import { attachPendingActions, cancelOrphanPendingActions, createPendingAction, recentPendingActions } from "@/lib/agents/pending-actions";
-import { MAX_AMOUNT, updateObjectivePayloadSchema } from "@/lib/agents/pending-action-view";
+import { MAX_AMOUNT, PROFILE_PAGE_ONLY_MESSAGE, type PendingActionType, profileUpdateToolSchema, readProfileToolInput, updateObjectivePayloadSchema, updateProfilePayloadSchema } from "@/lib/agents/pending-action-view";
 
 const PERSONA = PERSONAS.co_ceo;
 
@@ -301,6 +301,19 @@ export async function runCoCeoTurn(
   const createdActionIds: string[] = [];
   let objectiveCardProposed = false;
 
+  // Une erreur de création n'est jamais renvoyée brute à Paul.
+  const CARD_FAILED = "Aucune carte créée : réessaie.";
+  async function createCard<T extends PendingActionType>(type: T, payload: Parameters<typeof createPendingAction<T>>[2]) {
+    try {
+      const action = await createPendingAction(companyId, type, payload);
+      createdActionIds.push(action.id);
+      return action;
+    } catch (error) {
+      console.error(`Création d'une carte ${type} impossible :`, error);
+      return null;
+    }
+  }
+
   // Le schéma de l'outil reste permissif : les bornes sont celles de la carte (safeParse ci-dessous),
   // pour qu'un montant hors bornes donne un message lisible à Paul au lieu de faire échouer le tour.
   const proposeObjectiveUpdate = betaZodTool({
@@ -318,28 +331,67 @@ export async function runCoCeoTurn(
       targetDate: z.string().optional().describe("Échéance de l'objectif au format AAAA-MM, si le dirigeant l'a donnée — omettre sinon"),
     }),
     run: async (input) => {
+      // Drapeau posé avant tout await : deux appels dans le même message ne créent qu'une carte.
       if (objectiveCardProposed) return "Une carte d'objectif est déjà proposée dans cette réponse : rien de plus n'a été proposé.";
+      objectiveCardProposed = true;
       const parsed = updateObjectivePayloadSchema.safeParse(input);
       if (!parsed.success) {
+        objectiveCardProposed = false;
         return `Aucune carte créée : ${parsed.error.issues.map((issue) => issue.message).join(" ; ")}. Vérifie les montants et leurs périodes avec le dirigeant.`;
       }
-      const action = await createPendingAction(companyId, "update_objective", parsed.data);
-      createdActionIds.push(action.id);
-      objectiveCardProposed = true;
+      const action = await createCard("update_objective", parsed.data);
+      if (!action) {
+        objectiveCardProposed = false;
+        return CARD_FAILED;
+      }
       return "Carte de confirmation affichée sous ta réponse. Rien n'est enregistré tant que le dirigeant n'a pas cliqué sur « Confirmer » : dis-le-lui, sans citer de montant converti.";
+    },
+  });
+
+  let profileCardProposed = false;
+  // Le schéma de l'outil n'annonce que les champs modifiables par Paul ; les autres clés et les limites
+  // de longueur sont traitées dans run, pour que Paul reçoive un message lisible plutôt qu'une erreur brute.
+  const proposeProfileUpdate = betaZodTool({
+    name: "propose_profile_update",
+    description:
+      "Propose au dirigeant d'enregistrer dans son profil son site web, son compte Instagram ou Facebook, son téléphone, ses horaires ou sa description : crée une carte de confirmation sous ta réponse, rien n'est enregistré avant son clic sur « Confirmer ». Mets tous les champs donnés dans un seul appel (une seule carte par réponse) ; reprends chaque valeur telle qu'il l'a dite, une chaîne vide efface le champ. Le nom commercial, le métier et la zone de chalandise ne se modifient pas ici : ils se changent sur la page Entreprise.",
+    inputSchema: profileUpdateToolSchema,
+    run: async (input) => {
+      // Drapeau posé avant tout await : deux appels dans le même message ne créent qu'une carte.
+      if (profileCardProposed) return "Une carte de profil est déjà proposée dans cette réponse : rien de plus n'a été proposé.";
+      profileCardProposed = true;
+      const { payload, pageOnly } = readProfileToolInput(input);
+      if (pageOnly && Object.keys(payload).length === 0) {
+        profileCardProposed = false;
+        return PROFILE_PAGE_ONLY_MESSAGE;
+      }
+      const parsed = updateProfilePayloadSchema.safeParse(payload);
+      if (!parsed.success) {
+        profileCardProposed = false;
+        return `Aucune carte créée : ${parsed.error.issues.map((issue) => issue.message).join(" ; ")}. Demande au dirigeant une version plus courte.`;
+      }
+      const action = await createCard("update_profile", parsed.data);
+      if (!action) {
+        profileCardProposed = false;
+        return CARD_FAILED;
+      }
+      const created = "Carte de confirmation affichée sous ta réponse. Rien n'est enregistré tant que le dirigeant n'a pas cliqué sur « Confirmer » : dis-le-lui.";
+      return pageOnly ? `${created} ${PROFILE_PAGE_ONLY_MESSAGE}` : created;
     },
   });
 
   const runnerParams: BetaToolRunnerParams = {
     model: AGENT_MODEL,
     max_tokens: 2000,
-    tools: [getCurrentStatus, proposeObjectiveUpdate, delegateMarketing, delegateContenu, delegateDemarchage, recordUncovered],
+    tools: [getCurrentStatus, proposeObjectiveUpdate, proposeProfileUpdate, delegateMarketing, delegateContenu, delegateDemarchage, recordUncovered],
     system: [
       {
         type: "text",
         cache_control: { type: "ephemeral" },
         text: `Tu es ${PERSONA.name} de BienDecider, un copilote IA pour indépendants et TPE. ${PERSONA.blurb}
 Entreprise : ${company.name} (métier : ${company.trade}), zone de chalandise : ${company.servingArea}.
+Site : ${company.website ?? "non renseigné"}
+Réseaux sociaux : ${company.socialHandles ?? "non renseignés"}
 ${companyProfileLines(company)}
 ${objectiveLine(company)}
 ${directionLine(company.direction)}
@@ -361,6 +413,7 @@ Règles strictes, non négociables :
 - Pour les pistes de prospection, seules des informations publiques et professionnelles sont acceptables — refuse poliment toute demande de cibler des particuliers avec leurs données personnelles.
 - Quand tu cites explicitement une production, un constat ou un prospect présent dans get_current_status ou dans le contexte de page, ajoute immédiatement après son nom le marqueur fourni [[bd:proposal:ID]], [[bd:finding:ID]] ou [[bd:lead:ID]]. Reprends uniquement un identifiant exact de ces données; ne crée jamais d'identifiant, de lien ou d'URL. N'ajoute pas de marqueur pour un objet absent de ces données.
 - Quand le dirigeant te donne son objectif de chiffre d'affaires (et éventuellement son chiffre actuel, la valeur d'un client, ses nouveaux clients, une échéance), appelle propose_objective_update : c'est lui qui confirme d'un clic sur la carte, tu n'enregistres rien toi-même et tu ne dis pas que c'est enregistré. Chaque montant garde la période dans laquelle il l'a dit (« 12 000 € par mois aujourd'hui, 200 000 € par an visés » : currentPeriod month, targetPeriod year) ; ne convertis rien toi-même. S'il ne précise pas la période de l'objectif, demande-lui « par mois ou par an ? » avant d'appeler l'outil. S'il ne donne pas son chiffre d'affaires actuel, demande-le aussi : sans lui, l'écart ne peut pas être calculé. S'il veut corriger, propose une nouvelle carte : elle remplace la précédente. cartesRecentes (get_current_status) te dit ce que sont devenues tes cartes.
+- Quand le dirigeant te donne son site web, son compte Instagram ou Facebook, son téléphone, ses horaires d'ouverture ou une description de son entreprise, appelle propose_profile_update avec tous ces champs en un seul appel : c'est lui qui confirme d'un clic sur la carte, tu ne dis pas que c'est enregistré. Si l'outil refuse un texte trop long, demande-lui une version plus courte. Le nom commercial, le métier et la zone de chalandise, tu ne les modifies jamais : dis-lui de les changer lui-même sur la page Entreprise.
 - Ne calcule jamais toi-même un chiffre que tu affiches (conversion au mois, écart, nombre de clients nécessaires) : cite uniquement les chiffres calculés donnés plus haut dans ce message système. S'ils sont absents, dis que l'objectif chiffré n'est pas encore enregistré.
 - Réponds de façon brève et directe, comme un vrai point rapide entre dirigeants, pas un rapport formel.`,
       },

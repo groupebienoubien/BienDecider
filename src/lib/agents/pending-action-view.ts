@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { clientsToMonthly, formatDecimal, formatEuros, toMonthly, type Period } from "@/lib/business-target";
+import { PAUL_PROFILE_FIELDS, PROFILE_FIELD_LABELS, PROFILE_TEXT_LIMITS, clearableText, profileTextIssue, type PaulProfileField } from "@/lib/company-profile";
 
 /**
  * Partie pure des intentions de Paul (cartes de confirmation) : schémas,
@@ -7,7 +8,7 @@ import { clientsToMonthly, formatDecimal, formatEuros, toMonthly, type Period } 
  * panneau de Paul et les tests sans base — cf. pending-actions.ts.
  */
 
-export const PENDING_ACTION_TYPES = ["update_objective"] as const;
+export const PENDING_ACTION_TYPES = ["update_objective", "update_profile"] as const;
 export type PendingActionType = (typeof PENDING_ACTION_TYPES)[number];
 export function isPendingActionType(type: string): type is PendingActionType {
   return (PENDING_ACTION_TYPES as readonly string[]).includes(type);
@@ -19,6 +20,26 @@ export type PendingActionStatus = (typeof PENDING_ACTION_STATUSES)[number];
 /** Une carte non décidée expire 24 h après sa création. */
 export const PENDING_ACTION_TTL_MS = 24 * 60 * 60 * 1000;
 export const EXPIRED_MESSAGE = "Cette proposition a expiré. Redites votre objectif à Paul.";
+const EXPIRED_MESSAGES: Record<PendingActionType, string> = {
+  update_objective: EXPIRED_MESSAGE,
+  update_profile: "Cette proposition a expiré. Redites à Paul ce qu'il faut enregistrer dans votre profil.",
+};
+const NEUTRAL_EXPIRED_MESSAGE = "Cette proposition a expiré. Redites votre demande à Paul.";
+/** Message d'une carte expirée, selon ce qu'elle proposait. */
+export function expiredMessage(type: string): string {
+  return isPendingActionType(type) ? EXPIRED_MESSAGES[type] : NEUTRAL_EXPIRED_MESSAGE;
+}
+
+/** Texte affiché sous une carte décidée, selon son statut et son type (vide tant qu'elle est en attente). */
+export function decidedText(status: PendingActionStatus, type: string): string {
+  switch (status) {
+    case "pending": return "";
+    case "confirmed": return "C’est enregistré.";
+    case "cancelled": return "Proposition annulée. Dites à Paul ce qu’il faut corriger.";
+    case "expired": return expiredMessage(type);
+    case "superseded": return "Remplacée par une proposition plus récente.";
+  }
+}
 export const INACTIVE_MESSAGE = "Cette proposition n'est plus active.";
 
 // Mêmes bornes que la page Entreprise (entiers 32 bits en base).
@@ -94,10 +115,75 @@ export function objectiveUpdateValues(payload: UpdateObjectivePayload): Objectiv
   };
 }
 
+/**
+ * Saisie de l'outil de Paul : seuls site, comptes sociaux, téléphone, horaires
+ * et description sont annoncés au modèle. null = non fourni. Les autres clés
+ * sont tolérées par le schéma (pas d'erreur brute du SDK) puis écartées par
+ * readProfileToolInput, qui signale nom, métier ou zone à Paul.
+ */
+export const profileUpdateToolSchema = z.object({
+  website: z.string().nullable().optional().describe(`${PROFILE_FIELD_LABELS.website} (adresse du site, ${PROFILE_TEXT_LIMITS.website} caractères au plus)`),
+  socialHandles: z.string().nullable().optional().describe(`${PROFILE_FIELD_LABELS.socialHandles} (ex. @atelier, ${PROFILE_TEXT_LIMITS.socialHandles} caractères au plus)`),
+  phone: z.string().nullable().optional().describe(`${PROFILE_FIELD_LABELS.phone} (${PROFILE_TEXT_LIMITS.phone} caractères au plus)`),
+  openingHours: z.string().nullable().optional().describe(`${PROFILE_FIELD_LABELS.openingHours} (${PROFILE_TEXT_LIMITS.openingHours} caractères au plus)`),
+  description: z.string().nullable().optional().describe(`Description de l'entreprise, de son savoir-faire et de ce qui la différencie (${PROFILE_TEXT_LIMITS.description} caractères au plus)`),
+}).loose();
+
+/** Champs que Paul ne modifie jamais : il renvoie vers la page Entreprise. */
+const PAGE_ONLY_FIELDS = ["name", "trade", "servingArea"] as const;
+export const PROFILE_PAGE_ONLY_MESSAGE = "Nom commercial, métier et zone se modifient sur la page Entreprise.";
+
+/** Sépare la saisie de l'outil : champs admis (null écarté) et champs réservés à la page Entreprise. */
+export function readProfileToolInput(input: Record<string, unknown>): { payload: Partial<Record<PaulProfileField, string>>; pageOnly: boolean } {
+  const payload: Partial<Record<PaulProfileField, string>> = {};
+  for (const field of PAUL_PROFILE_FIELDS) {
+    const value = input[field];
+    if (typeof value === "string") payload[field] = value;
+  }
+  return { payload, pageOnly: PAGE_ONLY_FIELDS.some((field) => input[field] != null) };
+}
+
+/**
+ * Intention enregistrée : champs admis seulement (strict), mêmes limites que la
+ * page Entreprise ; un texte vide efface le champ.
+ */
+export const updateProfilePayloadSchema = z.object({
+  website: z.string().optional(),
+  socialHandles: z.string().optional(),
+  phone: z.string().optional(),
+  openingHours: z.string().optional(),
+  description: z.string().optional(),
+}).strict().superRefine((payload, context) => {
+  const fields = PAUL_PROFILE_FIELDS.filter((field) => payload[field] !== undefined);
+  if (fields.length === 0) context.addIssue({ code: "custom", message: "Aucun champ du profil à enregistrer" });
+  for (const field of fields) {
+    if (profileTextIssue(field, payload[field]) === "too_long") {
+      context.addIssue({ code: "custom", path: [field], message: `« ${PROFILE_FIELD_LABELS[field]} » est limité à ${PROFILE_TEXT_LIMITS[field]} caractères` });
+    }
+  }
+});
+export type UpdateProfilePayload = z.infer<typeof updateProfilePayloadSchema>;
+
+/** Une nouvelle carte de profil reprend les champs de la carte en attente qu'elle remplace ; ses valeurs l'emportent. */
+export function mergeProfilePayloads(previous: UpdateProfilePayload, next: UpdateProfilePayload): UpdateProfilePayload {
+  return { ...previous, ...next };
+}
+
+/** Valeurs écrites dans Company à la confirmation, nettoyées comme sur la page Entreprise ; un champ absent n'est pas modifié. */
+export function profileUpdateValues(payload: UpdateProfilePayload): Partial<Record<PaulProfileField, string | null>> {
+  const values: Partial<Record<PaulProfileField, string | null>> = {};
+  for (const field of PAUL_PROFILE_FIELDS) {
+    const value = clearableText(payload[field]);
+    if (value !== undefined) values[field] = value;
+  }
+  return values;
+}
+
 export type PendingActionDescription = { title: string; lines: string[]; confirmLabel: string };
 
 /** Lignes de la carte, construites depuis l'intention enregistrée (jamais depuis le texte de Paul). */
 export function describePendingAction(action: { type: string; payload: unknown }): PendingActionDescription | null {
+  if (action.type === "update_profile") return describeProfileUpdate(action.payload);
   if (action.type !== "update_objective") return null;
   const parsed = updateObjectivePayloadSchema.safeParse(action.payload);
   if (!parsed.success) return null;
@@ -110,6 +196,14 @@ export function describePendingAction(action: { type: string; payload: unknown }
   }
   if (values.targetDate) lines.push(`Échéance : ${MONTH_LABEL.format(values.targetDate)}`);
   return { title: `Enregistrer votre objectif : ${values.objective}`, lines, confirmLabel: "Confirmer" };
+}
+
+function describeProfileUpdate(payload: unknown): PendingActionDescription | null {
+  const parsed = updateProfilePayloadSchema.safeParse(payload);
+  if (!parsed.success) return null;
+  const lines = Object.entries(profileUpdateValues(parsed.data)).map(([field, value]) =>
+    `${PROFILE_FIELD_LABELS[field as PaulProfileField]} : ${value ?? "(effacé)"}`);
+  return { title: "Enregistrer dans votre profil", lines, confirmLabel: "Confirmer" };
 }
 
 export type PendingActionView = {

@@ -14,7 +14,8 @@ import { describeRunProgress, finishedRunMessage, formatDuration, recentSucceede
 import { groupPlanItems, planItemStatusView } from "../src/lib/action-plan-view";
 import { facebookAuditSource } from "../src/lib/facebook-audit-source";
 import { businessTargetLines, clientGapLabel, clientsToMonthly, computeBusinessTarget, toMonthly } from "../src/lib/business-target";
-import { describePendingAction, objectiveUpdateValues, toPendingActionView, updateObjectivePayloadSchema } from "../src/lib/agents/pending-action-view";
+import { PROFILE_PAGE_ONLY_MESSAGE, decidedText, describePendingAction, expiredMessage, mergeProfilePayloads, objectiveUpdateValues, profileUpdateToolSchema, profileUpdateValues, readProfileToolInput, toPendingActionView, updateObjectivePayloadSchema, updateProfilePayloadSchema } from "../src/lib/agents/pending-action-view";
+import { PROFILE_TEXT_LIMITS, clearableText, profileTextIssue } from "../src/lib/company-profile";
 
 test("risk rules use registered kinds and contextual factors, then fail closed", () => {
   expect(assessActionRisk("piste_croissance").level).toBe("modere");
@@ -429,4 +430,62 @@ test("the client gap picks month or year on the exact value and never shows zero
   expect(tiny.extraClientsPerYear).toBe(0);
   expect(clientGapLabel(tiny)?.text).toBe("moins de 0,1 client de plus par an");
   expect(spaces(businessTargetLines({ monthlyRevenue: 10000, revenueTarget: 10001, averageClientValue: 100000, newClientsPerMonth: null, targetDate: null }))).toContain("moins de 0,1 nouveau client supplémentaire par an");
+});
+
+test("an Instagram account given to Paul becomes a profile card with the Entreprise page label", () => {
+  const card = describePendingAction({ type: "update_profile", payload: { socialHandles: "@atelierlumen.nantes" } });
+  expect(card).toEqual({ title: "Enregistrer dans votre profil", lines: ["Compte Instagram ou Facebook : @atelierlumen.nantes"], confirmLabel: "Confirmer" });
+  expect(profileUpdateValues({ socialHandles: "@atelierlumen.nantes" })).toEqual({ socialHandles: "@atelierlumen.nantes" });
+});
+
+test("one profile card carries several fields, one line each, cleaned like the Entreprise page", () => {
+  const payload = { website: " https://atelierlumen.fr ", openingHours: "Lun-ven 8h-18h" };
+  expect(describePendingAction({ type: "update_profile", payload })?.lines).toEqual(["Site web : https://atelierlumen.fr", "Horaires d'ouverture : Lun-ven 8h-18h"]);
+  expect(profileUpdateValues(payload)).toEqual({ website: "https://atelierlumen.fr", openingHours: "Lun-ven 8h-18h" });
+  // Texte vide = champ effacé, comme sur la page Entreprise.
+  expect(profileUpdateValues({ phone: "  " })).toEqual({ phone: null });
+  expect(describePendingAction({ type: "update_profile", payload: { phone: "" } })?.lines).toEqual(["Téléphone affiché aux clients : (effacé)"]);
+  expect(clearableText("  ")).toBeNull();
+  expect(clearableText(undefined)).toBeUndefined();
+  expect(expiredMessage("update_profile")).toContain("profil");
+  expect(expiredMessage("update_objective")).toBe("Cette proposition a expiré. Redites votre objectif à Paul.");
+  expect(expiredMessage("inconnu")).toBe("Cette proposition a expiré. Redites votre demande à Paul.");
+  expect(decidedText("expired", "update_profile")).toBe(expiredMessage("update_profile"));
+  expect(decidedText("pending", "update_profile")).toBe("");
+  // Une nouvelle carte reprend les champs de la précédente ; ses valeurs l'emportent.
+  expect(mergeProfilePayloads({ socialHandles: "@a", website: "https://ancien.fr" }, { website: "https://atelierlumen.fr" }))
+    .toEqual({ socialHandles: "@a", website: "https://atelierlumen.fr" });
+});
+
+test("Paul's profile tool rejects the business name, trade and serving area", () => {
+  for (const forbidden of [{ name: "Autre nom" }, { trade: "Plombier" }, { servingArea: "Lyon" }]) {
+    // L'outil accepte la saisie (pas d'erreur brute du SDK) ; la clé est écartée et signalée à Paul.
+    const input = profileUpdateToolSchema.parse(forbidden);
+    expect(readProfileToolInput(input), JSON.stringify(forbidden)).toEqual({ payload: {}, pageOnly: true });
+    expect(updateProfilePayloadSchema.safeParse(forbidden).success, JSON.stringify(forbidden)).toBe(false);
+  }
+  // Les champs admis passent, null = non fourni.
+  const mixed = profileUpdateToolSchema.parse({ website: "https://a.fr", phone: null, name: "Autre nom" });
+  expect(readProfileToolInput(mixed)).toEqual({ payload: { website: "https://a.fr" }, pageOnly: true });
+  expect(PROFILE_PAGE_ONLY_MESSAGE).toBe("Nom commercial, métier et zone se modifient sur la page Entreprise.");
+  // Une carte vide n'a pas de sens.
+  expect(updateProfilePayloadSchema.safeParse({}).success).toBe(false);
+  expect(describePendingAction({ type: "update_profile", payload: { name: "Autre nom" } })).toBeNull();
+});
+
+test("a profile text over the Entreprise page limit gives no card and a readable error", () => {
+  const tooLong = "a".repeat(PROFILE_TEXT_LIMITS.description + 1);
+  // L'outil accepte la saisie, pour que la vérification renvoie un message lisible à Paul.
+  expect(profileUpdateToolSchema.safeParse({ description: tooLong }).success).toBe(true);
+  const parsed = updateProfilePayloadSchema.safeParse({ description: tooLong });
+  expect(parsed.success).toBe(false);
+  expect(parsed.error?.issues[0].message).toContain("limité à 2000 caractères");
+  expect(updateProfilePayloadSchema.safeParse({ description: "a".repeat(PROFILE_TEXT_LIMITS.description) }).success).toBe(true);
+  // Même règle que la page Entreprise.
+  expect(profileTextIssue("description", tooLong)).toBe("too_long");
+  expect(profileTextIssue("phone", "0".repeat(101))).toBe("too_long");
+  expect(profileTextIssue("website", 42)).toBe("not_text");
+  expect(profileTextIssue("website", null)).toBeNull();
+  // Rogné, puis mesuré : des espaces autour ne font pas dépasser la limite.
+  expect(profileTextIssue("phone", ` ${"0".repeat(100)} `)).toBeNull();
 });

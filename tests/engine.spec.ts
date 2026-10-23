@@ -998,3 +998,176 @@ test("the Entreprise page stores a decimal rhythm of new clients, with a French 
   expect(response.status()).toBe(201);
   expect((await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).newClientsPerMonth).toBe(0.5);
 });
+
+const PROFILE_FIELDS = { website: true, socialHandles: true, phone: true, openingHours: true, description: true, name: true, trade: true, servingArea: true } as const;
+
+test("Paul's profile card writes nothing until confirmed, then the Entreprise page shows the new value", async ({ company, request }) => {
+  if (!process.env.SESSION_SECRET) throw new Error("SESSION_SECRET is required for engine tests.");
+  const { prisma } = await import("../src/lib/prisma");
+  const { createPendingAction } = await import("../src/lib/agents/pending-actions");
+  const before = await prisma.company.findUniqueOrThrow({ where: { id: company.id }, select: PROFILE_FIELDS });
+  const action = await createPendingAction(company.id, "update_profile", { socialHandles: "@atelierlumen.nantes" });
+  expect(action).toMatchObject({ status: "pending", type: "update_profile" });
+  expect(await prisma.company.findUniqueOrThrow({ where: { id: company.id }, select: PROFILE_FIELDS })).toEqual(before);
+
+  const baseURL = process.env.UX_TEST_BASE_URL ?? "http://localhost:3000";
+  const headers = { Cookie: `pepito_session=${createSessionToken(company.ownerEmail, company.sessionVersion, process.env.SESSION_SECRET)}`, Origin: baseURL };
+  const confirmed = await request.post(`${baseURL}/api/co-ceo/pending-actions/${action.id}`, { headers, data: { decision: "confirm" } });
+  expect(confirmed.status()).toBe(200);
+  expect(await confirmed.json()).toMatchObject({ action: { status: "confirmed", lines: ["Compte Instagram ou Facebook : @atelierlumen.nantes"] } });
+  expect((await prisma.paulPendingAction.findUniqueOrThrow({ where: { id: action.id } })).status).toBe("confirmed");
+  // La page Entreprise lit le profil par GET /api/companies.
+  const profile = await request.get(`${baseURL}/api/companies`, { headers });
+  expect(await profile.json()).toMatchObject({ socialHandles: "@atelierlumen.nantes", name: before.name, trade: before.trade, servingArea: before.servingArea });
+});
+
+test("a profile card with several fields writes them all on confirmation, an empty text clears the field", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { createPendingAction, decidePendingAction } = await import("../src/lib/agents/pending-actions");
+  await prisma.company.update({ where: { id: company.id }, data: { phone: "01 02 03 04 05", description: "Ancienne description" } });
+  const action = await createPendingAction(company.id, "update_profile", { website: " https://atelierlumen.fr ", openingHours: "Lun-ven 8h-18h", phone: "" });
+  expect(await decidePendingAction(company.id, action.id, "confirm")).toMatchObject({ ok: true, action: { status: "confirmed" } });
+  expect(await prisma.company.findUniqueOrThrow({ where: { id: company.id }, select: PROFILE_FIELDS })).toMatchObject({
+    website: "https://atelierlumen.fr", openingHours: "Lun-ven 8h-18h", phone: null, description: "Ancienne description", name: company.name,
+  });
+});
+
+test("a forbidden or too long profile field creates no card", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { createPendingAction } = await import("../src/lib/agents/pending-actions");
+  // Le cast reproduit une saisie hors schéma : refusée avant toute écriture.
+  await expect(createPendingAction(company.id, "update_profile", { name: "Autre nom" } as never)).rejects.toThrow(/Unrecognized key/);
+  await expect(createPendingAction(company.id, "update_profile", { description: "a".repeat(2001) })).rejects.toThrow(/limité à 2000 caractères/);
+  expect(await prisma.paulPendingAction.count({ where: { companyId: company.id } })).toBe(0);
+});
+
+test("a new profile card replaces the previous pending one without touching the objective card", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { createPendingAction, decidePendingAction } = await import("../src/lib/agents/pending-actions");
+  const objective = await createPendingAction(company.id, "update_objective", ANNUAL_OBJECTIVE_INPUT);
+  const first = await createPendingAction(company.id, "update_profile", { website: "https://ancien.fr" });
+  const second = await createPendingAction(company.id, "update_profile", { website: "https://atelierlumen.fr" });
+  expect((await prisma.paulPendingAction.findUniqueOrThrow({ where: { id: first.id } })).status).toBe("superseded");
+  expect((await prisma.paulPendingAction.findUniqueOrThrow({ where: { id: second.id } })).status).toBe("pending");
+  expect((await prisma.paulPendingAction.findUniqueOrThrow({ where: { id: objective.id } })).status).toBe("pending");
+  expect(await decidePendingAction(company.id, first.id, "confirm")).toMatchObject({ ok: false, error: "inactive" });
+  expect((await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).website).toBeNull();
+});
+
+test("Martine launched after a confirmed profile card reads the new values", async ({ company }) => {
+  const { createPendingAction, decidePendingAction } = await import("../src/lib/agents/pending-actions");
+  const { anthropic } = await import("../src/lib/anthropic");
+  const { runMarketingAgent } = await import("../src/lib/agents/marketing");
+  const action = await createPendingAction(company.id, "update_profile", { socialHandles: "@atelierlumen.nantes", website: "https://atelierlumen.fr" });
+  await decidePendingAction(company.id, action.id, "confirm");
+
+  // Aucun appel au modèle : le lancement est intercepté pour lire le contexte donné à Martine.
+  const messages = anthropic.beta.messages as unknown as { toolRunner: (params: unknown) => unknown };
+  const original = messages.toolRunner;
+  const captured: { params?: { system: { text: string }[]; messages: { content: string }[] } } = {};
+  messages.toolRunner = (params: unknown) => {
+    captured.params = params as typeof captured.params;
+    throw new Error("intercepted");
+  };
+  try {
+    await expect(runMarketingAgent(company.id)).rejects.toThrow("intercepted");
+  } finally {
+    messages.toolRunner = original;
+  }
+  const context = captured.params!;
+  expect(context.system.map((block) => block.text).join(" ")).toContain("Réseaux sociaux déclarés : @atelierlumen.nantes.");
+  expect(context.messages[0].content).toContain("https://atelierlumen.fr");
+});
+
+test("the Entreprise page keeps its text limits after sharing them with Paul's cards", async ({ company, request }) => {
+  if (!process.env.SESSION_SECRET) throw new Error("SESSION_SECRET is required for engine tests.");
+  const baseURL = process.env.UX_TEST_BASE_URL ?? "http://localhost:3000";
+  const headers = { Cookie: `pepito_session=${createSessionToken(company.ownerEmail, company.sessionVersion, process.env.SESSION_SECRET)}`, Origin: baseURL };
+  const tooLong = await request.post(`${baseURL}/api/companies`, { headers, data: { ...ONBOARDING_PROFILE, description: "a".repeat(2001) } });
+  expect(tooLong.status()).toBe(400);
+  expect(await tooLong.json()).toEqual({ error: "description est limité à 2000 caractères" });
+  const notText = await request.post(`${baseURL}/api/companies`, { headers, data: { ...ONBOARDING_PROFILE, website: 42 } });
+  expect(await notText.json()).toEqual({ error: "website doit être du texte" });
+});
+
+test("a second profile card keeps the fields of the pending one it replaces", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { createPendingAction, decidePendingAction } = await import("../src/lib/agents/pending-actions");
+  const instagram = await createPendingAction(company.id, "update_profile", { socialHandles: "@atelierlumen.nantes" });
+  const website = await createPendingAction(company.id, "update_profile", { website: "https://atelierlumen.fr" });
+  const pending = await prisma.paulPendingAction.findMany({ where: { companyId: company.id, type: "update_profile", status: "pending" } });
+  expect(pending.map((action) => action.id)).toEqual([website.id]);
+  expect(pending[0].payload).toEqual({ socialHandles: "@atelierlumen.nantes", website: "https://atelierlumen.fr" });
+  expect((await prisma.paulPendingAction.findUniqueOrThrow({ where: { id: instagram.id } })).status).toBe("superseded");
+  await decidePendingAction(company.id, website.id, "confirm");
+  expect(await prisma.company.findUniqueOrThrow({ where: { id: company.id }, select: { website: true, socialHandles: true } }))
+    .toEqual({ website: "https://atelierlumen.fr", socialHandles: "@atelierlumen.nantes" });
+});
+
+test("a profile card that no longer parses is refused at confirmation without writing", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { createPendingAction, decidePendingAction } = await import("../src/lib/agents/pending-actions");
+  const action = await createPendingAction(company.id, "update_profile", { website: "https://atelierlumen.fr" });
+  await prisma.paulPendingAction.update({ where: { id: action.id }, data: { payload: { name: "Autre nom" } } });
+  expect(await decidePendingAction(company.id, action.id, "confirm")).toMatchObject({ ok: false, error: "inactive" });
+  expect((await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).website).toBeNull();
+  expect((await prisma.paulPendingAction.findUniqueOrThrow({ where: { id: action.id } })).status).toBe("cancelled");
+});
+
+test("an expired profile card is refused by the route with a profile wording", async ({ company, request }) => {
+  if (!process.env.SESSION_SECRET) throw new Error("SESSION_SECRET is required for engine tests.");
+  const { prisma } = await import("../src/lib/prisma");
+  const { createPendingAction } = await import("../src/lib/agents/pending-actions");
+  const baseURL = process.env.UX_TEST_BASE_URL ?? "http://localhost:3000";
+  const headers = { Cookie: `pepito_session=${createSessionToken(company.ownerEmail, company.sessionVersion, process.env.SESSION_SECRET)}`, Origin: baseURL };
+  const action = await createPendingAction(company.id, "update_profile", { socialHandles: "@atelierlumen.nantes" });
+  await prisma.paulPendingAction.update({ where: { id: action.id }, data: { expiresAt: new Date(Date.now() - 1000) } });
+  const expired = await request.post(`${baseURL}/api/co-ceo/pending-actions/${action.id}`, { headers, data: { decision: "confirm" } });
+  expect(expired.status()).toBe(409);
+  const body = await expired.json();
+  expect(body.reason).toBe("expired");
+  expect(body.error).toContain("profil");
+  expect((await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).socialHandles).toBeNull();
+});
+
+test("Paul's profile tool creates one card per reply and answers refusals in plain words", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { anthropic } = await import("../src/lib/anthropic");
+  const { runCoCeoTurn } = await import("../src/lib/agents/co-ceo");
+  await prisma.company.update({ where: { id: company.id }, data: { website: "https://deja.fr", socialHandles: "@deja" } });
+
+  // Aucun appel au modèle : le lancement est intercepté pour récupérer les outils de Paul.
+  type CapturedTool = { name: string; run: (input: Record<string, unknown>) => Promise<string> };
+  const messages = anthropic.beta.messages as unknown as { toolRunner: (params: unknown) => unknown };
+  const original = messages.toolRunner;
+  const captured: { params?: { tools: CapturedTool[]; system: { text: string }[] } } = {};
+  messages.toolRunner = (params: unknown) => {
+    captured.params = params as typeof captured.params;
+    throw new Error("intercepted");
+  };
+  try {
+    await expect(runCoCeoTurn(company.id, "Mon Instagram est @atelierlumen.nantes")).rejects.toThrow("intercepted");
+  } finally {
+    messages.toolRunner = original;
+  }
+  const params = captured.params!;
+  // Paul voit le site et les réseaux déjà enregistrés.
+  const system = params.system.map((block) => block.text).join(" ");
+  expect(system).toContain("Site : https://deja.fr");
+  expect(system).toContain("Réseaux sociaux : @deja");
+
+  const tool = params.tools.find((candidate) => candidate.name === "propose_profile_update")!;
+  const tooLongFirst = await tool.run({ description: "a".repeat(2001) });
+  expect(tooLongFirst).toContain("Aucune carte créée");
+  expect(tooLongFirst).toContain("limité à 2000 caractères");
+  expect(await tool.run({ name: "Autre nom" })).toBe("Nom commercial, métier et zone se modifient sur la page Entreprise.");
+  const [first, second] = await Promise.all([
+    tool.run({ socialHandles: "@atelierlumen.nantes", phone: null }),
+    tool.run({ website: "https://atelierlumen.fr" }),
+  ]);
+  expect(first).toContain("Carte de confirmation affichée");
+  expect(second).toBe("Une carte de profil est déjà proposée dans cette réponse : rien de plus n'a été proposé.");
+  expect(await tool.run({ description: "a".repeat(2001) })).toBe("Une carte de profil est déjà proposée dans cette réponse : rien de plus n'a été proposé.");
+  const cards = await prisma.paulPendingAction.findMany({ where: { companyId: company.id, type: "update_profile" } });
+  expect(cards.map((card) => [card.status, card.payload])).toEqual([["pending", { socialHandles: "@atelierlumen.nantes" }]]);
+});

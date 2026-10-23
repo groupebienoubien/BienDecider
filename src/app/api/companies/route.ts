@@ -6,21 +6,18 @@ import { z } from "zod";
 import { readJsonObject } from "@/lib/request-body";
 import { startOnboardingAudit } from "@/lib/agents/onboarding-audit";
 import { AgentRunConflictError, AgentRunQuotaError } from "@/lib/agents/agent-errors";
+import { PROFILE_TEXT_LIMITS, clearableText, profileTextIssue } from "@/lib/company-profile";
 
 // Les montants sont des entiers 32 bits en base : au-delà, la requête échouerait en erreur serveur.
 const MAX_AMOUNT = 1_000_000_000;
-const TEXT_LIMITS: Record<string, number> = {
-  website: 500, socialHandles: 500, objective: 500, description: 2000, phone: 100, certifications: 500, openingHours: 500,
-};
-
 const profileDetailsSchema = z.object({
-  objective: z.string().trim().max(500).optional(),
-  website: z.string().trim().max(500).optional(),
-  socialHandles: z.string().trim().max(500).optional(),
-  description: z.string().trim().max(2000).optional(),
-  phone: z.string().trim().max(100).optional(),
-  certifications: z.string().trim().max(500).optional(),
-  openingHours: z.string().trim().max(500).optional(),
+  objective: z.string().trim().max(PROFILE_TEXT_LIMITS.objective).optional(),
+  website: z.string().trim().max(PROFILE_TEXT_LIMITS.website).optional(),
+  socialHandles: z.string().trim().max(PROFILE_TEXT_LIMITS.socialHandles).optional(),
+  description: z.string().trim().max(PROFILE_TEXT_LIMITS.description).optional(),
+  phone: z.string().trim().max(PROFILE_TEXT_LIMITS.phone).optional(),
+  certifications: z.string().trim().max(PROFILE_TEXT_LIMITS.certifications).optional(),
+  openingHours: z.string().trim().max(PROFILE_TEXT_LIMITS.openingHours).optional(),
 }).strict();
 
 export async function PATCH(request: NextRequest) {
@@ -97,14 +94,10 @@ export async function POST(request: NextRequest) {
     }
   }
   const optionalTextFields = { website, socialHandles, objective, description, phone, certifications, openingHours };
-  for (const [key, value] of Object.entries(optionalTextFields)) {
-    if (value != null && typeof value !== "string") {
-      return NextResponse.json({ error: `${key} doit être du texte` }, { status: 400 });
-    }
-    const max = TEXT_LIMITS[key];
-    if (typeof value === "string" && value.length > max) {
-      return NextResponse.json({ error: `${key} est limité à ${max} caractères` }, { status: 400 });
-    }
+  for (const [key, value] of Object.entries(optionalTextFields) as [keyof typeof optionalTextFields, unknown][]) {
+    const issue = profileTextIssue(key, value);
+    if (issue === "not_text") return NextResponse.json({ error: `${key} doit être du texte` }, { status: 400 });
+    if (issue === "too_long") return NextResponse.json({ error: `${key} est limité à ${PROFILE_TEXT_LIMITS[key]} caractères` }, { status: 400 });
   }
   if (targetDate != null && targetDate !== "" && typeof targetDate !== "string") {
     return NextResponse.json({ error: "targetDate invalide" }, { status: 400 });
@@ -114,10 +107,6 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "targetDate invalide" }, { status: 400 });
   }
   const toInt = (v: unknown) => (v == null || v === "" ? null : Number(v));
-  const clearableText = (value: unknown): string | null | undefined => {
-    if (value === undefined || value === null) return value;
-    return typeof value === "string" ? value.trim() || null : null;
-  };
 
   const data = {
     name,

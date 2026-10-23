@@ -1369,3 +1369,23 @@ test("Paul's objective card is confirmed in one click and stays confirmed in the
     await prisma.$disconnect();
   }
 });
+
+test("an expired profile card shows its expired message instead of the buttons", async ({ page, company }) => {
+  const { expiredMessage, toPendingActionView } = await import("../src/lib/agents/pending-action-view");
+  const view = toPendingActionView({ id: `expired-profile-${company.id}`, type: "update_profile", status: "expired", payload: { socialHandles: "@atelierlumen.nantes" }, expiresAt: new Date(Date.now() - 1000) })!;
+  await page.route("**/api/co-ceo/message", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/x-ndjson; charset=utf-8",
+    body: `${JSON.stringify({ type: "done", reply: "Voici votre profil, à confirmer.", references: [], actions: [view] })}\n`,
+  }));
+  await page.goto(`${baseURL}/dashboard`);
+  await page.getByRole("button", { name: "Échanger avec Paul", exact: true }).click();
+  const panel = page.getByRole("dialog", { name: "Discussion avec Paul" });
+  const input = panel.getByLabel("Message à Paul");
+  await input.fill("Mon Instagram est @atelierlumen.nantes");
+  await input.press("Enter");
+  const cardGroup = panel.getByRole("group", { name: "Proposition de Paul à confirmer" });
+  await expect(cardGroup.getByText("Compte Instagram ou Facebook : @atelierlumen.nantes", { exact: true })).toBeVisible();
+  await expect(cardGroup.getByRole("status")).toHaveText(expiredMessage("update_profile"));
+  await expect(cardGroup.getByRole("button", { name: "Confirmer" })).toHaveCount(0);
+});

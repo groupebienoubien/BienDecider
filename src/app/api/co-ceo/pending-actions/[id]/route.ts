@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { getSessionCompany } from "@/lib/session";
 import { decidePendingAction } from "@/lib/agents/pending-actions";
-import { EXPIRED_MESSAGE, INACTIVE_MESSAGE } from "@/lib/agents/pending-action-view";
+import { INACTIVE_MESSAGE, expiredMessage } from "@/lib/agents/pending-action-view";
 
 const bodySchema = z.object({ decision: z.enum(["confirm", "cancel"]) }).strict();
 
@@ -26,7 +26,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     if (result.ok) return NextResponse.json({ action: result.action });
     if (result.error === "not_found") return NextResponse.json({ error: "Proposition introuvable" }, { status: 404 });
     if (result.error === "expired") {
-      return NextResponse.json({ error: EXPIRED_MESSAGE, reason: "expired", action: result.action }, { status: 409 });
+      return NextResponse.json({ error: expiredMessage(result.action.type), reason: "expired", action: result.action }, { status: 409 });
     }
     return NextResponse.json({ error: INACTIVE_MESSAGE, reason: "inactive", action: result.action }, { status: 409 });
   } catch (error) {

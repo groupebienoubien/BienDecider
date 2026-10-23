@@ -4,12 +4,16 @@ import { isSerializationConflict } from "@/lib/agent-runs";
 import {
   PENDING_ACTION_TTL_MS,
   isPendingActionType,
+  mergeProfilePayloads,
   objectiveUpdateValues,
+  profileUpdateValues,
   toPendingActionView,
   updateObjectivePayloadSchema,
+  updateProfilePayloadSchema,
   type PendingActionType,
   type PendingActionView,
   type UpdateObjectivePayload,
+  type UpdateProfilePayload,
 } from "@/lib/agents/pending-action-view";
 
 export { describePendingAction, toPendingActionView, type PendingActionView } from "@/lib/agents/pending-action-view";
@@ -20,20 +24,43 @@ export { describePendingAction, toPendingActionView, type PendingActionView } fr
  * du dirigeant, qui passe par decidePendingAction.
  */
 
-type PayloadFor = { update_objective: UpdateObjectivePayload };
-type Executor = (tx: Prisma.TransactionClient, companyId: string, payload: unknown) => Promise<void>;
+type PayloadFor = { update_objective: UpdateObjectivePayload; update_profile: UpdateProfilePayload };
+/** Renvoie false, sans rien écrire, quand l'intention enregistrée n'est plus valide. */
+type Executor = (tx: Prisma.TransactionClient, companyId: string, payload: unknown) => Promise<boolean>;
 
 /** Un exécuteur par type d'intention (exhaustif) : écrit ce que l'écran manuel équivalent écrirait. */
 const EXECUTORS: { [K in PendingActionType]: Executor } = {
   // Mêmes champs que la page Entreprise, en valeurs mensuelles.
   update_objective: async (tx, companyId, payload) => {
-    const values = objectiveUpdateValues(updateObjectivePayloadSchema.parse(payload));
-    await tx.company.update({ where: { id: companyId }, data: values });
+    const parsed = updateObjectivePayloadSchema.safeParse(payload);
+    if (!parsed.success) return false;
+    await tx.company.update({ where: { id: companyId }, data: objectiveUpdateValues(parsed.data) });
+    return true;
+  },
+  // Mêmes limites et même nettoyage que la page Entreprise (src/lib/company-profile.ts).
+  update_profile: async (tx, companyId, payload) => {
+    const parsed = updateProfilePayloadSchema.safeParse(payload);
+    if (!parsed.success) return false;
+    await tx.company.update({ where: { id: companyId }, data: profileUpdateValues(parsed.data) });
+    return true;
+  },
+};
+
+/**
+ * Fusion avec la carte en attente remplacée, par type : une carte de profil
+ * reprend les champs de la précédente (les nouvelles valeurs l'emportent),
+ * pour qu'un second champ dit plus tard n'efface pas le premier.
+ */
+const MERGERS: { [K in PendingActionType]?: (previous: unknown, next: PayloadFor[K]) => PayloadFor[K] } = {
+  update_profile: (previous, next) => {
+    const parsed = updateProfilePayloadSchema.safeParse(previous);
+    return parsed.success ? updateProfilePayloadSchema.parse(mergeProfilePayloads(parsed.data, next)) : next;
   },
 };
 
 const PAYLOAD_SCHEMAS: { [K in PendingActionType]: { parse: (value: unknown) => PayloadFor[K] } } = {
   update_objective: updateObjectivePayloadSchema,
+  update_profile: updateProfilePayloadSchema,
 };
 
 const MAX_CREATE_ATTEMPTS = 3;
@@ -54,12 +81,15 @@ export async function createPendingAction<T extends PendingActionType>(companyId
           where: { companyId, type, status: "pending", expiresAt: { lte: now } },
           data: { status: "expired", decidedAt: now },
         });
+        const merge = MERGERS[type];
+        const previous = merge ? await tx.paulPendingAction.findFirst({ where: { companyId, type, status: "pending" }, orderBy: { createdAt: "desc" } }) : null;
+        const finalPayload = merge && previous ? merge(previous.payload, valid) : valid;
         await tx.paulPendingAction.updateMany({
           where: { companyId, type, status: "pending" },
           data: { status: "superseded", decidedAt: now },
         });
         return tx.paulPendingAction.create({
-          data: { companyId, type, payload: valid as Prisma.InputJsonValue, expiresAt: new Date(now.getTime() + PENDING_ACTION_TTL_MS) },
+          data: { companyId, type, payload: finalPayload as Prisma.InputJsonValue, expiresAt: new Date(now.getTime() + PENDING_ACTION_TTL_MS) },
         });
       }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
     } catch (error) {
@@ -86,7 +116,7 @@ const OUTCOME: Record<PendingDecision, "confirmed" | "cancelled"> = { confirm: "
  */
 export async function decidePendingAction(companyId: string, id: string, decision: PendingDecision, now: Date = new Date()): Promise<DecisionResult> {
   const outcome = OUTCOME[decision];
-  const result = await prisma.$transaction(async (tx): Promise<"not_found" | "unsupported" | "expired" | "transitioned" | "unchanged"> => {
+  const result = await prisma.$transaction(async (tx): Promise<"not_found" | "unsupported" | "invalid" | "expired" | "transitioned" | "unchanged"> => {
     const action = await tx.paulPendingAction.findFirst({ where: { id, companyId } });
     if (!action) return "not_found";
     if (!isPendingActionType(action.type)) return "unsupported";
@@ -99,14 +129,18 @@ export async function decidePendingAction(companyId: string, id: string, decisio
       data: { status: outcome, decidedAt: now },
     });
     if (transition.count === 0) return "unchanged";
-    if (decision === "confirm") await EXECUTORS[action.type](tx, companyId, action.payload);
+    if (decision === "confirm" && !(await EXECUTORS[action.type](tx, companyId, action.payload))) {
+      // Intention devenue illisible : rien n'est écrit, la carte est retirée.
+      await tx.paulPendingAction.updateMany({ where: { id, companyId }, data: { status: "cancelled" } });
+      return "invalid";
+    }
     return "transitioned";
   });
   if (result === "not_found") return { ok: false, error: "not_found" };
   const current = await prisma.paulPendingAction.findFirst({ where: { id, companyId } });
   const view = current ? toPendingActionView(current, now) : null;
   if (!current) return { ok: false, error: "not_found" };
-  if (result === "unsupported" || !view) return { ok: false, error: "inactive", action: view };
+  if (result === "unsupported" || result === "invalid" || !view) return { ok: false, error: "inactive", action: view };
   if (result === "transitioned" || view.status === outcome) return { ok: true, action: view };
   if (view.status === "expired") return { ok: false, error: "expired", action: view };
   return { ok: false, error: "inactive", action: view };

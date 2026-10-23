@@ -14,7 +14,7 @@ import { appendDictation, spokenText } from "@/lib/voice";
 import { dayKey, dayLabel, parseMessage, plainMessage, timeLabel, type Inline } from "@/lib/chat-format";
 import { NDJSON_CONTENT_TYPE, splitStreamEvents, streamPreview } from "@/lib/chat-stream";
 import { createVoiceConversation, supportsVoiceConversation, type VoicePhase } from "@/lib/speech";
-import { EXPIRED_MESSAGE, type PendingActionView } from "@/lib/agents/pending-action-view";
+import { decidedText, type PendingActionView } from "@/lib/agents/pending-action-view";
 
 type PanelState = { open: boolean; draft: string };
 type ChatEntry = { id: string; role: string; content: string; createdAt: string; references?: PaulReference[]; actions?: PendingActionView[]; pending?: boolean; stopped?: boolean };
@@ -151,14 +151,6 @@ function DaySeparator({ iso }: { iso: string }) {
   );
 }
 
-const DECIDED_TEXT: Record<PendingActionView["status"], string> = {
-  pending: "",
-  confirmed: "C’est enregistré.",
-  cancelled: "Proposition annulée. Dites à Paul ce qu’il faut corriger.",
-  expired: EXPIRED_MESSAGE,
-  superseded: "Remplacée par une proposition plus récente.",
-};
-
 /** Carte de confirmation rendue depuis l'intention enregistrée, jamais depuis le texte de Paul. */
 function PendingActionCard({ action, busy, error, onDecide }: { action: PendingActionView; busy: boolean; error: string | null; onDecide: (decision: Decision) => void }) {
   const decided = action.status !== "pending";
@@ -170,7 +162,7 @@ function PendingActionCard({ action, busy, error, onDecide }: { action: PendingA
       </ul>
       {decided ? (
         <p role="status" className={`mt-3 flex items-center gap-1.5 ${action.status === "confirmed" ? "text-emerald-700" : "text-slate-600"}`}>
-          {action.status === "confirmed" && <CheckIcon className="h-4 w-4" />}{DECIDED_TEXT[action.status]}
+          {action.status === "confirmed" && <CheckIcon className="h-4 w-4" />}{decidedText(action.status, action.type)}
         </p>
       ) : (
         <div className="mt-3 flex flex-wrap items-center gap-3">
