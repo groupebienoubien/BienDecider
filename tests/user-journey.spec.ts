@@ -1330,6 +1330,8 @@ test("Paul's objective card is confirmed in one click and stays confirmed in the
   const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }) });
   try {
     const { attachPendingActions, createPendingAction, toPendingActionView } = await import("../src/lib/agents/pending-actions");
+    // L'entreprise de test a déjà un objectif chiffré : la carte doit le laisser intact jusqu'au clic.
+    const before = (await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).revenueTarget;
     const card = await createPendingAction(company.id, "update_objective", {
       revenueTarget: 200000, targetPeriod: "year", currentRevenue: 140000, currentPeriod: "year", averageClientValue: 18000, newClients: 6, newClientsPeriod: "year",
     });
@@ -1349,7 +1351,7 @@ test("Paul's objective card is confirmed in one click and stays confirmed in the
     const cardGroup = panel.getByRole("group", { name: "Proposition de Paul à confirmer" });
     for (const line of view.lines) await expect(cardGroup.getByText(line, { exact: true })).toBeVisible();
     // Rien n'est écrit avant le clic.
-    expect((await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).revenueTarget).toBeNull();
+    expect((await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).revenueTarget).toBe(before);
 
     await cardGroup.getByRole("button", { name: "Confirmer" }).click();
     await expect(cardGroup.getByText("C’est enregistré.")).toBeVisible();
