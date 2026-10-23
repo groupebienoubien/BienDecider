@@ -13,6 +13,9 @@ import { buildOutreachDraft, dayToDate, formatDay, hasPlaceholders, leadReadines
 import { describeRunProgress, finishedRunMessage, formatDuration, recentSucceededRuns, runResultHref } from "../src/lib/agent-run-progress";
 import { groupPlanItems, planItemStatusView } from "../src/lib/action-plan-view";
 import { facebookAuditSource } from "../src/lib/facebook-audit-source";
+import { businessTargetLines, clientGapLabel, clientsToMonthly, computeBusinessTarget, toMonthly } from "../src/lib/business-target";
+import { PROFILE_PAGE_ONLY_MESSAGE, decidedText, launchPlanItemPayloadSchema, describePendingAction, expiredMessage, mergeProfilePayloads, objectiveUpdateValues, profileUpdateToolSchema, profileUpdateValues, readProfileToolInput, toPendingActionView, updateObjectivePayloadSchema, updateProfilePayloadSchema } from "../src/lib/agents/pending-action-view";
+import { PROFILE_TEXT_LIMITS, clearableText, profileTextIssue } from "../src/lib/company-profile";
 
 test("risk rules use registered kinds and contextual factors, then fail closed", () => {
   expect(assessActionRisk("piste_croissance").level).toBe("modere");
@@ -341,4 +344,184 @@ test("the results story groups by week and never mixes channel proof with owner 
   expect(weeks[1].items.find((item) => item.kind === "diffusion")?.text).toBe("Post publié sur Facebook : Post du lundi");
   // « Sans suite » n'est pas un résultat ; une publication n'est jamais transformée en vente.
   expect(weeks.flatMap((week) => week.items).some((item) => item.text.includes("Régie B"))).toBe(false);
+});
+
+/** Les montants formatés en français utilisent des espaces insécables : comparés après normalisation. */
+const spaces = (text: string) => text.replace(/\s/g, " ");
+const ANNUAL_OBJECTIVE = { targetPeriod: "year", revenueTarget: 200000, currentRevenue: 140000, currentPeriod: "year", averageClientValue: 18000, newClients: 6, newClientsPeriod: "year" } as const;
+
+test("an annual objective is converted to monthly values by the code, rounded to the euro", () => {
+  expect(toMonthly(200000, "year")).toBe(16667);
+  expect(toMonthly(140000, "year")).toBe(11667);
+  expect(toMonthly(5000, "month")).toBe(5000);
+  expect(clientsToMonthly(6, "year")).toBe(0.5);
+  expect(clientsToMonthly(3, "month")).toBe(3);
+  const values = objectiveUpdateValues(ANNUAL_OBJECTIVE);
+  expect(values).toMatchObject({ revenueTarget: 16667, monthlyRevenue: 11667, averageClientValue: 18000, newClientsPerMonth: 0.5 });
+  expect(spaces(values.objective)).toBe("Passer de 140 000 € à 200 000 € de chiffre d'affaires par an");
+  expect(spaces(objectiveUpdateValues({ targetPeriod: "month", revenueTarget: 10000 }).objective)).toBe("Atteindre 10 000 € de chiffre d'affaires par mois");
+  // Un champ non dit n'est pas écrit.
+  expect(Object.keys(objectiveUpdateValues({ targetPeriod: "month", revenueTarget: 10000 })).sort()).toEqual(["objective", "revenueTarget"]);
+});
+
+test("the objective card lists the converted values, from the recorded intention only", () => {
+  const card = describePendingAction({ type: "update_objective", payload: ANNUAL_OBJECTIVE });
+  expect(card?.confirmLabel).toBe("Confirmer");
+  expect(card?.lines.map(spaces)).toEqual(["16 667 €/mois visés", "11 667 €/mois actuels", "18 000 € par client", "0,5 client/mois aujourd'hui"]);
+  // Une intention sans période ou d'un type inconnu ne donne pas de carte.
+  expect(updateObjectivePayloadSchema.safeParse({ revenueTarget: 200000 }).success).toBe(false);
+  expect(describePendingAction({ type: "update_objective", payload: { revenueTarget: 200000 } })).toBeNull();
+  expect(describePendingAction({ type: "inconnu", payload: ANNUAL_OBJECTIVE })).toBeNull();
+});
+
+test("a pending card past its 24 hours is shown expired", () => {
+  const now = new Date("2026-10-23T12:00:00Z");
+  const base = { id: "a1", type: "update_objective", payload: ANNUAL_OBJECTIVE };
+  expect(toPendingActionView({ ...base, status: "pending", expiresAt: new Date("2026-10-23T11:59:59Z") }, now)?.status).toBe("expired");
+  expect(toPendingActionView({ ...base, status: "pending", expiresAt: new Date("2026-10-24T11:00:00Z") }, now)?.status).toBe("pending");
+  expect(toPendingActionView({ ...base, status: "confirmed", expiresAt: new Date("2026-10-23T11:00:00Z") }, now)?.status).toBe("confirmed");
+});
+
+test("the client gap is computed per year and per month without rounding up, shown per year under one client a month", () => {
+  const company = { monthlyRevenue: 11667, revenueTarget: 16667, averageClientValue: 18000, newClientsPerMonth: 0.5, targetDate: null };
+  const target = computeBusinessTarget(company)!;
+  expect(target.gap).toBe(5000);
+  expect(target.extraClientsPerYear).toBe(3.3);
+  expect(target.extraClientsPerMonth).toBe(0.3);
+  expect(clientGapLabel(target)).toEqual({ count: 3.3, period: "year", text: "environ 3,3 clients de plus par an" });
+  // À partir d'un client par mois, l'écart reste affiché par mois.
+  const monthly = computeBusinessTarget({ ...company, revenueTarget: 11667 + 36000 })!;
+  expect(monthly.extraClientsPerMonth).toBe(2);
+  expect(clientGapLabel(monthly)?.text).toBe("environ 2 clients de plus par mois");
+  expect(computeBusinessTarget({ ...company, averageClientValue: null })?.extraClientsPerYear).toBeNull();
+  // Paul cite ces chiffres calculés, jamais les siens.
+  const lines = spaces(businessTargetLines(company));
+  expect(lines).toContain("environ 3,3 nouveaux clients supplémentaires par an, soit 0,3 par mois");
+  expect(lines).toContain("rythme actuel déclaré : 0,5/mois");
+});
+
+test("each amount keeps its own period, with an optional deadline stored at the end of the month", () => {
+  const values = objectiveUpdateValues({ revenueTarget: 200000, targetPeriod: "year", currentRevenue: 12000, currentPeriod: "month", newClients: 2, newClientsPeriod: "month", targetDate: "2027-06" });
+  expect(values).toMatchObject({ revenueTarget: 16667, monthlyRevenue: 12000, newClientsPerMonth: 2 });
+  expect(values.targetDate?.toISOString()).toBe("2027-06-30T00:00:00.000Z");
+  expect(spaces(values.objective)).toBe("Passer de 12 000 € par mois à 200 000 € par an de chiffre d'affaires d'ici juin 2027");
+  expect(describePendingAction({ type: "update_objective", payload: { revenueTarget: 200000, targetPeriod: "year", targetDate: "2027-06" } })?.lines).toContain("Échéance : juin 2027");
+  // Un montant sans sa période, une échéance mal formée ou un montant qui arrondit sous 1 € est refusé.
+  for (const payload of [
+    { revenueTarget: 200000, targetPeriod: "year", currentRevenue: 12000 },
+    { revenueTarget: 200000, targetPeriod: "year", newClients: 2 },
+    { revenueTarget: 200000, targetPeriod: "year", targetDate: "2027-13" },
+    { revenueTarget: 5, targetPeriod: "year" },
+    { revenueTarget: 200000, targetPeriod: "year", currentRevenue: 0.4, currentPeriod: "month" },
+    { revenueTarget: 200000, targetPeriod: "year", averageClientValue: 0.4 },
+    { revenueTarget: 2_000_000_000, targetPeriod: "year" },
+  ]) {
+    expect(updateObjectivePayloadSchema.safeParse(payload).success, JSON.stringify(payload)).toBe(false);
+  }
+});
+
+test("the client gap picks month or year on the exact value and never shows zero clients", () => {
+  // 0,96 client par mois : arrondi à 1, mais affiché par an.
+  const almostOne = computeBusinessTarget({ monthlyRevenue: 10000, revenueTarget: 10960, averageClientValue: 1000, newClientsPerMonth: null, targetDate: null })!;
+  expect(almostOne.extraClientsPerMonth).toBe(1);
+  expect(clientGapLabel(almostOne)?.text).toBe("environ 11,5 clients de plus par an");
+  // Écart positif mais minuscule : jamais « environ 0 client ».
+  const tiny = computeBusinessTarget({ monthlyRevenue: 10000, revenueTarget: 10001, averageClientValue: 100000, newClientsPerMonth: null, targetDate: null })!;
+  expect(tiny.extraClientsPerYear).toBe(0);
+  expect(clientGapLabel(tiny)?.text).toBe("moins de 0,1 client de plus par an");
+  expect(spaces(businessTargetLines({ monthlyRevenue: 10000, revenueTarget: 10001, averageClientValue: 100000, newClientsPerMonth: null, targetDate: null }))).toContain("moins de 0,1 nouveau client supplémentaire par an");
+});
+
+test("an Instagram account given to Paul becomes a profile card with the Entreprise page label", () => {
+  const card = describePendingAction({ type: "update_profile", payload: { socialHandles: "@atelierlumen.nantes" } });
+  expect(card).toEqual({ title: "Enregistrer dans votre profil", lines: ["Compte Instagram ou Facebook : @atelierlumen.nantes"], confirmLabel: "Confirmer", cancelLabel: "Corriger" });
+  expect(profileUpdateValues({ socialHandles: "@atelierlumen.nantes" })).toEqual({ socialHandles: "@atelierlumen.nantes" });
+});
+
+test("one profile card carries several fields, one line each, cleaned like the Entreprise page", () => {
+  const payload = { website: " https://atelierlumen.fr ", openingHours: "Lun-ven 8h-18h" };
+  expect(describePendingAction({ type: "update_profile", payload })?.lines).toEqual(["Site web : https://atelierlumen.fr", "Horaires d'ouverture : Lun-ven 8h-18h"]);
+  expect(profileUpdateValues(payload)).toEqual({ website: "https://atelierlumen.fr", openingHours: "Lun-ven 8h-18h" });
+  // Texte vide = champ effacé, comme sur la page Entreprise.
+  expect(profileUpdateValues({ phone: "  " })).toEqual({ phone: null });
+  expect(describePendingAction({ type: "update_profile", payload: { phone: "" } })?.lines).toEqual(["Téléphone affiché aux clients : (effacé)"]);
+  expect(clearableText("  ")).toBeNull();
+  expect(clearableText(undefined)).toBeUndefined();
+  expect(expiredMessage("update_profile")).toContain("profil");
+  expect(expiredMessage("update_objective")).toBe("Cette proposition a expiré. Redites votre objectif à Paul.");
+  expect(expiredMessage("inconnu")).toBe("Cette proposition a expiré. Redites votre demande à Paul.");
+  expect(decidedText("expired", "update_profile")).toBe(expiredMessage("update_profile"));
+  expect(decidedText("pending", "update_profile")).toBe("");
+  // Une nouvelle carte reprend les champs de la précédente ; ses valeurs l'emportent.
+  expect(mergeProfilePayloads({ socialHandles: "@a", website: "https://ancien.fr" }, { website: "https://atelierlumen.fr" }))
+    .toEqual({ socialHandles: "@a", website: "https://atelierlumen.fr" });
+});
+
+test("Paul's profile tool rejects the business name, trade and serving area", () => {
+  for (const forbidden of [{ name: "Autre nom" }, { trade: "Plombier" }, { servingArea: "Lyon" }]) {
+    // L'outil accepte la saisie (pas d'erreur brute du SDK) ; la clé est écartée et signalée à Paul.
+    const input = profileUpdateToolSchema.parse(forbidden);
+    expect(readProfileToolInput(input), JSON.stringify(forbidden)).toEqual({ payload: {}, pageOnly: true });
+    expect(updateProfilePayloadSchema.safeParse(forbidden).success, JSON.stringify(forbidden)).toBe(false);
+  }
+  // Les champs admis passent, null = non fourni.
+  const mixed = profileUpdateToolSchema.parse({ website: "https://a.fr", phone: null, name: "Autre nom" });
+  expect(readProfileToolInput(mixed)).toEqual({ payload: { website: "https://a.fr" }, pageOnly: true });
+  expect(PROFILE_PAGE_ONLY_MESSAGE).toBe("Nom commercial, métier et zone se modifient sur la page Entreprise.");
+  // Une carte vide n'a pas de sens.
+  expect(updateProfilePayloadSchema.safeParse({}).success).toBe(false);
+  expect(describePendingAction({ type: "update_profile", payload: { name: "Autre nom" } })).toBeNull();
+});
+
+test("a profile text over the Entreprise page limit gives no card and a readable error", () => {
+  const tooLong = "a".repeat(PROFILE_TEXT_LIMITS.description + 1);
+  // L'outil accepte la saisie, pour que la vérification renvoie un message lisible à Paul.
+  expect(profileUpdateToolSchema.safeParse({ description: tooLong }).success).toBe(true);
+  const parsed = updateProfilePayloadSchema.safeParse({ description: tooLong });
+  expect(parsed.success).toBe(false);
+  expect(parsed.error?.issues[0].message).toContain("limité à 2000 caractères");
+  expect(updateProfilePayloadSchema.safeParse({ description: "a".repeat(PROFILE_TEXT_LIMITS.description) }).success).toBe(true);
+  // Même règle que la page Entreprise.
+  expect(profileTextIssue("description", tooLong)).toBe("too_long");
+  expect(profileTextIssue("phone", "0".repeat(101))).toBe("too_long");
+  expect(profileTextIssue("website", 42)).toBe("not_text");
+  expect(profileTextIssue("website", null)).toBeNull();
+  // Rogné, puis mesuré : des espaces autour ne font pas dépasser la limite.
+  expect(profileTextIssue("phone", ` ${"0".repeat(100)} `)).toBeNull();
+});
+
+const LAUNCH_PAYLOAD = { planItemId: "item-1", agent: "demarchage", title: "Pistes de croissance du quartier", outcome: "Trois pistes de clients à contacter" } as const;
+
+test("a launch card reads « Lancer {agent} : {titre} » with Lancer and Plus tard, from the recorded intention only", () => {
+  expect(describePendingAction({ type: "launch_plan_item", payload: LAUNCH_PAYLOAD })).toEqual({
+    title: "Lancer Jean-Claude : Pistes de croissance du quartier", lines: ["Trois pistes de clients à contacter"], confirmLabel: "Lancer", cancelLabel: "Plus tard",
+  });
+  // Un agent hors plan ou une action sans identifiant ne donne pas de carte.
+  expect(describePendingAction({ type: "launch_plan_item", payload: { ...LAUNCH_PAYLOAD, agent: "co_ceo" } })).toBeNull();
+  expect(launchPlanItemPayloadSchema.safeParse({ ...LAUNCH_PAYLOAD, planItemId: "" }).success).toBe(false);
+  // Actualité et description de prospects plafonnées à 1 000 caractères.
+  expect(launchPlanItemPayloadSchema.safeParse({ ...LAUNCH_PAYLOAD, extras: { prospectDescription: "a".repeat(1000) } }).success).toBe(true);
+  expect(launchPlanItemPayloadSchema.safeParse({ ...LAUNCH_PAYLOAD, extras: { newsContext: "a".repeat(1001) } }).success).toBe(false);
+});
+
+test("a launch card that reuses an action already in the plan says so before the expected result", () => {
+  expect(describePendingAction({ type: "launch_plan_item", payload: { ...LAUNCH_PAYLOAD, reused: true } })?.lines).toEqual([
+    "Je reprends l'action déjà au plan.", "Trois pistes de clients à contacter",
+  ]);
+  expect(launchPlanItemPayloadSchema.safeParse({ ...LAUNCH_PAYLOAD, reused: false }).success).toBe(false);
+});
+
+test("a decided launch card shows the launch result in plain words, Plus tard keeps the action to launch", () => {
+  const base = { id: "l1", type: "launch_plan_item", expiresAt: new Date("2026-10-24T12:00:00Z") };
+  const now = new Date("2026-10-23T12:00:00Z");
+  expect(toPendingActionView({ ...base, status: "pending", payload: LAUNCH_PAYLOAD }, now)).not.toHaveProperty("result");
+  const refused = { ok: false, reason: "quota_runs", message: "Le quota journalier de lancements est atteint." } as const;
+  const view = toPendingActionView({ ...base, status: "confirmed", payload: { ...LAUNCH_PAYLOAD, result: refused } }, now)!;
+  expect(view.result).toEqual(refused);
+  expect(decidedText(view.status, view.type, view.result)).toBe(refused.message);
+  // Confirmée sans résultat connu : texte neutre, jamais « lancé ».
+  expect(decidedText("confirmed", "launch_plan_item")).toBe("Lancement en cours de vérification…");
+  expect(decidedText("cancelled", "launch_plan_item")).toContain("reste dans votre plan, à lancer");
+  expect(decidedText("cancelled", "update_objective")).toContain("corriger");
+  expect(expiredMessage("launch_plan_item")).toContain("plan");
 });

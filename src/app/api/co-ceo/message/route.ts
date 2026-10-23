@@ -29,7 +29,7 @@ export async function POST(request: NextRequest) {
     const reservation = await reserveUsageBudget(company.id, "co_ceo_chat");
     if (!request.headers.get("accept")?.includes(NDJSON_CONTENT_TYPE)) {
       const reply = await runCoCeoTurn(company.id, parsed.data.message, reservation.id, pageContext);
-      return NextResponse.json({ reply: reply.content, references: reply.references });
+      return NextResponse.json({ reply: reply.content, references: reply.references, actions: reply.actions });
     }
 
     // Réponse en flux : si le client se déconnecte, le tour continue et la réponse est quand même enregistrée.
@@ -44,7 +44,7 @@ export async function POST(request: NextRequest) {
             onTurnStart: () => send({ type: "reset" }),
             onText: (text) => send({ type: "delta", text }),
           });
-          send({ type: "done", reply: reply.content, references: reply.references });
+          send({ type: "done", reply: reply.content, references: reply.references, actions: reply.actions });
         } catch (error) {
           console.error("Erreur Co-CEO:", error);
           const reason = classifyRunError(error) ?? "outage";

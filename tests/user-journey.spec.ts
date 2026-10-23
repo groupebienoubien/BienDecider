@@ -36,7 +36,17 @@ const test = base.extend<{ company: Company }>({
       await page.route("**/api/agents/**", (route) => route.fulfill({ status: 503, json: { error: "Agent indisponible pour le test" } }));
       await runFixture(company);
     } finally {
-      await prisma.company.delete({ where: { id: company.id } });
+      // L'audit d'inscription tourne en arrière-plan (story 1.3) : la suppression peut croiser ses écritures (P2034).
+      for (let attempt = 1; ; attempt++) {
+        try {
+          await prisma.company.delete({ where: { id: company.id } });
+          break;
+        } catch (error) {
+          const conflict = typeof error === "object" && error !== null && "code" in error && error.code === "P2034";
+          if (!conflict || attempt >= 5) throw error;
+          await new Promise((resolve) => setTimeout(resolve, 200));
+        }
+      }
       await prisma.$disconnect();
     }
   },
@@ -1322,6 +1332,104 @@ test("agents request only missing profile details and wait for successful partia
     await dialog.getByRole("button", { name: "Continuer sans complément" }).click();
     await expect(page.getByRole("status")).toContainText("Demande traitée");
     expect(agentCalls).toBe(2);
+  } finally {
+    await prisma.$disconnect();
+  }
+});
+test("Paul's objective card is confirmed in one click and stays confirmed in the history", async ({ page, company }) => {
+  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }) });
+  try {
+    const { attachPendingActions, createPendingAction, toPendingActionView } = await import("../src/lib/agents/pending-actions");
+    // L'entreprise de test a déjà un objectif chiffré : la carte doit le laisser intact jusqu'au clic.
+    const before = (await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).revenueTarget;
+    const card = await createPendingAction(company.id, "update_objective", {
+      revenueTarget: 200000, targetPeriod: "year", currentRevenue: 140000, currentPeriod: "year", averageClientValue: 18000, newClients: 6, newClientsPeriod: "year",
+    });
+    const view = toPendingActionView(card)!;
+    await page.route("**/api/co-ceo/message", (route) => route.fulfill({
+      status: 200,
+      contentType: "application/x-ndjson; charset=utf-8",
+      body: `${JSON.stringify({ type: "done", reply: "Voici votre objectif, à confirmer.", references: [], actions: [view] })}\n`,
+    }));
+
+    await page.goto(`${baseURL}/dashboard`);
+    await page.getByRole("button", { name: "Échanger avec Paul", exact: true }).click();
+    const panel = page.getByRole("dialog", { name: "Discussion avec Paul" });
+    const input = panel.getByLabel("Message à Paul");
+    await input.fill("Je veux passer de 140 000 à 200 000 € par an.");
+    await input.press("Enter");
+    const cardGroup = panel.getByRole("group", { name: "Proposition de Paul à confirmer" });
+    for (const line of view.lines) await expect(cardGroup.getByText(line, { exact: true })).toBeVisible();
+    // Rien n'est écrit avant le clic.
+    expect((await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).revenueTarget).toBe(before);
+
+    await cardGroup.getByRole("button", { name: "Confirmer" }).click();
+    await expect(cardGroup.getByText("C’est enregistré.")).toBeVisible();
+    await expect.poll(async () => (await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).revenueTarget).toBe(16667);
+
+    // Le tour réel rattache la carte au message de Paul : l'historique la montre confirmée après rechargement.
+    const message = await prisma.chatMessage.create({ data: { companyId: company.id, role: "assistant", content: "Voici votre objectif, à confirmer." } });
+    await attachPendingActions(company.id, [card.id], message.id);
+    await page.unroute("**/api/co-ceo/message");
+    await page.reload();
+    if (!(await panel.isVisible())) await page.getByRole("button", { name: "Échanger avec Paul", exact: true }).click();
+    await expect(panel.getByRole("group", { name: "Proposition de Paul à confirmer" }).getByText("C’est enregistré.")).toBeVisible();
+    await expect(panel.getByRole("button", { name: "Confirmer" })).toHaveCount(0);
+  } finally {
+    await prisma.$disconnect();
+  }
+});
+
+test("an expired profile card shows its expired message instead of the buttons", async ({ page, company }) => {
+  const { expiredMessage, toPendingActionView } = await import("../src/lib/agents/pending-action-view");
+  const view = toPendingActionView({ id: `expired-profile-${company.id}`, type: "update_profile", status: "expired", payload: { socialHandles: "@atelierlumen.nantes" }, expiresAt: new Date(Date.now() - 1000) })!;
+  await page.route("**/api/co-ceo/message", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/x-ndjson; charset=utf-8",
+    body: `${JSON.stringify({ type: "done", reply: "Voici votre profil, à confirmer.", references: [], actions: [view] })}\n`,
+  }));
+  await page.goto(`${baseURL}/dashboard`);
+  await page.getByRole("button", { name: "Échanger avec Paul", exact: true }).click();
+  const panel = page.getByRole("dialog", { name: "Discussion avec Paul" });
+  const input = panel.getByLabel("Message à Paul");
+  await input.fill("Mon Instagram est @atelierlumen.nantes");
+  await input.press("Enter");
+  const cardGroup = panel.getByRole("group", { name: "Proposition de Paul à confirmer" });
+  await expect(cardGroup.getByText("Compte Instagram ou Facebook : @atelierlumen.nantes", { exact: true })).toBeVisible();
+  await expect(cardGroup.getByRole("status")).toHaveText(expiredMessage("update_profile"));
+  await expect(cardGroup.getByRole("button", { name: "Confirmer" })).toHaveCount(0);
+});
+
+test("Paul's panel is titled Partenaire de croissance and a launch card offers Lancer or Plus tard", async ({ page, company }) => {
+  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }) });
+  try {
+    const { createPendingAction, toPendingActionView } = await import("../src/lib/agents/pending-actions");
+    const item = await prisma.actionPlanItem.create({ data: {
+      companyId: company.id, agent: "demarchage", title: "Pistes de croissance du quartier", rationale: "Demandé à Paul.", outcome: "Trois pistes de clients à contacter", timing: "Demandé dans le chat",
+    } });
+    const card = await createPendingAction(company.id, "launch_plan_item", { planItemId: item.id, agent: "demarchage", title: item.title, outcome: item.outcome! });
+    const view = toPendingActionView(card)!;
+    await page.route("**/api/co-ceo/message", (route) => route.fulfill({
+      status: 200,
+      contentType: "application/x-ndjson; charset=utf-8",
+      body: `${JSON.stringify({ type: "done", reply: "Je vous propose de lancer Jean-Claude.", references: [], actions: [view] })}\n`,
+    }));
+
+    await page.goto(`${baseURL}/dashboard`);
+    await page.getByRole("button", { name: "Échanger avec Paul", exact: true }).click();
+    const panel = page.getByRole("dialog", { name: "Discussion avec Paul" });
+    await expect(panel.locator("header")).toContainText("Partenaire de croissance");
+    const input = panel.getByLabel("Message à Paul");
+    await input.fill("Lance Jean-Claude sur les pistes du quartier");
+    await input.press("Enter");
+    const cardGroup = panel.getByRole("group", { name: "Proposition de Paul à confirmer" });
+    await expect(cardGroup.getByText("Lancer Jean-Claude : Pistes de croissance du quartier", { exact: true })).toBeVisible();
+    await expect(cardGroup.getByRole("button", { name: "Lancer" })).toBeVisible();
+
+    await cardGroup.getByRole("button", { name: "Plus tard" }).click();
+    await expect(cardGroup.getByRole("status")).toContainText("reste dans votre plan, à lancer");
+    expect((await prisma.actionPlanItem.findUniqueOrThrow({ where: { id: item.id } })).status).toBe("propose");
+    expect(await prisma.agentRun.count({ where: { planItemId: item.id } })).toBe(0);
   } finally {
     await prisma.$disconnect();
   }

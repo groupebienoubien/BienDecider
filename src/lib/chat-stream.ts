@@ -1,5 +1,6 @@
 import type { PaulReference } from "@/lib/paul-references";
 import type { RunFailureReason } from "@/lib/agents/agent-errors";
+import type { PendingActionView } from "@/lib/agents/pending-action-view";
 
 export const NDJSON_CONTENT_TYPE = "application/x-ndjson";
 
@@ -7,7 +8,7 @@ export const NDJSON_CONTENT_TYPE = "application/x-ndjson";
 export type PaulStreamEvent =
   | { type: "delta"; text: string }
   | { type: "reset" }
-  | { type: "done"; reply: string; references: PaulReference[] }
+  | { type: "done"; reply: string; references: PaulReference[]; actions?: PendingActionView[] }
   | { type: "error"; error: string; reason?: RunFailureReason };
 
 export function encodeStreamEvent(event: PaulStreamEvent): string {
@@ -19,7 +20,9 @@ function isStreamEvent(value: unknown): value is PaulStreamEvent {
   const event = value as Record<string, unknown>;
   if (event.type === "delta") return typeof event.text === "string";
   if (event.type === "reset") return true;
-  if (event.type === "done") return typeof event.reply === "string" && Array.isArray(event.references);
+  if (event.type === "done") {
+    return typeof event.reply === "string" && Array.isArray(event.references) && (event.actions === undefined || Array.isArray(event.actions));
+  }
   return event.type === "error" && typeof event.error === "string";
 }
 

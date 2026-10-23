@@ -6,7 +6,7 @@ import { AppShell } from "@/components/app-shell";
 import { Icon } from "@/components/icon";
 import { AgentByline, EmptyState, PageHeading, SectionTitle, Tag } from "@/components/mockup-ui";
 import { getShellProps } from "@/lib/shell-data";
-import { computeBusinessTarget, formatEuros } from "@/lib/business-target";
+import { clientGapLabel, computeBusinessTarget, formatDecimal, formatEuros } from "@/lib/business-target";
 import { buildResultsTimeline } from "@/lib/results-timeline";
 
 export const dynamic = "force-dynamic";
@@ -47,6 +47,7 @@ export default async function RapportPage() {
     since,
   );
   const target = computeBusinessTarget(company);
+  const clientGap = target ? clientGapLabel(target) : null;
 
   return (
     <AppShell {...await getShellProps(company)}>
@@ -63,7 +64,7 @@ export default async function RapportPage() {
             <div className="metric"><div className="metric-label">CA mensuel déclaré</div><div className="metric-value">{formatEuros(target.current)}</div></div>
             <div className="metric"><div className="metric-label">CA mensuel visé</div><div className="metric-value">{formatEuros(target.target)}</div></div>
             <div className="metric"><div className="metric-label">Écart à combler</div><div className="metric-value">{formatEuros(Math.max(0, target.gap))}</div></div>
-            <div className="metric"><div className="metric-label">Clients supplémentaires / mois</div><div className="metric-value">{target.extraClientsPerMonth ?? "Non renseigné"}</div></div>
+            <div className="metric"><div className="metric-label">Clients supplémentaires / {clientGap?.period === "year" ? "an" : "mois"}</div><div className="metric-value">{clientGap ? (clientGap.count === 0 ? "moins de 0,1" : formatDecimal(clientGap.count)) : "Non renseigné"}</div></div>
           </div>
         ) : <EmptyState agent="co_ceo" title="Aucun objectif chiffré renseigné" says="Donnez-moi un chiffre d’affaires à atteindre et je suivrai l’écart avec vous."><Link className="btn primary" href="/entreprise?tab=objectifs#modifier">Renseigner mon objectif chiffré</Link></EmptyState>}
       </section>

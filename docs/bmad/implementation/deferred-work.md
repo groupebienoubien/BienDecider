@@ -28,3 +28,24 @@
 - source_spec: `docs/bmad/implementation/spec-1-4-une-action-terminee-renvoie-vers-ses-productions.md`
   summary: Aligner docs/maquette/maquette.js sur le vocabulaire « lancer » des actions.
   evidence: la maquette garde « Examiner et valider », « Valider l'action, puis préparer », « À valider ».
+- source_spec: `docs/bmad/implementation/spec-2-1-dire-son-objectif-a-paul-et-le-confirmer.md`
+  summary: Permettre de saisir un rythme de nouveaux clients par an dans la page Entreprise.
+  evidence: le champ n'offre que « par mois » alors que l'objectif peut être annuel.
+- source_spec: `docs/bmad/implementation/spec-2-1-dire-son-objectif-a-paul-et-le-confirmer.md`
+  summary: Purger ou marquer expirées les cartes de Paul anciennes, et contraindre type et statut en base.
+  evidence: expiration seulement à la lecture ; colonnes texte sans contrainte.
+- source_spec: `docs/bmad/implementation/spec-2-2-faire-enregistrer-son-profil-par-paul.md`
+  summary: Vérifier le format du site, du téléphone et du compte social avant de les enregistrer.
+  evidence: une phrase ou « atelierlumen point fr » serait enregistrée telle quelle puis transmise aux agents.
+- source_spec: `docs/bmad/implementation/spec-2-3-paul-propose-le-lancement.md`
+  summary: Supprimer ou signaler les actions de plan créées par un tour de Paul qui a échoué avant la carte.
+  evidence: cancelOrphanPendingActions annule la carte mais laisse l'action « à lancer ».
+- source_spec: `docs/bmad/implementation/spec-2-3-paul-propose-le-lancement.md`
+  summary: Tester dans le panneau le rendu d'un lancement refusé (pas de coche verte).
+  evidence: l'expression succeeded n'existe que dans le composant ; les textes sont couverts par les tests unitaires.
+- source_spec: `docs/bmad/implementation/spec-2-4-pas-d-action-en-double.md`
+  summary: Appliquer la règle « une action active par agent et par thème » à la génération du plan, à POST /api/action-plan et à l'audit d'inscription.
+  evidence: seule createChatPlanItem la vérifie ; la spec excluait le plan généré par Paul.
+- source_spec: `docs/bmad/implementation/spec-2-4-pas-d-action-en-double.md`
+  summary: Index (companyId, agent, theme, status) sur ActionPlanItem et test de concurrence déterministe.
+  evidence: lecture sérialisable sans index ; le test Promise.all ne prouve pas le chevauchement.

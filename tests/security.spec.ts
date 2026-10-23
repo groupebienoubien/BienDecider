@@ -34,6 +34,7 @@ const GUARDED_ROUTES: Guarded[] = [
   { method: "POST", path: "/api/co-ceo/message", denied: 401 },
   { method: "GET", path: "/api/co-ceo/messages", denied: 401 },
   { method: "GET", path: "/api/co-ceo/plan", denied: 401 },
+  { method: "POST", path: "/api/co-ceo/pending-actions/[id]", denied: 401 },
   { method: "POST", path: "/api/co-ceo/plan", denied: 401 },
   { method: "GET", path: "/api/companies", denied: 401 },
   { method: "POST", path: "/api/companies", denied: 401 },
@@ -300,6 +301,9 @@ test("malformed or oversized input gets a clear 4xx, never a server error", asyn
   const company = await prisma.company.create({ data: { ownerEmail: email, name: "Input Test", trade: "Artisan", servingArea: "Paris" } });
   const planItem = await prisma.actionPlanItem.create({ data: { companyId: company.id, agent: "marketing", title: "Action", rationale: "Raison", timing: "bientôt" } });
   const proposal = await prisma.agentProposal.create({ data: { companyId: company.id, agent: "contenu", kind: "social_post", title: "Post", content: "Contenu" } });
+  const card = await prisma.paulPendingAction.create({ data: {
+    companyId: company.id, type: "update_objective", payload: { targetPeriod: "year", revenueTarget: 200000 }, expiresAt: new Date(Date.now() + 3_600_000),
+  } });
   const cookie = sessionCookie(email, company.sessionVersion);
   const send = (method: string, path: string, body: string, authenticated = true) => request.fetch(`${baseURL}${path}`, {
     method,
@@ -318,6 +322,7 @@ test("malformed or oversized input gets a clear 4xx, never a server error", asyn
       ["POST", "/api/companies/direction"],
       ["POST", "/api/companies/outreach"],
       ["PATCH", `/api/proposals/${proposal.id}`],
+      ["POST", `/api/co-ceo/pending-actions/${card.id}`],
     ];
     for (const [method, path, authenticated] of targets) {
       for (const body of ["pas du json", "null", "[]", "\"texte\"", "42"]) {
@@ -339,6 +344,8 @@ test("malformed or oversized input gets a clear 4xx, never a server error", asyn
       ["POST", "/api/companies", { name: "Nom", trade: "Artisan", servingArea: "Paris", monthlyRevenue: 5_000_000_000 }],
       ["POST", "/api/companies", { name: "Nom", trade: "Artisan", servingArea: "Paris", description: long(2001) }],
       ["POST", "/api/companies", { name: "Nom", trade: "Artisan", servingArea: "Paris", targetDate: 5 }],
+      ["POST", "/api/companies", { name: "Nom", trade: "Artisan", servingArea: "Paris", newClientsPerMonth: "0.55" }],
+      ["POST", `/api/co-ceo/pending-actions/${card.id}`, { decision: "valider" }],
       ["POST", "/api/companies/direction", { direction: long(2001) }],
       ["PATCH", `/api/proposals/${proposal.id}`, { status: "brouillon", content: long(100_001), expectedVersion: 1 }],
       ["PATCH", `/api/proposals/${proposal.id}`, { leadSource: long(2001) }],
@@ -349,6 +356,10 @@ test("malformed or oversized input gets a clear 4xx, never a server error", asyn
       expect(typeof (await response.json()).error).toBe("string");
     }
     expect(await prisma.company.count({ where: { ownerEmail: { startsWith: "a@example" } } })).toBe(0);
+    // Une carte de Paul ne se confirme pas depuis une autre origine.
+    const forged = await request.post(`${baseURL}/api/co-ceo/pending-actions/${card.id}`, { headers: { Cookie: cookie, Origin: "https://attacker.invalid" }, data: { decision: "confirm" } });
+    expect(forged.status()).toBe(403);
+    expect((await prisma.paulPendingAction.findUniqueOrThrow({ where: { id: card.id } })).status).toBe("pending");
   } finally {
     await prisma.company.delete({ where: { id: company.id } });
     await prisma.$disconnect();

@@ -35,7 +35,7 @@ model Company {
   revenueTarget      Int? // € / mois visés
   targetDate         DateTime?
   averageClientValue Int? // € par client
-  newClientsPerMonth Int?
+  newClientsPerMonth Float? // décimal : un rythme annuel converti (6 par an = 0,5 par mois)
   description     String? // description libre de l'activité et du positionnement — remplace l'ancien champ "tone" figé, injectée dans tous les prompts agents
   phone           String? // téléphone affiché aux clients — utilisé par les agents pour éviter les placeholders "[Votre téléphone]"
   certifications  String? // labels/certifications (ex: RGE, Qualibat) — utile pour la crédibilité locale et le contenu généré
@@ -65,6 +65,7 @@ model Company {
   leads           Lead[]
   uncoveredRequests UncoveredRequest[]
   linkedinAuthorizations LinkedInAuthorization[]
+  paulPendingActions PaulPendingAction[]
 }
 
 model LinkedInAuthorization {
@@ -227,6 +228,26 @@ model ChatMessage {
   role        String // user, assistant
   content     String
   createdAt   DateTime @default(now())
+  pendingActions PaulPendingAction[]
+}
+
+// Intention proposée par Paul (carte de confirmation) : rien n'est écrit ni
+// lancé avant le clic du dirigeant — cf. src/lib/agents/pending-actions.ts.
+model PaulPendingAction {
+  id            String       @id @default(cuid())
+  companyId     String
+  company       Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  chatMessageId String? // message de Paul qui porte la carte, rattaché à la fin du tour
+  chatMessage   ChatMessage? @relation(fields: [chatMessageId], references: [id], onDelete: SetNull)
+  type          String // update_objective (2.2 et 2.3 ajoutent leurs types)
+  payload       Json
+  status        String       @default("pending") // pending, confirmed, cancelled, expired, superseded (remplacée par une plus récente)
+  createdAt     DateTime     @default(now())
+  decidedAt     DateTime?
+  expiresAt     DateTime
+
+  @@index([companyId, status])
+  @@index([chatMessageId])
 }
 
 model AuditFinding {
