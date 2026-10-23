@@ -851,3 +851,150 @@ test("two concurrent onboarding audit starts create one action and one run", asy
   expect(await prisma.actionPlanItem.count({ where: { companyId: company.id, agent: "marketing", timing: ONBOARDING_AUDIT_TIMING } })).toBe(1);
   expect(await prisma.agentRun.count({ where: { companyId: company.id } })).toBe(1);
 });
+
+const ANNUAL_OBJECTIVE_INPUT = { targetPeriod: "year", revenueTarget: 200000, currentRevenue: 140000, currentPeriod: "year", averageClientValue: 18000, newClients: 6, newClientsPeriod: "year" } as const;
+const OBJECTIVE_FIELDS = { revenueTarget: true, monthlyRevenue: true, averageClientValue: true, newClientsPerMonth: true, objective: true } as const;
+
+test("Paul's objective card writes nothing until confirmed, then writes the monthly values once", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { createPendingAction, decidePendingAction } = await import("../src/lib/agents/pending-actions");
+  const action = await createPendingAction(company.id, "update_objective", ANNUAL_OBJECTIVE_INPUT);
+  expect(action).toMatchObject({ status: "pending", type: "update_objective", companyId: company.id });
+  expect(action.expiresAt.getTime() - action.createdAt.getTime()).toBeGreaterThanOrEqual(24 * 60 * 60 * 1000 - 1000);
+  expect(await prisma.company.findUniqueOrThrow({ where: { id: company.id }, select: OBJECTIVE_FIELDS }))
+    .toEqual({ revenueTarget: null, monthlyRevenue: null, averageClientValue: null, newClientsPerMonth: null, objective: null });
+
+  // Double clic : deux confirmations simultanées, une seule écriture, les deux reçoivent l'état confirmé.
+  const results = await Promise.all([
+    decidePendingAction(company.id, action.id, "confirm"),
+    decidePendingAction(company.id, action.id, "confirm"),
+  ]);
+  for (const result of results) {
+    expect(result).toMatchObject({ ok: true, action: { id: action.id, status: "confirmed" } });
+  }
+  const saved = await prisma.company.findUniqueOrThrow({ where: { id: company.id }, select: OBJECTIVE_FIELDS });
+  expect(saved).toMatchObject({ revenueTarget: 16667, monthlyRevenue: 11667, averageClientValue: 18000, newClientsPerMonth: 0.5 });
+  expect(saved.objective?.replace(/\s/g, " ")).toBe("Passer de 140 000 € à 200 000 € de chiffre d'affaires par an");
+  const decided = await prisma.paulPendingAction.findUniqueOrThrow({ where: { id: action.id } });
+  expect(decided.status).toBe("confirmed");
+
+  // Une confirmation tardive ne réécrit pas : l'objectif modifié entre-temps reste tel quel.
+  await prisma.company.update({ where: { id: company.id }, data: { revenueTarget: 20000 } });
+  expect(await decidePendingAction(company.id, action.id, "confirm")).toMatchObject({ ok: true, action: { status: "confirmed" } });
+  expect((await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).revenueTarget).toBe(20000);
+  expect((await prisma.paulPendingAction.findUniqueOrThrow({ where: { id: action.id } })).decidedAt).toEqual(decided.decidedAt);
+});
+
+test("a cancelled card leaves the company unchanged", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { createPendingAction, decidePendingAction } = await import("../src/lib/agents/pending-actions");
+  const action = await createPendingAction(company.id, "update_objective", ANNUAL_OBJECTIVE_INPUT);
+  expect(await decidePendingAction(company.id, action.id, "cancel")).toMatchObject({ ok: true, action: { status: "cancelled" } });
+  // Une carte annulée n'est plus confirmable : refus clair, rien n'est écrit.
+  expect(await decidePendingAction(company.id, action.id, "confirm")).toMatchObject({ ok: false, error: "inactive", action: { status: "cancelled" } });
+  expect((await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).revenueTarget).toBeNull();
+});
+
+test("an expired card is refused, marked expired and writes nothing", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { createPendingAction, decidePendingAction } = await import("../src/lib/agents/pending-actions");
+  const action = await createPendingAction(company.id, "update_objective", ANNUAL_OBJECTIVE_INPUT);
+  await prisma.paulPendingAction.update({ where: { id: action.id }, data: { expiresAt: new Date(Date.now() - 1000) } });
+  expect(await decidePendingAction(company.id, action.id, "confirm")).toMatchObject({ ok: false, error: "expired", action: { status: "expired" } });
+  expect((await prisma.paulPendingAction.findUniqueOrThrow({ where: { id: action.id } })).status).toBe("expired");
+  expect((await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).revenueTarget).toBeNull();
+});
+
+test("a card can only be decided by the company that received it", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { createPendingAction, decidePendingAction } = await import("../src/lib/agents/pending-actions");
+  const action = await createPendingAction(company.id, "update_objective", ANNUAL_OBJECTIVE_INPUT);
+  const other = await prisma.company.create({ data: { ownerEmail: `engine-other-${randomUUID()}@example.invalid`, name: "Autre", trade: "Artisan", servingArea: "Lyon" } });
+  try {
+    expect(await decidePendingAction(other.id, action.id, "confirm")).toEqual({ ok: false, error: "not_found" });
+    expect((await prisma.paulPendingAction.findUniqueOrThrow({ where: { id: action.id } })).status).toBe("pending");
+    expect((await prisma.company.findUniqueOrThrow({ where: { id: other.id } })).revenueTarget).toBeNull();
+  } finally {
+    await prisma.company.delete({ where: { id: other.id } });
+  }
+});
+
+test("the confirmation route answers 404 for another company's card and 409 for an expired one", async ({ company, request }) => {
+  if (!process.env.SESSION_SECRET) throw new Error("SESSION_SECRET is required for engine tests.");
+  const { prisma } = await import("../src/lib/prisma");
+  const { createPendingAction } = await import("../src/lib/agents/pending-actions");
+  const baseURL = process.env.UX_TEST_BASE_URL ?? "http://localhost:3000";
+  const headers = { Cookie: `pepito_session=${createSessionToken(company.ownerEmail, company.sessionVersion, process.env.SESSION_SECRET)}`, Origin: baseURL };
+  const other = await prisma.company.create({ data: { ownerEmail: `engine-other-${randomUUID()}@example.invalid`, name: "Autre", trade: "Artisan", servingArea: "Lyon" } });
+  try {
+    const foreign = await createPendingAction(other.id, "update_objective", ANNUAL_OBJECTIVE_INPUT);
+    const refused = await request.post(`${baseURL}/api/co-ceo/pending-actions/${foreign.id}`, { headers, data: { decision: "confirm" } });
+    expect(refused.status()).toBe(404);
+    expect((await prisma.paulPendingAction.findUniqueOrThrow({ where: { id: foreign.id } })).status).toBe("pending");
+
+    const own = await createPendingAction(company.id, "update_objective", ANNUAL_OBJECTIVE_INPUT);
+    await prisma.paulPendingAction.update({ where: { id: own.id }, data: { expiresAt: new Date(Date.now() - 1000) } });
+    const expired = await request.post(`${baseURL}/api/co-ceo/pending-actions/${own.id}`, { headers, data: { decision: "confirm" } });
+    expect(expired.status()).toBe(409);
+    expect(await expired.json()).toMatchObject({ reason: "expired", error: "Cette proposition a expiré. Redites votre objectif à Paul." });
+  } finally {
+    await prisma.company.delete({ where: { id: other.id } });
+  }
+});
+
+test("a new objective card cancels the previous pending one and both stay attached to Paul's messages", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { attachPendingActions, createPendingAction, pendingActionsByMessage } = await import("../src/lib/agents/pending-actions");
+  const first = await createPendingAction(company.id, "update_objective", ANNUAL_OBJECTIVE_INPUT);
+  const firstMessage = await prisma.chatMessage.create({ data: { companyId: company.id, role: "assistant", content: "Voici la carte." } });
+  await attachPendingActions(company.id, [first.id], firstMessage.id);
+  const second = await createPendingAction(company.id, "update_objective", { ...ANNUAL_OBJECTIVE_INPUT, revenueTarget: 240000 });
+  const secondMessage = await prisma.chatMessage.create({ data: { companyId: company.id, role: "assistant", content: "Carte corrigée." } });
+  const attached = await attachPendingActions(company.id, [second.id], secondMessage.id);
+  expect(attached.map((view) => [view.id, view.status])).toEqual([[second.id, "pending"]]);
+  expect((await prisma.paulPendingAction.findUniqueOrThrow({ where: { id: first.id } })).status).toBe("superseded");
+  const history = await pendingActionsByMessage(company.id, [firstMessage.id, secondMessage.id]);
+  expect(history.get(firstMessage.id)?.map((view) => view.status)).toEqual(["superseded"]);
+  // La carte remplacée n'est plus confirmable.
+  const { decidePendingAction } = await import("../src/lib/agents/pending-actions");
+  expect(await decidePendingAction(company.id, first.id, "confirm")).toMatchObject({ ok: false, error: "inactive", action: { status: "superseded" } });
+  expect((await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).revenueTarget).toBeNull();
+  expect(history.get(secondMessage.id)?.map((view) => view.status)).toEqual(["pending"]);
+});
+
+test("two simultaneous objective cards leave one pending, an expired previous card is marked expired", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { createPendingAction } = await import("../src/lib/agents/pending-actions");
+  const stale = await createPendingAction(company.id, "update_objective", ANNUAL_OBJECTIVE_INPUT);
+  await prisma.paulPendingAction.update({ where: { id: stale.id }, data: { expiresAt: new Date(Date.now() - 1000) } });
+  await Promise.all([
+    createPendingAction(company.id, "update_objective", ANNUAL_OBJECTIVE_INPUT),
+    createPendingAction(company.id, "update_objective", { ...ANNUAL_OBJECTIVE_INPUT, revenueTarget: 240000 }),
+  ]);
+  expect(await prisma.paulPendingAction.count({ where: { companyId: company.id, status: "pending" } })).toBe(1);
+  expect(await prisma.paulPendingAction.count({ where: { companyId: company.id, status: "superseded" } })).toBe(1);
+  expect((await prisma.paulPendingAction.findUniqueOrThrow({ where: { id: stale.id } })).status).toBe("expired");
+});
+
+test("cards created during a failed turn are cancelled, attached ones are kept", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { attachPendingActions, cancelOrphanPendingActions, createPendingAction } = await import("../src/lib/agents/pending-actions");
+  const orphan = await createPendingAction(company.id, "update_objective", ANNUAL_OBJECTIVE_INPUT);
+  await cancelOrphanPendingActions(company.id, [orphan.id]);
+  expect((await prisma.paulPendingAction.findUniqueOrThrow({ where: { id: orphan.id } })).status).toBe("cancelled");
+  const kept = await createPendingAction(company.id, "update_objective", ANNUAL_OBJECTIVE_INPUT);
+  const message = await prisma.chatMessage.create({ data: { companyId: company.id, role: "assistant", content: "Carte." } });
+  await attachPendingActions(company.id, [kept.id], message.id);
+  await cancelOrphanPendingActions(company.id, [kept.id]);
+  expect((await prisma.paulPendingAction.findUniqueOrThrow({ where: { id: kept.id } })).status).toBe("pending");
+});
+
+test("the Entreprise page stores a decimal rhythm of new clients, with a French comma", async ({ company, request }) => {
+  if (!process.env.SESSION_SECRET) throw new Error("SESSION_SECRET is required for engine tests.");
+  const { prisma } = await import("../src/lib/prisma");
+  const baseURL = process.env.UX_TEST_BASE_URL ?? "http://localhost:3000";
+  const headers = { Cookie: `pepito_session=${createSessionToken(company.ownerEmail, company.sessionVersion, process.env.SESSION_SECRET)}`, Origin: baseURL };
+  const response = await request.post(`${baseURL}/api/companies`, { headers, data: { ...ONBOARDING_PROFILE, newClientsPerMonth: "0,5" } });
+  expect(response.status()).toBe(201);
+  expect((await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).newClientsPerMonth).toBe(0.5);
+});

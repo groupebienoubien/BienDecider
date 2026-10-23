@@ -281,6 +281,8 @@ export function CompanyProfileForm({ guided = false, embedded = false, initialTa
                     id="profile-new-clients"
                     type="number"
                     min={0}
+                    step={0.1}
+                    inputMode="decimal"
                     placeholder="Nouveaux clients par mois aujourd'hui"
                     value={newClientsPerMonth}
                     onChange={(e) => setNewClientsPerMonth(e.target.value)}

@@ -28,3 +28,9 @@
 - source_spec: `docs/bmad/implementation/spec-1-4-une-action-terminee-renvoie-vers-ses-productions.md`
   summary: Aligner docs/maquette/maquette.js sur le vocabulaire « lancer » des actions.
   evidence: la maquette garde « Examiner et valider », « Valider l'action, puis préparer », « À valider ».
+- source_spec: `docs/bmad/implementation/spec-2-1-dire-son-objectif-a-paul-et-le-confirmer.md`
+  summary: Permettre de saisir un rythme de nouveaux clients par an dans la page Entreprise.
+  evidence: le champ n'offre que « par mois » alors que l'objectif peut être annuel.
+- source_spec: `docs/bmad/implementation/spec-2-1-dire-son-objectif-a-paul-et-le-confirmer.md`
+  summary: Purger ou marquer expirées les cartes de Paul anciennes, et contraindre type et statut en base.
+  evidence: expiration seulement à la lecture ; colonnes texte sans contrainte.

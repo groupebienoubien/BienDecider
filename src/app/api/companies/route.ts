@@ -81,11 +81,19 @@ export async function POST(request: NextRequest) {
   const trade = (rawTrade as string).trim();
   const servingArea = (rawServingArea as string).trim();
 
-  const amounts = { monthlyRevenue, revenueTarget, averageClientValue, newClientsPerMonth };
+  const amounts = { monthlyRevenue, revenueTarget, averageClientValue };
   for (const [key, value] of Object.entries(amounts)) {
     if (value == null || value === "") continue;
     if ((typeof value !== "number" && typeof value !== "string") || !Number.isInteger(Number(value)) || Number(value) < 0 || Number(value) > MAX_AMOUNT) {
       return NextResponse.json({ error: `${key} doit être un entier positif (${MAX_AMOUNT.toLocaleString("fr-FR")} maximum)` }, { status: 400 });
+    }
+  }
+  // Le rythme de nouveaux clients accepte une décimale (6 par an = 0,5 par mois) ; la virgule française est acceptée.
+  const clientsRate = typeof newClientsPerMonth === "string" ? newClientsPerMonth.trim().replace(",", ".") : newClientsPerMonth;
+  if (clientsRate != null && clientsRate !== "") {
+    const rate = Number(clientsRate);
+    if ((typeof clientsRate !== "number" && typeof clientsRate !== "string") || !Number.isFinite(rate) || rate < 0 || rate > MAX_AMOUNT || Math.abs(Math.round(rate * 10) - rate * 10) > 1e-9) {
+      return NextResponse.json({ error: `newClientsPerMonth doit être un nombre positif avec une décimale au plus (${MAX_AMOUNT.toLocaleString("fr-FR")} maximum)` }, { status: 400 });
     }
   }
   const optionalTextFields = { website, socialHandles, objective, description, phone, certifications, openingHours };
@@ -126,7 +134,7 @@ export async function POST(request: NextRequest) {
     revenueTarget: toInt(revenueTarget),
     targetDate: parsedTargetDate,
     averageClientValue: toInt(averageClientValue),
-    newClientsPerMonth: toInt(newClientsPerMonth),
+    newClientsPerMonth: toInt(clientsRate),
   };
 
   // L'inscription crée la ligne sans profil (nom vide) : la première création du profil est ce passage-là.

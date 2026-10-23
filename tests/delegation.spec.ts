@@ -13,6 +13,8 @@ import { buildOutreachDraft, dayToDate, formatDay, hasPlaceholders, leadReadines
 import { describeRunProgress, finishedRunMessage, formatDuration, recentSucceededRuns, runResultHref } from "../src/lib/agent-run-progress";
 import { groupPlanItems, planItemStatusView } from "../src/lib/action-plan-view";
 import { facebookAuditSource } from "../src/lib/facebook-audit-source";
+import { businessTargetLines, clientGapLabel, clientsToMonthly, computeBusinessTarget, toMonthly } from "../src/lib/business-target";
+import { describePendingAction, objectiveUpdateValues, toPendingActionView, updateObjectivePayloadSchema } from "../src/lib/agents/pending-action-view";
 
 test("risk rules use registered kinds and contextual factors, then fail closed", () => {
   expect(assessActionRisk("piste_croissance").level).toBe("modere");
@@ -341,4 +343,90 @@ test("the results story groups by week and never mixes channel proof with owner 
   expect(weeks[1].items.find((item) => item.kind === "diffusion")?.text).toBe("Post publié sur Facebook : Post du lundi");
   // « Sans suite » n'est pas un résultat ; une publication n'est jamais transformée en vente.
   expect(weeks.flatMap((week) => week.items).some((item) => item.text.includes("Régie B"))).toBe(false);
+});
+
+/** Les montants formatés en français utilisent des espaces insécables : comparés après normalisation. */
+const spaces = (text: string) => text.replace(/\s/g, " ");
+const ANNUAL_OBJECTIVE = { targetPeriod: "year", revenueTarget: 200000, currentRevenue: 140000, currentPeriod: "year", averageClientValue: 18000, newClients: 6, newClientsPeriod: "year" } as const;
+
+test("an annual objective is converted to monthly values by the code, rounded to the euro", () => {
+  expect(toMonthly(200000, "year")).toBe(16667);
+  expect(toMonthly(140000, "year")).toBe(11667);
+  expect(toMonthly(5000, "month")).toBe(5000);
+  expect(clientsToMonthly(6, "year")).toBe(0.5);
+  expect(clientsToMonthly(3, "month")).toBe(3);
+  const values = objectiveUpdateValues(ANNUAL_OBJECTIVE);
+  expect(values).toMatchObject({ revenueTarget: 16667, monthlyRevenue: 11667, averageClientValue: 18000, newClientsPerMonth: 0.5 });
+  expect(spaces(values.objective)).toBe("Passer de 140 000 € à 200 000 € de chiffre d'affaires par an");
+  expect(spaces(objectiveUpdateValues({ targetPeriod: "month", revenueTarget: 10000 }).objective)).toBe("Atteindre 10 000 € de chiffre d'affaires par mois");
+  // Un champ non dit n'est pas écrit.
+  expect(Object.keys(objectiveUpdateValues({ targetPeriod: "month", revenueTarget: 10000 })).sort()).toEqual(["objective", "revenueTarget"]);
+});
+
+test("the objective card lists the converted values, from the recorded intention only", () => {
+  const card = describePendingAction({ type: "update_objective", payload: ANNUAL_OBJECTIVE });
+  expect(card?.confirmLabel).toBe("Confirmer");
+  expect(card?.lines.map(spaces)).toEqual(["16 667 €/mois visés", "11 667 €/mois actuels", "18 000 € par client", "0,5 client/mois aujourd'hui"]);
+  // Une intention sans période ou d'un type inconnu ne donne pas de carte.
+  expect(updateObjectivePayloadSchema.safeParse({ revenueTarget: 200000 }).success).toBe(false);
+  expect(describePendingAction({ type: "update_objective", payload: { revenueTarget: 200000 } })).toBeNull();
+  expect(describePendingAction({ type: "inconnu", payload: ANNUAL_OBJECTIVE })).toBeNull();
+});
+
+test("a pending card past its 24 hours is shown expired", () => {
+  const now = new Date("2026-10-23T12:00:00Z");
+  const base = { id: "a1", type: "update_objective", payload: ANNUAL_OBJECTIVE };
+  expect(toPendingActionView({ ...base, status: "pending", expiresAt: new Date("2026-10-23T11:59:59Z") }, now)?.status).toBe("expired");
+  expect(toPendingActionView({ ...base, status: "pending", expiresAt: new Date("2026-10-24T11:00:00Z") }, now)?.status).toBe("pending");
+  expect(toPendingActionView({ ...base, status: "confirmed", expiresAt: new Date("2026-10-23T11:00:00Z") }, now)?.status).toBe("confirmed");
+});
+
+test("the client gap is computed per year and per month without rounding up, shown per year under one client a month", () => {
+  const company = { monthlyRevenue: 11667, revenueTarget: 16667, averageClientValue: 18000, newClientsPerMonth: 0.5, targetDate: null };
+  const target = computeBusinessTarget(company)!;
+  expect(target.gap).toBe(5000);
+  expect(target.extraClientsPerYear).toBe(3.3);
+  expect(target.extraClientsPerMonth).toBe(0.3);
+  expect(clientGapLabel(target)).toEqual({ count: 3.3, period: "year", text: "environ 3,3 clients de plus par an" });
+  // À partir d'un client par mois, l'écart reste affiché par mois.
+  const monthly = computeBusinessTarget({ ...company, revenueTarget: 11667 + 36000 })!;
+  expect(monthly.extraClientsPerMonth).toBe(2);
+  expect(clientGapLabel(monthly)?.text).toBe("environ 2 clients de plus par mois");
+  expect(computeBusinessTarget({ ...company, averageClientValue: null })?.extraClientsPerYear).toBeNull();
+  // Paul cite ces chiffres calculés, jamais les siens.
+  const lines = spaces(businessTargetLines(company));
+  expect(lines).toContain("environ 3,3 nouveaux clients supplémentaires par an, soit 0,3 par mois");
+  expect(lines).toContain("rythme actuel déclaré : 0,5/mois");
+});
+
+test("each amount keeps its own period, with an optional deadline stored at the end of the month", () => {
+  const values = objectiveUpdateValues({ revenueTarget: 200000, targetPeriod: "year", currentRevenue: 12000, currentPeriod: "month", newClients: 2, newClientsPeriod: "month", targetDate: "2027-06" });
+  expect(values).toMatchObject({ revenueTarget: 16667, monthlyRevenue: 12000, newClientsPerMonth: 2 });
+  expect(values.targetDate?.toISOString()).toBe("2027-06-30T00:00:00.000Z");
+  expect(spaces(values.objective)).toBe("Passer de 12 000 € par mois à 200 000 € par an de chiffre d'affaires d'ici juin 2027");
+  expect(describePendingAction({ type: "update_objective", payload: { revenueTarget: 200000, targetPeriod: "year", targetDate: "2027-06" } })?.lines).toContain("Échéance : juin 2027");
+  // Un montant sans sa période, une échéance mal formée ou un montant qui arrondit sous 1 € est refusé.
+  for (const payload of [
+    { revenueTarget: 200000, targetPeriod: "year", currentRevenue: 12000 },
+    { revenueTarget: 200000, targetPeriod: "year", newClients: 2 },
+    { revenueTarget: 200000, targetPeriod: "year", targetDate: "2027-13" },
+    { revenueTarget: 5, targetPeriod: "year" },
+    { revenueTarget: 200000, targetPeriod: "year", currentRevenue: 0.4, currentPeriod: "month" },
+    { revenueTarget: 200000, targetPeriod: "year", averageClientValue: 0.4 },
+    { revenueTarget: 2_000_000_000, targetPeriod: "year" },
+  ]) {
+    expect(updateObjectivePayloadSchema.safeParse(payload).success, JSON.stringify(payload)).toBe(false);
+  }
+});
+
+test("the client gap picks month or year on the exact value and never shows zero clients", () => {
+  // 0,96 client par mois : arrondi à 1, mais affiché par an.
+  const almostOne = computeBusinessTarget({ monthlyRevenue: 10000, revenueTarget: 10960, averageClientValue: 1000, newClientsPerMonth: null, targetDate: null })!;
+  expect(almostOne.extraClientsPerMonth).toBe(1);
+  expect(clientGapLabel(almostOne)?.text).toBe("environ 11,5 clients de plus par an");
+  // Écart positif mais minuscule : jamais « environ 0 client ».
+  const tiny = computeBusinessTarget({ monthlyRevenue: 10000, revenueTarget: 10001, averageClientValue: 100000, newClientsPerMonth: null, targetDate: null })!;
+  expect(tiny.extraClientsPerYear).toBe(0);
+  expect(clientGapLabel(tiny)?.text).toBe("moins de 0,1 client de plus par an");
+  expect(spaces(businessTargetLines({ monthlyRevenue: 10000, revenueTarget: 10001, averageClientValue: 100000, newClientsPerMonth: null, targetDate: null }))).toContain("moins de 0,1 nouveau client supplémentaire par an");
 });

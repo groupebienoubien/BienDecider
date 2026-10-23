@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import type { ReactNode } from "react";
-import { formatEuros, type BusinessTarget } from "@/lib/business-target";
+import { clientGapLabel, formatEuros, type BusinessTarget } from "@/lib/business-target";
 import type { WeeklyDelta } from "@/lib/funnel";
 import { openPaul } from "@/lib/paul-context";
 import { Icon } from "@/components/icon";
@@ -42,6 +42,7 @@ export function ObjectiveHero({ objective, progress, dateLabel, actions }: { obj
     );
   }
 
+  const clientGap = target ? clientGapLabel(target) : null;
   const ratio = target && target.target > 0 ? Math.min(1, Math.max(0, target.current / target.target)) : null;
   return (
     <section className="objective-hero" aria-label="Mon objectif">
@@ -52,7 +53,7 @@ export function ObjectiveHero({ objective, progress, dateLabel, actions }: { obj
         <div className="objective-progress">
           <div className="objective-progress-text">
             <span>Chiffre d’affaires mensuel déclaré : <strong>{formatEuros(target.current)}</strong> sur <strong>{formatEuros(target.target)}</strong> visés</span>
-            {target.extraClientsPerMonth !== null && <small>Écart : environ {plural(target.extraClientsPerMonth, "client")} de plus par mois</small>}
+            {clientGap && <small>Écart : {clientGap.text}</small>}
           </div>
           <progress value={Math.round(ratio * 100)} max={100} aria-label={`Chiffre d’affaires déclaré : ${Math.round(ratio * 100)} % de l’objectif`} />
         </div>

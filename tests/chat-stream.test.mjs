@@ -28,3 +28,11 @@ test("the live preview never shows a link marker, even a partial one", () => {
   }
   assert.equal(streamPreview("Un [lien] normal"), "Un [lien] normal");
 });
+
+test("the final event carries Paul's confirmation cards", () => {
+  const action = { id: "a1", type: "update_objective", status: "pending", title: "Enregistrer votre objectif", lines: ["16 667 €/mois visés"], confirmLabel: "Confirmer", expiresAt: "2026-10-24T12:00:00.000Z" };
+  const { events } = splitStreamEvents(encodeStreamEvent({ type: "done", reply: "Voici la carte.", references: [], actions: [action] }));
+  assert.deepEqual(events, [{ type: "done", reply: "Voici la carte.", references: [], actions: [action] }]);
+  // Des cartes illisibles rendent l'évènement invalide.
+  assert.deepEqual(splitStreamEvents('{"type":"done","reply":"ok","references":[],"actions":"non"}\n').events, []);
+});

@@ -16,6 +16,8 @@ import { CAPABILITY_CATALOG, recordUncoveredRequest } from "@/lib/agents/capabil
 import { getChatInstructionsForPlan, loadRecentChatHistory } from "@/lib/agents/chat-context";
 import { getTeamState } from "@/lib/team-state";
 import { resolvePaulReferences } from "@/lib/paul-references";
+import { attachPendingActions, cancelOrphanPendingActions, createPendingAction, recentPendingActions } from "@/lib/agents/pending-actions";
+import { MAX_AMOUNT, updateObjectivePayloadSchema } from "@/lib/agents/pending-action-view";
 
 const PERSONA = PERSONAS.co_ceo;
 
@@ -44,7 +46,7 @@ function uncoveredRequestTool(companyId: string, source: "chat" | "plan") {
  * de getTeamState, la lecture unique partagée avec le menu et l'accueil.
  */
 export async function buildCurrentStatus(companyId: string) {
-  const [teamState, funnel, pending, findings, leads] = await Promise.all([
+  const [teamState, funnel, pending, findings, leads, cards] = await Promise.all([
     getTeamState(companyId),
     getFunnelStats(companyId),
     prisma.agentProposal.findMany({
@@ -62,6 +64,7 @@ export async function buildCurrentStatus(companyId: string) {
       take: 10,
       select: { id: true, name: true, stage: true },
     }),
+    recentPendingActions(companyId),
   ]);
   return {
     planEnCours: teamState.actions,
@@ -82,6 +85,9 @@ export async function buildCurrentStatus(companyId: string) {
       content: f.content,
     })),
     prospectsSuivis: leads,
+    // Dernières cartes proposées par Paul : pending = à confirmer, confirmed = enregistrée, cancelled = refusée
+    // par le dirigeant, superseded = remplacée par une plus récente, expired = non décidée sous 24 h.
+    cartesRecentes: cards,
   };
 }
 
@@ -291,10 +297,43 @@ export async function runCoCeoTurn(
     run: async (input) => JSON.stringify(await delegatePlanAction(companyId, "demarchage", input, { prospectDescription: input.prospectDescription })),
   });
 
+  // Intentions créées pendant ce tour : rattachées au message de Paul enregistré à la fin.
+  const createdActionIds: string[] = [];
+  let objectiveCardProposed = false;
+
+  // Le schéma de l'outil reste permissif : les bornes sont celles de la carte (safeParse ci-dessous),
+  // pour qu'un montant hors bornes donne un message lisible à Paul au lieu de faire échouer le tour.
+  const proposeObjectiveUpdate = betaZodTool({
+    name: "propose_objective_update",
+    description:
+      "Propose au dirigeant d'enregistrer son objectif de chiffre d'affaires : crée une carte de confirmation sous ta réponse, rien n'est enregistré avant son clic sur « Confirmer ». Passe chaque montant exactement tel qu'il l'a dit, avec la période dans laquelle il l'a dit (month ou year) : le code fait la conversion au mois. Une seule carte par réponse. N'appelle pas cet outil si la période de l'objectif n'est pas connue : demande d'abord « par mois ou par an ? ».",
+    inputSchema: z.object({
+      revenueTarget: z.number().describe(`Chiffre d'affaires visé, en euros, tel que dit par le dirigeant (entre 1 et ${MAX_AMOUNT.toLocaleString("fr-FR")})`),
+      targetPeriod: z.enum(["month", "year"]).describe("Période de l'objectif : month (par mois) ou year (par an)"),
+      currentRevenue: z.number().optional().describe("Chiffre d'affaires actuel, en euros, tel que dit — omettre s'il ne l'a pas dit"),
+      currentPeriod: z.enum(["month", "year"]).optional().describe("Période du chiffre d'affaires actuel — obligatoire avec currentRevenue"),
+      averageClientValue: z.number().optional().describe("Ce que rapporte un client en tout, en euros (sans période) — omettre s'il ne l'a pas dit"),
+      newClients: z.number().optional().describe("Nombre de nouveaux clients actuels, tel que dit — omettre s'il ne l'a pas dit"),
+      newClientsPeriod: z.enum(["month", "year"]).optional().describe("Période du nombre de nouveaux clients — obligatoire avec newClients"),
+      targetDate: z.string().optional().describe("Échéance de l'objectif au format AAAA-MM, si le dirigeant l'a donnée — omettre sinon"),
+    }),
+    run: async (input) => {
+      if (objectiveCardProposed) return "Une carte d'objectif est déjà proposée dans cette réponse : rien de plus n'a été proposé.";
+      const parsed = updateObjectivePayloadSchema.safeParse(input);
+      if (!parsed.success) {
+        return `Aucune carte créée : ${parsed.error.issues.map((issue) => issue.message).join(" ; ")}. Vérifie les montants et leurs périodes avec le dirigeant.`;
+      }
+      const action = await createPendingAction(companyId, "update_objective", parsed.data);
+      createdActionIds.push(action.id);
+      objectiveCardProposed = true;
+      return "Carte de confirmation affichée sous ta réponse. Rien n'est enregistré tant que le dirigeant n'a pas cliqué sur « Confirmer » : dis-le-lui, sans citer de montant converti.";
+    },
+  });
+
   const runnerParams: BetaToolRunnerParams = {
     model: AGENT_MODEL,
     max_tokens: 2000,
-    tools: [getCurrentStatus, delegateMarketing, delegateContenu, delegateDemarchage, recordUncovered],
+    tools: [getCurrentStatus, proposeObjectiveUpdate, delegateMarketing, delegateContenu, delegateDemarchage, recordUncovered],
     system: [
       {
         type: "text",
@@ -321,37 +360,46 @@ Règles strictes, non négociables :
 - Pour déléguer à Contenu (sans actualité) ou Démarchage (sans cible), tu peux le faire sans information — les agents proposeront leurs propres idées génériques. Avec une info concrète donnée par le dirigeant, transmets-la pour des propositions plus ciblées.
 - Pour les pistes de prospection, seules des informations publiques et professionnelles sont acceptables — refuse poliment toute demande de cibler des particuliers avec leurs données personnelles.
 - Quand tu cites explicitement une production, un constat ou un prospect présent dans get_current_status ou dans le contexte de page, ajoute immédiatement après son nom le marqueur fourni [[bd:proposal:ID]], [[bd:finding:ID]] ou [[bd:lead:ID]]. Reprends uniquement un identifiant exact de ces données; ne crée jamais d'identifiant, de lien ou d'URL. N'ajoute pas de marqueur pour un objet absent de ces données.
+- Quand le dirigeant te donne son objectif de chiffre d'affaires (et éventuellement son chiffre actuel, la valeur d'un client, ses nouveaux clients, une échéance), appelle propose_objective_update : c'est lui qui confirme d'un clic sur la carte, tu n'enregistres rien toi-même et tu ne dis pas que c'est enregistré. Chaque montant garde la période dans laquelle il l'a dit (« 12 000 € par mois aujourd'hui, 200 000 € par an visés » : currentPeriod month, targetPeriod year) ; ne convertis rien toi-même. S'il ne précise pas la période de l'objectif, demande-lui « par mois ou par an ? » avant d'appeler l'outil. S'il ne donne pas son chiffre d'affaires actuel, demande-le aussi : sans lui, l'écart ne peut pas être calculé. S'il veut corriger, propose une nouvelle carte : elle remplace la précédente. cartesRecentes (get_current_status) te dit ce que sont devenues tes cartes.
+- Ne calcule jamais toi-même un chiffre que tu affiches (conversion au mois, écart, nombre de clients nécessaires) : cite uniquement les chiffres calculés donnés plus haut dans ce message système. S'ils sont absents, dis que l'objectif chiffré n'est pas encore enregistré.
 - Réponds de façon brève et directe, comme un vrai point rapide entre dirigeants, pas un rapport formel.`,
       },
     ],
     messages,
   };
-  const { finalMessage, usage } = stream
-    ? await runStreamingToolLoop(anthropic.beta.messages.toolRunner({ ...runnerParams, stream: true as const }), stream)
-    : await runToolLoop(anthropic.beta.messages.toolRunner({ ...runnerParams, stream: false as const }));
+  try {
+    const { finalMessage, usage } = stream
+      ? await runStreamingToolLoop(anthropic.beta.messages.toolRunner({ ...runnerParams, stream: true as const }), stream)
+      : await runToolLoop(anthropic.beta.messages.toolRunner({ ...runnerParams, stream: false as const }));
 
-  const assistantText = finalMessage.content
-    .filter((block): block is Anthropic.TextBlock => block.type === "text")
-    .map((block) => block.text)
-    .join("\n")
-    .trim();
+    const assistantText = finalMessage.content
+      .filter((block): block is Anthropic.TextBlock => block.type === "text")
+      .map((block) => block.text)
+      .join("\n")
+      .trim();
 
-  const savedReply = assistantText || "(pas de réponse textuelle — vérifiez le dashboard pour les nouvelles propositions)";
-  const [resolvedReply] = await resolvePaulReferences(companyId, [savedReply]);
+    const savedReply = assistantText || "(pas de réponse textuelle — vérifiez le dashboard pour les nouvelles propositions)";
+    const [resolvedReply] = await resolvePaulReferences(companyId, [savedReply]);
 
-  await recordUsage({
-    companyId: company.id,
-    reservationId,
-    agent: "co_ceo",
-    model: AGENT_MODEL,
-    usage,
-  });
+    await recordUsage({
+      companyId: company.id,
+      reservationId,
+      agent: "co_ceo",
+      model: AGENT_MODEL,
+      usage,
+    });
 
-  await prisma.chatMessage.create({
-    data: { companyId, role: "assistant", content: resolvedReply.content },
-  });
+    const savedMessage = await prisma.chatMessage.create({
+      data: { companyId, role: "assistant", content: resolvedReply.content },
+    });
+    const actions = await attachPendingActions(companyId, createdActionIds, savedMessage.id);
 
-  return resolvedReply;
+    return { ...resolvedReply, actions };
+  } catch (error) {
+    // Un tour qui échoue après avoir créé une carte ne la laisse pas en attente sans message.
+    await cancelOrphanPendingActions(companyId, createdActionIds).catch((cleanupError) => console.error("Annulation des cartes du tour échoué :", cleanupError));
+    throw error;
+  }
 }
 
 /**

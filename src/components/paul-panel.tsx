@@ -14,10 +14,12 @@ import { appendDictation, spokenText } from "@/lib/voice";
 import { dayKey, dayLabel, parseMessage, plainMessage, timeLabel, type Inline } from "@/lib/chat-format";
 import { NDJSON_CONTENT_TYPE, splitStreamEvents, streamPreview } from "@/lib/chat-stream";
 import { createVoiceConversation, supportsVoiceConversation, type VoicePhase } from "@/lib/speech";
+import { EXPIRED_MESSAGE, type PendingActionView } from "@/lib/agents/pending-action-view";
 
 type PanelState = { open: boolean; draft: string };
-type ChatEntry = { id: string; role: string; content: string; createdAt: string; references?: PaulReference[]; pending?: boolean; stopped?: boolean };
-type Reply = { content: string; references: PaulReference[] };
+type ChatEntry = { id: string; role: string; content: string; createdAt: string; references?: PaulReference[]; actions?: PendingActionView[]; pending?: boolean; stopped?: boolean };
+type Reply = { content: string; references: PaulReference[]; actions: PendingActionView[] };
+type Decision = "confirm" | "cancel";
 
 const subscribeNothing = () => () => undefined;
 const SUGGESTIONS = ["Où en est mon plan d'action ?", "Que dois-je décider aujourd'hui ?", "Quelle est ma priorité cette semaine ?"];
@@ -149,6 +151,42 @@ function DaySeparator({ iso }: { iso: string }) {
   );
 }
 
+const DECIDED_TEXT: Record<PendingActionView["status"], string> = {
+  pending: "",
+  confirmed: "C’est enregistré.",
+  cancelled: "Proposition annulée. Dites à Paul ce qu’il faut corriger.",
+  expired: EXPIRED_MESSAGE,
+  superseded: "Remplacée par une proposition plus récente.",
+};
+
+/** Carte de confirmation rendue depuis l'intention enregistrée, jamais depuis le texte de Paul. */
+function PendingActionCard({ action, busy, error, onDecide }: { action: PendingActionView; busy: boolean; error: string | null; onDecide: (decision: Decision) => void }) {
+  const decided = action.status !== "pending";
+  return (
+    <div className={`mt-3 rounded-2xl border p-3 text-sm ${decided ? "border-slate-200 bg-slate-50 text-slate-700" : "border-emerald-200 bg-white text-slate-800"}`} aria-label="Proposition de Paul à confirmer" role="group">
+      <p className="font-semibold text-slate-900">{action.title}</p>
+      <ul className="mt-2 list-disc space-y-0.5 pl-5">
+        {action.lines.map((line) => <li key={line}>{line}</li>)}
+      </ul>
+      {decided ? (
+        <p role="status" className={`mt-3 flex items-center gap-1.5 ${action.status === "confirmed" ? "text-emerald-700" : "text-slate-600"}`}>
+          {action.status === "confirmed" && <CheckIcon className="h-4 w-4" />}{DECIDED_TEXT[action.status]}
+        </p>
+      ) : (
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          <button type="button" disabled={busy} onClick={() => onDecide("confirm")} className="min-h-11 rounded-full bg-emerald-600 px-4 font-medium text-white hover:bg-emerald-700 disabled:opacity-60">
+            {action.confirmLabel}
+          </button>
+          <button type="button" disabled={busy} onClick={() => onDecide("cancel")} className="min-h-11 px-1 text-slate-700 underline underline-offset-2 disabled:opacity-60">
+            Corriger
+          </button>
+        </div>
+      )}
+      {error && <p role="alert" className="mt-2 text-red-800">{error}</p>}
+    </div>
+  );
+}
+
 /** Lit la réponse en flux : le texte s'affiche au fur et à mesure, la réponse finale (liens résolus) fait foi. */
 async function readReplyStream(body: ReadableStream<Uint8Array>, onLive: (text: string) => void): Promise<Reply> {
   const reader = body.getReader();
@@ -165,7 +203,7 @@ async function readReplyStream(body: ReadableStream<Uint8Array>, onLive: (text: 
       for (const event of parsed.events) {
         if (event.type === "reset") { live = ""; onLive(""); }
         else if (event.type === "delta") { live += event.text; onLive(streamPreview(live)); }
-        else if (event.type === "done") result = { content: event.reply, references: event.references };
+        else if (event.type === "done") result = { content: event.reply, references: event.references, actions: event.actions ?? [] };
         else throw new Error(event.error);
       }
       if (done) break;
@@ -190,6 +228,8 @@ export function PaulPanel() {
   const [voiceMessage, setVoiceMessage] = useState<string | null>(null);
   const [wide, setWide] = useState(false);
   const [atBottom, setAtBottom] = useState(true);
+  const [deciding, setDeciding] = useState<string | null>(null);
+  const [actionErrors, setActionErrors] = useState<Record<string, string>>({});
   const voiceSupported = useSyncExternalStore(subscribeNothing, supportsVoiceConversation, () => false);
   const toggleRef = useRef<HTMLButtonElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -292,9 +332,9 @@ export function PaulPanel() {
       } else {
         const data = await response.json().catch(() => null);
         if (!response.ok) throw new Error(data?.error ?? "Paul n'a pas pu répondre. Votre message est conservé : réessayez.");
-        reply = { content: data.reply, references: Array.isArray(data.references) ? data.references : [] };
+        reply = { content: data.reply, references: Array.isArray(data.references) ? data.references : [], actions: Array.isArray(data.actions) ? data.actions : [] };
       }
-      updatePending({ content: reply.content, references: reply.references, pending: false });
+      updatePending({ content: reply.content, references: reply.references, actions: reply.actions, pending: false });
       router.refresh();
       return spokenText(reply.content, reply.references);
     } catch (sendError) {
@@ -315,6 +355,39 @@ export function PaulPanel() {
   }
 
   useEffect(() => { submitRef.current = submit; });
+
+  // Clic sur une carte : « Confirmer » enregistre côté serveur, « Corriger » annule et rend la main à la saisie.
+  async function decide(actionId: string, decision: Decision) {
+    if (deciding) return;
+    setDeciding(actionId);
+    setActionErrors((previous) => {
+      const rest = { ...previous };
+      delete rest[actionId];
+      return rest;
+    });
+    const replaceAction = (next: PendingActionView) => setMessages((previous) => previous.map((entry) => (
+      entry.actions?.some((action) => action.id === next.id)
+        ? { ...entry, actions: entry.actions.map((action) => (action.id === next.id ? next : action)) }
+        : entry
+    )));
+    try {
+      const response = await fetch(`/api/co-ceo/pending-actions/${encodeURIComponent(actionId)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ decision }),
+      });
+      const data = await response.json().catch(() => null);
+      if (data?.action) replaceAction(data.action as PendingActionView);
+      // Un refus qui renvoie la carte (expirée, remplacée…) se lit sur la carte elle-même.
+      if (!response.ok && !data?.action) throw new Error(data?.error ?? "La décision n'a pas pu être enregistrée. Réessayez.");
+      if (response.ok && decision === "confirm") router.refresh();
+      if (decision === "cancel") inputRef.current?.focus();
+    } catch (decideError) {
+      setActionErrors((previous) => ({ ...previous, [actionId]: decideError instanceof Error ? decideError.message : "La décision n'a pas pu être enregistrée. Réessayez." }));
+    } finally {
+      setDeciding(null);
+    }
+  }
 
   function send(event: React.FormEvent) {
     event.preventDefault();
@@ -432,6 +505,9 @@ export function PaulPanel() {
                             <MessageBody content={message.content} references={message.references} streaming={message.pending} />
                           )}
                           {message.stopped && <p className="mt-1 text-sm italic text-slate-600">Génération arrêtée.</p>}
+                          {message.actions?.map((action) => (
+                            <PendingActionCard key={action.id} action={action} busy={deciding !== null} error={actionErrors[action.id] ?? null} onDecide={(decision) => void decide(action.id, decision)} />
+                          ))}
                           {!message.pending && message.content && (
                             <div className="-ml-3 mt-1 flex items-center">
                               <CopyButton text={plainMessage(message.content, message.references)} label={`Copier la réponse de ${persona.name}`} />
