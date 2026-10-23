@@ -75,6 +75,8 @@ context:
 
 ## Spec Change Log
 
+- 2026-10-24, après la CI : le test « l'onboarding guidé commence avec trois champs » (choix de la refonte UX) échouait avec le champ du nom. Le champ n'est plus affiché dans l'onboarding guidé ; il reste dans la page Entreprise et la carte de profil de Paul, et Paul le demande dès qu'un email est en jeu. KEEP : le nettoyage du nom et sa présence dans `runtimeContextLines`.
+
 ## Review Triage Log
 
 | # | Source | Constat | Verdict | Preuve | Route |

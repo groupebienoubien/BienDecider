@@ -327,21 +327,24 @@ export function CompanyProfileForm({ guided = false, embedded = false, initialTa
            
           />
 
-          <label htmlFor="profile-owner-name" className="field">
-            {PROFILE_FIELD_LABELS.ownerName} (facultatif)
-            <input
-              id="profile-owner-name"
-              autoComplete="name"
-              aria-describedby="profile-owner-name-help"
-              maxLength={PROFILE_TEXT_LIMITS.ownerName}
-              placeholder="ex: Samuel Morel"
-              value={ownerName}
-              onChange={(e) => setOwnerName(e.target.value)}
-            />
-          </label>
-          <p id="profile-owner-name-help" className="-mt-1 text-xs text-slate-600">
-            Vos agents signent de ce nom les emails qu&apos;ils préparent pour vous.
-          </p>
+          {/* L'onboarding guidé garde ses trois champs (refonte UX) : le nom se saisit dans Entreprise ou via Paul, qui le demande dès qu'un email est en jeu. */}
+          {!guided && <>
+            <label htmlFor="profile-owner-name" className="field">
+              {PROFILE_FIELD_LABELS.ownerName} (facultatif)
+              <input
+                id="profile-owner-name"
+                autoComplete="name"
+                aria-describedby="profile-owner-name-help"
+                maxLength={PROFILE_TEXT_LIMITS.ownerName}
+                placeholder="ex: Samuel Morel"
+                value={ownerName}
+                onChange={(e) => setOwnerName(e.target.value)}
+              />
+            </label>
+            <p id="profile-owner-name-help" className="-mt-1 text-xs text-slate-600">
+              Vos agents signent de ce nom les emails qu&apos;ils préparent pour vous.
+            </p>
+          </>}
 
           {!guided && <>
             <label htmlFor="profile-description" className="field">
