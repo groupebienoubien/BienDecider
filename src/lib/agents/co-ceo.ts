@@ -148,7 +148,7 @@ function notLaunchableResult(agent: PlanAgent): DelegationResult {
 async function launchItem(
   companyId: string,
   agent: PlanAgent,
-  item: Awaited<ReturnType<typeof createChatPlanItem>>,
+  item: Awaited<ReturnType<typeof createChatPlanItem>>["item"],
   extras: LaunchExtras,
   launchedMessage: string,
 ): Promise<DelegationResult> {
@@ -212,12 +212,17 @@ export async function delegatePlanAction(
   if (input.planItemId) {
     const running = await alreadyRunningResult(companyId, agent, input.planItemId);
     if (running) return running;
+    const item = await findLaunchablePlanItem(companyId, agent, input.planItemId);
+    if (!item) return notLaunchableResult(agent);
+    return launchItem(companyId, agent, item, extras, "du plan lancée");
   }
-  const item = input.planItemId
-    ? await findLaunchablePlanItem(companyId, agent, input.planItemId)
-    : await createChatPlanItem(companyId, agent, input.actionTitle, input.brief, input.theme, input.priority, input.outcome);
-  if (!item) return notLaunchableResult(agent);
-  return launchItem(companyId, agent, item, extras, input.planItemId ? "du plan lancée" : "ajoutée au plan et mise en cours");
+  // Une action active de même agent et même thème est reprise (AD-16), jamais recréée.
+  const { item, reused } = await createChatPlanItem(companyId, agent, input.actionTitle, input.brief, input.theme, input.priority, input.outcome);
+  if (reused) {
+    const running = await alreadyRunningResult(companyId, agent, item.id);
+    if (running) return running;
+  }
+  return launchItem(companyId, agent, item, extras, reused ? "déjà au plan lancée" : "ajoutée au plan et mise en cours");
 }
 
 /**
@@ -348,7 +353,8 @@ export async function runCoCeoTurn(
     const releaseCard = reserveCard();
     if (!releaseCard) return CARDS_LIMIT_MESSAGE;
     try {
-      let item: { id: string; title: string; outcome: string | null } | null;
+      let item: { id: string; title: string; rationale: string; outcome: string | null; status: string } | null;
+      let reused = false;
       if (input.planItemId) {
         item = await findLaunchablePlanItem(companyId, agent, input.planItemId);
         if (!item) {
@@ -359,19 +365,32 @@ export async function runCoCeoTurn(
             : `Aucune carte créée : aucune action à lancer avec cet identifiant pour ${agentName}. Relis le plan avec get_current_status.`;
         }
       } else {
-        item = await createChatPlanItem(companyId, agent, input.actionTitle, input.brief, input.theme, input.priority, input.outcome);
+        // Une action active (à lancer ou en cours) de même agent et même thème est reprise telle quelle (AD-16).
+        ({ item, reused } = await createChatPlanItem(companyId, agent, input.actionTitle, input.brief, input.theme, input.priority, input.outcome));
       }
       const cleanExtras = Object.fromEntries(Object.entries(extras).flatMap(([key, value]) => (typeof value === "string" && value.trim() ? [[key, value.trim()]] : []))) as LaunchExtras;
       const action = await createCard("launch_plan_item", {
         planItemId: item.id, agent, title: item.title,
         ...(item.outcome ? { outcome: item.outcome } : {}),
         ...(Object.keys(cleanExtras).length > 0 ? { extras: cleanExtras } : {}),
+        ...(reused ? { reused: true as const } : {}),
       });
+      const inProgress = reused && item.status === "en_cours";
       if (!action) {
         releaseCard();
-        return `${CARD_FAILED} L'action « ${item.title} » est au plan, à lancer.`;
+        return `${CARD_FAILED} L'action « ${item.title} » est au plan, ${inProgress ? "marquée en cours" : "à lancer"}.`;
       }
-      return `Carte « Lancer ${agentName} : ${item.title} » affichée sous ta réponse (action du plan ${item.id}, à lancer). RIEN N'EST LANCÉ tant que le dirigeant n'a pas cliqué sur « Lancer » : ne dis pas que c'est lancé ni que ${agentName} y travaille ; dis-lui qu'il peut la lancer d'un clic ou choisir « Plus tard ».`;
+      // Action reprise : Paul sait ce qui était déjà au plan et ce qui vient d'être demandé, pour dire au dirigeant ce qui diffère.
+      const reusedNote = reused
+        ? `Aucune nouvelle action créée : une action active de ${agentName} sur ce thème était déjà au plan et la carte la reprend telle quelle. Action reprise : « ${item.title} », consigne : « ${item.rationale} ». Demande de ce tour, non enregistrée : « ${input.actionTitle.trim()} ». Si elles diffèrent, dis au dirigeant en une phrase ce qui est repris et ce qui change, sans lui demander de trier des doublons. `
+        : "";
+      if (inProgress) {
+        const running = await alreadyRunningResult(companyId, agent, item.id);
+        return running?.runId
+          ? `${reusedNote}${agentName} y travaille déjà (exécution ${running.runId}) : un clic sur « Lancer » ne relancera rien. Dis au dirigeant que le résultat apparaîtra dans le plan.`
+          : `${reusedNote}L'action est marquée en cours, mais aucune exécution de ${agentName} n'est visible : vérifie executionsRecentes avec get_current_status avant de dire au dirigeant où elle en est ; ne dis pas que ${agentName} y travaille.`;
+      }
+      return `${reusedNote}Carte « Lancer ${agentName} : ${item.title} » affichée sous ta réponse (action du plan ${item.id}, à lancer). RIEN N'EST LANCÉ tant que le dirigeant n'a pas cliqué sur « Lancer » : ne dis pas que c'est lancé ni que ${agentName} y travaille ; dis-lui qu'il peut la lancer d'un clic ou choisir « Plus tard ».`;
     } catch (error) {
       releaseCard();
       console.error(`Proposition de lancement ${agent} impossible :`, error);

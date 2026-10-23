@@ -44,9 +44,9 @@ development_status:
 
   epic-2: in-progress
   2-1-dire-son-objectif-à-paul-et-le-confirmer-en-un-clic: done
-  2-2-faire-enregistrer-son-profil-par-paul: review
-  2-3-paul-propose-le-lancement-le-dirigeant-lance: review
-  2-4-pas-d-action-en-double: backlog
+  2-2-faire-enregistrer-son-profil-par-paul: done
+  2-3-paul-propose-le-lancement-le-dirigeant-lance: done
+  2-4-pas-d-action-en-double: review
   epic-2-retrospective: optional
 
   epic-3: backlog

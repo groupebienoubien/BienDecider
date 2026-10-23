@@ -1,6 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { isSerializationConflict } from "@/lib/agent-runs";
+import { withSerializableRetry } from "@/lib/serialization-conflict";
 import { failureMessage } from "@/lib/agents/agent-errors";
 import { PERSONAS } from "@/lib/agents/personas";
 import {
@@ -137,29 +137,25 @@ const MAX_CREATE_ATTEMPTS = 3;
 export async function createPendingAction<T extends PendingActionType>(companyId: string, type: T, payload: PayloadFor[T]) {
   const valid = PAYLOAD_SCHEMAS[type].parse(payload);
   const target = sameTarget(type, valid);
-  for (let attempt = 1; ; attempt++) {
+  return withSerializableRetry(() => {
     const now = new Date();
-    try {
-      return await prisma.$transaction(async (tx) => {
-        await tx.paulPendingAction.updateMany({
-          where: { companyId, type, status: "pending", expiresAt: { lte: now }, ...target },
-          data: { status: "expired", decidedAt: now },
-        });
-        const merge = MERGERS[type];
-        const previous = merge ? await tx.paulPendingAction.findFirst({ where: { companyId, type, status: "pending", ...target }, orderBy: { createdAt: "desc" } }) : null;
-        const finalPayload = merge && previous ? merge(previous.payload, valid) : valid;
-        await tx.paulPendingAction.updateMany({
-          where: { companyId, type, status: "pending", ...target },
-          data: { status: "superseded", decidedAt: now },
-        });
-        return tx.paulPendingAction.create({
-          data: { companyId, type, payload: finalPayload as Prisma.InputJsonValue, expiresAt: new Date(now.getTime() + PENDING_ACTION_TTL_MS) },
-        });
-      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
-    } catch (error) {
-      if (!isSerializationConflict(error) || attempt >= MAX_CREATE_ATTEMPTS) throw error;
-    }
-  }
+    return prisma.$transaction(async (tx) => {
+      await tx.paulPendingAction.updateMany({
+        where: { companyId, type, status: "pending", expiresAt: { lte: now }, ...target },
+        data: { status: "expired", decidedAt: now },
+      });
+      const merge = MERGERS[type];
+      const previous = merge ? await tx.paulPendingAction.findFirst({ where: { companyId, type, status: "pending", ...target }, orderBy: { createdAt: "desc" } }) : null;
+      const finalPayload = merge && previous ? merge(previous.payload, valid) : valid;
+      await tx.paulPendingAction.updateMany({
+        where: { companyId, type, status: "pending", ...target },
+        data: { status: "superseded", decidedAt: now },
+      });
+      return tx.paulPendingAction.create({
+        data: { companyId, type, payload: finalPayload as Prisma.InputJsonValue, expiresAt: new Date(now.getTime() + PENDING_ACTION_TTL_MS) },
+      });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  }, MAX_CREATE_ATTEMPTS);
 }
 
 export type PendingDecision = "confirm" | "cancel";

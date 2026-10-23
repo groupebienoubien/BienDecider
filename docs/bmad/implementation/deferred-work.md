@@ -43,3 +43,9 @@
 - source_spec: `docs/bmad/implementation/spec-2-3-paul-propose-le-lancement.md`
   summary: Tester dans le panneau le rendu d'un lancement refusé (pas de coche verte).
   evidence: l'expression succeeded n'existe que dans le composant ; les textes sont couverts par les tests unitaires.
+- source_spec: `docs/bmad/implementation/spec-2-4-pas-d-action-en-double.md`
+  summary: Appliquer la règle « une action active par agent et par thème » à la génération du plan, à POST /api/action-plan et à l'audit d'inscription.
+  evidence: seule createChatPlanItem la vérifie ; la spec excluait le plan généré par Paul.
+- source_spec: `docs/bmad/implementation/spec-2-4-pas-d-action-en-double.md`
+  summary: Index (companyId, agent, theme, status) sur ActionPlanItem et test de concurrence déterministe.
+  evidence: lecture sérialisable sans index ; le test Promise.all ne prouve pas le chevauchement.

@@ -681,14 +681,16 @@ test("a request made in the chat becomes a plan action that can only be launched
   expect(statusAfterRun(2)).toBe("lance");
   expect(statusAfterRun(0)).toBe("termine");
 
-  const item = await createChatPlanItem(company.id, "contenu", "  Trois posts sur les chantiers  ", " Demande du dirigeant : montrer les réalisations récentes. ", "Visibilité", 2);
+  const { item, reused } = await createChatPlanItem(company.id, "contenu", "  Trois posts sur les chantiers  ", " Demande du dirigeant : montrer les réalisations récentes. ", "Visibilité", 2);
+  expect(reused).toBe(false);
   expect(item).toMatchObject({
     companyId: company.id, agent: "contenu", status: "propose", timing: CHAT_REQUEST_TIMING, theme: "Visibilité", priority: 2,
     title: "Trois posts sur les chantiers", rationale: "Demande du dirigeant : montrer les réalisations récentes.",
   });
   // Résultat attendu (#218) : absent par défaut, nettoyé quand Paul le fournit.
   expect(item.outcome).toBeNull();
-  const withOutcome = await createChatPlanItem(company.id, "contenu", "Un post", "Consigne", "Visibilité", 3, "  Plus de visites sur la page  ");
+  // Autre thème : une action distincte (même thème, elle serait reprise — story 2.4).
+  const { item: withOutcome } = await createChatPlanItem(company.id, "contenu", "Un post", "Consigne", "Conversion", 3, "  Plus de visites sur la page  ");
   expect(withOutcome.outcome).toBe("Plus de visites sur la page");
   await prisma.actionPlanItem.delete({ where: { id: withOutcome.id } });
   // Les productions de l'agent sont rattachées à l'action par planItemId, comme pour une action du plan de Paul.
@@ -1304,7 +1306,7 @@ test("Paul cannot propose more than three cards in one reply, all types together
     paul.tool("propose_objective_update").run({ revenueTarget: 200000, targetPeriod: "year" }),
     launch.run({ ...LAUNCH_TOOL_INPUT, actionTitle: "Posts des chantiers", theme: "Visibilité" }),
     launch.run({ ...LAUNCH_TOOL_INPUT, actionTitle: "Page d'accueil du site", theme: "Conversion" }),
-    launch.run({ ...LAUNCH_TOOL_INPUT, actionTitle: "Posts de la saison", theme: "Visibilité" }),
+    launch.run({ ...LAUNCH_TOOL_INPUT, actionTitle: "Posts de la saison", theme: "Prospection" }),
   ]);
   expect(answers.filter((answer) => answer.includes("c'est le maximum"))).toHaveLength(1);
   expect(await prisma.paulPendingAction.count({ where: { companyId: company.id, status: "pending" } })).toBe(3);
@@ -1348,8 +1350,9 @@ test("a refused card gives its place back: three launch proposals still pass aft
   const paul = await capturePaulTools(company.id);
   expect(await paul.tool("propose_objective_update").run({ revenueTarget: 0, targetPeriod: "year" })).toContain("Aucune carte créée");
   const launch = paul.tool("propose_launch_contenu");
-  for (const actionTitle of ["Posts des chantiers", "Page d'accueil du site", "Posts de la saison"]) {
-    expect(await launch.run({ ...LAUNCH_TOOL_INPUT, actionTitle })).toContain("RIEN N'EST LANCÉ");
+  // Un thème par proposition : une action active de même agent et même thème serait reprise (story 2.4).
+  for (const [actionTitle, theme] of [["Posts des chantiers", "Visibilité"], ["Page d'accueil du site", "Conversion"], ["Posts de la saison", "Prospection"]]) {
+    expect(await launch.run({ ...LAUNCH_TOOL_INPUT, actionTitle, theme })).toContain("RIEN N'EST LANCÉ");
   }
   expect(await prisma.paulPendingAction.count({ where: { companyId: company.id, status: "pending" } })).toBe(3);
 });
@@ -1383,4 +1386,173 @@ test("a confirmed launch card without a recorded result is read by Paul as an un
   await prisma.paulPendingAction.update({ where: { id: card.id }, data: { status: "confirmed", decidedAt: new Date() } });
   const status = await buildCurrentStatus(company.id);
   expect(status.cartesRecentes[0]).toMatchObject({ type: "launch_plan_item", status: "confirmed", lancement: { ok: null } });
+});
+
+// Story 2.4 — pas d'action en double : une seule action active (à lancer ou en cours) par agent et par thème.
+
+/** Action de Jean-Claude déjà au plan, au statut donné. */
+async function demarchageItem(companyId: string, theme: string, status: string) {
+  const { prisma } = await import("../src/lib/prisma");
+  return prisma.actionPlanItem.create({ data: {
+    companyId, agent: "demarchage", title: `Action ${theme} déjà au plan`, rationale: "Brief d'origine", timing: "Cette semaine", theme, priority: 1, status,
+  } });
+}
+
+test("Paul proposing a prospection while one is to launch reuses it, title and brief unchanged, and the card says so", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { describePendingAction } = await import("../src/lib/agents/pending-actions");
+  const existing = await demarchageItem(company.id, "Prospection", "propose");
+  const { answer, card } = await proposeDemarchageLaunch(company.id);
+  expect(answer).toContain("Aucune nouvelle action créée");
+  // Paul reçoit l'action reprise (titre, consigne) et la demande du tour, pour dire ce qui diffère.
+  expect(answer).toContain(`« ${existing.title} »`);
+  expect(answer).toContain("« Brief d'origine »");
+  expect(answer).toContain(`« ${LAUNCH_TOOL_INPUT.actionTitle} »`);
+  expect(answer).toContain("RIEN N'EST LANCÉ");
+  expect(card.payload).toMatchObject({ planItemId: existing.id, title: existing.title, reused: true });
+  expect(describePendingAction(card)?.lines).toContain("Je reprends l'action déjà au plan.");
+  expect(await prisma.actionPlanItem.count({ where: { companyId: company.id } })).toBe(1);
+  expect(await prisma.actionPlanItem.findUniqueOrThrow({ where: { id: existing.id } })).toMatchObject({ title: existing.title, rationale: "Brief d'origine", status: "propose" });
+  expect(await prisma.agentRun.count({ where: { companyId: company.id } })).toBe(0);
+});
+
+test("Paul proposing a prospection while one is in progress reuses it and Lancer says it is already running with its run", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { decidePendingAction } = await import("../src/lib/agents/pending-actions");
+  const existing = await demarchageItem(company.id, "Prospection", "en_cours");
+  const running = await prisma.agentRun.create({ data: {
+    companyId: company.id, planItemId: existing.id, agent: "demarchage", requestKey: `plan:${existing.id}`, payload: {}, status: "running", startedAt: new Date(),
+  } });
+  const { answer, card } = await proposeDemarchageLaunch(company.id);
+  expect(answer).toContain("y travaille déjà");
+  expect(card.payload).toMatchObject({ planItemId: existing.id, reused: true });
+  expect(await prisma.actionPlanItem.count({ where: { companyId: company.id } })).toBe(1);
+  const result = await inRequestScope([], () => decidePendingAction(company.id, card.id, "confirm"));
+  expect(result).toMatchObject({ ok: true, launch: { ok: false, reason: "already_running", runId: running.id } });
+  expect(await prisma.agentRun.count({ where: { companyId: company.id } })).toBe(1);
+});
+
+test("an active action of the same agent on another theme does not prevent a new prospection action", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const visibility = await demarchageItem(company.id, "Visibilité", "propose");
+  const paul = await capturePaulTools(company.id);
+  const answer = await paul.tool("propose_launch_demarchage").run({ ...LAUNCH_TOOL_INPUT });
+  expect(answer).not.toContain("Aucune nouvelle action créée");
+  const item = await prisma.actionPlanItem.findFirstOrThrow({ where: { companyId: company.id, agent: "demarchage", theme: "Prospection" } });
+  expect(item.id).not.toBe(visibility.id);
+  const card = await prisma.paulPendingAction.findFirstOrThrow({ where: { companyId: company.id, type: "launch_plan_item" } });
+  expect(card.payload).toMatchObject({ planItemId: item.id });
+  expect(card.payload).not.toHaveProperty("reused");
+  expect(await prisma.actionPlanItem.count({ where: { companyId: company.id } })).toBe(2);
+});
+
+test("a finished, launched or dismissed prospection does not prevent a new one", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { createChatPlanItem } = await import("../src/lib/agents/plan-items");
+  for (const status of ["termine", "lance", "ecarte"]) {
+    const previous = await demarchageItem(company.id, "Prospection", status);
+    const { item, reused } = await createChatPlanItem(company.id, "demarchage", "Nouvelle prospection", "Brief", "Prospection", 2);
+    expect(reused, status).toBe(false);
+    expect(item.id, status).not.toBe(previous.id);
+    // L'action créée est désormais l'action active du thème : on la clôt avant le statut suivant.
+    await prisma.actionPlanItem.update({ where: { id: item.id }, data: { status: "termine" } });
+  }
+  expect(await prisma.actionPlanItem.count({ where: { companyId: company.id } })).toBe(6);
+});
+
+test("two concurrent prospection proposals create a single active action", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { createChatPlanItem } = await import("../src/lib/agents/plan-items");
+  const results = await Promise.all([
+    createChatPlanItem(company.id, "demarchage", "Prospection des syndics", "Brief 1", "Prospection", 2),
+    createChatPlanItem(company.id, "demarchage", "Prospection des agences", "Brief 2", "Prospection", 2),
+  ]);
+  expect(new Set(results.map((result) => result.item.id)).size).toBe(1);
+  expect(results.filter((result) => result.reused)).toHaveLength(1);
+  expect(await prisma.actionPlanItem.count({ where: { companyId: company.id, agent: "demarchage", theme: "Prospection", status: { in: ["propose", "en_cours"] } } })).toBe(1);
+});
+
+test("two turns asking for a prospection leave one active Jean-Claude prospection action", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  for (const turn of [1, 2]) {
+    const paul = await capturePaulTools(company.id);
+    expect(await paul.tool("propose_launch_demarchage").run({ ...LAUNCH_TOOL_INPUT, actionTitle: `Prospection du tour ${turn}` })).toContain("RIEN N'EST LANCÉ");
+  }
+  expect(await prisma.actionPlanItem.count({ where: { companyId: company.id, agent: "demarchage", theme: "Prospection", status: { in: ["propose", "en_cours"] } } })).toBe(1);
+});
+
+test("Paul proposing an audit while the onboarding audit runs reuses the onboarding audit action", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { startOnboardingAudit } = await import("../src/lib/agents/onboarding-audit");
+  const started = await inRequestScope([], () => startOnboardingAudit(company.id));
+  expect((await prisma.actionPlanItem.findUniqueOrThrow({ where: { id: started!.item.id } })).status).toBe("en_cours");
+  const paul = await capturePaulTools(company.id);
+  const answer = await paul.tool("propose_launch_marketing").run({ ...LAUNCH_TOOL_INPUT, actionTitle: "Audit de la fiche Google", theme: "Visibilité" });
+  expect(answer).toContain("y travaille déjà");
+  const card = await prisma.paulPendingAction.findFirstOrThrow({ where: { companyId: company.id, type: "launch_plan_item" } });
+  expect(card.payload).toMatchObject({ planItemId: started!.item.id, title: started!.item.title, reused: true });
+  expect(await prisma.actionPlanItem.count({ where: { companyId: company.id, agent: "marketing" } })).toBe(1);
+  expect(await prisma.agentRun.count({ where: { companyId: company.id } })).toBe(1);
+});
+
+test("AD-16: a second contenu proposal on the same theme reuses the first one even with a different title", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { createChatPlanItem } = await import("../src/lib/agents/plan-items");
+  const first = await createChatPlanItem(company.id, "contenu", "Trois posts sur les chantiers", "Montrer les chantiers", "Visibilité", 2);
+  const second = await createChatPlanItem(company.id, "contenu", "Une vidéo de l'atelier", "Montrer l'atelier", "Visibilité", 1);
+  // Règle par agent et par thème, sans comparaison de titres (rapprochement par similarité différé).
+  expect(second).toMatchObject({ reused: true, item: { id: first.item.id, title: "Trois posts sur les chantiers", rationale: "Montrer les chantiers" } });
+  expect(await prisma.actionPlanItem.count({ where: { companyId: company.id } })).toBe(1);
+});
+
+test("among pre-existing duplicate actions to launch, the oldest is reused", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { createChatPlanItem } = await import("../src/lib/agents/plan-items");
+  const base = { companyId: company.id, agent: "demarchage", rationale: "R", timing: "Cette semaine", theme: "Prospection", status: "propose" };
+  const older = await prisma.actionPlanItem.create({ data: { ...base, title: "Plus ancienne", createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000) } });
+  await prisma.actionPlanItem.create({ data: { ...base, title: "Plus récente", createdAt: new Date(Date.now() - 60 * 60 * 1000) } });
+  const { item, reused } = await createChatPlanItem(company.id, "demarchage", "Prospection", "Brief", "Prospection", 2);
+  expect(reused).toBe(true);
+  expect(item.id).toBe(older.id);
+});
+
+test("among pre-existing duplicate active actions, the one in progress is reused before an older one to launch", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { createChatPlanItem } = await import("../src/lib/agents/plan-items");
+  const base = { companyId: company.id, agent: "demarchage", rationale: "R", timing: "Cette semaine", theme: "Prospection" };
+  await prisma.actionPlanItem.create({ data: { ...base, title: "À lancer, plus ancienne", status: "propose", createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000) } });
+  const inProgress = await prisma.actionPlanItem.create({ data: { ...base, title: "En cours", status: "en_cours", createdAt: new Date(Date.now() - 60 * 60 * 1000) } });
+  const { item, reused } = await createChatPlanItem(company.id, "demarchage", "Prospection", "Brief", "Prospection", 2);
+  expect(reused).toBe(true);
+  expect(item.id).toBe(inProgress.id);
+});
+
+test("Paul reusing an action marked in progress without any visible run does not say the agent is on it", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const existing = await demarchageItem(company.id, "Prospection", "en_cours");
+  const { answer, card } = await proposeDemarchageLaunch(company.id);
+  expect(card.payload).toMatchObject({ planItemId: existing.id, reused: true });
+  expect(answer).toContain("aucune exécution de Jean-Claude n'est visible");
+  expect(answer).toContain("executionsRecentes");
+  expect(answer).not.toContain("y travaille déjà");
+  expect(await prisma.agentRun.count({ where: { companyId: company.id } })).toBe(0);
+});
+
+test("delegatePlanAction reuses an active action of the same agent and theme: launches one to launch, reports one in progress", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { delegatePlanAction } = await import("../src/lib/agents/co-ceo");
+  const existing = await prisma.actionPlanItem.create({ data: {
+    companyId: company.id, agent: "contenu", title: "Posts déjà au plan", rationale: "R", timing: "Cette semaine", theme: DELEGATION_INPUT.theme,
+  } });
+  const scheduled: unknown[] = [];
+  const launched = await inRequestScope(scheduled, () => delegatePlanAction(company.id, "contenu", DELEGATION_INPUT));
+  expect(launched).toMatchObject({ ok: true, planItemId: existing.id });
+  expect((await prisma.actionPlanItem.findUniqueOrThrow({ where: { id: existing.id } })).status).toBe("en_cours");
+
+  // L'action est maintenant en cours, avec son exécution en file : une nouvelle délégation ne relance rien.
+  const again = await inRequestScope(scheduled, () => delegatePlanAction(company.id, "contenu", DELEGATION_INPUT));
+  expect(again).toMatchObject({ ok: false, reason: "already_running", runId: launched.runId, planItemId: existing.id });
+  expect(await prisma.actionPlanItem.count({ where: { companyId: company.id } })).toBe(1);
+  expect(await prisma.agentRun.count({ where: { companyId: company.id } })).toBe(1);
+  expect(scheduled).toHaveLength(1);
 });

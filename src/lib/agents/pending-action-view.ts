@@ -208,17 +208,25 @@ export const launchPlanItemPayloadSchema = z.object({
   title: z.string().min(1),
   outcome: z.string().optional(),
   extras: z.object({ newsContext: z.string().max(LAUNCH_EXTRA_MAX).optional(), prospectDescription: z.string().max(LAUNCH_EXTRA_MAX).optional() }).strict().optional(),
+  /** Action active déjà au plan (même agent, même thème) reprise au lieu d'en créer une seconde. */
+  reused: z.literal(true).optional(),
   result: launchResultSchema.optional(),
 }).strict();
 export type LaunchPlanItemPayload = z.infer<typeof launchPlanItemPayloadSchema>;
 
+/** Ligne d'une carte qui reprend une action déjà au plan au lieu d'en créer une seconde (le titre est déjà dans l'en-tête). */
+export const REUSED_LAUNCH_LINE = "Je reprends l'action déjà au plan.";
+
 function describeLaunch(payload: unknown): PendingActionDescription | null {
   const parsed = launchPlanItemPayloadSchema.safeParse(payload);
   if (!parsed.success) return null;
-  const { agent, title, outcome } = parsed.data;
+  const { agent, title, outcome, reused } = parsed.data;
   return {
     title: `Lancer ${PERSONAS[agent].name} : ${title}`,
-    lines: outcome?.trim() ? [outcome.trim()] : [],
+    lines: [
+      ...(reused ? [REUSED_LAUNCH_LINE] : []),
+      ...(outcome?.trim() ? [outcome.trim()] : []),
+    ],
     confirmLabel: "Lancer",
     cancelLabel: "Plus tard",
   };

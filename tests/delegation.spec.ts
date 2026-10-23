@@ -504,6 +504,13 @@ test("a launch card reads « Lancer {agent} : {titre} » with Lancer and Plus ta
   expect(launchPlanItemPayloadSchema.safeParse({ ...LAUNCH_PAYLOAD, extras: { newsContext: "a".repeat(1001) } }).success).toBe(false);
 });
 
+test("a launch card that reuses an action already in the plan says so before the expected result", () => {
+  expect(describePendingAction({ type: "launch_plan_item", payload: { ...LAUNCH_PAYLOAD, reused: true } })?.lines).toEqual([
+    "Je reprends l'action déjà au plan.", "Trois pistes de clients à contacter",
+  ]);
+  expect(launchPlanItemPayloadSchema.safeParse({ ...LAUNCH_PAYLOAD, reused: false }).success).toBe(false);
+});
+
 test("a decided launch card shows the launch result in plain words, Plus tard keeps the action to launch", () => {
   const base = { id: "l1", type: "launch_plan_item", expiresAt: new Date("2026-10-24T12:00:00Z") };
   const now = new Date("2026-10-23T12:00:00Z");

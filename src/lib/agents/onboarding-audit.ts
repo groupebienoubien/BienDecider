@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { enqueuePlanRun, isSerializationConflict } from "@/lib/agent-runs";
+import { enqueuePlanRun } from "@/lib/agent-runs";
+import { withSerializableRetry } from "@/lib/serialization-conflict";
 
 export const ONBOARDING_AUDIT_TITLE = "Audit de présence en ligne et fiche Google";
 export const ONBOARDING_AUDIT_TIMING = "Dès l'inscription";
@@ -15,34 +16,26 @@ const MAX_SERIALIZATION_ATTEMPTS = 3;
  * alors « à lancer ».
  */
 export async function startOnboardingAudit(companyId: string) {
-  let item = null;
-  for (let attempt = 1; ; attempt++) {
-    try {
-      // Sérialisable : deux envois simultanés lisent tous deux « pas d'audit » ; l'un échoue (conflit de sérialisation), relit et trouve l'audit.
-      item = await prisma.$transaction(async (tx) => {
-        const existing = await tx.actionPlanItem.findFirst({
-          where: { companyId, agent: "marketing", timing: ONBOARDING_AUDIT_TIMING },
-          select: { id: true },
-        });
-        if (existing) return null;
-        return tx.actionPlanItem.create({
-          data: {
-            companyId,
-            agent: "marketing",
-            title: ONBOARDING_AUDIT_TITLE,
-            rationale: "Premier passage de Martine dès l'inscription, pour connaître le point de départ de votre visibilité en ligne.",
-            outcome: "Un état des lieux de votre présence en ligne et de votre fiche Google, avec les premières corrections à faire.",
-            timing: ONBOARDING_AUDIT_TIMING,
-            theme: "Visibilité",
-            priority: 1,
-          },
-        });
-      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
-      break;
-    } catch (error) {
-      if (!isSerializationConflict(error) || attempt >= MAX_SERIALIZATION_ATTEMPTS) throw error;
-    }
-  }
+  // Sérialisable : deux envois simultanés lisent tous deux « pas d'audit » ; l'un échoue (conflit de sérialisation), relit et trouve l'audit.
+  const item = await withSerializableRetry(() => prisma.$transaction(async (tx) => {
+    const existing = await tx.actionPlanItem.findFirst({
+      where: { companyId, agent: "marketing", timing: ONBOARDING_AUDIT_TIMING },
+      select: { id: true },
+    });
+    if (existing) return null;
+    return tx.actionPlanItem.create({
+      data: {
+        companyId,
+        agent: "marketing",
+        title: ONBOARDING_AUDIT_TITLE,
+        rationale: "Premier passage de Martine dès l'inscription, pour connaître le point de départ de votre visibilité en ligne.",
+        outcome: "Un état des lieux de votre présence en ligne et de votre fiche Google, avec les premières corrections à faire.",
+        timing: ONBOARDING_AUDIT_TIMING,
+        theme: "Visibilité",
+        priority: 1,
+      },
+    });
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }), MAX_SERIALIZATION_ATTEMPTS);
   if (!item) return null;
   const run = await enqueuePlanRun({ companyId, item });
   return { item, run };
