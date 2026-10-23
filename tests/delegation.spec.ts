@@ -14,7 +14,7 @@ import { describeRunProgress, finishedRunMessage, formatDuration, recentSucceede
 import { groupPlanItems, planItemStatusView } from "../src/lib/action-plan-view";
 import { facebookAuditSource } from "../src/lib/facebook-audit-source";
 import { businessTargetLines, clientGapLabel, clientsToMonthly, computeBusinessTarget, toMonthly } from "../src/lib/business-target";
-import { PROFILE_PAGE_ONLY_MESSAGE, decidedText, describePendingAction, expiredMessage, mergeProfilePayloads, objectiveUpdateValues, profileUpdateToolSchema, profileUpdateValues, readProfileToolInput, toPendingActionView, updateObjectivePayloadSchema, updateProfilePayloadSchema } from "../src/lib/agents/pending-action-view";
+import { PROFILE_PAGE_ONLY_MESSAGE, decidedText, launchPlanItemPayloadSchema, describePendingAction, expiredMessage, mergeProfilePayloads, objectiveUpdateValues, profileUpdateToolSchema, profileUpdateValues, readProfileToolInput, toPendingActionView, updateObjectivePayloadSchema, updateProfilePayloadSchema } from "../src/lib/agents/pending-action-view";
 import { PROFILE_TEXT_LIMITS, clearableText, profileTextIssue } from "../src/lib/company-profile";
 
 test("risk rules use registered kinds and contextual factors, then fail closed", () => {
@@ -434,7 +434,7 @@ test("the client gap picks month or year on the exact value and never shows zero
 
 test("an Instagram account given to Paul becomes a profile card with the Entreprise page label", () => {
   const card = describePendingAction({ type: "update_profile", payload: { socialHandles: "@atelierlumen.nantes" } });
-  expect(card).toEqual({ title: "Enregistrer dans votre profil", lines: ["Compte Instagram ou Facebook : @atelierlumen.nantes"], confirmLabel: "Confirmer" });
+  expect(card).toEqual({ title: "Enregistrer dans votre profil", lines: ["Compte Instagram ou Facebook : @atelierlumen.nantes"], confirmLabel: "Confirmer", cancelLabel: "Corriger" });
   expect(profileUpdateValues({ socialHandles: "@atelierlumen.nantes" })).toEqual({ socialHandles: "@atelierlumen.nantes" });
 });
 
@@ -488,4 +488,33 @@ test("a profile text over the Entreprise page limit gives no card and a readable
   expect(profileTextIssue("website", null)).toBeNull();
   // Rogné, puis mesuré : des espaces autour ne font pas dépasser la limite.
   expect(profileTextIssue("phone", ` ${"0".repeat(100)} `)).toBeNull();
+});
+
+const LAUNCH_PAYLOAD = { planItemId: "item-1", agent: "demarchage", title: "Pistes de croissance du quartier", outcome: "Trois pistes de clients à contacter" } as const;
+
+test("a launch card reads « Lancer {agent} : {titre} » with Lancer and Plus tard, from the recorded intention only", () => {
+  expect(describePendingAction({ type: "launch_plan_item", payload: LAUNCH_PAYLOAD })).toEqual({
+    title: "Lancer Jean-Claude : Pistes de croissance du quartier", lines: ["Trois pistes de clients à contacter"], confirmLabel: "Lancer", cancelLabel: "Plus tard",
+  });
+  // Un agent hors plan ou une action sans identifiant ne donne pas de carte.
+  expect(describePendingAction({ type: "launch_plan_item", payload: { ...LAUNCH_PAYLOAD, agent: "co_ceo" } })).toBeNull();
+  expect(launchPlanItemPayloadSchema.safeParse({ ...LAUNCH_PAYLOAD, planItemId: "" }).success).toBe(false);
+  // Actualité et description de prospects plafonnées à 1 000 caractères.
+  expect(launchPlanItemPayloadSchema.safeParse({ ...LAUNCH_PAYLOAD, extras: { prospectDescription: "a".repeat(1000) } }).success).toBe(true);
+  expect(launchPlanItemPayloadSchema.safeParse({ ...LAUNCH_PAYLOAD, extras: { newsContext: "a".repeat(1001) } }).success).toBe(false);
+});
+
+test("a decided launch card shows the launch result in plain words, Plus tard keeps the action to launch", () => {
+  const base = { id: "l1", type: "launch_plan_item", expiresAt: new Date("2026-10-24T12:00:00Z") };
+  const now = new Date("2026-10-23T12:00:00Z");
+  expect(toPendingActionView({ ...base, status: "pending", payload: LAUNCH_PAYLOAD }, now)).not.toHaveProperty("result");
+  const refused = { ok: false, reason: "quota_runs", message: "Le quota journalier de lancements est atteint." } as const;
+  const view = toPendingActionView({ ...base, status: "confirmed", payload: { ...LAUNCH_PAYLOAD, result: refused } }, now)!;
+  expect(view.result).toEqual(refused);
+  expect(decidedText(view.status, view.type, view.result)).toBe(refused.message);
+  // Confirmée sans résultat connu : texte neutre, jamais « lancé ».
+  expect(decidedText("confirmed", "launch_plan_item")).toBe("Lancement en cours de vérification…");
+  expect(decidedText("cancelled", "launch_plan_item")).toContain("reste dans votre plan, à lancer");
+  expect(decidedText("cancelled", "update_objective")).toContain("corriger");
+  expect(expiredMessage("launch_plan_item")).toContain("plan");
 });

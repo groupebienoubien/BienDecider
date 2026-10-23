@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { clientsToMonthly, formatDecimal, formatEuros, toMonthly, type Period } from "@/lib/business-target";
+import { PERSONAS } from "@/lib/agents/personas";
 import { PAUL_PROFILE_FIELDS, PROFILE_FIELD_LABELS, PROFILE_TEXT_LIMITS, clearableText, profileTextIssue, type PaulProfileField } from "@/lib/company-profile";
 
 /**
@@ -8,7 +9,7 @@ import { PAUL_PROFILE_FIELDS, PROFILE_FIELD_LABELS, PROFILE_TEXT_LIMITS, clearab
  * panneau de Paul et les tests sans base — cf. pending-actions.ts.
  */
 
-export const PENDING_ACTION_TYPES = ["update_objective", "update_profile"] as const;
+export const PENDING_ACTION_TYPES = ["update_objective", "update_profile", "launch_plan_item"] as const;
 export type PendingActionType = (typeof PENDING_ACTION_TYPES)[number];
 export function isPendingActionType(type: string): type is PendingActionType {
   return (PENDING_ACTION_TYPES as readonly string[]).includes(type);
@@ -23,6 +24,7 @@ export const EXPIRED_MESSAGE = "Cette proposition a expiré. Redites votre objec
 const EXPIRED_MESSAGES: Record<PendingActionType, string> = {
   update_objective: EXPIRED_MESSAGE,
   update_profile: "Cette proposition a expiré. Redites à Paul ce qu'il faut enregistrer dans votre profil.",
+  launch_plan_item: "Cette proposition a expiré. L'action reste dans votre plan : lancez-la depuis le plan ou redemandez-la à Paul.",
 };
 const NEUTRAL_EXPIRED_MESSAGE = "Cette proposition a expiré. Redites votre demande à Paul.";
 /** Message d'une carte expirée, selon ce qu'elle proposait. */
@@ -31,15 +33,18 @@ export function expiredMessage(type: string): string {
 }
 
 /** Texte affiché sous une carte décidée, selon son statut et son type (vide tant qu'elle est en attente). */
-export function decidedText(status: PendingActionStatus, type: string): string {
+export function decidedText(status: PendingActionStatus, type: string, result?: LaunchResult): string {
+  const launch = type === "launch_plan_item";
   switch (status) {
     case "pending": return "";
-    case "confirmed": return "C’est enregistré.";
-    case "cancelled": return "Proposition annulée. Dites à Paul ce qu’il faut corriger.";
+    case "confirmed": return launch ? (result?.message ?? LAUNCH_UNKNOWN_MESSAGE) : "C’est enregistré.";
+    case "cancelled": return launch ? "Plus tard : l’action reste dans votre plan, à lancer." : "Proposition annulée. Dites à Paul ce qu’il faut corriger.";
     case "expired": return expiredMessage(type);
     case "superseded": return "Remplacée par une proposition plus récente.";
   }
 }
+/** Carte de lancement confirmée dont le résultat n'est pas (encore) connu. */
+export const LAUNCH_UNKNOWN_MESSAGE = "Lancement en cours de vérification…";
 export const INACTIVE_MESSAGE = "Cette proposition n'est plus active.";
 
 // Mêmes bornes que la page Entreprise (entiers 32 bits en base).
@@ -179,11 +184,52 @@ export function profileUpdateValues(payload: UpdateProfilePayload): Partial<Reco
   return values;
 }
 
-export type PendingActionDescription = { title: string; lines: string[]; confirmLabel: string };
+/** Agents qu'une carte de lancement peut faire travailler (mêmes que PLAN_AGENTS, sans accès base). */
+/** Longueur maximale d'une actualité ou d'une description de prospects transmise à l'agent. */
+export const LAUNCH_EXTRA_MAX = 1000;
+const LAUNCH_AGENTS = ["marketing", "contenu", "demarchage"] as const;
+
+/** Résultat du lancement, enregistré sur la carte au clic « Lancer » (motifs typés de l'épopée 1). */
+export const launchResultSchema = z.object({
+  ok: z.boolean(),
+  reason: z.enum(["already_running", "quota_runs", "quota_budget", "no_result", "outage"]).optional(),
+  message: z.string(),
+  runId: z.string().optional(),
+}).strict();
+export type LaunchResult = z.infer<typeof launchResultSchema>;
+
+/**
+ * Lancement proposé par Paul : l'action du plan (créée ou reprise au statut
+ * « à lancer ») et ce que l'agent doit recevoir. Rien n'est lancé avant le clic.
+ */
+export const launchPlanItemPayloadSchema = z.object({
+  planItemId: z.string().min(1),
+  agent: z.enum(LAUNCH_AGENTS),
+  title: z.string().min(1),
+  outcome: z.string().optional(),
+  extras: z.object({ newsContext: z.string().max(LAUNCH_EXTRA_MAX).optional(), prospectDescription: z.string().max(LAUNCH_EXTRA_MAX).optional() }).strict().optional(),
+  result: launchResultSchema.optional(),
+}).strict();
+export type LaunchPlanItemPayload = z.infer<typeof launchPlanItemPayloadSchema>;
+
+function describeLaunch(payload: unknown): PendingActionDescription | null {
+  const parsed = launchPlanItemPayloadSchema.safeParse(payload);
+  if (!parsed.success) return null;
+  const { agent, title, outcome } = parsed.data;
+  return {
+    title: `Lancer ${PERSONAS[agent].name} : ${title}`,
+    lines: outcome?.trim() ? [outcome.trim()] : [],
+    confirmLabel: "Lancer",
+    cancelLabel: "Plus tard",
+  };
+}
+
+export type PendingActionDescription = { title: string; lines: string[]; confirmLabel: string; cancelLabel: string };
 
 /** Lignes de la carte, construites depuis l'intention enregistrée (jamais depuis le texte de Paul). */
 export function describePendingAction(action: { type: string; payload: unknown }): PendingActionDescription | null {
   if (action.type === "update_profile") return describeProfileUpdate(action.payload);
+  if (action.type === "launch_plan_item") return describeLaunch(action.payload);
   if (action.type !== "update_objective") return null;
   const parsed = updateObjectivePayloadSchema.safeParse(action.payload);
   if (!parsed.success) return null;
@@ -195,7 +241,7 @@ export function describePendingAction(action: { type: string; payload: unknown }
     lines.push(`${formatDecimal(values.newClientsPerMonth)} ${values.newClientsPerMonth >= 2 ? "clients" : "client"}/mois aujourd'hui`);
   }
   if (values.targetDate) lines.push(`Échéance : ${MONTH_LABEL.format(values.targetDate)}`);
-  return { title: `Enregistrer votre objectif : ${values.objective}`, lines, confirmLabel: "Confirmer" };
+  return { title: `Enregistrer votre objectif : ${values.objective}`, lines, confirmLabel: "Confirmer", cancelLabel: "Corriger" };
 }
 
 function describeProfileUpdate(payload: unknown): PendingActionDescription | null {
@@ -203,7 +249,7 @@ function describeProfileUpdate(payload: unknown): PendingActionDescription | nul
   if (!parsed.success) return null;
   const lines = Object.entries(profileUpdateValues(parsed.data)).map(([field, value]) =>
     `${PROFILE_FIELD_LABELS[field as PaulProfileField]} : ${value ?? "(effacé)"}`);
-  return { title: "Enregistrer dans votre profil", lines, confirmLabel: "Confirmer" };
+  return { title: "Enregistrer dans votre profil", lines, confirmLabel: "Confirmer", cancelLabel: "Corriger" };
 }
 
 export type PendingActionView = {
@@ -213,7 +259,10 @@ export type PendingActionView = {
   title: string;
   lines: string[];
   confirmLabel: string;
+  cancelLabel: string;
   expiresAt: string;
+  /** Carte de lancement confirmée : ce que le lancement a donné (lancé, ou motif en clair). */
+  result?: LaunchResult;
 };
 
 /** Vue affichable ; une carte encore « pending » dont l'échéance est passée est montrée expirée. */
@@ -225,5 +274,7 @@ export function toPendingActionView(
   if (!description) return null;
   const known = (PENDING_ACTION_STATUSES as readonly string[]).includes(action.status) ? (action.status as PendingActionStatus) : "expired";
   const status = known === "pending" && action.expiresAt.getTime() <= now.getTime() ? "expired" : known;
-  return { id: action.id, type: action.type, status, ...description, expiresAt: action.expiresAt.toISOString() };
+  const launched = action.type === "launch_plan_item" ? launchPlanItemPayloadSchema.safeParse(action.payload) : null;
+  const result = launched?.success ? launched.data.result : undefined;
+  return { id: action.id, type: action.type, status, ...description, expiresAt: action.expiresAt.toISOString(), ...(result ? { result } : {}) };
 }

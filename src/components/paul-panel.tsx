@@ -154,6 +154,18 @@ function DaySeparator({ iso }: { iso: string }) {
 /** Carte de confirmation rendue depuis l'intention enregistrée, jamais depuis le texte de Paul. */
 function PendingActionCard({ action, busy, error, onDecide }: { action: PendingActionView; busy: boolean; error: string | null; onDecide: (decision: Decision) => void }) {
   const decided = action.status !== "pending";
+  // Une carte de lancement confirmée n'est un succès que si le lancement a eu lieu ; sans résultat connu, texte neutre.
+  const succeeded = action.status === "confirmed" && (action.type !== "launch_plan_item" || action.result?.ok === true);
+  const statusRef = useRef<HTMLParagraphElement>(null);
+  const clickedRef = useRef(false);
+  // Après « Lancer » ou « Plus tard », les boutons disparaissent : le focus passe au résultat affiché sur la carte.
+  useEffect(() => {
+    if (decided && clickedRef.current && action.type === "launch_plan_item") statusRef.current?.focus();
+  }, [decided, action.type]);
+  const click = (decision: Decision) => {
+    clickedRef.current = true;
+    onDecide(decision);
+  };
   return (
     <div className={`mt-3 rounded-2xl border p-3 text-sm ${decided ? "border-slate-200 bg-slate-50 text-slate-700" : "border-emerald-200 bg-white text-slate-800"}`} aria-label="Proposition de Paul à confirmer" role="group">
       <p className="font-semibold text-slate-900">{action.title}</p>
@@ -161,16 +173,16 @@ function PendingActionCard({ action, busy, error, onDecide }: { action: PendingA
         {action.lines.map((line) => <li key={line}>{line}</li>)}
       </ul>
       {decided ? (
-        <p role="status" className={`mt-3 flex items-center gap-1.5 ${action.status === "confirmed" ? "text-emerald-700" : "text-slate-600"}`}>
-          {action.status === "confirmed" && <CheckIcon className="h-4 w-4" />}{decidedText(action.status, action.type)}
+        <p ref={statusRef} tabIndex={-1} role="status" className={`mt-3 flex items-center gap-1.5 ${succeeded ? "text-emerald-700" : "text-slate-600"}`}>
+          {succeeded && <CheckIcon className="h-4 w-4 shrink-0" />}{decidedText(action.status, action.type, action.result)}
         </p>
       ) : (
         <div className="mt-3 flex flex-wrap items-center gap-3">
-          <button type="button" disabled={busy} onClick={() => onDecide("confirm")} className="min-h-11 rounded-full bg-emerald-600 px-4 font-medium text-white hover:bg-emerald-700 disabled:opacity-60">
+          <button type="button" disabled={busy} onClick={() => click("confirm")} className="min-h-11 rounded-full bg-emerald-600 px-4 font-medium text-white hover:bg-emerald-700 disabled:opacity-60">
             {action.confirmLabel}
           </button>
-          <button type="button" disabled={busy} onClick={() => onDecide("cancel")} className="min-h-11 px-1 text-slate-700 underline underline-offset-2 disabled:opacity-60">
-            Corriger
+          <button type="button" disabled={busy} onClick={() => click("cancel")} className="min-h-11 px-1 text-slate-700 underline underline-offset-2 disabled:opacity-60">
+            {action.cancelLabel}
           </button>
         </div>
       )}
@@ -348,7 +360,7 @@ export function PaulPanel() {
 
   useEffect(() => { submitRef.current = submit; });
 
-  // Clic sur une carte : « Confirmer » enregistre côté serveur, « Corriger » annule et rend la main à la saisie.
+  // Clic sur une carte : « Confirmer » / « Lancer » exécute côté serveur ; « Corriger » annule et rend la main à la saisie, « Plus tard » annule seulement.
   async function decide(actionId: string, decision: Decision) {
     if (deciding) return;
     setDeciding(actionId);
@@ -373,7 +385,7 @@ export function PaulPanel() {
       // Un refus qui renvoie la carte (expirée, remplacée…) se lit sur la carte elle-même.
       if (!response.ok && !data?.action) throw new Error(data?.error ?? "La décision n'a pas pu être enregistrée. Réessayez.");
       if (response.ok && decision === "confirm") router.refresh();
-      if (decision === "cancel") inputRef.current?.focus();
+      if (decision === "cancel" && data?.action?.type !== "launch_plan_item") inputRef.current?.focus();
     } catch (decideError) {
       setActionErrors((previous) => ({ ...previous, [actionId]: decideError instanceof Error ? decideError.message : "La décision n'a pas pu être enregistrée. Réessayez." }));
     } finally {
@@ -413,7 +425,7 @@ export function PaulPanel() {
             <PersonaAvatar agentKey="co_ceo" size={32} />
             <div>
               <strong>{persona.name}</strong>
-              <small>Votre copilote</small>
+              <small>{persona.role}</small>
             </div>
             <div className="panel-controls">
               {voiceSupported && (

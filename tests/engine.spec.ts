@@ -1171,3 +1171,216 @@ test("Paul's profile tool creates one card per reply and answers refusals in pla
   const cards = await prisma.paulPendingAction.findMany({ where: { companyId: company.id, type: "update_profile" } });
   expect(cards.map((card) => [card.status, card.payload])).toEqual([["pending", { socialHandles: "@atelierlumen.nantes" }]]);
 });
+
+/** Outils de Paul pour un tour, sans appel au modèle : le lancement du modèle est intercepté. */
+async function capturePaulTools(companyId: string) {
+  const { anthropic } = await import("../src/lib/anthropic");
+  const { runCoCeoTurn } = await import("../src/lib/agents/co-ceo");
+  type CapturedTool = { name: string; run: (input: Record<string, unknown>) => Promise<string> };
+  const messages = anthropic.beta.messages as unknown as { toolRunner: (params: unknown) => unknown };
+  const original = messages.toolRunner;
+  const captured: { params?: { tools: CapturedTool[]; system: { text: string }[] } } = {};
+  messages.toolRunner = (params: unknown) => {
+    captured.params = params as typeof captured.params;
+    throw new Error("intercepted");
+  };
+  try {
+    await expect(runCoCeoTurn(companyId, "Lance Jean-Claude sur les pistes du quartier")).rejects.toThrow("intercepted");
+  } finally {
+    messages.toolRunner = original;
+  }
+  const params = captured.params!;
+  return {
+    system: params.system.map((block) => block.text).join(" "),
+    names: params.tools.map((tool) => tool.name),
+    tool: (name: string) => params.tools.find((candidate) => candidate.name === name)!,
+  };
+}
+
+const LAUNCH_TOOL_INPUT = {
+  actionTitle: "Pistes de croissance du quartier", brief: "Le dirigeant veut des pistes de clients locaux.", outcome: "Trois pistes de clients à contacter",
+  theme: "Prospection", priority: 2,
+} as const;
+
+/** Une proposition de lancement faite par Paul : l'action du plan et sa carte. */
+async function proposeDemarchageLaunch(companyId: string) {
+  const { prisma } = await import("../src/lib/prisma");
+  const paul = await capturePaulTools(companyId);
+  const answer = await paul.tool("propose_launch_demarchage").run({ ...LAUNCH_TOOL_INPUT, prospectDescription: "Syndics de copropriété" });
+  const card = await prisma.paulPendingAction.findFirstOrThrow({ where: { companyId, type: "launch_plan_item" } });
+  const item = await prisma.actionPlanItem.findFirstOrThrow({ where: { companyId, agent: "demarchage" } });
+  return { answer, card, item };
+}
+
+test("Paul proposing to launch an agent creates the plan action and a Lancer card, and no run before any click", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { PERSONAS } = await import("../src/lib/agents/personas");
+  const paul = await capturePaulTools(company.id);
+  expect(paul.names).toEqual(expect.arrayContaining(["propose_launch_marketing", "propose_launch_contenu", "propose_launch_demarchage"]));
+  expect(paul.names.filter((name) => name.startsWith("delegate_"))).toEqual([]);
+  // Paul porte le titre « Partenaire de croissance » dans son prompt.
+  expect(paul.system).toContain(`Tu es Paul, ${PERSONAS.co_ceo.role} de BienDecider`);
+  expect(paul.system).not.toContain("copilote");
+
+  const { answer, card, item } = await proposeDemarchageLaunch(company.id);
+  expect(answer).toContain("RIEN N'EST LANCÉ");
+  expect(item).toMatchObject({ status: "propose", title: LAUNCH_TOOL_INPUT.actionTitle });
+  expect(card).toMatchObject({ status: "pending" });
+  expect(card.payload).toEqual({
+    planItemId: item.id, agent: "demarchage", title: LAUNCH_TOOL_INPUT.actionTitle, outcome: LAUNCH_TOOL_INPUT.outcome, extras: { prospectDescription: "Syndics de copropriété" },
+  });
+  expect(await prisma.agentRun.count({ where: { companyId: company.id } })).toBe(0);
+});
+
+test("Lancer on a launch card creates the run through the plan path and gives its id", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { decidePendingAction } = await import("../src/lib/agents/pending-actions");
+  const { card, item } = await proposeDemarchageLaunch(company.id);
+  const scheduled: unknown[] = [];
+  const result = await inRequestScope(scheduled, () => decidePendingAction(company.id, card.id, "confirm"));
+  expect(result).toMatchObject({ ok: true, action: { id: card.id, status: "confirmed", result: { ok: true } }, launch: { ok: true } });
+  const runId = result.ok ? result.launch?.runId : undefined;
+  expect(runId).toBeTruthy();
+  const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: runId } });
+  expect(run).toMatchObject({ planItemId: item.id, agent: "demarchage", status: "queued" });
+  expect(run.payload).toMatchObject({ extras: { prospectDescription: "Syndics de copropriété" } });
+  expect((await prisma.actionPlanItem.findUniqueOrThrow({ where: { id: item.id } })).status).toBe("en_cours");
+  expect((await prisma.paulPendingAction.findUniqueOrThrow({ where: { id: card.id } })).status).toBe("confirmed");
+  expect(scheduled).toHaveLength(1);
+
+  // Un second clic ne lance rien de plus.
+  expect(await inRequestScope(scheduled, () => decidePendingAction(company.id, card.id, "confirm"))).toMatchObject({ ok: true, action: { status: "confirmed" } });
+  expect(await prisma.agentRun.count({ where: { companyId: company.id } })).toBe(1);
+
+  // Paul lit le résultat de la carte au tour suivant.
+  const { buildCurrentStatus } = await import("../src/lib/agents/co-ceo");
+  const status = await buildCurrentStatus(company.id);
+  expect(status.cartesRecentes[0]).toMatchObject({ type: "launch_plan_item", status: "confirmed", planItemId: item.id, lancement: { ok: true } });
+});
+
+test("Plus tard on a launch card cancels it, leaves the action to launch and creates no run", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { decidePendingAction } = await import("../src/lib/agents/pending-actions");
+  const { card, item } = await proposeDemarchageLaunch(company.id);
+  expect(await decidePendingAction(company.id, card.id, "cancel")).toMatchObject({ ok: true, action: { status: "cancelled" } });
+  expect((await prisma.actionPlanItem.findUniqueOrThrow({ where: { id: item.id } })).status).toBe("propose");
+  expect(await prisma.agentRun.count({ where: { companyId: company.id } })).toBe(0);
+});
+
+test("a launch refused for quota keeps the card confirmed, gives the typed reason in plain words and the action to launch", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { decidePendingAction } = await import("../src/lib/agents/pending-actions");
+  const { card, item } = await proposeDemarchageLaunch(company.id);
+  await prisma.company.update({ where: { id: company.id }, data: { dailyAgentRunLimit: 0 } });
+  const result = await inRequestScope([], () => decidePendingAction(company.id, card.id, "confirm"));
+  expect(result).toMatchObject({ ok: true, action: { status: "confirmed", result: { ok: false, reason: "quota_runs" } }, launch: { ok: false, reason: "quota_runs" } });
+  const message = result.ok ? result.launch?.message : "";
+  expect(message).toContain("quota journalier de lancements");
+  expect(message).not.toContain("ÉCHEC");
+  expect((await prisma.actionPlanItem.findUniqueOrThrow({ where: { id: item.id } })).status).toBe("propose");
+  expect(await prisma.agentRun.count({ where: { companyId: company.id } })).toBe(0);
+});
+
+test("Lancer on an action started in the meantime says the agent is already on it and creates no second run", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { decidePendingAction } = await import("../src/lib/agents/pending-actions");
+  const { card, item } = await proposeDemarchageLaunch(company.id);
+  // Lancée entre-temps depuis le plan.
+  await prisma.actionPlanItem.update({ where: { id: item.id }, data: { status: "en_cours" } });
+  const running = await prisma.agentRun.create({ data: {
+    companyId: company.id, planItemId: item.id, agent: "demarchage", requestKey: `plan:${item.id}`, payload: {}, status: "running", startedAt: new Date(),
+  } });
+  const result = await inRequestScope([], () => decidePendingAction(company.id, card.id, "confirm"));
+  expect(result).toMatchObject({ ok: true, launch: { ok: false, reason: "already_running", runId: running.id } });
+  expect(result.ok ? result.launch?.message : "").toContain("Jean-Claude y travaille déjà");
+  expect(await prisma.agentRun.count({ where: { companyId: company.id } })).toBe(1);
+});
+
+test("Paul cannot propose more than three cards in one reply, all types together", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const paul = await capturePaulTools(company.id);
+  const launch = paul.tool("propose_launch_contenu");
+  const answers = await Promise.all([
+    paul.tool("propose_objective_update").run({ revenueTarget: 200000, targetPeriod: "year" }),
+    launch.run({ ...LAUNCH_TOOL_INPUT, actionTitle: "Posts des chantiers", theme: "Visibilité" }),
+    launch.run({ ...LAUNCH_TOOL_INPUT, actionTitle: "Page d'accueil du site", theme: "Conversion" }),
+    launch.run({ ...LAUNCH_TOOL_INPUT, actionTitle: "Posts de la saison", theme: "Visibilité" }),
+  ]);
+  expect(answers.filter((answer) => answer.includes("c'est le maximum"))).toHaveLength(1);
+  expect(await prisma.paulPendingAction.count({ where: { companyId: company.id, status: "pending" } })).toBe(3);
+  expect(await prisma.agentRun.count({ where: { companyId: company.id } })).toBe(0);
+});
+
+test("a new launch card replaces only the pending card aimed at the same plan action", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { createPendingAction } = await import("../src/lib/agents/pending-actions");
+  const [first, second] = await Promise.all(["Posts des chantiers", "Page d'accueil"].map((title) => prisma.actionPlanItem.create({ data: {
+    companyId: company.id, agent: "contenu", title, rationale: "Demandé à Paul.", timing: "Demandé dans le chat",
+  } })));
+  const replaced = await createPendingAction(company.id, "launch_plan_item", { planItemId: first.id, agent: "contenu", title: first.title });
+  const other = await createPendingAction(company.id, "launch_plan_item", { planItemId: second.id, agent: "contenu", title: second.title });
+  const latest = await createPendingAction(company.id, "launch_plan_item", { planItemId: first.id, agent: "contenu", title: first.title });
+  const statuses = Object.fromEntries((await prisma.paulPendingAction.findMany({ where: { companyId: company.id } })).map((card) => [card.id, card.status]));
+  expect(statuses).toEqual({ [replaced.id]: "superseded", [other.id]: "pending", [latest.id]: "pending" });
+});
+
+test("Paul proposing an action already in the plan reuses it, and refuses an action in progress or unknown", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const toLaunch = await prisma.actionPlanItem.create({ data: { companyId: company.id, agent: "contenu", title: "Posts déjà au plan", rationale: "R", timing: "Cette semaine" } });
+  const inProgress = await prisma.actionPlanItem.create({ data: { companyId: company.id, agent: "contenu", title: "Posts en cours", rationale: "R", timing: "Aujourd'hui", status: "en_cours" } });
+  const paul = await capturePaulTools(company.id);
+  const tool = paul.tool("propose_launch_contenu");
+
+  expect(await tool.run({ ...LAUNCH_TOOL_INPUT, planItemId: toLaunch.id })).toContain("RIEN N'EST LANCÉ");
+  expect(await prisma.actionPlanItem.count({ where: { companyId: company.id } })).toBe(2);
+  const card = await prisma.paulPendingAction.findFirstOrThrow({ where: { companyId: company.id, type: "launch_plan_item" } });
+  expect(card.payload).toMatchObject({ planItemId: toLaunch.id, title: "Posts déjà au plan" });
+
+  expect(await tool.run({ ...LAUNCH_TOOL_INPUT, planItemId: inProgress.id })).toContain("travaille déjà");
+  expect(await tool.run({ ...LAUNCH_TOOL_INPUT, planItemId: "inconnu" })).toContain("Aucune carte créée");
+  expect(await prisma.paulPendingAction.count({ where: { companyId: company.id } })).toBe(1);
+  expect(await prisma.actionPlanItem.count({ where: { companyId: company.id } })).toBe(2);
+  expect(await prisma.agentRun.count({ where: { companyId: company.id } })).toBe(0);
+});
+
+test("a refused card gives its place back: three launch proposals still pass after it", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const paul = await capturePaulTools(company.id);
+  expect(await paul.tool("propose_objective_update").run({ revenueTarget: 0, targetPeriod: "year" })).toContain("Aucune carte créée");
+  const launch = paul.tool("propose_launch_contenu");
+  for (const actionTitle of ["Posts des chantiers", "Page d'accueil du site", "Posts de la saison"]) {
+    expect(await launch.run({ ...LAUNCH_TOOL_INPUT, actionTitle })).toContain("RIEN N'EST LANCÉ");
+  }
+  expect(await prisma.paulPendingAction.count({ where: { companyId: company.id, status: "pending" } })).toBe(3);
+});
+
+test("Paul's launch tool refuses an over-long news or prospect description in plain words", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const paul = await capturePaulTools(company.id);
+  const answer = await paul.tool("propose_launch_demarchage").run({ ...LAUNCH_TOOL_INPUT, prospectDescription: "a".repeat(1001) });
+  expect(answer).toContain("dépasse 1000 caractères");
+  expect(await prisma.paulPendingAction.count({ where: { companyId: company.id } })).toBe(0);
+  expect(await prisma.actionPlanItem.count({ where: { companyId: company.id } })).toBe(0);
+});
+
+test("Lancer on an action dismissed in the meantime launches nothing and says it is no longer to launch", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { decidePendingAction } = await import("../src/lib/agents/pending-actions");
+  const { card, item } = await proposeDemarchageLaunch(company.id);
+  await prisma.actionPlanItem.update({ where: { id: item.id }, data: { status: "ecarte" } });
+  const result = await inRequestScope([], () => decidePendingAction(company.id, card.id, "confirm"));
+  expect(result).toMatchObject({ ok: true, action: { status: "confirmed", result: { ok: false } } });
+  const launched = result.ok ? result.action.result : undefined;
+  expect(launched).not.toHaveProperty("reason");
+  expect(launched?.message).toContain("n'est plus à lancer");
+  expect(await prisma.agentRun.count({ where: { companyId: company.id } })).toBe(0);
+});
+
+test("a confirmed launch card without a recorded result is read by Paul as an unknown outcome", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { buildCurrentStatus } = await import("../src/lib/agents/co-ceo");
+  const { card } = await proposeDemarchageLaunch(company.id);
+  await prisma.paulPendingAction.update({ where: { id: card.id }, data: { status: "confirmed", decidedAt: new Date() } });
+  const status = await buildCurrentStatus(company.id);
+  expect(status.cartesRecentes[0]).toMatchObject({ type: "launch_plan_item", status: "confirmed", lancement: { ok: null } });
+});

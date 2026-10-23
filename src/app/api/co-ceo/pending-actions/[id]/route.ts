@@ -7,8 +7,9 @@ import { INACTIVE_MESSAGE, expiredMessage } from "@/lib/agents/pending-action-vi
 const bodySchema = z.object({ decision: z.enum(["confirm", "cancel"]) }).strict();
 
 /**
- * Clic du dirigeant sur une carte de Paul : « Confirmer » exécute l'intention,
- * « Corriger » l'annule. Filtré sur l'entreprise de la session (404 sinon).
+ * Clic du dirigeant sur une carte de Paul : « Confirmer » (ou « Lancer ») exécute
+ * l'intention, « Corriger » (ou « Plus tard ») l'annule. Route Next : after()
+ * y est disponible pour programmer l'exécution d'un lancement. Filtré sur l'entreprise de la session (404 sinon).
  */
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   if (request.headers.get("origin") !== request.nextUrl.origin) {
@@ -23,6 +24,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const { id } = await params;
   try {
     const result = await decidePendingAction(company.id, id, parsed.data.decision);
+    // Carte de lancement : action.result dit ce que le clic a donné ({ ok, reason?, message, runId? }).
     if (result.ok) return NextResponse.json({ action: result.action });
     if (result.error === "not_found") return NextResponse.json({ error: "Proposition introuvable" }, { status: 404 });
     if (result.error === "expired") {

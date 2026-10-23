@@ -33,7 +33,7 @@ flowchart LR
 
 | Agent | Rôle | Outils (function calling) | Produit |
 |---|---|---|---|
-| **Paul** (`co_ceo`) | Point de contact, orchestrateur, "meneur" | `get_current_status`, `delegate_marketing`, `delegate_contenu`, `delegate_demarchage`, `record_uncovered_request` (chat), `propose_plan_item` (plan) | Réponses de chat, plan d'action priorisé (`ActionPlanItem`) |
+| **Paul** (`co_ceo`) | Point de contact, orchestrateur, "meneur" | `get_current_status`, `propose_launch_marketing`, `propose_launch_contenu`, `propose_launch_demarchage`, `propose_objective_update`, `propose_profile_update`, `record_uncovered_request` (chat), `propose_plan_item` (plan) | Réponses de chat, plan d'action priorisé (`ActionPlanItem`) |
 | **Martine** (`marketing`) | Diagnostic + pilotage de la fiche Google. Jamais de contenu créatif. | `web_fetch`, `web_search`, `record_audit_finding`, `propose_action` (gbp_update, review_reply) | `AuditFinding`, `AgentProposal` |
 | **Camille** (`contenu`) | Production créative : posts + site web. S'appuie sur les constats de Martine. | `propose_content` (social_post, site_web_content) | `AgentProposal` |
 | **Jean-Claude** (`demarchage`) | Pistes de croissance publiques + templates de prospection générique | `web_search`, `propose_growth_lead`, `propose_prospecting_email` | `AgentProposal` |
@@ -53,9 +53,9 @@ Les plafonds par entreprise sont en UTC : 10 tentatives/jour, 100/mois, 5 USD/jo
 ```mermaid
 flowchart TD
     Paul["Paul (Co-CEO)"]
-    Paul -->|delegate_marketing| Martine
-    Paul -->|delegate_contenu| Camille
-    Paul -->|delegate_demarchage| JC["Jean-Claude"]
+    Paul -->|carte « Lancer » confirmée| Martine
+    Paul -->|carte « Lancer » confirmée| Camille
+    Paul -->|carte « Lancer » confirmée| JC["Jean-Claude"]
     Martine -->|AuditFinding<br/>lu comme contexte| Camille
     Martine -->|AgentProposal gbp_update/review_reply| Validation{{Dirigeant valide}}
     Camille -->|AgentProposal social_post/site_web_content| Validation

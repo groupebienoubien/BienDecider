@@ -37,3 +37,9 @@
 - source_spec: `docs/bmad/implementation/spec-2-2-faire-enregistrer-son-profil-par-paul.md`
   summary: Vérifier le format du site, du téléphone et du compte social avant de les enregistrer.
   evidence: une phrase ou « atelierlumen point fr » serait enregistrée telle quelle puis transmise aux agents.
+- source_spec: `docs/bmad/implementation/spec-2-3-paul-propose-le-lancement.md`
+  summary: Supprimer ou signaler les actions de plan créées par un tour de Paul qui a échoué avant la carte.
+  evidence: cancelOrphanPendingActions annule la carte mais laisse l'action « à lancer ».
+- source_spec: `docs/bmad/implementation/spec-2-3-paul-propose-le-lancement.md`
+  summary: Tester dans le panneau le rendu d'un lancement refusé (pas de coche verte).
+  evidence: l'expression succeeded n'existe que dans le composant ; les textes sont couverts par les tests unitaires.

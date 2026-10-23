@@ -2,7 +2,8 @@
 title: 'Story 2.3 — Paul propose le lancement, le dirigeant lance'
 type: 'feature'
 created: '2026-10-23'
-status: 'ready-for-dev'
+status: 'done'
+baseline_commit: '80278e1a7f6785b106557c0425f88532974a674c'
 route: 'dispatch'
 review_loop_iteration: 0
 context:
@@ -50,19 +51,48 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `src/lib/agents/pending-actions.ts` -- type `launch_plan_item` et exécuteur -- lancement sur clic
-- [ ] `src/lib/agents/co-ceo.ts` -- outils `propose_launch_*`, plafond de 3 cartes, prompt -- Paul propose
-- [ ] `src/components/paul-panel.tsx` -- carte de lancement et titre -- interface
-- [ ] tests -- une ligne de la matrice par test -- non-régression
+- [x] `src/lib/agents/pending-actions.ts` -- type `launch_plan_item` et exécuteur -- lancement sur clic
+- [x] `src/lib/agents/co-ceo.ts` -- outils `propose_launch_*`, plafond de 3 cartes, prompt -- Paul propose
+- [x] `src/components/paul-panel.tsx` -- carte de lancement et titre -- interface
+- [x] tests -- une ligne de la matrice par test -- non-régression
 
 **Acceptance Criteria:**
 - Étant donné un tour de Paul qui propose de faire travailler un agent, quand on compte les `AgentRun` avant tout clic, alors il n'y en a aucun.
 
 ## Implementation Notes
 
+- Le lancement confirmé s'exécute après la transaction `pending → confirmed` (`AFTER_CONFIRM` dans `pending-actions.ts`), pas dans l'exécuteur transactionnel : le lancement a ses propres transactions et `after()`. Il passe par `launchPlanItemFromCard` (`co-ceo.ts`), qui partage la logique de lancement de `delegatePlanAction` sans brief ni thème factices ; importé dynamiquement pour éviter la dépendance circulaire. Un second clic reçoit l'état confirmé sans relancer.
+- Le résultat (`{ ok, reason?, message, runId? }`) est écrit dans `payload.result` de la carte : la vue (`result`), l'historique et `cartesRecentes.lancement` (lu par Paul via `get_current_status`) le reprennent. Un échec d'écriture du résultat est journalisé sans faire échouer la décision. Une carte confirmée sans résultat affiche « Lancement en cours de vérification… » et Paul la lit `lancement: { ok: null }`. Une action devenue non lançable (écartée, terminée) donne un message destiné au dirigeant, sans motif.
+- Remplacement : une carte `launch_plan_item` ne remplace que la carte en attente visant la même action du plan (filtre JSON sur `payload.planItemId`) ; objectif et profil gardent le remplacement par type.
+- Plafond : compteur de cartes du tour réservé avant tout `await` et rendu quand aucune carte n'est créée ; il s'applique aussi aux cartes d'objectif et de profil.
+- Vue : `cancelLabel` ajouté (« Corriger » ou « Plus tard ») ; « Plus tard » ne remet pas le focus dans la saisie.
+
 ## Spec Change Log
 
 ## Review Triage Log
+
+| # | Source | Constat | Verdict | Preuve | Route |
+|---|--------|---------|---------|--------|-------|
+| 1 | blind, edge | Carte de lancement confirmée sans résultat affichée en succès ; Paul sans consigne pour ce cas | medium | `succeeded = confirmed && result?.ok !== false` | patch |
+| 2 | blind, edge | Échec d'écriture du résultat après un lancement réussi présenté comme décision échouée | medium | `updateMany` non protégé après `delegatePlanAction` | patch |
+| 3 | blind, gap | Une erreur inattendue est présentée « n'est plus à lancer dans votre plan » | false | `classifyRunError` renvoie `outage` pour toute erreur inconnue (`agent-errors.ts:61`) ; `null` seulement pour une action non lançable ; test ajouté | rejeté |
+| 4 | blind | Entrées factices (`brief`, `theme`, `priority`) passées à `delegatePlanAction` | low | correctif direct : point d'entrée dédié | patch |
+| 5 | blind | « Oui, lance-le » en réponse à une carte crée une seconde action et une seconde carte | medium | aucune consigne de renvoyer vers la carte ouverte | patch |
+| 6 | blind | `cartesRecentes` limité à 5 alors qu'un message peut créer 3 cartes | low | correctif direct | patch |
+| 7 | blind | Nom « Jean-Claude » écrit en dur dans le prompt | low | correctif direct | patch |
+| 8 | blind | Focus perdu après « Plus tard » ou « Lancer » | low | correctif direct | patch |
+| 9 | blind | Champ `launch` de la route jamais lu, seconde source de vérité | low | correctif direct (suppression) | patch |
+| 10 | blind | `extras` sans limite de longueur | medium | texte du dirigeant copié sans borne dans la charge utile et l'exécution | patch |
+| 11 | edge | `releaseCard` peut être appelé deux fois | low | correctif direct (libération idempotente) | patch |
+| 12 | gap | Remplacement de cartes de lancement visant la même action non testé | medium | aucun test avec le même `planItemId` | patch |
+| 13 | gap | Branche `planItemId` de `proposeLaunch` non testée | medium | tous les tests passent sans `planItemId` | patch |
+| 14 | gap | Retour de la place après un refus non testé | medium | le test de plafond n'a aucun refus | patch |
+| 15 | gap | Message de remplacement sans motif non testé | medium | aucun test d'action écartée entre proposition et clic | patch |
+| 16 | blind | Cartes de lancement d'autres actions jamais marquées expirées en base | low | l'expiration est appliquée à la lecture | rejeté |
+| 17 | edge | Actions de plan sans carte après un tour échoué | low | dédoublonnage de la story 2.4 | defer |
+| 18 | edge | Deux propositions de même titre ou de même action dans un tour | low | couvert par la story 2.4 et le remplacement par action | rejeté |
+| 19 | gap | Rendu d'un lancement refusé dans le panneau non testé | low | textes déjà fixés par les tests unitaires | defer |
+| 20 | gap | `docs/architecture.md` cite encore les outils `delegate_*` | low | correctif direct | patch |
 
 ## Verification
 
