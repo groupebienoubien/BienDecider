@@ -440,7 +440,8 @@ test("single validation queue, persistent decisions, publishing and error recove
       { companyId: company.id, agent: "contenu", kind: "site_web_content", title: "Site approuvé à publier", content: "Contenu du site", status: "validee", approvedVersion: 1 },
     ] });
     await page.setViewportSize({ width: 1440, height: 1000 });
-    await page.goto(`${baseURL}/dashboard?view=plan`);
+    await page.goto(`${baseURL}/dashboard?view=plan&onglet=menees`);
+    await expect(page.getByRole("button", { name: "En cours et menées (1)" })).toHaveAttribute("aria-pressed", "true");
     await expect(page.getByRole("heading", { name: "Préparer la communication" })).toBeVisible();
     // Story 1.4 : une action lancée avec une production en attente renvoie vers Décisions.
     await expect(page.locator(`#plan-item-${item.id}`).getByRole("link", { name: "1 à examiner" })).toHaveAttribute("href", "/dashboard?view=validation");
@@ -1375,6 +1376,43 @@ test("story 5.4: on a phone, Paul takes the whole screen, above the bottom bar, 
   await panel.getByRole("button", { name: "Replier" }).click();
   await expect(panel).toHaveCount(0);
   expect(await page.evaluate(() => getComputedStyle(document.documentElement).overflow)).not.toBe("hidden");
+});
+
+test("story 5.3: the plan opens on the actions to do, the running and executed ones are in their own tab", async ({ page, company }) => {
+  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }) });
+  try {
+    const base = { companyId: company.id, rationale: "Test", timing: "Cette semaine", theme: "Visibilité" };
+    await prisma.actionPlanItem.createMany({ data: [
+      { ...base, agent: "contenu", title: "Action à lancer", status: "propose" },
+      { ...base, agent: "marketing", title: "Action en cours", status: "en_cours" },
+      { ...base, agent: "demarchage", title: "Action menée", status: "lance" },
+    ] });
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.goto(`${baseURL}/dashboard?view=plan`);
+    const plan = page.getByRole("region", { name: "Plan d'action", exact: true });
+    await expect(plan.getByRole("button", { name: "À faire (1)" })).toHaveAttribute("aria-pressed", "true");
+    await expect(plan.getByRole("heading", { name: "Action à lancer" })).toBeVisible();
+    await expect(plan.getByRole("heading", { name: "Action en cours" })).toHaveCount(0);
+    await expect(plan.getByRole("heading", { name: "Action menée" })).toHaveCount(0);
+
+    await plan.getByRole("button", { name: "En cours et menées (2)" }).click();
+    await expect(page).toHaveURL(/onglet=menees/);
+    await expect(plan.getByRole("heading", { name: "Action en cours" })).toBeVisible();
+    await expect(plan.getByRole("heading", { name: "Action menée" })).toBeVisible();
+    await expect(plan.getByRole("heading", { name: "Action à lancer" })).toHaveCount(0);
+
+    await page.reload();
+    await expect(plan.getByRole("button", { name: "En cours et menées (2)" })).toHaveAttribute("aria-pressed", "true");
+    await plan.getByRole("button", { name: "À faire (1)" }).click();
+    await expect(page).not.toHaveURL(/onglet=/);
+    // Le retour arrière revient à l'onglet précédent, et le lien « Plan d'action » rouvre « À faire ».
+    await page.goBack();
+    await expect(plan.getByRole("button", { name: "En cours et menées (2)" })).toHaveAttribute("aria-pressed", "true");
+    await page.getByRole("link", { name: "Plan d’action" }).first().click();
+    await expect(plan.getByRole("button", { name: "À faire (1)" })).toHaveAttribute("aria-pressed", "true");
+  } finally {
+    await prisma.$disconnect();
+  }
 });
 
 test("Paul's objective card is confirmed in one click and stays confirmed in the history", async ({ page, company }) => {

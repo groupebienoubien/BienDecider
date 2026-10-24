@@ -65,7 +65,7 @@ development_status:
   epic-5: in-progress
   5-1-un-diagnostic-à-jour: backlog
   5-2-du-diagnostic-au-plan-sans-boucle: backlog
-  5-3-le-plan-montre-d-abord-ce-qu-il-reste-à-faire: backlog
+  5-3-le-plan-montre-d-abord-ce-qu-il-reste-à-faire: review
   5-4-paul-utilisable-sur-smartphone: review
   5-5-des-photos-sur-le-site: backlog
   epic-5-retrospective: optional

@@ -56,3 +56,22 @@ export function planItemStatusView(status: string, lastRunStatus: string | null 
       return { label: "Écartée", cta: null };
   }
 }
+
+export type PlanTab = "a_faire" | "menees";
+
+/** Onglet du plan demandé par l'URL (`?onglet=menees`) ; « À faire » par défaut (story 5.3). */
+export function planTabFromParam(value: string | null | undefined): PlanTab {
+  return value === "menees" ? "menees" : "a_faire";
+}
+
+/**
+ * Story 5.3 : « À faire » = actions à lancer ; « En cours et menées » = actions en cours ou exécutées
+ * (statut inconnu compris, affiché « En cours »). Terminées et écartées restent dans l'historique.
+ */
+export function splitPlanItems<T extends { status: string }>(items: T[]): Record<PlanTab, T[]> {
+  const open = items.filter((item) => item.status !== "termine" && item.status !== "ecarte");
+  return {
+    a_faire: open.filter((item) => item.status === "propose"),
+    menees: open.filter((item) => item.status !== "propose"),
+  };
+}

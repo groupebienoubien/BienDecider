@@ -11,7 +11,7 @@ import { decideProposalReview, reviewProposal, reviewPublishedSiteHtml } from ".
 import { describePage } from "../src/lib/paul-context";
 import { buildOutreachDraft, dayToDate, formatDay, hasPlaceholders, leadReadiness, pickNextLead } from "../src/lib/lead-followup";
 import { describeRunProgress, finishedRunMessage, formatDuration, recentSucceededRuns, runResultHref } from "../src/lib/agent-run-progress";
-import { groupPlanItems, planItemStatusView } from "../src/lib/action-plan-view";
+import { groupPlanItems, planItemStatusView, planTabFromParam, splitPlanItems } from "../src/lib/action-plan-view";
 import { facebookAuditSource } from "../src/lib/facebook-audit-source";
 import { businessTargetLines, clientGapLabel, clientsToMonthly, computeBusinessTarget, toMonthly } from "../src/lib/business-target";
 import { PROFILE_PAGE_ONLY_MESSAGE, PENDING_ACTION_TYPES, REVISION_INSTRUCTION_MAX, decidedText, launchesRun, launchPlanItemPayloadSchema, reviseProposalPayloadSchema, describePendingAction, expiredMessage, mergeProfilePayloads, objectiveUpdateValues, profileUpdateToolSchema, profileUpdateValues, readProfileToolInput, toPendingActionView, updateObjectivePayloadSchema, updateProfilePayloadSchema } from "../src/lib/agents/pending-action-view";
@@ -838,4 +838,15 @@ test("usage limit windows start at midnight in Paris, across daylight saving cha
   expect(usageCounterFor("onboarding_interpret")).toBe("chat");
   expect(usageCounterFor("site_publish")).toBe("runs");
   expect(usageCounterFor("unit-test")).toBe("runs");
+});
+
+test("story 5.3: the plan puts actions to launch first and keeps running and executed ones apart", () => {
+  const items = ["propose", "en_cours", "lance", "termine", "ecarte", "inconnu", "propose"].map((status, index) => ({ id: String(index), status }));
+  const tabs = splitPlanItems(items);
+  expect(tabs.a_faire.map((item) => item.id)).toEqual(["0", "6"]);
+  // Un statut inconnu s'affiche « En cours » : il va avec les actions menées, jamais dans « À faire ».
+  expect(tabs.menees.map((item) => item.id)).toEqual(["1", "2", "5"]);
+  expect(planTabFromParam("menees")).toBe("menees");
+  expect(planTabFromParam(undefined)).toBe("a_faire");
+  expect(planTabFromParam("autre")).toBe("a_faire");
 });
