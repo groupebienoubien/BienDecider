@@ -144,54 +144,86 @@ export function stripCssResources(css: string): string {
     .replace(/(?:-webkit-)?(?:url|image-set|image|cross-fade|element|src)\s*\([^)]*\)?/gi, "none");
 }
 
-/** Répète un remplacement jusqu'à ce que le texte ne change plus : une seule passe peut recomposer ce qu'elle retire (« <scr<script>ipt> »). */
-export function untilStable(text: string, step: (value: string) => string): string {
-  let previous: string;
-  let current = text;
-  do { previous = current; current = step(previous); } while (current !== previous);
-  return current;
-}
-
-const REMOVED_ELEMENTS = /<\/?(?:picture|source|link|object|embed|video|audio|track|image|feimage|use|input|iframe|frame|frameset|base|meta|form|script|noscript|svg:image)\b(?:"[^"]*"|'[^']*'|[^'">])*>/gi;
-const TAG = /<([a-z][a-z0-9:-]*)((?:"[^"]*"|'[^']*'|[^'">])*)>/gi;
+/** Éléments retirés avec leurs balises ; leur contenu éventuel (texte de repli) reste soumis au même tri. */
+const REMOVED_ELEMENTS = new Set(["picture", "source", "link", "video", "audio", "track", "image", "feimage", "use", "input", "frame", "base", "meta", "form", "svg:image"]);
+/** Éléments retirés avec tout leur contenu. */
+const SKIPPED_ELEMENTS = new Set(["script", "noscript", "iframe", "object", "embed", "frameset", "template"]);
+const TOKEN = /<!--[\s\S]*?(?:-->|$)|<!doctype[^>]*>|<\/([a-z][a-z0-9:-]*)\s*>|<([a-z][a-z0-9:-]*)((?:"[^"]*"|'[^']*'|[^'"<>])*)>/gi;
 const REMOTE_URL = /(?:https?:|\/\/)/i;
 
+/** Texte entre deux balises : tout « < » restant (balise incomplète ou recomposée) devient du texte. */
+function escapeText(text: string): string {
+  return text.replace(/</g, "&lt;");
+}
+
 /**
- * Seules les photos de l'entreprise restent dans la page. Chaque <img> gardé est reconstruit à partir de rien
+ * Seules les photos de l'entreprise restent dans la page. Le HTML est parcouru balise par balise, sans
+ * retrait par motif : chaque balise gardée est reconstruite, le contenu des scripts et cadres est sauté,
+ * et tout « < » resté dans le texte est échappé. Chaque <img> gardé est reconstruit à partir de rien
  * (adresse autorisée, texte alternatif de la photo en base, loading="lazy") ; il est supprimé si son adresse
- * n'est pas une photo de l'entreprise ou si la balise contient une autre adresse distante. Les éléments qui
- * chargent une ressource sont retirés ; sur les autres balises, srcset/src/background/poster et tout href hors
- * <a> sont retirés, et les styles sont vidés de leurs ressources.
+ * n'est pas une photo de l'entreprise ou si la balise contient une autre adresse distante. Sur les autres
+ * balises, srcset/src/background/poster, les gestionnaires on… et tout href hors <a> sont retirés, et les
+ * styles sont vidés de leurs ressources.
  */
 export function keepOnlyCompanyPhotos(html: string, photos: readonly { url: string; alt: string }[]): string {
   const byUrl = new Map(photos.map((photo) => [photo.url, photo]));
-  return untilStable(html, (value) => value.replace(REMOVED_ELEMENTS, ""))
-    .replace(/(<style\b(?:"[^"]*"|'[^']*'|[^'">])*>)([\s\S]*?)(<\/style\s*>|$)/gi, (_, open: string, css: string, close: string) => `${open}${stripCssResources(css)}${close}`)
-    .replace(TAG, (tag, rawName: string, rawAttributes: string) => {
-      const name = rawName.toLowerCase();
-      const attributes = parseAttributes(rawAttributes);
-      if (name === "img") {
-        const src = attributes.find((attribute) => attribute.name === "src")?.value.trim();
-        const photo = src ? byUrl.get(src) : undefined;
-        if (!photo) return "";
-        let rest = decodeEntities(tag);
-        for (const known of byUrl.values()) rest = rest.split(known.url).join("").split(known.alt).join("");
-        if (REMOTE_URL.test(rest)) return "";
-        return `<img src="${escapeAttribute(photo.url)}" alt="${escapeAttribute(photo.alt)}" loading="lazy">`;
-      }
-      const kept = attributes.filter((attribute) => {
-        if (/^on/.test(attribute.name)) return false;
-        if (["src", "srcset", "background", "poster", "lowsrc", "dynsrc", "data", "action", "formaction", "xlink:href", "ping"].includes(attribute.name)) return false;
-        if (attribute.name.endsWith(":href") || (attribute.name === "href" && name !== "a")) return false;
-        if (attribute.name === "href" && /^(javascript|data|vbscript):/i.test(attribute.value.replace(/[\s\p{Cc}]/gu, ""))) return false;
-        return true;
-      });
-      const rebuilt = kept.map((attribute) => {
-        const value = attribute.name === "style" ? stripCssResources(attribute.value) : attribute.value;
-        return `${attribute.name}="${escapeAttribute(value)}"`;
-      });
-      return `<${rawName}${rebuilt.length ? " " + rebuilt.join(" ") : ""}>`;
+  let output = "";
+  let cursor = 0;
+  let skipping: string | null = null;
+  let inStyle = false;
+  TOKEN.lastIndex = 0;
+  for (let match = TOKEN.exec(html); match; match = TOKEN.exec(html)) {
+    const text = html.slice(cursor, match.index);
+    cursor = TOKEN.lastIndex;
+    if (!skipping) output += inStyle ? stripCssResources(text) : escapeText(text);
+    const [token, closingName, openingName, rawAttributes = ""] = match;
+    if (closingName !== undefined) {
+      const name = closingName.toLowerCase();
+      if (skipping) { if (name === skipping) skipping = null; continue; }
+      if (name === "style") inStyle = false;
+      if (!REMOVED_ELEMENTS.has(name) && !SKIPPED_ELEMENTS.has(name) && name !== "img") output += `</${closingName}>`;
+      continue;
+    }
+    if (skipping) continue;
+    if (openingName === undefined) {
+      // Doctype gardé, commentaires retirés.
+      if (/^<!doctype/i.test(token)) output += "<!DOCTYPE html>";
+      continue;
+    }
+    const name = openingName.toLowerCase();
+    if (SKIPPED_ELEMENTS.has(name)) { skipping = name; continue; }
+    if (REMOVED_ELEMENTS.has(name)) continue;
+    const attributes = parseAttributes(rawAttributes);
+    if (name === "img") {
+      const src = attributes.find((attribute) => attribute.name === "src")?.value.trim();
+      const photo = src ? byUrl.get(src) : undefined;
+      if (!photo) continue;
+      let rest = decodeEntities(token);
+      for (const known of byUrl.values()) rest = rest.split(known.url).join("").split(known.alt).join("");
+      if (REMOTE_URL.test(rest)) continue;
+      output += `<img src="${escapeAttribute(photo.url)}" alt="${escapeAttribute(photo.alt)}" loading="lazy">`;
+      continue;
+    }
+    if (name === "style") inStyle = true;
+    const kept = attributes.filter((attribute) => {
+      if (!/^[a-z][a-z0-9:_-]*$/.test(attribute.name)) return false;
+      if (/^on/.test(attribute.name)) return false;
+      if (["src", "srcset", "background", "poster", "lowsrc", "dynsrc", "data", "action", "formaction", "xlink:href", "ping"].includes(attribute.name)) return false;
+      if (attribute.name.endsWith(":href") || (attribute.name === "href" && name !== "a")) return false;
+      if (attribute.name === "href" && /^(javascript|data|vbscript):/i.test(attribute.value.replace(/[\s\p{Cc}]/gu, ""))) return false;
+      return true;
     });
+    const rebuilt = kept.map((attribute) => {
+      const value = attribute.name === "style" ? stripCssResources(attribute.value) : attribute.value;
+      return `${attribute.name}="${escapeAttribute(value)}"`;
+    });
+    output += `<${openingName}${rebuilt.length ? " " + rebuilt.join(" ") : ""}>`;
+  }
+  if (!skipping) {
+    const rest = html.slice(cursor);
+    output += inStyle ? stripCssResources(rest) : escapeText(rest);
+  }
+  return output;
 }
 
 /** Lignes des photos transmises au modèle : adresse et texte alternatif, rien d'autre. */

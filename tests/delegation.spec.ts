@@ -23,7 +23,7 @@ import { WEEKLY_REVIEW_MARKER } from "../src/lib/weekly-review";
 import { RUN_CAPS, capGroup, runCapReachedMessage, withRunCap } from "../src/lib/agents/run-caps";
 import { PROFILE_TEXT_LIMITS, clearableText, profileTextIssue } from "../src/lib/company-profile";
 import { parisQuotaWindows, usageCounterFor } from "../src/lib/quota-windows";
-import { SITE_PHOTO_BAD_TYPE, SITE_PHOTO_MAX_BYTES, SITE_PHOTO_TOO_LARGE, SITE_PHOTO_TOO_WIDE, checkSitePhoto, cleanSitePhotoAlt, detectSitePhotoType, keepOnlyCompanyPhotos, sitePhotoPathname, sitePhotoPromptLines, untilStable } from "../src/lib/site/photos";
+import { SITE_PHOTO_BAD_TYPE, SITE_PHOTO_MAX_BYTES, SITE_PHOTO_TOO_LARGE, SITE_PHOTO_TOO_WIDE, checkSitePhoto, cleanSitePhotoAlt, detectSitePhotoType, keepOnlyCompanyPhotos, sitePhotoPathname, sitePhotoPromptLines } from "../src/lib/site/photos";
 import { runStreamingToolLoop, runToolLoop, type ToolLoopOptions, type UsageTotal } from "../src/lib/usage";
 import { AgentRunLimitError } from "../src/lib/agent-run-limits";
 import { createAgentExecution, withAgentExecution } from "../src/lib/agent-run-execution";
@@ -1049,11 +1049,17 @@ test("story 5.5: the model is given each photo's address and description, or tol
   expect(sitePhotoPromptLines([])).toContain("aucune");
 });
 
-test("story 5.5: a removal that would rebuild what it removes runs until the text is stable", () => {
-  expect(untilStable("<scr<script>ipt>", (value) => value.replace(/<script>/g, ""))).toBe("");
-  const cleaned = keepOnlyCompanyPhotos('<p>A</p><scr<script>ipt>alert(1)</script ><iframe src="//evil"></iframe>', []);
-  expect(cleaned).not.toMatch(/<\/?script/i);
-  expect(cleaned).not.toMatch(/<iframe/i);
+test("story 5.5: the page is sorted tag by tag: no script survives, stray brackets become text, closing tags stay", () => {
+  const cleaned = keepOnlyCompanyPhotos('<!DOCTYPE html><p onclick="x()">A</p><scr<script>ipt>alert(1)</script ><script>alert(2)</script><iframe src="//evil">x</iframe><!-- c --><p>B < C</p>', []);
+  expect(cleaned.toLowerCase().includes("<script")).toBe(false);
+  expect(cleaned.toLowerCase().includes("<iframe")).toBe(false);
+  // Le contenu d'un vrai script disparaît ; une balise recomposée ne reste que du texte inerte.
+  expect(cleaned.includes("alert(2)")).toBe(false);
+  expect(cleaned.includes("onclick")).toBe(false);
+  expect(cleaned.startsWith("<!DOCTYPE html><p>A</p>")).toBe(true);
+  expect(cleaned.includes("<p>B &lt; C</p>")).toBe(true);
+  expect(cleaned.includes("&lt;scr")).toBe(true);
+  expect(cleaned.includes("alert(1)")).toBe(false);
 });
 
 function auditLoopAccounting(companyId = "company-a") {
