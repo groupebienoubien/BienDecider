@@ -123,6 +123,24 @@ export function parisDateKey(now: Date): string {
   return DATE_KEY.format(now);
 }
 
+const TIME_PARTS = new Intl.DateTimeFormat("fr-FR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone: RUNTIME_TIME_ZONE });
+
+/**
+ * Heure d'un état à Paris (story 3.5) : « 23:39 » le jour même, « 22/10 23:39 »
+ * un autre jour, « 22/10/2025 23:39 » une autre année. null si la date est absente.
+ */
+export function formatParisTime(date: Date | string | null | undefined, now: Date): string | null {
+  if (date === null || date === undefined) return null;
+  const value = typeof date === "string" ? new Date(date) : date;
+  if (Number.isNaN(value.getTime())) return null;
+  const parts = TIME_PARTS.formatToParts(value);
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)?.value ?? "";
+  const time = `${part("hour")}:${part("minute")}`;
+  if (parisDateKey(value) === parisDateKey(now)) return time;
+  const day = `${part("day")}/${part("month")}`;
+  return parisDateKey(value).slice(0, 4) === parisDateKey(now).slice(0, 4) ? `${day} ${time}` : `${day}/${part("year")} ${time}`;
+}
+
 /**
  * Contexte du moment donné à tous les agents : date du jour (Europe/Paris) et
  * nom du dirigeant pour signer. Varie d'un jour à l'autre : toujours placé

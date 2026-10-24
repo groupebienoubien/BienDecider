@@ -169,6 +169,7 @@ model ActionPlanItem {
   status      String   @default("propose") // propose, en_cours, lance, termine, ecarte
   feedback    String? // raison donnée par le dirigeant quand il écarte l'action — relue par Paul au plan suivant
   createdAt   DateTime @default(now())
+  updatedAt   DateTime @default(now()) @updatedAt // story 3.5 : Paul situe chaque état dans le temps
   proposals   AgentProposal[]
   agentRuns   AgentRun[]
 }

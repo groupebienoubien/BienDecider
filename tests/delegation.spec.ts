@@ -720,3 +720,26 @@ test("story 3.3: a finished revision run names the new version and links to the 
   expect(runResultHref({ agent: "marketing" })).toBe("/diagnostic");
   expect(finishedRunMessage({ agent: "demarchage", resultCount: 1, revision: { ...revision, title: null } })).toBe("Jean-Claude a préparé la version 2.");
 });
+
+test("story 3.5: a state time reads HH:MM in Paris, with the date when it is not today", async () => {
+  const { formatParisTime } = await import("../src/lib/agents/personas");
+  // 23 octobre 2026, 23:40 à Paris (heure d'été, UTC+2).
+  const now = new Date("2026-10-23T21:40:00Z");
+  expect(formatParisTime(new Date("2026-10-23T21:37:00Z"), now)).toBe("23:37");
+  expect(formatParisTime("2026-10-23T21:39:00.000Z", now)).toBe("23:39");
+  expect(formatParisTime(new Date("2026-10-22T21:39:00Z"), now)).toBe("22/10 23:39");
+  expect(formatParisTime(new Date("2025-10-22T21:39:00Z"), now)).toBe("22/10/2025 23:39");
+  // 23 h 30 UTC = minuit et demi à Paris le lendemain : ce n'est plus « aujourd'hui » pour un instant du 23.
+  expect(formatParisTime(new Date("2026-10-23T22:30:00Z"), new Date("2026-10-23T22:45:00Z"))).toBe("00:30");
+  expect(formatParisTime(new Date("2026-10-23T21:30:00Z"), new Date("2026-10-23T22:45:00Z"))).toBe("23/10 23:30");
+  // Heure d'hiver : UTC+1.
+  expect(formatParisTime(new Date("2026-12-01T08:05:00Z"), new Date("2026-12-01T09:00:00Z"))).toBe("09:05");
+});
+
+test("story 3.5: a run still in progress has no end time, Paul's first message has no previous one", async () => {
+  const { formatParisTime } = await import("../src/lib/agents/personas");
+  const now = new Date("2026-10-23T21:40:00Z");
+  expect(formatParisTime(null, now)).toBeNull();
+  expect(formatParisTime(undefined, now)).toBeNull();
+  expect(formatParisTime("pas une date", now)).toBeNull();
+});

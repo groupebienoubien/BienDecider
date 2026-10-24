@@ -2,7 +2,8 @@
 title: 'Story 3.5 — Paul situe chaque état dans le temps'
 type: 'bugfix'
 created: '2026-10-23'
-status: 'ready-for-dev'
+status: 'done'
+baseline_commit: '6a5e2f0114b9a705b64f7f49dfafe86ab93453db'
 route: 'dispatch'
 review_loop_iteration: 0
 context:
@@ -46,19 +47,40 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] formatage des heures (pur) -- Europe/Paris, date si autre jour -- lisible
-- [ ] `team-state.ts`, `buildCurrentStatus` -- heures et message précédent -- Paul situe les états
-- [ ] prompt de Paul -- règle mise à jour / erreur -- plus de fausses corrections
-- [ ] tests -- une ligne de la matrice par test -- non-régression
+- [x] formatage des heures (pur) -- Europe/Paris, date si autre jour -- lisible
+- [x] `team-state.ts`, `buildCurrentStatus` -- heures et message précédent -- Paul situe les états
+- [x] prompt de Paul -- règle mise à jour / erreur -- plus de fausses corrections
+- [x] tests -- une ligne de la matrice par test -- non-régression
 
 **Acceptance Criteria:**
 - Étant donné une exécution terminée après le dernier message de Paul, quand il lit `get_current_status`, alors il dispose de l'heure de fin et de l'heure de son message précédent.
 
 ## Implementation Notes
 
+- `formatParisTime(date, now)` (pure, `src/lib/agents/personas.ts`) : « HH:MM » le jour même à Paris, « JJ/MM HH:MM » un autre jour, « JJ/MM/AAAA HH:MM » une autre année ; null si la date est absente ou invalide. Comparaison du jour par `parisDateKey`.
+- `ActionPlanItem` n'avait pas de colonne `updatedAt` : migration additive `20261024140000_action_plan_item_updated_at` (`@default(now()) @updatedAt`, rétro-remplie avec `createdAt`). Prisma la met à jour sur `update` et `updateMany` ; aucune écriture SQL brute ne touche cette table. `getTeamState` la lit, sans changer le filtre ni l'ordre.
+- `buildCurrentStatus(companyId, now = new Date())` : `maintenant`, `monMessagePrecedent` (dernier `ChatMessage` assistant à `createdAt <= now` ; celui du tour en cours n'est enregistré qu'en fin de tour), `planEnCours[i].misAJour` (le `updatedAt` brut n'est pas transmis), `executionsRecentes[i].debut` (`startedAt`, nul tant que l'exécution est en file) et `fin` (nul tant qu'elle tourne), en plus des champs existants.
+- Règle du prompt ajoutée telle que formulée, précédée d'une phrase qui nomme les champs horaires.
+- Tests : formatage dans `tests/delegation.spec.ts` ; `buildCurrentStatus` et prompt dans `tests/engine.spec.ts` (base de données, CI).
+
 ## Spec Change Log
 
+- 2026-10-24 : `ActionPlanItem` n'avait pas de colonne `updatedAt` ; ajoutée par une migration additive (`20261024140000_action_plan_item_updated_at`, valeur initiale = `createdAt`). Choix de l'orchestrateur : la règle « Never » visait le calcul de l'état, pas l'ajout d'une donnée de date.
+
 ## Review Triage Log
+
+| # | Source | Constat | Verdict | Preuve | Route |
+|---|--------|---------|---------|--------|-------|
+| 1 | blind, edge | Heures UTC brutes laissées à côté des heures de Paris | medium | `...run` conserve `queuedAt`, `startedAt`, `finishedAt` | patch |
+| 2 | blind, edge | À la minute près, « fin postérieure à ton message » est indécidable | medium | message et fin dans la même minute | patch |
+| 3 | blind, edge | Le bilan hebdomadaire automatique compte comme « message précédent » de Paul | medium | même rôle `assistant` (`cron/weekly-review`) | patch |
+| 4 | blind | La règle ne couvre que les fins, pas les démarrages ni les actions mises à jour | low | correctif direct (avec le 2) | patch |
+| 5 | blind, edge | Exécution en file sans heure lisible | low | correctif direct | patch |
+| 6 | blind, edge | `misAJour` change pour toute modification, pas seulement le statut | low | correctif direct (libellé du prompt) | patch |
+| 7 | blind | `maintenant` sans date | low | correctif direct | patch |
+| 8 | blind | Mise à jour réelle de `updatedAt` et limite du message précédent non testées | low | correctif direct | patch |
+| 9 | edge | Deux tours simultanés : le message précédent peut venir de l'autre tour | low | cas improbable | rejeté |
+| 10 | blind | La colonne ajoutée n'a pas été validée par les PF | low | signalé à Samir dans le récapitulatif | defer |
 
 ## Verification
 

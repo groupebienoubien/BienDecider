@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { computeBusinessTarget, formatEuros } from "@/lib/business-target";
 import { getWeeklyDelta } from "@/lib/funnel";
+import { WEEKLY_REVIEW_MARKER as MARKER } from "@/lib/weekly-review";
 
 /**
  * "Events" : le seul trigger qui ne vient pas d'un clic ou d'un message de
@@ -16,8 +17,6 @@ import { getWeeklyDelta } from "@/lib/funnel";
  * Paul garde son rôle de synthèse et de plan uniquement dans les flux
  * déclenchés par l'utilisateur (chat, "Compléter le plan").
  */
-
-const MARKER = "📅 Point hebdomadaire automatique";
 
 function buildMessage(params: {
   company: { objective: string | null } & Parameters<typeof computeBusinessTarget>[0];

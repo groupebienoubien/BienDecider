@@ -4,6 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { requireLocalDatabase } from "./support/local-database";
 import { createSessionToken } from "../src/lib/session-token";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { WEEKLY_REVIEW_MARKER } from "../src/lib/weekly-review";
 
 // Next n'utilise un vrai AsyncLocalStorage que s'il est exposé globalement au
 // chargement de ses modules (le serveur Next le fait au démarrage). Sans lui,
@@ -1961,7 +1962,7 @@ test("story 3.3: a confirmed revision rewrites the same production in version 2 
   const runId = result.ok ? result.launch?.runId : undefined;
   const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: runId } });
   expect(run).toMatchObject({ agent: "demarchage", status: "queued", activeDedupeKey: `revision:${email.id}`, planItemId: null });
-  expect(run.payload).toEqual({ kind: "revision", proposalId: email.id, fromVersion: 1, instruction: REVISION_INSTRUCTION });
+  expect(run.payload).toEqual({ kind: "revision", proposalId: email.id, fromVersion: 1, instruction: REVISION_INSTRUCTION, title: email.title });
 
   let answer = "";
   await processWithScenario(run.id, async (tool) => { answer = await tool("revise_proposal").run({ content: REVISED_EMAIL }); });
@@ -2223,4 +2224,103 @@ test("story 3.3: an agent-revised version 2 approved as it is is validated, and 
   expect(refused.status()).toBe(409);
   expect(await refused.json()).toEqual({ error: "Une révision est en cours : attendez la nouvelle version." });
   expect((await prisma.agentProposal.findUniqueOrThrow({ where: { id: running.id } })).status).toBe("en_attente");
+});
+
+test("story 3.5: Paul reads when each state started, ended and was updated, and when he last wrote", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { buildCurrentStatus } = await import("../src/lib/agents/co-ceo");
+  // 23 octobre 2026, 23:40 à Paris (UTC+2).
+  const now = new Date("2026-10-23T21:40:00Z");
+  const at = (iso: string) => new Date(iso);
+  const action = await prisma.actionPlanItem.create({ data: {
+    companyId: company.id, agent: "demarchage", title: "Pistes du quartier", rationale: "Raison", timing: "Aujourd'hui", status: "lance",
+    createdAt: at("2026-10-23T21:30:00Z"), updatedAt: at("2026-10-23T21:39:00Z"),
+  } });
+  const finished = await prisma.agentRun.create({ data: {
+    companyId: company.id, planItemId: action.id, agent: "demarchage", requestKey: `time-${randomUUID()}`, payload: {}, status: "succeeded",
+    queuedAt: at("2026-10-23T21:37:00Z"), startedAt: at("2026-10-23T21:37:00Z"), finishedAt: at("2026-10-23T21:39:00Z"), createdAt: at("2026-10-23T21:37:00Z"),
+  } });
+  const running = await prisma.agentRun.create({ data: {
+    companyId: company.id, agent: "contenu", requestKey: `time-${randomUUID()}`, payload: {}, status: "running",
+    queuedAt: at("2026-10-23T21:38:00Z"), startedAt: at("2026-10-23T21:38:00Z"), createdAt: at("2026-10-23T21:38:00Z"),
+  } });
+  const yesterday = await prisma.agentRun.create({ data: {
+    companyId: company.id, agent: "marketing", requestKey: `time-${randomUUID()}`, payload: {}, status: "succeeded",
+    queuedAt: at("2026-10-22T21:41:00Z"), startedAt: at("2026-10-22T21:41:00Z"), finishedAt: at("2026-10-22T21:45:00Z"), createdAt: at("2026-10-22T21:41:00Z"),
+  } });
+
+  const queued = await prisma.agentRun.create({ data: {
+    companyId: company.id, agent: "contenu", requestKey: `time-${randomUUID()}`, payload: {}, status: "queued",
+    queuedAt: at("2026-10-23T21:39:10Z"), createdAt: at("2026-10-23T21:39:10Z"),
+  } });
+
+  const first = JSON.parse(JSON.stringify(await buildCurrentStatus(company.id, now)));
+  expect(first.maintenant).toBe("vendredi 23 octobre 2026, 23:40");
+  expect(first.monMessagePrecedent).toBeNull();
+  // Sans message précédent, rien n'est « depuis mon dernier message ».
+  expect(first.planEnCours.map((item: { depuisMonMessagePrecedent: boolean }) => item.depuisMonMessagePrecedent)).toEqual([false]);
+  expect(first.executionsRecentes.map((run: { depuisMonMessagePrecedent: boolean }) => run.depuisMonMessagePrecedent)).toEqual([false, false, false, false]);
+
+  await prisma.chatMessage.createMany({ data: [
+    { companyId: company.id, role: "assistant", content: "Bonjour.", createdAt: at("2026-10-23T21:20:00Z") },
+    { companyId: company.id, role: "assistant", content: "Jean-Claude est encore en cours.", createdAt: at("2026-10-23T21:38:00Z") },
+    { companyId: company.id, role: "user", content: "Et maintenant ?", createdAt: at("2026-10-23T21:39:30Z") },
+    // Écrit par le cron, pas par Paul : ignoré.
+    { companyId: company.id, role: "assistant", content: `${WEEKLY_REVIEW_MARKER}
+Aucun mouvement côté prospection cette semaine.`, createdAt: at("2026-10-23T21:39:50Z") },
+    // Postérieur à l'instant lu : ignoré.
+    { companyId: company.id, role: "assistant", content: "Plus tard.", createdAt: at("2026-10-23T21:45:00Z") },
+  ] });
+  const status = JSON.parse(JSON.stringify(await buildCurrentStatus(company.id, now)));
+  expect(status.monMessagePrecedent).toBe("23:38");
+  expect(status.planEnCours).toEqual([expect.objectContaining({ id: action.id, misAJour: "23:39", depuisMonMessagePrecedent: true })]);
+  const byId = (id: string) => status.executionsRecentes.find((run: { id: string }) => run.id === id);
+  expect(byId(finished.id)).toMatchObject({ status: "succeeded", enFileDepuis: null, debut: "23:37", fin: "23:39", depuisMonMessagePrecedent: true });
+  // Commencée à 23:38:00, pas après le message de 23:38:00.
+  expect(byId(running.id)).toMatchObject({ status: "running", debut: "23:38", fin: null, depuisMonMessagePrecedent: false });
+  expect(byId(yesterday.id)).toMatchObject({ fin: "22/10 23:45", depuisMonMessagePrecedent: false });
+  expect(byId(queued.id)).toMatchObject({ status: "queued", enFileDepuis: "23:39", debut: null, fin: null, depuisMonMessagePrecedent: false });
+  for (const run of status.executionsRecentes) {
+    expect(run).not.toHaveProperty("queuedAt");
+    expect(run).not.toHaveProperty("startedAt");
+    expect(run).not.toHaveProperty("finishedAt");
+    expect(run).toHaveProperty("elapsedSeconds");
+  }
+});
+
+test("story 3.5: a real status change of an action moves its misAJour past Paul's previous message", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { buildCurrentStatus } = await import("../src/lib/agents/co-ceo");
+  const { syncPlanItemStatus } = await import("../src/lib/plan-item-status");
+  const { formatParisTime } = await import("../src/lib/agents/personas");
+  const longAgo = new Date(Date.now() - 2 * 3600 * 1000);
+  // Terminée sans production décidée : syncPlanItemStatus la repasse « lance » par un updateMany.
+  const action = await prisma.actionPlanItem.create({ data: {
+    companyId: company.id, agent: "contenu", title: "Posts de la semaine", rationale: "Raison", timing: "Cette semaine", status: "termine",
+    createdAt: longAgo, updatedAt: longAgo,
+  } });
+  await prisma.chatMessage.create({ data: { companyId: company.id, role: "assistant", content: "Tout est terminé.", createdAt: new Date(Date.now() - 60 * 1000) } });
+
+  await syncPlanItemStatus(action.id);
+  const updated = await prisma.actionPlanItem.findUniqueOrThrow({ where: { id: action.id } });
+  expect(updated.status).toBe("lance");
+  expect(updated.updatedAt.getTime()).toBeGreaterThan(longAgo.getTime());
+
+  const now = new Date();
+  const status = await buildCurrentStatus(company.id, now);
+  expect(status.planEnCours).toEqual([expect.objectContaining({
+    id: action.id, misAJour: formatParisTime(updated.updatedAt, now), depuisMonMessagePrecedent: true,
+  })]);
+  expect(status.planEnCours[0].misAJour).not.toBe(formatParisTime(longAgo, now));
+});
+
+test("story 3.5: Paul's prompt tells a change since his last message apart from a mistake", async ({ company }) => {
+  const paul = await capturePaulTools(company.id);
+  expect(paul.system).toContain("Si un état a changé depuis ton message précédent (fin postérieure à ton message), dis \"depuis mon dernier message, …\"");
+  expect(paul.system).toContain("Ne dis \"je me suis trompé\" que si l'état à l'heure de ton message contredisait ce que tu as écrit.");
+  const status = JSON.parse(await paul.tool("get_current_status").run({}));
+  expect(status).toHaveProperty("maintenant");
+  expect(status.monMessagePrecedent).toBeNull();
+  expect(paul.system).toContain("depuisMonMessagePrecedent: true");
+  expect(paul.system).toContain("pas forcément un changement de statut");
 });

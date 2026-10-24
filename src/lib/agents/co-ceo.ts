@@ -6,7 +6,8 @@ import { anthropic, AGENT_MODEL } from "@/lib/anthropic";
 import { prisma } from "@/lib/prisma";
 import { getRejectionContext } from "@/lib/agents/rejection-context";
 import { AgentRunQuotaError, classifyRunError, failureMessage, isRunFailureReason, type RunFailureReason } from "@/lib/agents/agent-errors";
-import { PERSONAS, objectiveLine, directionLine, companyProfileLines, runtimeContextLines } from "@/lib/agents/personas";
+import { PERSONAS, objectiveLine, directionLine, companyProfileLines, runtimeContextLines, formatParisTime, formatParisDate } from "@/lib/agents/personas";
+import { WEEKLY_REVIEW_MARKER } from "@/lib/weekly-review";
 import { enqueuePlanRun } from "@/lib/agent-runs";
 import { createChatPlanItem, findLaunchablePlanItem, isPlanAgent, type PlanAgent } from "@/lib/agents/plan-items";
 import { PLAN_THEMES, type PlanTheme } from "@/lib/plan-themes";
@@ -45,10 +46,12 @@ function uncoveredRequestTool(companyId: string, source: "chat" | "plan") {
 /**
  * État lu par Paul via get_current_status : actions et exécutions viennent
  * de getTeamState, la lecture unique partagée avec le menu et l'accueil.
+ * Chaque état porte son heure (Europe/Paris), avec l'heure courante et celle
+ * du message précédent de Paul, pour qu'il distingue une mise à jour d'une erreur (story 3.5).
  */
-export async function buildCurrentStatus(companyId: string) {
-  const [teamState, funnel, pending, findings, leads, cards] = await Promise.all([
-    getTeamState(companyId),
+export async function buildCurrentStatus(companyId: string, now = new Date()) {
+  const [teamState, funnel, pending, findings, leads, cards, previousReply] = await Promise.all([
+    getTeamState(companyId, now),
     getFunnelStats(companyId),
     prisma.agentProposal.findMany({
       where: { companyId, status: "en_attente" },
@@ -66,10 +69,32 @@ export async function buildCurrentStatus(companyId: string) {
       select: { id: true, name: true, stage: true },
     }),
     recentPendingActions(companyId),
+    // Message de Paul précédant le tour en cours : celui du tour n'est enregistré qu'à la fin ;
+    // le point hebdomadaire du cron, écrit sans Paul, ne compte pas.
+    prisma.chatMessage.findFirst({
+      where: { companyId, role: "assistant", createdAt: { lte: now }, NOT: { content: { startsWith: WEEKLY_REVIEW_MARKER } } },
+      orderBy: { createdAt: "desc" },
+      select: { createdAt: true },
+    }),
   ]);
+  // Calculé ici à la milliseconde : à la minute près, Paul ne pourrait pas trancher.
+  const previousAt = previousReply?.createdAt.getTime() ?? null;
+  const since = (date: Date | string | null) => previousAt !== null && date !== null && new Date(date).getTime() > previousAt;
   return {
-    planEnCours: teamState.actions,
-    executionsRecentes: teamState.recentRuns,
+    maintenant: `${formatParisDate(now)}, ${formatParisTime(now, now)}`,
+    monMessagePrecedent: formatParisTime(previousReply?.createdAt, now),
+    planEnCours: teamState.actions.map(({ updatedAt, ...action }) => ({
+      ...action, misAJour: formatParisTime(updatedAt, now), depuisMonMessagePrecedent: since(updatedAt),
+    })),
+    // Heures de Paris uniquement (pas d'horodatage UTC brut) : enFileDepuis pour une exécution en file,
+    // debut nul tant qu'elle attend son tour, fin nulle tant qu'elle n'est pas terminée.
+    executionsRecentes: teamState.recentRuns.map(({ queuedAt, startedAt, finishedAt, ...run }) => ({
+      ...run,
+      enFileDepuis: run.status === "queued" ? formatParisTime(queuedAt, now) : null,
+      debut: formatParisTime(startedAt, now),
+      fin: formatParisTime(finishedAt, now),
+      depuisMonMessagePrecedent: since(startedAt) || since(finishedAt),
+    })),
     decisionsEnAttente: teamState.pendingDecisions,
     suiviProspects: funnelLines(funnel) || "Aucun prospect suivi pour l'instant.",
     refusRecents: await getRejectionContext(companyId),
@@ -602,6 +627,7 @@ Ton rôle concret : échanger avec le dirigeant, l'aider à prioriser, et lui pr
 Règles strictes, non négociables :
 - RÈGLE ABSOLUE : ne dis JAMAIS qu'une action a été faite (proposition créée, audit relancé, fiche vue, contenu consulté) sans avoir réellement appelé l'outil correspondant DANS CE TOUR. Tu n'as aucune mémoire fiable de ce qui a été fait avant ce message — si on te demande l'état actuel, le plan d'action, le suivi des prospects, le nombre ou le contenu de propositions/constats, appelle TOUJOURS get_current_status avant de répondre. Ne devine jamais.
 - Avant de proposer une priorité ou un lancement, appelle get_current_status pour partir du plan en cours et du suivi des prospects : ne propose pas ce qui est déjà au plan, et appuie-toi sur ce que le dirigeant t'a déjà dit dans cette conversation plutôt que de le lui redemander.
+- Chaque état de get_current_status porte son heure (heure de Paris, avec la date si ce n'est pas aujourd'hui) : maintenant (date et heure), monMessagePrecedent (l'heure de ton message précédent), enFileDepuis, debut et fin des exécutions, misAJour des actions (heure de la dernière modification de l'action, quelle qu'elle soit, pas forcément un changement de statut). Si un état a changé depuis ton message précédent (fin postérieure à ton message), dis "depuis mon dernier message, …". Un élément marqué depuisMonMessagePrecedent: true (exécution commencée ou terminée, action modifiée depuis ton message précédent) est un tel changement, à annoncer ainsi. Ne dis "je me suis trompé" que si l'état à l'heure de ton message contredisait ce que tu as écrit.
 - Une action au statut "en_cours" est déjà en train d'être réalisée (voir son exécution dans executionsRecentes) : ne la relance pas et ne crée pas d'action équivalente ; dis au dirigeant qu'elle est en cours.
 - Tu ne lances JAMAIS un agent toi-même. Les outils propose_launch_* créent l'action dans le plan (statut à lancer) et une carte « Lancer {agent} : {titre} » sous ta réponse ; rien n'est lancé tant que le dirigeant n'a pas cliqué sur « Lancer ». Même quand il te demande explicitement de lancer un agent (« lance ${PERSONAS.demarchage.name} »), tu passes par la carte. Ne dis JAMAIS « c'est lancé », « c'est parti » ni que l'agent y travaille après une proposition : dis qu'il peut lancer d'un clic sur la carte, ou choisir « Plus tard » (l'action reste alors dans son plan, à lancer).
 - Chaque proposition de lancement crée une action dans le plan, avec le brief que tu rédiges, et les productions y seront rattachées. Si sa demande correspond à une action déjà au plan avec le statut "propose", passe son identifiant (planItemId) au lieu d'en créer une seconde.
