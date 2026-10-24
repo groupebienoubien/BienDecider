@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSessionEmail } from "@/lib/session";
 import { isAdminEmail } from "@/lib/admin";
+import { deleteCompanySitePhotoFiles } from "@/lib/site/photo-store";
 
 /** Suppression définitive d'une entreprise (nettoyage pilote) — cascade sur toutes ses données, cf. prisma/schema.prisma. */
 export async function DELETE(
@@ -14,6 +15,7 @@ export async function DELETE(
   }
 
   const { id } = await params;
+  await deleteCompanySitePhotoFiles(id);
   await prisma.company.delete({ where: { id } });
   return NextResponse.json({ ok: true });
 }

@@ -6,12 +6,14 @@ import { OpenPaulButton } from "@/components/open-paul-button";
 import { PageHeading } from "@/components/mockup-ui";
 import { PersonaAvatar } from "@/components/persona-avatar";
 import { DirectionForm } from "@/components/direction-form";
+import { SitePhotos } from "@/components/site-photos";
 import { PERSONAS, type AgentKey } from "@/lib/agents/personas";
 import { facebookConnectionView } from "@/lib/oauth/meta";
 import { prisma } from "@/lib/prisma";
 import { getRetainedFeedback } from "@/lib/retained-feedback";
 import { getSessionCompany } from "@/lib/session";
 import { getShellProps } from "@/lib/shell-data";
+import { listSitePhotos, sitePhotoStorage } from "@/lib/site/photo-store";
 
 export const dynamic = "force-dynamic";
 
@@ -27,10 +29,11 @@ export default async function EntreprisePage({ searchParams }: { searchParams: P
   if (!company) redirect("/login");
   if (!company.name) redirect("/onboarding");
   const { tab } = await searchParams;
-  const [shell, connections, feedback] = await Promise.all([
+  const [shell, connections, feedback, sitePhotos] = await Promise.all([
     getShellProps(company),
     prisma.channelConnection.findMany({ where: { companyId: company.id } }),
     getRetainedFeedback(company.id),
+    listSitePhotos(company.id),
   ]);
   const facebook = facebookConnectionView(connections.find((connection) => connection.channel === "facebook"), company.id);
   const gmailConnected = connections.some((connection) => connection.channel === "gmail" && connection.status === "connecte");
@@ -75,6 +78,9 @@ export default async function EntreprisePage({ searchParams }: { searchParams: P
           <p>{feedback.length ? "Préférences confirmées par vous :" : "Aucune nouvelle préférence confirmée."}</p>
           <ul className="feedback-list">{feedback.map((item, index) => <li key={index}>{item}</li>)}</ul>
         </section>
+      </div>
+      <div style={{ marginTop: 40 }}>
+        <SitePhotos initialPhotos={sitePhotos} available={sitePhotoStorage.isConfigured()} siteSlug={company.siteHtml ? company.siteSlug : null} />
       </div>
       <div style={{ marginTop: 40 }}>
         <CompanyProfileForm embedded initialTab={tab === "objectifs" ? "objectifs" : "informations"} />

@@ -1575,3 +1575,37 @@ test("Paul's panel is titled Partenaire de croissance and a launch card offers L
     await prisma.$disconnect();
   }
 });
+
+test("story 5.5: the Entreprise page shows the site photos section, reached from the site content card", async ({ page, company }) => {
+  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }) });
+  try {
+    await prisma.agentProposal.create({ data: {
+      companyId: company.id, agent: "contenu", kind: "site_web_content", title: "Page d'accueil de l'atelier", content: "Brief du site", status: "en_attente",
+    } });
+    await page.goto(`${baseURL}/dashboard?view=validation`);
+    const card = await openProduction(page, "Page d'accueil de l'atelier");
+    await expect(card.getByRole("link", { name: "Ajouter des photos" })).toHaveAttribute("href", "/entreprise#photos-site");
+    await card.getByRole("link", { name: "Ajouter des photos" }).click();
+    await expect(page).toHaveURL(`${baseURL}/entreprise#photos-site`);
+    const section = page.locator("#photos-site");
+    await expect(section.getByRole("heading", { name: "Photos du site" })).toBeVisible();
+    await expect(section).toContainText("8 photos au plus, JPG, PNG ou WebP, 5 Mo au plus");
+    // Aucun site en ligne : rien à republier.
+    await expect(section.getByRole("button", { name: "Republier avec les photos" })).toHaveCount(0);
+  } finally {
+    await prisma.$disconnect();
+  }
+});
+
+test("story 5.5: without the Blob store, the section says sending photos is not available yet, without a technical error", async ({ page, company }) => {
+  test.skip(Boolean(process.env.BLOB_READ_WRITE_TOKEN), "Le serveur de test a un magasin Blob : l'état sans stockage ne s'observe pas.");
+  expect(company.id).toBeTruthy(); // la fixture ouvre la session du dirigeant
+  await page.goto(`${baseURL}/entreprise`);
+  const section = page.locator("#photos-site");
+  await expect(section.getByRole("status")).toHaveText("L’envoi de photos n’est pas encore disponible. Nous vous préviendrons dès qu’il le sera.");
+  await expect(section.getByRole("button", { name: "Ajouter la photo" })).toHaveCount(0);
+  await expect(section).not.toContainText("BLOB_READ_WRITE_TOKEN");
+  const upload = await page.request.post(`${baseURL}/api/site/photos`, { headers: { Origin: baseURL }, multipart: { file: { name: "photo.jpg", mimeType: "image/jpeg", buffer: Buffer.from([0xff, 0xd8, 0xff]) } } });
+  expect(upload.status()).toBe(503);
+  expect((await upload.json()).error).toContain("pas encore disponible");
+});

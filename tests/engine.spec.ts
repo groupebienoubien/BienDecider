@@ -2996,3 +2996,259 @@ test("story 5.2: the plan is prepared from the latest audit's findings and recom
   expect(created.map((item) => item.title).sort()).toEqual(["Compléter la fiche Google", "Répondre aux avis"]);
   expect(created.every((item) => item.status === "propose")).toBe(true);
 });
+
+/** PNG minimal valide (signature et IHDR) : assez pour le contrôle de type et de dimensions. */
+function sitePhotoPng(width = 1600, height = 1200): Uint8Array {
+  const bytes = new Uint8Array(64);
+  bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52]);
+  new DataView(bytes.buffer).setUint32(16, width);
+  new DataView(bytes.buffer).setUint32(20, height);
+  return bytes;
+}
+
+/** Client Blob remplacé : aucun appel à Vercel, les envois et suppressions sont relevés. */
+async function withFakeBlobStorage<T>(fn: (calls: { put: string[]; del: string[] }) => Promise<T>, configured = true): Promise<T> {
+  const { sitePhotoStorage } = await import("../src/lib/site/photo-store");
+  const original = { ...sitePhotoStorage };
+  const calls = { put: [] as string[], del: [] as string[] };
+  sitePhotoStorage.isConfigured = () => configured;
+  sitePhotoStorage.put = async (pathname: string) => {
+    calls.put.push(pathname);
+    return { url: `https://fake.public.blob.vercel-storage.com/${pathname}`, pathname };
+  };
+  sitePhotoStorage.del = async (url: string) => {
+    calls.del.push(url);
+  };
+  try {
+    return await fn(calls);
+  } finally {
+    Object.assign(sitePhotoStorage, original);
+  }
+}
+
+test("story 5.5: a photo is stored under the company's path, the ninth is refused, a non-image is refused", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { addSitePhoto } = await import("../src/lib/site/photo-store");
+  await withFakeBlobStorage(async (calls) => {
+    const first = await addSitePhoto(company.id, sitePhotoPng(), "Cuisine rénovée");
+    expect(first).toMatchObject({ alt: "Cuisine rénovée", width: 1600, height: 1200 });
+    expect(calls.put[0]).toMatch(new RegExp(`^site-photos/${company.id}/[0-9a-f-]+[.]png$`));
+    for (let index = 1; index < 8; index++) await addSitePhoto(company.id, sitePhotoPng(), `Photo ${index}`);
+    expect(await prisma.sitePhoto.count({ where: { companyId: company.id } })).toBe(8);
+    await expect(addSitePhoto(company.id, sitePhotoPng(), "Neuvième")).rejects.toMatchObject({ status: 409, message: expect.stringContaining("8 photos au plus") });
+    const pdf = new TextEncoder().encode("%PDF-1.7 fichier nommé photo.jpg");
+    await expect(addSitePhoto(company.id, pdf, "PDF")).rejects.toMatchObject({ status: 415, message: expect.stringContaining("JPG, PNG ou WebP") });
+    expect(await prisma.sitePhoto.count({ where: { companyId: company.id } })).toBe(8);
+    expect(calls.put).toHaveLength(8);
+    const positions = (await prisma.sitePhoto.findMany({ where: { companyId: company.id }, orderBy: { position: "asc" } })).map((photo) => photo.position);
+    expect(positions).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+  });
+});
+
+test("story 5.5: removing a photo deletes the file and the row, another company's photo is not found", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { addSitePhoto, removeSitePhoto, updateSitePhotoAlt } = await import("../src/lib/site/photo-store");
+  const other = await prisma.company.create({ data: {
+    ownerEmail: `engine-photo-other-${randomUUID()}@example.invalid`, name: "Autre entreprise", trade: "Artisan", servingArea: "Lyon",
+  } });
+  try {
+    await withFakeBlobStorage(async (calls) => {
+      const mine = await addSitePhoto(company.id, sitePhotoPng(), "Ma photo");
+      const theirs = await addSitePhoto(other.id, sitePhotoPng(), "Leur photo");
+      await expect(removeSitePhoto(company.id, theirs.id)).rejects.toMatchObject({ status: 404 });
+      await expect(updateSitePhotoAlt(company.id, theirs.id, "Volée")).rejects.toMatchObject({ status: 404 });
+      expect(await prisma.sitePhoto.findUnique({ where: { id: theirs.id } })).toMatchObject({ alt: "Leur photo" });
+      expect(calls.del).toEqual([]);
+
+      await removeSitePhoto(company.id, mine.id);
+      expect(calls.del).toEqual([mine.url]);
+      expect(await prisma.sitePhoto.findUnique({ where: { id: mine.id } })).toBeNull();
+    });
+    // La ligne part d'abord : un stockage en erreur ne laisse pas de photo vers un fichier absent.
+    await withFakeBlobStorage(async () => {
+      const { sitePhotoStorage } = await import("../src/lib/site/photo-store");
+      const photo = await addSitePhoto(company.id, sitePhotoPng(), "Photo");
+      sitePhotoStorage.del = async () => { throw new Error("stockage indisponible"); };
+      await removeSitePhoto(company.id, photo.id);
+      expect(await prisma.sitePhoto.findUnique({ where: { id: photo.id } })).toBeNull();
+    });
+  } finally {
+    await deleteCompany(other.id);
+  }
+});
+
+test("story 5.5: without the Blob store, sending and removing answer 503 with a plain explanation", async ({ company }) => {
+  const { addSitePhoto, removeSitePhoto } = await import("../src/lib/site/photo-store");
+  await withFakeBlobStorage(async (calls) => {
+    await expect(addSitePhoto(company.id, sitePhotoPng(), "Photo")).rejects.toMatchObject({ status: 503, message: expect.stringContaining("pas encore disponible") });
+    await expect(removeSitePhoto(company.id, "inconnue")).rejects.toMatchObject({ status: 503 });
+    expect(calls.put).toEqual([]);
+  }, false);
+});
+
+async function publishedSiteFixture(companyId: string) {
+  const { prisma } = await import("../src/lib/prisma");
+  await prisma.company.update({ where: { id: companyId }, data: { siteSlug: `atelier-photos-${companyId.slice(-8)}`, siteHtml: "<html><body>Ancienne page</body></html>", sitePublishedAt: new Date() } });
+  const proposal = await prisma.agentProposal.create({ data: {
+    companyId, agent: "contenu", kind: "site_web_content", title: "Site de l'atelier", content: "Brief approuvé : présenter l'atelier.",
+    status: "executee", version: 1, approvedVersion: 1, approvedAt: new Date(),
+  } });
+  await prisma.executionLog.create({ data: { proposalId: proposal.id, result: "succes", detail: "Site publié depuis la version 1" } });
+  const photos = await Promise.all(["a", "b"].map((name, position) => prisma.sitePhoto.create({ data: {
+    companyId, url: `https://fake.public.blob.vercel-storage.com/site-photos/${companyId}/${name}.webp`, pathname: `site-photos/${companyId}/${name}.webp`,
+    alt: name === "a" ? "Cuisine rénovée" : "Terrasse en bois", width: 1600, height: 1200, position,
+  } })));
+  return { proposal, photos };
+}
+
+type CapturedSiteCall = { params?: { messages: { content: string }[]; system: { text: string }[] } };
+
+/** Appel au modèle remplacé : relève la requête et renvoie la page donnée. */
+async function withFakeSiteModel<T>(html: string, fn: (captured: CapturedSiteCall) => Promise<T>): Promise<T> {
+  const { anthropic } = await import("../src/lib/anthropic");
+  const messages = anthropic.messages as unknown as { create: (params: unknown) => unknown };
+  const original = messages.create;
+  const captured: CapturedSiteCall = {};
+  messages.create = async (params: unknown) => {
+    captured.params = params as CapturedSiteCall["params"];
+    return { content: [{ type: "text", text: html }], usage: { input_tokens: 100, output_tokens: 100 } };
+  };
+  try {
+    return await fn(captured);
+  } finally {
+    messages.create = original;
+  }
+}
+
+test("story 5.5: republishing regenerates the published brief with the two photos, drops a third remote image and counts one launch", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { republishSite } = await import("../src/lib/site/publish");
+  const { proposal, photos } = await publishedSiteFixture(company.id);
+  const generated = `<html><body><h1>Atelier</h1>
+<img src="${photos[0].url}" alt="Cuisine rénovée"><img src="${photos[1].url}" alt="Terrasse en bois">
+<img src="https://images.example/stock.jpg" alt="Image de banque"></body></html>`;
+  const launchesBefore = await prisma.usageReservation.count({ where: { companyId: company.id, purpose: "site_publish" } });
+
+  await withFakeSiteModel(generated, async (captured) => {
+    const { slug } = await republishSite(company.id);
+    expect(slug).toBe(`atelier-photos-${company.id.slice(-8)}`);
+    const prompt = captured.params!.messages[0].content;
+    expect(prompt).toContain("Brief approuvé : présenter l'atelier.");
+    expect(prompt).toContain(`src="${photos[0].url}" alt="Cuisine rénovée"`);
+    expect(prompt).toContain(`src="${photos[1].url}" alt="Terrasse en bois"`);
+    expect(captured.params!.system[0].text).not.toContain(company.id);
+  });
+
+  const site = await prisma.company.findUniqueOrThrow({ where: { id: company.id } });
+  expect(site.siteHtml).toContain(`<img src="${photos[0].url}" alt="Cuisine rénovée" loading="lazy">`);
+  expect(site.siteHtml).toContain(`<img src="${photos[1].url}" alt="Terrasse en bois" loading="lazy">`);
+  // La republication est tracée sur la publication du brief.
+  expect(await prisma.executionLog.findUniqueOrThrow({ where: { proposalId: proposal.id } })).toMatchObject({
+    result: "succes", detail: `Site republié depuis la version 1 avec 2 photos : /site/${site.siteSlug}`, executedAt: site.sitePublishedAt,
+  });
+  expect(site.siteHtml).not.toContain("images.example");
+  expect(site.siteHtml).not.toContain("Ancienne page");
+  expect(await prisma.usageReservation.count({ where: { companyId: company.id, purpose: "site_publish" } })).toBe(launchesBefore + 1);
+  // Le brief n'est pas réécrit : même version, même contenu, toujours exécuté.
+  expect(await prisma.agentProposal.findUniqueOrThrow({ where: { id: proposal.id } })).toMatchObject({ version: 1, status: "executee", content: proposal.content });
+});
+
+test("story 5.5: republishing under a reached launch limit gives the limit message and leaves the page unchanged", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { republishSite } = await import("../src/lib/site/publish");
+  await publishedSiteFixture(company.id);
+  await prisma.company.update({ where: { id: company.id }, data: { dailyAgentRunLimit: 0 } });
+  await withFakeSiteModel("<html><body>Nouvelle</body></html>", async (captured) => {
+    await expect(republishSite(company.id)).rejects.toMatchObject({ reason: "quota_runs", message: expect.stringContaining("limite de lancements") });
+    expect(captured.params).toBeUndefined();
+  });
+  expect((await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).siteHtml).toContain("Ancienne page");
+});
+
+test("story 5.5: a company without a published site cannot republish", async ({ company }) => {
+  const { republishSite } = await import("../src/lib/site/publish");
+  await expect(republishSite(company.id)).rejects.toMatchObject({ status: 409 });
+});
+
+test("story 5.5: a regenerated page showing the profile phone asks for a confirmation, then republishes once confirmed", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { republishSite, SiteReviewRequiredError } = await import("../src/lib/site/publish");
+  await publishedSiteFixture(company.id);
+  await prisma.company.update({ where: { id: company.id }, data: { phone: "01 23 45 67 89" } });
+  const generated = "<html><body><h1>Atelier</h1><p>Appelez-nous au 01 23 45 67 89.</p></body></html>";
+
+  let points: { id: string; title: string; detail: string }[] = [];
+  await withFakeSiteModel(generated, async () => {
+    const refusal = await republishSite(company.id).catch((error: unknown) => error);
+    expect(refusal).toBeInstanceOf(SiteReviewRequiredError);
+    const review = refusal as InstanceType<typeof SiteReviewRequiredError>;
+    expect(review.status).toBe(409);
+    expect(review.message).not.toContain("Modifiez le brief");
+    points = review.points;
+  });
+  expect(points).toEqual(expect.arrayContaining([expect.objectContaining({ id: "phone_profile_match", title: expect.any(String), detail: expect.stringContaining("01 23 45 67 89") })]));
+  expect((await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).siteHtml).toContain("Ancienne page");
+
+  await withFakeSiteModel(generated, async () => {
+    await republishSite(company.id, points.map((point) => point.id));
+  });
+  expect((await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).siteHtml).toContain("01 23 45 67 89");
+});
+
+test("story 5.5: republishing uses the latest successfully published brief, not a newer failed one", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { republishSite } = await import("../src/lib/site/publish");
+  await prisma.company.update({ where: { id: company.id }, data: { siteSlug: `atelier-briefs-${company.id.slice(-8)}`, siteHtml: "<html><body>Ancienne page</body></html>" } });
+  const brief = async (content: string, result: string, minutesAgo: number, status = "executee") => {
+    const proposal = await prisma.agentProposal.create({ data: {
+      companyId: company.id, agent: "contenu", kind: "site_web_content", title: content, content, status, version: 1, approvedVersion: 1, approvedAt: new Date(),
+    } });
+    await prisma.executionLog.create({ data: { proposalId: proposal.id, result, executedAt: new Date(Date.now() - minutesAgo * 60_000) } });
+    return proposal;
+  };
+  await brief("Premier brief publié", "succes", 30);
+  const latest = await brief("Dernier brief publié", "succes", 20);
+  await brief("Brief plus récent en échec", "echec", 10, "validee");
+
+  await withFakeSiteModel("<html><body>Nouvelle page</body></html>", async (captured) => {
+    await republishSite(company.id);
+    const prompt = captured.params!.messages[0].content;
+    expect(prompt).toContain("Dernier brief publié");
+    expect(prompt).not.toContain("Premier brief publié");
+    expect(prompt).not.toContain("Brief plus récent en échec");
+  });
+  expect((await prisma.executionLog.findUniqueOrThrow({ where: { proposalId: latest.id } })).detail).toContain("Site republié depuis la version 1");
+
+  // Une version publiée qui n'est plus la version approuvée n'est pas republiée.
+  await prisma.agentProposal.update({ where: { id: latest.id }, data: { version: 2 } });
+  await withFakeSiteModel("<html><body>Autre page</body></html>", async (captured) => {
+    await expect(republishSite(company.id)).rejects.toMatchObject({ status: 409 });
+    expect(captured.params).toBeUndefined();
+  });
+});
+
+test("story 5.5: deleting an account deletes its photo files first, best effort, and only its own", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { addSitePhoto, deleteCompanySitePhotoFiles, sitePhotoStorage } = await import("../src/lib/site/photo-store");
+  const other = await prisma.company.create({ data: {
+    ownerEmail: `engine-photo-delete-${randomUUID()}@example.invalid`, name: "Autre entreprise", trade: "Artisan", servingArea: "Lyon",
+  } });
+  try {
+    await withFakeBlobStorage(async (calls) => {
+      const first = await addSitePhoto(company.id, sitePhotoPng(), "Une");
+      const second = await addSitePhoto(company.id, sitePhotoPng(), "Deux");
+      const theirs = await addSitePhoto(other.id, sitePhotoPng(), "Leur photo");
+      const fakeDel = sitePhotoStorage.del;
+      // Un premier fichier en erreur n'empêche pas la suppression des suivants.
+      sitePhotoStorage.del = async (url: string) => {
+        if (url === first.url) throw new Error("stockage indisponible");
+        await fakeDel(url);
+      };
+      await deleteCompanySitePhotoFiles(company.id);
+      expect(calls.del).toEqual([second.url]);
+      expect(calls.del).not.toContain(theirs.url);
+    });
+  } finally {
+    await deleteCompany(other.id);
+  }
+});

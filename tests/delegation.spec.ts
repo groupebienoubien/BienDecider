@@ -23,6 +23,7 @@ import { WEEKLY_REVIEW_MARKER } from "../src/lib/weekly-review";
 import { RUN_CAPS, capGroup, runCapReachedMessage, withRunCap } from "../src/lib/agents/run-caps";
 import { PROFILE_TEXT_LIMITS, clearableText, profileTextIssue } from "../src/lib/company-profile";
 import { parisQuotaWindows, usageCounterFor } from "../src/lib/quota-windows";
+import { SITE_PHOTO_BAD_TYPE, SITE_PHOTO_MAX_BYTES, SITE_PHOTO_TOO_LARGE, SITE_PHOTO_TOO_WIDE, checkSitePhoto, cleanSitePhotoAlt, detectSitePhotoType, keepOnlyCompanyPhotos, sitePhotoPathname, sitePhotoPromptLines } from "../src/lib/site/photos";
 
 test("risk rules use registered kinds and contextual factors, then fail closed", () => {
   expect(assessActionRisk("piste_croissance").level).toBe("modere");
@@ -917,4 +918,127 @@ test("story 5.2: Paul reads each finding of the latest audit with what to improv
   expect(bounded).not.toContain("Constat 9");
   expect(bounded).toContain("Reco 3");
   expect(bounded).not.toContain("Reco 4");
+});
+
+/** En-têtes minimaux d'images valides, pour les contrôles de type et de dimensions. */
+function pngBytes(width: number, height: number, padding = 0): Uint8Array {
+  const bytes = new Uint8Array(33 + padding);
+  bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52]);
+  new DataView(bytes.buffer).setUint32(16, width);
+  new DataView(bytes.buffer).setUint32(20, height);
+  return bytes;
+}
+
+function webpBytes(width: number, height: number): Uint8Array {
+  const bytes = new Uint8Array(32);
+  bytes.set([...Buffer.from("RIFF"), 0, 0, 0, 0, ...Buffer.from("WEBPVP8X")]);
+  const view = new DataView(bytes.buffer);
+  view.setUint32(24, (width - 1) & 0xffffff, true);
+  view.setUint32(27, (height - 1) & 0xffffff, true);
+  return bytes;
+}
+
+function jpegBytes(width: number, height: number): Uint8Array {
+  // SOI, APP0 (longueur 16), SOF0 (longueur 17) : hauteur puis largeur.
+  const bytes = new Uint8Array(2 + 18 + 19 + 2);
+  bytes.set([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]);
+  bytes.set([0xff, 0xc0, 0x00, 0x11, 0x08, height >> 8, height & 0xff, width >> 8, width & 0xff, 0x03], 20);
+  return bytes;
+}
+
+test("story 5.5: a photo's real type is read from its first bytes, never from its name", () => {
+  expect(detectSitePhotoType(jpegBytes(800, 600))).toMatchObject({ mime: "image/jpeg" });
+  expect(detectSitePhotoType(pngBytes(10, 10))).toMatchObject({ mime: "image/png" });
+  expect(detectSitePhotoType(webpBytes(10, 10))).toMatchObject({ mime: "image/webp" });
+  expect(checkSitePhoto(jpegBytes(1600, 1200))).toMatchObject({ ok: true, width: 1600, height: 1200 });
+  expect(checkSitePhoto(pngBytes(1200, 900))).toMatchObject({ ok: true, width: 1200, height: 900 });
+  expect(checkSitePhoto(webpBytes(1600, 1067))).toMatchObject({ ok: true, width: 1600, height: 1067 });
+  // Un « .jpg » qui est un PDF : refusé en 415.
+  const pdf = new Uint8Array(Buffer.from("%PDF-1.7\n1 0 obj"));
+  expect(checkSitePhoto(pdf)).toEqual({ ok: false, status: 415, error: SITE_PHOTO_BAD_TYPE });
+  expect(SITE_PHOTO_BAD_TYPE).toContain("JPG, PNG ou WebP");
+});
+
+test("story 5.5: a photo over 5 MB after resizing is refused with 413", () => {
+  expect(checkSitePhoto(pngBytes(1600, 1200, SITE_PHOTO_MAX_BYTES - 33))).toMatchObject({ ok: true });
+  expect(checkSitePhoto(pngBytes(1600, 1200, 6 * 1024 * 1024))).toEqual({ ok: false, status: 413, error: SITE_PHOTO_TOO_LARGE });
+  expect(SITE_PHOTO_TOO_LARGE).toContain("5 Mo au plus");
+});
+
+test("story 5.5: photos are stored under the company's own path, with a one-line bounded description", () => {
+  expect(sitePhotoPathname("company-1", "photo-1", { mime: "image/webp", extension: "webp" })).toBe("site-photos/company-1/photo-1.webp");
+  expect(cleanSitePhotoAlt("  Terrasse <b>bois</b>\n livrée  ")).toBe("Terrasse bbois/b livrée");
+  expect(cleanSitePhotoAlt("x".repeat(201))).toBeNull();
+  expect(cleanSitePhotoAlt(42)).toBeNull();
+});
+
+const MY_PHOTOS = [
+  { url: "https://store.public.blob.vercel-storage.com/site-photos/c1/a.webp", alt: "Cuisine rénovée" },
+  { url: "https://store.public.blob.vercel-storage.com/site-photos/c1/b.webp", alt: "Salle de bain \"zen\"" },
+];
+
+test("story 5.5: the generated page keeps the company's two photos and drops any other remote image", () => {
+  const [a, b] = MY_PHOTOS.map((photo) => photo.url);
+  const html = `<html><head><style>body{background:url('https://evil.example/bg.png')} .h{background-image:url(${a})}</style><link rel="stylesheet" href="https://fonts.example/x.css"></head><body>
+<img src="${a}" alt="Texte du modèle" class="hero" style="border:1px solid">
+<img alt="Salle de bain" src='${b}' width="800">
+<img src="https://evil.example/stock.jpg" alt="Photo de banque d'images">
+<img src="https://store.public.blob.vercel-storage.com/site-photos/autre-entreprise/c.webp" alt="Photo d'une autre entreprise">
+<picture><source srcset="https://evil.example/p.webp"><img src="https://evil.example/p.jpg"></picture>
+<div style="background-image:image-set('https://evil.example/s.png' 1x)"></div><table background="https://evil.example/t.png"></table>
+<a href="https://atelier.example/contact">Contact</a>
+</body></html>`;
+  const clean = keepOnlyCompanyPhotos(html, MY_PHOTOS);
+  // Chaque photo gardée est reconstruite : adresse autorisée, texte de la photo en base, rien d'autre.
+  expect(clean).toContain(`<img src="${a}" alt="Cuisine rénovée" loading="lazy">`);
+  expect(clean).toContain(`<img src="${b}" alt="Salle de bain &quot;zen&quot;" loading="lazy">`);
+  expect(clean.match(/<img\b/g)).toHaveLength(2);
+  // Les photos ne passent que par <img> : aucune url() ne reste, même vers une photo de l'entreprise.
+  expect(clean).not.toContain("url(");
+  expect(clean).not.toContain("evil.example");
+  expect(clean).not.toContain("fonts.example");
+  expect(clean).not.toContain("autre-entreprise");
+  expect(clean).not.toContain("srcset");
+  // Les liens restent : un href sur <a> ne charge rien.
+  expect(clean).toContain(`<a href="https://atelier.example/contact">`);
+  // Sans photo, aucune image ne reste.
+  expect(keepOnlyCompanyPhotos(`<img src="${a}">`, [])).toBe("");
+});
+
+const PHOTO = MY_PHOTOS[0].url;
+const BYPASSES: [string, string][] = [
+  ["a fake src= inside another attribute's value", `<img alt="x src=${PHOTO}" src="https://evil.example/a.png"><img alt="y src=${PHOTO}">`],
+  ["srcset glued to a quote", `<img src="${PHOTO}"srcset="https://evil.example/a.png 2x">`],
+  ["background glued to a quote", `<div title="a"background="https://evil.example/a.png">x</div>`],
+  ["srcset and poster glued to a slash", `<img/srcset="https://evil.example/a.png"/src="${PHOTO}"><div/poster="https://evil.example/b.png">x</div>`],
+  ["a CSS hexadecimal escape", `<style>body{background:\\75 rl(https://evil.example/a.png)}</style>`],
+  ["a CSS backslash inside url", `<style>body{background:u\\rl(https://evil.example/a.png)}</style>`],
+  ["an escaped @import", `<style>@\\69mport "https://evil.example/a.css";</style>`],
+  ["a CSS comment between url and its parenthesis", `<style>body{background:url/**/(https://evil.example/a.png)}</style>`],
+  ["HTML entities in a style attribute", `<div style="background:url&#40;https://evil.example/a.png&#41;">x</div>`],
+  ["an SVG use element and xlink:href", `<svg xlink:href="https://evil.example/a.svg"><use href="https://evil.example/a.svg#i"/></svg>`],
+  ["a meta refresh", `<meta http-equiv="refresh" content="0;url=https://evil.example/">`],
+  ["a base element", `<base href="https://evil.example/">`],
+];
+
+for (const [label, html] of BYPASSES) {
+  test(`story 5.5: the photo filter resists ${label}`, () => {
+    const clean = keepOnlyCompanyPhotos(`<html><body>${html}</body></html>`, MY_PHOTOS);
+    expect(clean).not.toContain("evil.example");
+    expect(clean).not.toMatch(/srcset|poster|background=|@import|url\(|<use|<meta|<base|xlink/i);
+  });
+}
+
+test("story 5.5: a photo wider or taller than 1600 px is refused, whatever its weight", () => {
+  expect(checkSitePhoto(pngBytes(1600, 1600))).toMatchObject({ ok: true });
+  expect(checkSitePhoto(pngBytes(8000, 1200))).toEqual({ ok: false, status: 413, error: SITE_PHOTO_TOO_WIDE });
+  expect(checkSitePhoto(webpBytes(1200, 1601))).toMatchObject({ ok: false, status: 413 });
+  expect(checkSitePhoto(jpegBytes(65535, 65535))).toMatchObject({ ok: false, status: 413 });
+  expect(SITE_PHOTO_TOO_WIDE).toContain("1600 px au plus");
+});
+
+test("story 5.5: the model is given each photo's address and description, or told to use none", () => {
+  const lines = sitePhotoPromptLines([{ url: "https://x.blob/a.webp", alt: "Terrasse \"bois\"", width: 1600, height: 1200 }]);
+  expect(lines).toContain(`src="https://x.blob/a.webp" alt="Terrasse 'bois'"`);
+  expect(sitePhotoPromptLines([])).toContain("aucune");
 });

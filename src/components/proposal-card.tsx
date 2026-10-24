@@ -177,7 +177,7 @@ export function ProposalCard({
           <div className="preview-label"><span>{terminal ? "Contenu conservé" : "Aperçu de la version à diffuser"}</span><span>v{proposal.version}</span></div>
           <ProductionPreview kind={proposal.kind} title={proposal.title} content={proposal.content} version={proposal.version} companyName={companyName} siteDestination={siteDestination} />
           <PreviousVersion proposalId={proposal.id} agent={proposal.agent} version={proposal.version} kind={proposal.kind} title={proposal.title} companyName={companyName} siteDestination={siteDestination} />
-          {proposal.kind === "site_web_content" && <small className="legend">L’approbation porte sur ce brief : BienDecider génère la page au moment de la mise en ligne. Vérifiez ensuite la page publique.</small>}
+          {proposal.kind === "site_web_content" && <small className="legend">L’approbation porte sur ce brief : BienDecider génère la page au moment de la mise en ligne, avec vos photos. Vérifiez ensuite la page publique. <Link className="text-link" href="/entreprise#photos-site">Ajouter des photos</Link></small>}
           {!modal && <ReadAloudButton text={spokenText(`${proposal.title}. ${displayContent}`)} label={`Écouter la production de ${persona?.name ?? "l'agent"}`} />}
         </div>
         <aside className="review-context">

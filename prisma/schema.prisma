@@ -69,6 +69,7 @@ model Company {
   uncoveredRequests UncoveredRequest[]
   linkedinAuthorizations LinkedInAuthorization[]
   paulPendingActions PaulPendingAction[]
+  sitePhotos      SitePhoto[]
 }
 
 model LinkedInAuthorization {
@@ -252,6 +253,23 @@ model PaulPendingAction {
 
   @@index([companyId, status])
   @@index([chatMessageId])
+}
+
+// Photo du site d'une page (story 5.5) : fichier public sur Vercel Blob, sous un chemin propre à l'entreprise.
+// Seules ces adresses sont admises dans le HTML généré (src/lib/site/photos.ts).
+model SitePhoto {
+  id        String   @id @default(cuid())
+  companyId String
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  url       String
+  pathname  String
+  alt       String   @default("")
+  width     Int
+  height    Int
+  position  Int
+  createdAt DateTime @default(now())
+
+  @@index([companyId])
 }
 
 model AuditFinding {
