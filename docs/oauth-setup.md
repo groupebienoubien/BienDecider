@@ -46,13 +46,36 @@ Le branding OAuth, la propriété du domaine et les documents publics peuvent ê
 4. Menu **API et services → Identifiants** → **Créer des identifiants → ID client OAuth** :
    - Type d'application : *Application Web*.
    - URI de redirection autorisée : `https://www.biendecider.com/api/oauth/google/callback` (et `http://localhost:3000/api/oauth/google/callback` pour tester en local). Domaine autorisé de l'écran de consentement : `biendecider.com`.
-5. Récupérer le **Client ID** et le **Client Secret**, les mettre dans `.env` :
+5. Récupérer le **Client ID** et le **Client Secret**, générer une clé dédiée aux jetons GBP avec la commande ci-dessous, puis mettre les trois valeurs dans `.env` :
    ```
    GOOGLE_OAUTH_CLIENT_ID="..."
    GOOGLE_OAUTH_CLIENT_SECRET="..."
+   GOOGLE_TOKEN_ENCRYPTION_KEY="64 caractères hexadécimaux"
    ```
-6. En production, ajouter `GOOGLE_OAUTH_CLIENT_ID` et `GOOGLE_OAUTH_CLIENT_SECRET` dans **Vercel > bien-decider > Settings > Environment Variables > Production**, puis redéployer. Ne jamais les envoyer dans un chat, les commiter ou les afficher dans des logs. En local, utiliser `.env` (ignoré par Git).
-7. Tester `/connexions` avec un compte test autorisé. Le code actuel échange le code OAuth et enregistre un jeton ; il **ne liste pas encore les fiches, ne sélectionne pas d'établissement et ne publie pas**. Ne pas considérer cette seule étape comme une connexion métier validée.
+   Générer la clé dans un terminal privé et la conserver dans le gestionnaire de secrets :
+   `node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"`
+6. Tester le script sur une base PostgreSQL jetable : définir sa `DATABASE_URL` et la clé factice de test dans l'environnement privé, puis exécuter d'abord le dry-run :
+   ```text
+   npm run migrate:oauth-tokens
+   ```
+   Pour appliquer dans cette base locale jetable, ajouter `-- --apply --confirm-backup BACKUP_VERIFIED`.
+7. En production, faire et vérifier une sauvegarde, saisir `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET` et `GOOGLE_TOKEN_ENCRYPTION_KEY` dans **Vercel > bien-decider > Settings > Environment Variables > Production**, puis déployer le code. Sans la clé, le démarrage OAuth GBP reste refusé. Après le déploiement, depuis un terminal opérateur privé, charger la `DATABASE_URL` voulue sans l'afficher et exécuter le dry-run en confirmant le nom exact :
+   ```text
+   npm run migrate:oauth-tokens -- --allow-remote --expected-database <nom exact>
+   ```
+   Vérifier la cible et les compteurs; appliquer seulement après confirmation de la sauvegarde :
+   ```text
+   npm run migrate:oauth-tokens -- --allow-remote --expected-database <nom exact> --apply --confirm-backup BACKUP_VERIFIED
+   ```
+   Toute cible distante exige `--allow-remote` et le nom exact de la base; `--apply` exige la confirmation de sauvegarde. Le script refuse Vercel Production, chiffre access/refresh GBP en place et purge seulement les anciennes lignes Facebook/Instagram non chiffrées. Il n'affiche ni URL, ni jeton. La transaction est annulée entièrement en cas d'erreur; ne pas restaurer en production une sauvegarde antérieure contenant des jetons en clair.
+8. Tester `/connexions` avec un compte test autorisé. Le code échange le code OAuth et chiffre les jetons; il **ne liste pas encore les fiches, ne sélectionne pas d'établissement et ne publie pas**. Ne pas considérer cette seule étape comme une connexion métier validée.
+
+### Migration et rotation des clés de jetons
+
+- Le chiffrement GBP utilise `GOOGLE_TOKEN_ENCRYPTION_KEY`, distincte des clés Gmail et Meta. L'enveloppe AES-256-GCM est liée à `google_business_profile:<companyId>`; l'absence de clé désactive le démarrage OAuth GBP.
+- Facebook utilise `META_TOKEN_ENCRYPTION_KEY` et l'enveloppe liée à `facebook:<companyId>`. Les anciennes lignes Facebook/Instagram en clair sont illisibles pour le code actuel; la migration les supprime et demande une nouvelle autorisation. Une ligne déjà chiffrée est conservée.
+- Pour Meta, déconnecter chaque Page dans BienDecider avant de changer `META_TOKEN_ENCRYPTION_KEY`. Pour GBP, il n'existe pas encore de bouton de déconnexion: chaque propriétaire retire d'abord BienDecider dans la sécurité de son compte Google; après sauvegarde vérifiée, l'opérateur purge les lignes GBP avec `--purge-google-connections --apply --confirm-backup BACKUP_VERIFIED --confirm-google-revocation GOOGLE_ACCESS_REVOKED` (et les confirmations de cible distante le cas échéant). Changer ensuite seulement `GOOGLE_TOKEN_ENCRYPTION_KEY`, redéployer et demander une nouvelle autorisation. Si la procédure est interrompue après la purge, garder la clé courante, rétablir la configuration puis reprendre les réautorisations; ne pas restaurer de jetons en clair. Ne jamais remplacer une clé en laissant des connexions actives.
+- La migration et son rollback transactionnel doivent être testés sur une base jetable. Une sauvegarde antérieure peut contenir les anciennes valeurs en clair jusqu'à expiration de la rétention de l'hébergeur; protéger cette sauvegarde et ne pas la restaurer sur une base active après la migration.
 
 En mode OAuth **Testing**, les autorisations avec des scopes comme `business.manage` et les refresh tokens sont limités à **7 jours** : prévoir une réautorisation pendant le pilote. Le renouvellement du jeton d'accès ne supprime pas cette limite. [Durée des autorisations Google](https://support.google.com/cloud/answer/15549945).
 

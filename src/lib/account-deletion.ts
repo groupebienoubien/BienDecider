@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { revokeGmailConnection } from "@/lib/oauth/gmail";
 import { revokeGoogleToken } from "@/lib/oauth/google";
+import { decryptGoogleToken, isGoogleTokenEncryptionConfigured } from "@/lib/oauth/google-token";
 import { decryptFacebookAccount, revokeFacebookAuthorization } from "@/lib/oauth/meta";
 
 export type RevocationReport = Record<string, "revoque" | "non_revoque">;
@@ -23,7 +24,15 @@ export async function revokeCompanyAuthorizations(companyId: string): Promise<Re
     if (connection.channel === "gmail") {
       revoked = await withTimeout(revokeGmailConnection(connection, companyId));
     } else if (connection.channel === "google_business_profile") {
-      const token = connection.refreshToken ?? connection.accessToken;
+      const encrypted = connection.refreshToken ?? connection.accessToken;
+      let token: string | null = null;
+      try {
+        token = encrypted ? decryptGoogleToken(encrypted, companyId) : null;
+      } catch {
+        const reason = isGoogleTokenEncryptionConfigured() ? "enveloppe GBP invalide" : "clé GBP absente ou invalide";
+        console.error(`Révocation Google ignorée: ${reason}.`);
+        token = null;
+      }
       revoked = token ? await withTimeout(revokeGoogleToken(token)) : false;
     } else if (connection.channel === "facebook" && connection.accessToken) {
       try {
