@@ -1743,6 +1743,7 @@ const PROSPECT_INPUT = { reason: "Gère des copropriétés du quartier.", segmen
 const CAP_LABELS = {
   prospect: "les prospects",
   prospecting_email: "les modèles d'email",
+  piste_croissance: "les pistes de croissance",
   social_post: "les posts",
   site_web_content: "le contenu de site",
   fiche_google: "les propositions de fiche Google (mise à jour et réponse aux avis)",
@@ -2323,4 +2324,282 @@ test("story 3.5: Paul's prompt tells a change since his last message apart from 
   expect(status.monMessagePrecedent).toBeNull();
   expect(paul.system).toContain("depuisMonMessagePrecedent: true");
   expect(paul.system).toContain("pas forcément un changement de statut");
+});
+
+// Story 3.4 — Recette du scénario Atelier Lumen : le parcours des tests en production du 22 et du 23 octobre,
+// rejoué sans appel au modèle sur une seule entreprise. Les tests s'enchaînent : chacun part de l'état laissé
+// par le précédent, comme le dirigeant dans une même session. Recette manuelle : docs/bmad/implementation/recette-paul-fiable.md.
+test.describe("Recette Atelier Lumen", () => {
+  test.describe.configure({ mode: "serial" });
+  // L'audit d'inscription tourne sur le serveur de test : sans clé de modèle, il échoue sans rien produire.
+  test.skip(Boolean(process.env.ANTHROPIC_API_KEY), "Runs only without a model key, so that the onboarding audit run by the server fails instead of reaching the provider.");
+
+  const LUMEN_PROFILE = { name: "Atelier Lumen", trade: "Ébéniste", servingArea: "Nantes" };
+  const LUMEN_PROFILE_CARD = { socialHandles: "@atelierlumen.nantes", openingHours: "Du lundi au vendredi, 8h-18h", ownerName: "Samuel Morel" };
+  const LUMEN_LAUNCH = {
+    actionTitle: "Trouver des clients pour des cuisines sur mesure", brief: "Le dirigeant veut 3 à 4 cuisines de plus par an.",
+    outcome: "Des prescripteurs à contacter pour des cuisines sur mesure", theme: "Prospection", priority: 1,
+    prospectDescription: "Architectes d'intérieur et cuisinistes de Nantes",
+  } as const;
+  // Avertissement ajouté par l'outil d'email de Jean-Claude, que la révision retire.
+  const LUMEN_EMAIL_WARNING = "⚠️ Template générique à adapter manuellement avant tout envoi.";
+
+  let company: Company;
+  let auditRunId = "";
+  let launchRunId = "";
+  let launchItemId = "";
+
+  test.beforeAll(async () => {
+    const { prisma } = await import("../src/lib/prisma");
+    // Compte tel que l'inscription le crée (cf. withSignedUpCompany) : le profil est rempli par l'onboarding.
+    company = await prisma.company.create({ data: { ownerEmail: `engine-recette-${randomUUID()}@example.invalid`, name: "", trade: "", servingArea: "" } });
+  });
+
+  test.afterAll(async () => {
+    if (company) await deleteCompany(company.id);
+  });
+
+  test("onboarding: the first profile creation starts Martine's audit, in progress with one run", async ({ request }) => {
+    test.setTimeout(60000);
+    const { prisma } = await import("../src/lib/prisma");
+    const { ONBOARDING_AUDIT_TITLE } = await import("../src/lib/agents/onboarding-audit");
+    const { baseURL, headers } = ownerSession(company);
+    const response = await request.post(`${baseURL}/api/companies`, { headers, data: LUMEN_PROFILE });
+    expect(response.status()).toBe(201);
+    const items = await prisma.actionPlanItem.findMany({ where: { companyId: company.id } });
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ agent: "marketing", title: ONBOARDING_AUDIT_TITLE });
+    // « en_cours » à la création ; le serveur peut déjà avoir fait échouer l'audit, qui repasse « à lancer ».
+    expect(["en_cours", "propose"]).toContain(items[0].status);
+    const runs = await prisma.agentRun.findMany({ where: { companyId: company.id } });
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({ agent: "marketing", planItemId: items[0].id });
+    auditRunId = runs[0].id;
+
+    // La suite part d'un état stable : l'audit, exécuté par le serveur sans clé de modèle, échoue sans rien produire.
+    let status = runs[0].status;
+    for (let attempt = 0; attempt < 300 && ["queued", "running"].includes(status); attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      status = (await prisma.agentRun.findUniqueOrThrow({ where: { id: auditRunId } })).status;
+    }
+    expect(status).toBe("failed");
+    expect(await prisma.agentProposal.count({ where: { companyId: company.id } })).toBe(0);
+  });
+
+  test("objective: the yearly objective card writes nothing before the click, then 16 667 €/month and about 3.3 more clients a year", async ({ request }) => {
+    const { prisma } = await import("../src/lib/prisma");
+    const { clientGapLabel, computeBusinessTarget } = await import("../src/lib/business-target");
+    const paul = await capturePaulTools(company.id);
+    expect(await paul.tool("propose_objective_update").run({ ...ANNUAL_OBJECTIVE_INPUT })).toContain("Carte de confirmation affichée");
+    const card = await prisma.paulPendingAction.findFirstOrThrow({ where: { companyId: company.id, type: "update_objective", status: "pending" } });
+    expect(await prisma.company.findUniqueOrThrow({ where: { id: company.id }, select: OBJECTIVE_FIELDS }))
+      .toEqual({ revenueTarget: null, monthlyRevenue: null, averageClientValue: null, newClientsPerMonth: null, objective: null });
+
+    const { baseURL, headers } = ownerSession(company);
+    const confirmed = await request.post(`${baseURL}/api/co-ceo/pending-actions/${card.id}`, { headers, data: { decision: "confirm" } });
+    expect(confirmed.status()).toBe(200);
+    const saved = await prisma.company.findUniqueOrThrow({ where: { id: company.id } });
+    expect(saved).toMatchObject({ revenueTarget: 16667, monthlyRevenue: 11667, averageClientValue: 18000, newClientsPerMonth: 0.5 });
+    expect(clientGapLabel(computeBusinessTarget(saved)!)?.text).toBe("environ 3,3 clients de plus par an");
+  });
+
+  test("profile: the Instagram, hours and name card is saved on confirmation and Jean-Claude reads Samuel Morel", async ({ request }) => {
+    const { prisma } = await import("../src/lib/prisma");
+    const paul = await capturePaulTools(company.id);
+    expect(await paul.tool("propose_profile_update").run(LUMEN_PROFILE_CARD)).toContain("Carte de confirmation affichée");
+    const card = await prisma.paulPendingAction.findFirstOrThrow({ where: { companyId: company.id, type: "update_profile", status: "pending" } });
+    expect(await prisma.company.findUniqueOrThrow({ where: { id: company.id }, select: { socialHandles: true, openingHours: true, ownerName: true } }))
+      .toEqual({ socialHandles: null, openingHours: null, ownerName: null });
+
+    const { baseURL, headers } = ownerSession(company);
+    const confirmed = await request.post(`${baseURL}/api/co-ceo/pending-actions/${card.id}`, { headers, data: { decision: "confirm" } });
+    expect(confirmed.status()).toBe(200);
+    expect(await prisma.company.findUniqueOrThrow({ where: { id: company.id }, select: { socialHandles: true, openingHours: true, ownerName: true } }))
+      .toEqual(LUMEN_PROFILE_CARD);
+
+    const jeanClaude = await captureDemarchageParams(company.id);
+    const context = jeanClaude.system.map((block) => block.text).join("\n");
+    expect(context).toContain("signe « Samuel Morel »");
+    expect(context).toContain(LUMEN_PROFILE_CARD.openingHours);
+  });
+
+  test("launch: Paul's Jean-Claude card creates no run before the click, and one run after Lancer", async () => {
+    const { prisma } = await import("../src/lib/prisma");
+    const { decidePendingAction } = await import("../src/lib/agents/pending-actions");
+    const paul = await capturePaulTools(company.id);
+    expect(await paul.tool("propose_launch_demarchage").run(LUMEN_LAUNCH)).toContain("RIEN N'EST LANCÉ");
+    const card = await prisma.paulPendingAction.findFirstOrThrow({ where: { companyId: company.id, type: "launch_plan_item", status: "pending" } });
+    const item = await prisma.actionPlanItem.findFirstOrThrow({ where: { companyId: company.id, agent: "demarchage" } });
+    expect(item).toMatchObject({ status: "propose", title: LUMEN_LAUNCH.actionTitle });
+    expect(await prisma.agentRun.count({ where: { companyId: company.id, agent: "demarchage" } })).toBe(0);
+
+    // Clic « Lancer » : l'exécution reste en file, le scénario la traite plus bas sans appel au modèle.
+    const scheduled: unknown[] = [];
+    const result = await inRequestScope(scheduled, () => decidePendingAction(company.id, card.id, "confirm"));
+    expect(result).toMatchObject({ ok: true, action: { status: "confirmed" }, launch: { ok: true } });
+    launchRunId = (result.ok ? result.launch?.runId : undefined) ?? "";
+    launchItemId = item.id;
+    expect(await prisma.agentRun.findUniqueOrThrow({ where: { id: launchRunId } })).toMatchObject({ agent: "demarchage", planItemId: item.id, status: "queued" });
+    expect(await prisma.agentRun.count({ where: { companyId: company.id, agent: "demarchage" } })).toBe(1);
+    expect((await prisma.actionPlanItem.findUniqueOrThrow({ where: { id: item.id } })).status).toBe("en_cours");
+    expect(scheduled).toHaveLength(1);
+  });
+
+  test("duplicate: « Lance Jean-Claude sur les architectes » during the run creates no action and Lancer says already_running", async () => {
+    const { prisma } = await import("../src/lib/prisma");
+    const { decidePendingAction } = await import("../src/lib/agents/pending-actions");
+    const paul = await capturePaulTools(company.id);
+    const answer = await paul.tool("propose_launch_demarchage").run({
+      ...LUMEN_LAUNCH, actionTitle: "Prospection des architectes", prospectDescription: "Architectes de Nantes",
+    });
+    expect(answer).toContain("Aucune nouvelle action créée");
+    expect(answer).toContain(`y travaille déjà (exécution ${launchRunId})`);
+    expect(await prisma.actionPlanItem.count({ where: { companyId: company.id, agent: "demarchage" } })).toBe(1);
+    const card = await prisma.paulPendingAction.findFirstOrThrow({ where: { companyId: company.id, type: "launch_plan_item", status: "pending" } });
+    expect(card.payload).toMatchObject({ planItemId: launchItemId, reused: true });
+
+    const result = await inRequestScope([], () => decidePendingAction(company.id, card.id, "confirm"));
+    expect(result).toMatchObject({ ok: true, launch: { ok: false, reason: "already_running", runId: launchRunId } });
+    expect(await prisma.agentRun.count({ where: { companyId: company.id, agent: "demarchage" } })).toBe(1);
+  });
+
+  test("caps: Jean-Claude trying 9 prospects, 3 emails and 3 leads and Martine 3 Google profile proposals leave 11 decisions, split 5/2/2/2", async () => {
+    const { prisma } = await import("../src/lib/prisma");
+    const { delegatePlanAction } = await import("../src/lib/agents/co-ceo");
+    const { getTeamState } = await import("../src/lib/team-state");
+    const answers: Record<string, string[]> = { prospect: [], email: [], lead: [], fiche: [] };
+    await processWithScenario(launchRunId, async (tool) => {
+      for (let index = 1; index <= 9; index++) {
+        answers.prospect.push(await tool("propose_prospect").run({ name: `Architecte ${index}`, reason: "Conçoit des cuisines pour ses clients.", segment: "architectes", source: `https://example.invalid/architecte-${index}` }));
+      }
+      for (let index = 1; index <= 3; index++) {
+        answers.email.push(await tool("propose_prospecting_email").run({
+          title: `Modèle architectes ${index}`, subject: "Vos projets de cuisine sur mesure", body: `Bonjour [Prénom], voici notre atelier de cuisines sur mesure (${index}).`,
+        }));
+        answers.lead.push(await tool("propose_growth_lead").run({ title: `Piste ${index}`, content: `Piste locale ${index}`, source: `https://example.invalid/piste-${index}`, isEvent: false }));
+      }
+    });
+    for (const answer of answers.prospect.slice(0, 5)) expect(answer).toContain("Prospect enregistré");
+    expect(answers.prospect.slice(5)).toEqual(Array(4).fill(capMessage("prospect")));
+    for (const answer of answers.email.slice(0, 2)) expect(answer).toContain("Proposition enregistrée");
+    expect(answers.email.slice(2)).toEqual([capMessage("prospecting_email")]);
+    for (const answer of answers.lead.slice(0, 2)) expect(answer).toContain("Piste enregistrée");
+    expect(answers.lead.slice(2)).toEqual([capMessage("piste_croissance")]);
+    expect(await prisma.agentRun.findUniqueOrThrow({ where: { id: launchRunId } })).toMatchObject({ status: "succeeded", resultCount: 9 });
+
+    // L'audit d'inscription échoué est relancé (même exécution, comme « Relancer l'action ») ;
+    // Martine tente 3 propositions de fiche et 5 constats.
+    const findings: string[] = [];
+    const auditItem = await prisma.actionPlanItem.findFirstOrThrow({ where: { companyId: company.id, agent: "marketing" } });
+    const relaunch = await inRequestScope([], () => delegatePlanAction(company.id, "marketing", { ...DELEGATION_INPUT, planItemId: auditItem.id }));
+    expect(relaunch).toMatchObject({ ok: true, runId: auditRunId });
+    await processWithScenario(auditRunId, async (tool) => {
+      for (const [kind, title] of [["gbp_update", "Horaires"], ["review_reply", "Réponse à Claire"], ["gbp_update", "Catégorie"]]) {
+        answers.fiche.push(await tool("propose_action").run({ kind, title, content: `${title} de la fiche Google` }));
+      }
+      for (let index = 1; index <= 5; index++) {
+        findings.push(await tool("record_audit_finding").run({
+          category: "reseaux_sociaux", title: `Constat ${index}`, summary: "Résumé.", whatWorks: "Photos de chantiers soignées.", toImprove: "Publier plus souvent.", actionItems: [],
+        }));
+      }
+    });
+    for (const answer of answers.fiche.slice(0, 2)) expect(answer).toContain("Proposition enregistrée");
+    expect(answers.fiche.slice(2)).toEqual([capMessage("fiche_google")]);
+    for (const answer of findings.slice(0, 4)) expect(answer).toContain("Constat enregistré");
+    expect(findings.slice(4)).toEqual([capMessage("audit_finding")]);
+    expect(await prisma.auditFinding.count({ where: { companyId: company.id } })).toBe(4);
+    expect((await prisma.agentRun.findUniqueOrThrow({ where: { id: auditRunId } })).status).toBe("succeeded");
+
+    const perKind = await prisma.agentProposal.groupBy({ by: ["kind"], where: { companyId: company.id, status: "en_attente" }, _count: true });
+    expect(Object.fromEntries(perKind.map((row) => [row.kind, row._count]))).toEqual({ prospect: 5, piste_croissance: 2, prospecting_email: 2, gbp_update: 1, review_reply: 1 });
+    // Indicateur de l'épopée : au plus 12 décisions après le scénario (contre 15 le 23 octobre).
+    expect((await getTeamState(company.id)).pendingDecisions).toBe(11);
+  });
+
+  test("revision: a confirmed revision card rewrites the same email in version 2, keeps version 1 and adds no production", async () => {
+    const { prisma } = await import("../src/lib/prisma");
+    const email = await prisma.agentProposal.findFirstOrThrow({ where: { companyId: company.id, kind: "prospecting_email" }, orderBy: { createdAt: "asc" } });
+    expect(email.content).toContain(LUMEN_EMAIL_WARNING);
+    const before = await prisma.agentProposal.count({ where: { companyId: company.id } });
+
+    // Phrase du 23 octobre : « retire l'avertissement et signe avec mon nom ».
+    const { answer, result } = await confirmRevision(company.id, email.id);
+    expect(answer).toContain("RIEN N'EST DEMANDÉ");
+    expect(result).toMatchObject({ ok: true, action: { status: "confirmed" }, launch: { ok: true } });
+    const runId = (result.ok ? result.launch?.runId : undefined)!;
+    const warningAt = email.content.indexOf(`\n\n${LUMEN_EMAIL_WARNING}`);
+    expect(warningAt).toBeGreaterThanOrEqual(0);
+    const revised = `${email.content.slice(0, warningAt)}\n\nSamuel Morel`;
+    expect(revised).not.toContain(LUMEN_EMAIL_WARNING);
+    let written = "";
+    await processWithScenario(runId, async (tool) => { written = await tool("revise_proposal").run({ content: revised }); });
+    expect(written).toContain("Version 2 enregistrée");
+
+    expect(await prisma.agentProposal.findUniqueOrThrow({ where: { id: email.id } })).toMatchObject({ version: 2, content: revised, status: "en_attente" });
+    expect(await prisma.proposalRevision.findMany({ where: { proposalId: email.id }, select: { fromVersion: true, previousContent: true, instruction: true } }))
+      .toEqual([{ fromVersion: 1, previousContent: email.content, instruction: REVISION_INSTRUCTION }]);
+    expect(await prisma.agentProposal.count({ where: { companyId: company.id } })).toBe(before);
+    expect(await prisma.agentRun.findUniqueOrThrow({ where: { id: runId } })).toMatchObject({ status: "succeeded", resultCount: 1 });
+  });
+
+  test("state: « Où en est l'équipe ? » twice reads the same states with their times, and Paul's previous message the second time", async () => {
+    const { prisma } = await import("../src/lib/prisma");
+    const { buildCurrentStatus } = await import("../src/lib/agents/co-ceo");
+    const { formatParisTime } = await import("../src/lib/agents/personas");
+    type Status = Awaited<ReturnType<typeof buildCurrentStatus>>;
+    const statuses = (status: Status) => ({
+      plan: Object.fromEntries(status.planEnCours.map((item) => [item.id, item.status])),
+      runs: Object.fromEntries(status.executionsRecentes.map((run) => [run.id, run.status])),
+    });
+
+    const first = await buildCurrentStatus(company.id, new Date());
+    expect(first.monMessagePrecedent).toBeNull();
+    // Paul répond à la première question, puis le dirigeant la repose.
+    const reply = await prisma.chatMessage.create({ data: { companyId: company.id, role: "assistant", content: "Martine et Jean-Claude ont terminé." } });
+    const now = new Date();
+    const second = await buildCurrentStatus(company.id, now);
+
+    expect(statuses(second)).toEqual(statuses(first));
+    expect(Object.keys(statuses(second).runs)).toHaveLength(3);
+    expect(second.monMessagePrecedent).toBe(formatParisTime(reply.createdAt, now));
+    expect(second.maintenant).toBeTruthy();
+    expect(second.planEnCours.length).toBeGreaterThan(0);
+    for (const item of second.planEnCours) {
+      expect(item.misAJour, item.title).toBeTruthy();
+      // Rien n'a changé depuis le message de Paul : aucun état n'est présenté comme une mise à jour.
+      expect(item.depuisMonMessagePrecedent, item.title).toBe(false);
+    }
+    for (const run of second.executionsRecentes) {
+      expect(run.status, run.id).toBe("succeeded");
+      expect(run.debut, run.id).toBeTruthy();
+      expect(run.fin, run.id).toBeTruthy();
+      expect(run.depuisMonMessagePrecedent, run.id).toBe(false);
+    }
+
+    // Cas bloquant de l'étape 9 de la recette manuelle : une exécution qui se termine après le message de Paul
+    // est marquée comme changée depuis ce message (« depuis mon dernier message, … »), pas comme une erreur.
+    const after = (ms: number) => new Date(reply.createdAt.getTime() + ms);
+    const finishedSince = await prisma.agentRun.create({ data: {
+      companyId: company.id, agent: "contenu", requestKey: `recette-${randomUUID()}`, payload: {}, status: "succeeded", resultCount: 0,
+      queuedAt: after(500), startedAt: after(500), finishedAt: after(1000), createdAt: after(500),
+    } });
+    const third = await buildCurrentStatus(company.id, after(2000));
+    expect(third.monMessagePrecedent).toBe(formatParisTime(reply.createdAt, after(2000)));
+    expect(third.executionsRecentes.find((run) => run.id === finishedSince.id)).toMatchObject({ status: "succeeded", depuisMonMessagePrecedent: true });
+    for (const run of third.executionsRecentes.filter((entry) => entry.id !== finishedSince.id)) expect(run.depuisMonMessagePrecedent, run.id).toBe(false);
+  });
+
+  test("counters: the menu badge, the home page, the Décisions page and Paul give the same number", async () => {
+    const { prisma } = await import("../src/lib/prisma");
+    const { getShellProps } = await import("../src/lib/shell-data");
+    const { countPendingDecisions } = await import("../src/lib/pending-decisions");
+    const { buildCurrentStatus } = await import("../src/lib/agents/co-ceo");
+    const current = await prisma.company.findUniqueOrThrow({ where: { id: company.id } });
+    const badge = (await getShellProps(current)).decisionCount;
+    // L'accueil et la page Décisions comptent les productions de /dashboard avec needsAttention (aucune Page Facebook connectée).
+    const proposals = await prisma.agentProposal.findMany({ where: { companyId: company.id } });
+    const dashboard = countPendingDecisions(proposals, null);
+    const paul = (await buildCurrentStatus(company.id)).decisionsEnAttente;
+    expect({ badge, dashboard, paul }).toEqual({ badge: 11, dashboard: 11, paul: 11 });
+  });
 });

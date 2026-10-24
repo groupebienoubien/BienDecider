@@ -53,6 +53,6 @@ development_status:
   3-1-date-du-jour-et-nom-du-dirigeant-pour-tous-les-agents: done
   3-2-des-exécutions-plafonnées: done
   3-3-faire-réviser-une-production-par-paul: done
-  3-4-recette-du-scénario-atelier-lumen: backlog
-  3-5-paul-situe-chaque-état-dans-le-temps: review
+  3-4-recette-du-scénario-atelier-lumen: review
+  3-5-paul-situe-chaque-état-dans-le-temps: done
   epic-3-retrospective: optional

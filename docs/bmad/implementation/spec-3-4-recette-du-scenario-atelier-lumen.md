@@ -2,7 +2,8 @@
 title: 'Story 3.4 — Recette du scénario Atelier Lumen'
 type: 'chore'
 created: '2026-10-24'
-status: 'ready-for-dev'
+status: 'done'
+baseline_commit: '830ae4ee05bfee2b945d34210078b4c6f03a2598'
 route: 'dispatch'
 review_loop_iteration: 0
 context:
@@ -49,17 +50,38 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `tests/engine.spec.ts` -- bloc « Recette Atelier Lumen », un test par ligne de la matrice, enchaînés sur la même entreprise -- non-régression du parcours
-- [ ] `docs/bmad/implementation/recette-paul-fiable.md` -- recette manuelle -- les PF rejouent avec le vrai modèle
+- [x] `tests/engine.spec.ts` -- bloc « Recette Atelier Lumen », un test par ligne de la matrice, enchaînés sur la même entreprise -- non-régression du parcours
+- [x] `docs/bmad/implementation/recette-paul-fiable.md` -- recette manuelle -- les PF rejouent avec le vrai modèle
 
 **Acceptance Criteria:**
 - Étant donné la CI, quand `npm run test:engine` tourne, alors le bloc « Recette Atelier Lumen » s'exécute et passe.
 
 ## Implementation Notes
 
+- Bloc `test.describe("Recette Atelier Lumen")` en mode `serial` à la fin de `tests/engine.spec.ts` : neuf tests (un par ligne de la matrice), une entreprise créée vide en `beforeAll` (comme `withSignedUpCompany`, qui ne peut pas couvrir plusieurs tests) et supprimée par `deleteCompany` en `afterAll`. Un échec arrête la suite du scénario.
+- Onboarding, objectif et profil passent par les routes du serveur de test (`POST /api/companies`, `POST /api/co-ceo/pending-actions/{id}`). Les clics « Lancer » et la confirmation de révision passent par `decidePendingAction` dans `inRequestScope` : par la route, le serveur exécuterait l'agent lui-même et le test ne pourrait pas rejouer ses outils.
+- L'audit d'inscription est exécuté par le serveur : sans clé de modèle (CI), il échoue sans rien produire ; le premier test attend cet échec pour partir d'un état stable, et l'étape des plafonds le relance (même exécution, via `delegatePlanAction` comme « Relancer l'action ») pour rejouer les propositions de fiche de Martine avec `processWithScenario`. Le bloc est ignoré si `ANTHROPIC_API_KEY` est défini, comme le test d'échec de lancement existant.
+- Plafonds : 9 prospects, 3 emails, 3 pistes pour Jean-Claude, 3 propositions de fiche (2 mises à jour, 1 réponse à un avis) pour Martine ; le test vérifie exactement 11 décisions, réparties 5/2/2/2 (fiche : 1 `gbp_update` + 1 `review_reply`).
+- Compteurs : badge = `getShellProps().decisionCount` ; accueil et Décisions = `countPendingDecisions` sur les productions lues par `/dashboard` (même filtre `needsAttention` que `dashboard-client.tsx`, aucune Page Facebook) ; Paul = `decisionsEnAttente`. Le HTML des pages n'est pas lu (rendu client).
+- État : entre les deux `buildCurrentStatus`, un message de Paul est enregistré (sa réponse à la première question) ; le second appel le date et ne marque aucun état « depuis mon dernier message ».
+- Vérifié localement : `npx tsc --noEmit`, `npm run lint`, `npx playwright test tests/engine.spec.ts --list` (les neuf tests sont listés). Exécution réelle en CI uniquement (base de données).
+
 ## Spec Change Log
 
 ## Review Triage Log
+
+| # | Source | Constat | Verdict | Preuve | Route |
+|---|--------|---------|---------|--------|-------|
+| 1 | edge | Premier test instable : l'audit peut échouer côté serveur avant la lecture, l'action revient à « à lancer » | medium | `after()` s'exécute juste après la réponse 201 | patch |
+| 2 | blind | Le cas bloquant de l'étape 9 (« depuis mon dernier message ») n'est pas automatisé | medium | seul le cas sans changement est testé | patch |
+| 3 | blind | Plafond des constats d'audit (4) non testé | low | correctif direct | patch |
+| 4 | blind | Assertions de plafond hétérogènes ; réponses acceptées non vérifiées | low | correctif direct | patch |
+| 5 | blind, gap | Le test « révision » peut garder l'avertissement si le séparateur change | low | `indexOf` à -1 non vérifié | patch |
+| 6 | edge | Boucle d'attente sur une liste fermée de statuts ; `planEnCours` vide non vérifié | low | correctif direct | patch |
+| 7 | blind | Commentaire dupliqué, espace manquant | low | correctif direct | patch |
+| 8 | blind | Recette manuelle : ordre différent des tests, 12 contre 11 non expliqué, étape 2 sans critère, préparation et nettoyage absents, persona (6 × 18 000 ≠ 140 000) non commentée, signature et condition de clé non dites | low | correctif direct (document) | patch |
+| 9 | gap, edge | Le test des compteurs ne lit pas ce que les pages affichent (badge et Paul partagent la même fonction) | medium | vérification à faire dans le parcours navigateur | defer |
+| 10 | edge | Clé du modèle présente seulement côté serveur : audit réel | low | la CI n'a pas de clé ; à dire dans la recette | patch (document) |
 
 ## Verification
 
