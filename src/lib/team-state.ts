@@ -16,6 +16,8 @@ export type TeamStateAction = {
   rationale: string;
   timing: string;
   status: string;
+  /** Dernière mise à jour de l'action (story 3.5). */
+  updatedAt: Date;
 };
 
 export type TeamStateRun = AgentRunView & { elapsedSeconds: number };
@@ -36,7 +38,7 @@ export async function getTeamState(companyId: string, now = new Date()): Promise
     prisma.actionPlanItem.findMany({
       where: { companyId, status: { in: [...ACTIVE_PLAN_STATUSES] } },
       orderBy: { createdAt: "asc" },
-      select: { id: true, agent: true, title: true, rationale: true, timing: true, status: true },
+      select: { id: true, agent: true, title: true, rationale: true, timing: true, status: true, updatedAt: true },
     }),
     // Une exécution en file ou en cours reste visible quel que soit son âge : son action est toujours « en cours ».
     prisma.agentRun.findMany({

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { clientsToMonthly, formatDecimal, formatEuros, toMonthly, type Period } from "@/lib/business-target";
 import { PERSONAS } from "@/lib/agents/personas";
-import { PAUL_PROFILE_FIELDS, PROFILE_FIELD_LABELS, PROFILE_TEXT_LIMITS, clearableText, profileTextIssue, type PaulProfileField } from "@/lib/company-profile";
+import { PAUL_PROFILE_FIELDS, PROFILE_FIELD_LABELS, PROFILE_TEXT_LIMITS, cleanProfileText, profileTextIssue, type PaulProfileField } from "@/lib/company-profile";
 
 /**
  * Partie pure des intentions de Paul (cartes de confirmation) : schémas,
@@ -9,7 +9,7 @@ import { PAUL_PROFILE_FIELDS, PROFILE_FIELD_LABELS, PROFILE_TEXT_LIMITS, clearab
  * panneau de Paul et les tests sans base — cf. pending-actions.ts.
  */
 
-export const PENDING_ACTION_TYPES = ["update_objective", "update_profile", "launch_plan_item"] as const;
+export const PENDING_ACTION_TYPES = ["update_objective", "update_profile", "launch_plan_item", "revise_proposal"] as const;
 export type PendingActionType = (typeof PENDING_ACTION_TYPES)[number];
 export function isPendingActionType(type: string): type is PendingActionType {
   return (PENDING_ACTION_TYPES as readonly string[]).includes(type);
@@ -25,6 +25,7 @@ const EXPIRED_MESSAGES: Record<PendingActionType, string> = {
   update_objective: EXPIRED_MESSAGE,
   update_profile: "Cette proposition a expiré. Redites à Paul ce qu'il faut enregistrer dans votre profil.",
   launch_plan_item: "Cette proposition a expiré. L'action reste dans votre plan : lancez-la depuis le plan ou redemandez-la à Paul.",
+  revise_proposal: "Cette proposition a expiré. La production reste à relire, telle quelle : redemandez la correction à Paul.",
 };
 const NEUTRAL_EXPIRED_MESSAGE = "Cette proposition a expiré. Redites votre demande à Paul.";
 /** Message d'une carte expirée, selon ce qu'elle proposait. */
@@ -37,11 +38,18 @@ export function decidedText(status: PendingActionStatus, type: string, result?: 
   const launch = type === "launch_plan_item";
   switch (status) {
     case "pending": return "";
-    case "confirmed": return launch ? (result?.message ?? LAUNCH_UNKNOWN_MESSAGE) : "C’est enregistré.";
-    case "cancelled": return launch ? "Plus tard : l’action reste dans votre plan, à lancer." : "Proposition annulée. Dites à Paul ce qu’il faut corriger.";
+    case "confirmed": return launchesRun(type) ? (result?.message ?? LAUNCH_UNKNOWN_MESSAGE) : "C’est enregistré.";
+    case "cancelled":
+      if (launch) return "Plus tard : l’action reste dans votre plan, à lancer.";
+      if (type === "revise_proposal") return "Annulé : la production reste à relire, telle quelle.";
+      return "Proposition annulée. Dites à Paul ce qu’il faut corriger.";
     case "expired": return expiredMessage(type);
     case "superseded": return "Remplacée par une proposition plus récente.";
   }
+}
+/** Cartes dont la confirmation crée une exécution (lancement, révision) : leur résultat est enregistré sur la carte. */
+export function launchesRun(type: string): boolean {
+  return type === "launch_plan_item" || type === "revise_proposal";
 }
 /** Carte de lancement confirmée dont le résultat n'est pas (encore) connu. */
 export const LAUNCH_UNKNOWN_MESSAGE = "Lancement en cours de vérification…";
@@ -121,12 +129,13 @@ export function objectiveUpdateValues(payload: UpdateObjectivePayload): Objectiv
 }
 
 /**
- * Saisie de l'outil de Paul : seuls site, comptes sociaux, téléphone, horaires
- * et description sont annoncés au modèle. null = non fourni. Les autres clés
+ * Saisie de l'outil de Paul : seuls prénom et nom du dirigeant, site, comptes
+ * sociaux, téléphone, horaires et description sont annoncés au modèle. null = non fourni. Les autres clés
  * sont tolérées par le schéma (pas d'erreur brute du SDK) puis écartées par
  * readProfileToolInput, qui signale nom, métier ou zone à Paul.
  */
 export const profileUpdateToolSchema = z.object({
+  ownerName: z.string().nullable().optional().describe(`${PROFILE_FIELD_LABELS.ownerName} : prénom et nom du dirigeant, tels qu'il les a dits (${PROFILE_TEXT_LIMITS.ownerName} caractères au plus)`),
   website: z.string().nullable().optional().describe(`${PROFILE_FIELD_LABELS.website} (adresse du site, ${PROFILE_TEXT_LIMITS.website} caractères au plus)`),
   socialHandles: z.string().nullable().optional().describe(`${PROFILE_FIELD_LABELS.socialHandles} (ex. @atelier, ${PROFILE_TEXT_LIMITS.socialHandles} caractères au plus)`),
   phone: z.string().nullable().optional().describe(`${PROFILE_FIELD_LABELS.phone} (${PROFILE_TEXT_LIMITS.phone} caractères au plus)`),
@@ -153,6 +162,7 @@ export function readProfileToolInput(input: Record<string, unknown>): { payload:
  * page Entreprise ; un texte vide efface le champ.
  */
 export const updateProfilePayloadSchema = z.object({
+  ownerName: z.string().optional(),
   website: z.string().optional(),
   socialHandles: z.string().optional(),
   phone: z.string().optional(),
@@ -178,7 +188,7 @@ export function mergeProfilePayloads(previous: UpdateProfilePayload, next: Updat
 export function profileUpdateValues(payload: UpdateProfilePayload): Partial<Record<PaulProfileField, string | null>> {
   const values: Partial<Record<PaulProfileField, string | null>> = {};
   for (const field of PAUL_PROFILE_FIELDS) {
-    const value = clearableText(payload[field]);
+    const value = cleanProfileText(field, payload[field]);
     if (value !== undefined) values[field] = value;
   }
   return values;
@@ -232,12 +242,43 @@ function describeLaunch(payload: unknown): PendingActionDescription | null {
   };
 }
 
+/** Longueur maximale de la consigne d'une révision. */
+export const REVISION_INSTRUCTION_MAX = 1000;
+
+/**
+ * Révision proposée par Paul (story 3.3) : la production visée, sa version
+ * au moment de la proposition et la consigne du dirigeant. Rien n'est
+ * demandé à l'agent avant le clic.
+ */
+export const reviseProposalPayloadSchema = z.object({
+  proposalId: z.string().min(1),
+  agent: z.enum(LAUNCH_AGENTS),
+  title: z.string().min(1),
+  fromVersion: z.number().int().min(1),
+  instruction: z.string().min(1).max(REVISION_INSTRUCTION_MAX),
+  result: launchResultSchema.optional(),
+}).strict();
+export type ReviseProposalPayload = z.infer<typeof reviseProposalPayloadSchema>;
+
+function describeRevision(payload: unknown): PendingActionDescription | null {
+  const parsed = reviseProposalPayloadSchema.safeParse(payload);
+  if (!parsed.success) return null;
+  const { agent, title, fromVersion, instruction } = parsed.data;
+  return {
+    title: `Demander à ${PERSONAS[agent].name} une version ${fromVersion + 1} de « ${title} »`,
+    lines: [`Consigne : ${instruction}`],
+    confirmLabel: "Confirmer",
+    cancelLabel: "Annuler",
+  };
+}
+
 export type PendingActionDescription = { title: string; lines: string[]; confirmLabel: string; cancelLabel: string };
 
 /** Lignes de la carte, construites depuis l'intention enregistrée (jamais depuis le texte de Paul). */
 export function describePendingAction(action: { type: string; payload: unknown }): PendingActionDescription | null {
   if (action.type === "update_profile") return describeProfileUpdate(action.payload);
   if (action.type === "launch_plan_item") return describeLaunch(action.payload);
+  if (action.type === "revise_proposal") return describeRevision(action.payload);
   if (action.type !== "update_objective") return null;
   const parsed = updateObjectivePayloadSchema.safeParse(action.payload);
   if (!parsed.success) return null;
@@ -269,7 +310,7 @@ export type PendingActionView = {
   confirmLabel: string;
   cancelLabel: string;
   expiresAt: string;
-  /** Carte de lancement confirmée : ce que le lancement a donné (lancé, ou motif en clair). */
+  /** Carte de lancement ou de révision confirmée : ce que le lancement a donné (lancé, ou motif en clair). */
   result?: LaunchResult;
 };
 
@@ -282,7 +323,8 @@ export function toPendingActionView(
   if (!description) return null;
   const known = (PENDING_ACTION_STATUSES as readonly string[]).includes(action.status) ? (action.status as PendingActionStatus) : "expired";
   const status = known === "pending" && action.expiresAt.getTime() <= now.getTime() ? "expired" : known;
-  const launched = action.type === "launch_plan_item" ? launchPlanItemPayloadSchema.safeParse(action.payload) : null;
+  const launched = action.type === "launch_plan_item" ? launchPlanItemPayloadSchema.safeParse(action.payload)
+    : action.type === "revise_proposal" ? reviseProposalPayloadSchema.safeParse(action.payload) : null;
   const result = launched?.success ? launched.data.result : undefined;
   return { id: action.id, type: action.type, status, ...description, expiresAt: action.expiresAt.toISOString(), ...(result ? { result } : {}) };
 }

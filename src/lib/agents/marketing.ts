@@ -4,6 +4,7 @@ import { anthropic, AGENT_MODEL } from "@/lib/anthropic";
 import { prisma } from "@/lib/prisma";
 import { getRejectionContext, rejectedDuplicateNotice } from "@/lib/agents/rejection-context";
 import { ensureAgentProduced } from "@/lib/agents/agent-errors";
+import { RUN_CAPS, withRunCap } from "@/lib/agents/run-caps";
 import { facebookAuditSource } from "@/lib/facebook-audit-source";
 import { recordUsage, runToolLoop } from "@/lib/usage";
 import {
@@ -12,6 +13,7 @@ import {
   directionLine,
   briefLine,
   companyProfileLines,
+  runtimeContextLines,
   type AgentRunOptions,
 } from "@/lib/agents/personas";
 
@@ -41,7 +43,7 @@ export async function runMarketingAgent(
   const recordFinding = betaZodTool({
     name: "record_audit_finding",
     description:
-      "Enregistre un constat d'audit ou de positionnement concurrentiel, structuré en 4 parties lisibles (pas une action à valider, juste un état des lieux).",
+      `Enregistre un constat d'audit ou de positionnement concurrentiel, structuré en 4 parties lisibles (pas une action à valider, juste un état des lieux). Au plus ${RUN_CAPS.audit_finding} constats par passage : au-delà, l'outil refuse.`,
     inputSchema: z.object({
       category: z
         .enum(["site_web", "reseaux_sociaux", "concurrence"])
@@ -77,7 +79,7 @@ export async function runMarketingAgent(
         .max(3)
         .describe("0 à 3 actions concrètes pour corriger ce qui a été constaté — le dirigeant pourra les ajouter au plan en un clic."),
     }),
-    run: async (input) => {
+    run: async (input) => withRunCap(options.agentRunId, "audit_finding", async () => {
       const finding = await prisma.auditFinding.create({
         data: {
           companyId: company.id,
@@ -94,13 +96,13 @@ export async function runMarketingAgent(
       });
       createdFindingIds.push(finding.id);
       return `Constat enregistré (id: ${finding.id}).`;
-    },
+    }),
   });
 
   const proposeAction = betaZodTool({
     name: "propose_action",
     description:
-      "Enregistre une proposition de mise à jour de la fiche Google, en attente de validation humaine. N'exécute rien directement.",
+      `Enregistre une proposition de mise à jour de la fiche Google, en attente de validation humaine. N'exécute rien directement. Au plus ${RUN_CAPS.fiche_google} propositions de fiche Google par passage, mises à jour et réponses aux avis ensemble : au-delà, l'outil refuse.`,
     inputSchema: z.object({
       kind: z
         .enum(["gbp_update", "review_reply"])
@@ -113,21 +115,23 @@ export async function runMarketingAgent(
         .describe("Contenu complet de la proposition, prêt à être relu et validé par l'utilisateur"),
     }),
     run: async (input) => {
-      const alreadyRejected = await rejectedDuplicateNotice(company.id, { kind: input.kind, title: input.title, content: input.content });
-      if (alreadyRejected) return alreadyRejected;
-      const proposal = await prisma.agentProposal.create({
-        data: {
-          companyId: company.id,
-          agentRunId: options.agentRunId,
-          agent: AGENT_NAME,
-          kind: input.kind,
-          title: input.title,
-          content: input.content,
-          planItemId: options.planItemId,
-        },
+      return withRunCap(options.agentRunId, input.kind, async () => {
+        const alreadyRejected = await rejectedDuplicateNotice(company.id, { kind: input.kind, title: input.title, content: input.content });
+        if (alreadyRejected) return alreadyRejected;
+        const proposal = await prisma.agentProposal.create({
+          data: {
+            companyId: company.id,
+            agentRunId: options.agentRunId,
+            agent: AGENT_NAME,
+            kind: input.kind,
+            title: input.title,
+            content: input.content,
+            planItemId: options.planItemId,
+          },
+        });
+        createdProposalIds.push(proposal.id);
+        return `Proposition enregistrée (id: ${proposal.id}), en attente de validation.`;
       });
-      createdProposalIds.push(proposal.id);
-      return `Proposition enregistrée (id: ${proposal.id}), en attente de validation.`;
     },
   });
 
@@ -172,7 +176,8 @@ Règles strictes :
 - Utilise web_search pour identifier des concurrents réels (ex: "${company.trade} ${company.servingArea}") — cite tes sources, n'invente jamais de concurrent.
 - Tu ne fais QUE proposer/constater, jamais exécuter directement.
 - Pas de jargon marketing creux : chaque constat ou proposition doit être concret et actionnable.
-- Un seul constat large et structuré par sujet (site, réseaux, concurrence) vaut mieux que plusieurs constats fragmentés — le dirigeant doit pouvoir tout comprendre en ouvrant une seule carte.`;
+- Un seul constat large et structuré par sujet (site, réseaux, concurrence) vaut mieux que plusieurs constats fragmentés — le dirigeant doit pouvoir tout comprendre en ouvrant une seule carte.
+- Plafonds par passage, au-delà l'outil refuse : ${RUN_CAPS.audit_finding} constats, ${RUN_CAPS.fiche_google} propositions pour la fiche Google (mises à jour et réponses aux avis ensemble). Garde les plus importantes.`;
 
   const { finalMessage, usage } = await runToolLoop(anthropic.beta.messages.toolRunner({
     model: AGENT_MODEL,
@@ -188,6 +193,8 @@ Règles strictes :
     ],
     system: [
       { type: "text", text: stableSystem, cache_control: { type: "ephemeral" } },
+      // Date du jour et nom du dirigeant : hors du bloc mis en cache.
+      { type: "text", text: runtimeContextLines(company, new Date()) },
       { type: "text", text: await getRejectionContext(companyId) },
       ...(options.brief ? [{ type: "text" as const, text: briefLine(options.brief) }] : []),
     ],

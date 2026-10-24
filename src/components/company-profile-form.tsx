@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
 import { TradeCombobox } from "@/components/trade-combobox";
 import { PageHeading } from "@/components/mockup-ui";
-import { PROFILE_FIELD_LABELS } from "@/lib/company-profile";
+import { PROFILE_FIELD_LABELS, PROFILE_TEXT_LIMITS } from "@/lib/company-profile";
 
 export function CompanyProfileForm({ guided = false, embedded = false, initialTab = "informations" }: { guided?: boolean; embedded?: boolean; initialTab?: "informations" | "objectifs" }) {
   const router = useRouter();
@@ -20,6 +20,7 @@ export function CompanyProfileForm({ guided = false, embedded = false, initialTa
   const [phone, setPhone] = useState("");
   const [certifications, setCertifications] = useState("");
   const [openingHours, setOpeningHours] = useState("");
+  const [ownerName, setOwnerName] = useState("");
   const [monthlyRevenue, setMonthlyRevenue] = useState("");
   const [revenueTarget, setRevenueTarget] = useState("");
   const [targetDate, setTargetDate] = useState("");
@@ -52,6 +53,7 @@ export function CompanyProfileForm({ guided = false, embedded = false, initialTa
         setPhone(c.phone ?? "");
         setCertifications(c.certifications ?? "");
         setOpeningHours(c.openingHours ?? "");
+        setOwnerName(c.ownerName ?? "");
         setMonthlyRevenue(c.monthlyRevenue?.toString() ?? "");
         setRevenueTarget(c.revenueTarget?.toString() ?? "");
         setTargetDate(c.targetDate ? String(c.targetDate).slice(0, 7) : "");
@@ -127,6 +129,7 @@ export function CompanyProfileForm({ guided = false, embedded = false, initialTa
           phone: phone.trim(),
           certifications: certifications.trim(),
           openingHours: openingHours.trim(),
+          ownerName: ownerName.trim(),
           monthlyRevenue: monthlyRevenue || null,
           revenueTarget: revenueTarget || null,
           // <input type="month"> renvoie "AAAA-MM" : on vise la fin du mois choisi.
@@ -323,6 +326,25 @@ export function CompanyProfileForm({ guided = false, embedded = false, initialTa
             onChange={(e) => setServingArea(e.target.value)}
            
           />
+
+          {/* L'onboarding guidé garde ses trois champs (refonte UX) : le nom se saisit dans Entreprise ou via Paul, qui le demande dès qu'un email est en jeu. */}
+          {!guided && <>
+            <label htmlFor="profile-owner-name" className="field">
+              {PROFILE_FIELD_LABELS.ownerName} (facultatif)
+              <input
+                id="profile-owner-name"
+                autoComplete="name"
+                aria-describedby="profile-owner-name-help"
+                maxLength={PROFILE_TEXT_LIMITS.ownerName}
+                placeholder="ex: Samuel Morel"
+                value={ownerName}
+                onChange={(e) => setOwnerName(e.target.value)}
+              />
+            </label>
+            <p id="profile-owner-name-help" className="-mt-1 text-xs text-slate-600">
+              Vos agents signent de ce nom les emails qu&apos;ils préparent pour vous.
+            </p>
+          </>}
 
           {!guided && <>
             <label htmlFor="profile-description" className="field">

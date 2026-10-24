@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { getRejectionContext, rejectedDuplicateNotice } from "@/lib/agents/rejection-context";
 import { getFindingsContextForContent } from "@/lib/agents/findings-context";
 import { ensureAgentProduced } from "@/lib/agents/agent-errors";
+import { RUN_CAPS, withRunCap } from "@/lib/agents/run-caps";
 import { recordUsage, runToolLoop } from "@/lib/usage";
 import {
   PERSONAS,
@@ -12,6 +13,7 @@ import {
   directionLine,
   briefLine,
   companyProfileLines,
+  runtimeContextLines,
   type AgentRunOptions,
 } from "@/lib/agents/personas";
 
@@ -40,7 +42,7 @@ export async function runContenuAgent(
   const proposeContent = betaZodTool({
     name: "propose_content",
     description:
-      "Enregistre une proposition de contenu (post réseau social ou brief de site web), en attente de validation humaine. N'exécute rien directement.",
+      `Enregistre une proposition de contenu (post réseau social ou brief de site web), en attente de validation humaine. N'exécute rien directement. Au plus ${RUN_CAPS.social_post} posts et ${RUN_CAPS.site_web_content} contenu de site par passage : au-delà, l'outil refuse.`,
     inputSchema: z.object({
       kind: z
         .enum(["social_post", "site_web_content"])
@@ -53,21 +55,23 @@ export async function runContenuAgent(
         .describe("Contenu complet, prêt à être relu et validé (pour un post : légende + visuel suggéré + date)"),
     }),
     run: async (input) => {
-      const alreadyRejected = await rejectedDuplicateNotice(company.id, { kind: input.kind, title: input.title, content: input.content });
-      if (alreadyRejected) return alreadyRejected;
-      const proposal = await prisma.agentProposal.create({
-        data: {
-          companyId: company.id,
-          agentRunId: options.agentRunId,
-          agent: AGENT_NAME,
-          kind: input.kind,
-          title: input.title,
-          content: input.content,
-          planItemId: options.planItemId,
-        },
+      return withRunCap(options.agentRunId, input.kind, async () => {
+        const alreadyRejected = await rejectedDuplicateNotice(company.id, { kind: input.kind, title: input.title, content: input.content });
+        if (alreadyRejected) return alreadyRejected;
+        const proposal = await prisma.agentProposal.create({
+          data: {
+            companyId: company.id,
+            agentRunId: options.agentRunId,
+            agent: AGENT_NAME,
+            kind: input.kind,
+            title: input.title,
+            content: input.content,
+            planItemId: options.planItemId,
+          },
+        });
+        createdProposalIds.push(proposal.id);
+        return `Proposition enregistrée (id: ${proposal.id}), en attente de validation.`;
       });
-      createdProposalIds.push(proposal.id);
-      return `Proposition enregistrée (id: ${proposal.id}), en attente de validation.`;
     },
   });
 
@@ -87,15 +91,18 @@ Site web déclaré : ${company.website ?? "aucun"}. ${
       : "Aucun site déclaré : inclus une proposition site_web_content — un brief complet (titre accrocheur, présentation, 3 à 5 services, zone d'intervention, preuve/certifications, appel à l'action avec téléphone)."
   }
 
-Ton rôle : produire 2 à 3 propositions de contenu concrètes (posts et/ou contenu de site) via propose_content.
+Ton rôle : produire jusqu'à ${RUN_CAPS.social_post} propositions de contenu concrètes (posts et/ou contenu de site), les meilleures, via propose_content.
 Règles strictes :
 - Tu ne fais QUE proposer, JAMAIS publier ou exécuter toi-même, même automatiquement.
 - Pour le site, tu fournis uniquement le contenu (texte, structure) — pas de code, BienDecider le publie après validation.
 - Si une actualité réelle t'est fournie, appuie-toi exclusivement sur elle — n'invente jamais un événement, une offre ou un chiffre.
 - Si aucune actualité n'est fournie, génère tes propres idées honnêtes (conseil pratique, présentation d'un service, FAQ) — jamais un faux événement présenté comme réel.
-- Une proposition = un contenu complet et directement utilisable, pas de placeholder "[à compléter]".`;
+- Une proposition = un contenu complet et directement utilisable, pas de placeholder "[à compléter]".
+- Plafonds par passage, au-delà l'outil refuse : ${RUN_CAPS.social_post} posts, ${RUN_CAPS.site_web_content} contenu de site. Choisis les plus utiles plutôt que d'en proposer davantage.`;
 
-  const dynamicSystem = `${await getRejectionContext(companyId)}
+  // Date du jour et nom du dirigeant : hors du bloc mis en cache.
+  const dynamicSystem = `${runtimeContextLines(company, new Date())}
+${await getRejectionContext(companyId)}
 ${briefLine(options.brief)}
 ${await getFindingsContextForContent(companyId)}`;
 

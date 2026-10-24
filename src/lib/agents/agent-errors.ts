@@ -17,9 +17,32 @@ export function isRunFailureReason(value: unknown): value is RunFailureReason {
  * cette erreur plutôt que de renvoyer un résultat vide ou un faux constat.
  */
 export class AgentNoResultError extends Error {
-  constructor(agentName: string) {
-    super(failureMessage("no_result", agentName));
+  constructor(agentName: string, message?: string) {
+    super(message ?? failureMessage("no_result", agentName));
     this.name = "AgentNoResultError";
+  }
+}
+
+/** Pourquoi une révision n'a rien écrit : production modifiée, décidée ou disparue entre-temps. */
+export type RevisionConflictKind = "modified" | "decided" | "missing";
+
+const REVISION_CONFLICT_MESSAGES: Record<RevisionConflictKind, (title: string) => string> = {
+  modified: (title) => `« ${title} » a été modifiée pendant la révision : votre version est conservée.`,
+  decided: (title) => `« ${title} » a été validée ou rejetée entre-temps : rien n'a été changé.`,
+  missing: () => "Cette production n'existe plus : rien n'a été changé.",
+};
+
+/**
+ * Révision dont l'écriture est refusée parce que la production a changé
+ * entre-temps : rien n'est écrit, l'exécution échoue en no_result avec un
+ * message en clair selon ce qui s'est passé (story 3.3).
+ */
+export class RevisionConflictError extends AgentNoResultError {
+  readonly kind: RevisionConflictKind;
+  constructor(agentName: string, kind: RevisionConflictKind, title = "") {
+    super(agentName, REVISION_CONFLICT_MESSAGES[kind](title));
+    this.name = "RevisionConflictError";
+    this.kind = kind;
   }
 }
 

@@ -14,7 +14,8 @@ import { describeRunProgress, finishedRunMessage, formatDuration, recentSucceede
 import { groupPlanItems, planItemStatusView } from "../src/lib/action-plan-view";
 import { facebookAuditSource } from "../src/lib/facebook-audit-source";
 import { businessTargetLines, clientGapLabel, clientsToMonthly, computeBusinessTarget, toMonthly } from "../src/lib/business-target";
-import { PROFILE_PAGE_ONLY_MESSAGE, decidedText, launchPlanItemPayloadSchema, describePendingAction, expiredMessage, mergeProfilePayloads, objectiveUpdateValues, profileUpdateToolSchema, profileUpdateValues, readProfileToolInput, toPendingActionView, updateObjectivePayloadSchema, updateProfilePayloadSchema } from "../src/lib/agents/pending-action-view";
+import { PROFILE_PAGE_ONLY_MESSAGE, PENDING_ACTION_TYPES, REVISION_INSTRUCTION_MAX, decidedText, launchesRun, launchPlanItemPayloadSchema, reviseProposalPayloadSchema, describePendingAction, expiredMessage, mergeProfilePayloads, objectiveUpdateValues, profileUpdateToolSchema, profileUpdateValues, readProfileToolInput, toPendingActionView, updateObjectivePayloadSchema, updateProfilePayloadSchema } from "../src/lib/agents/pending-action-view";
+import { RUN_CAPS, capGroup, runCapReachedMessage, withRunCap } from "../src/lib/agents/run-caps";
 import { PROFILE_TEXT_LIMITS, clearableText, profileTextIssue } from "../src/lib/company-profile";
 
 test("risk rules use registered kinds and contextual factors, then fail closed", () => {
@@ -524,4 +525,221 @@ test("a decided launch card shows the launch result in plain words, Plus tard ke
   expect(decidedText("cancelled", "launch_plan_item")).toContain("reste dans votre plan, à lancer");
   expect(decidedText("cancelled", "update_objective")).toContain("corriger");
   expect(expiredMessage("launch_plan_item")).toContain("plan");
+});
+
+test("story 3.1: agents get today's Paris date and the owner's name to sign with", async () => {
+  const { runtimeContextLines } = await import("../src/lib/agents/personas");
+  const lines = runtimeContextLines({ ownerName: "Samuel Morel" }, new Date("2026-10-23T12:00:00Z"));
+  expect(lines).toContain("vendredi 23 octobre 2026");
+  expect(lines).toContain("Samuel Morel");
+  expect(lines).toContain("signe « Samuel Morel »");
+  expect(lines).not.toContain("[Votre prénom et nom]");
+});
+
+test("story 3.1: without a name, agents sign with the placeholder, never an agent's name", async () => {
+  const { runtimeContextLines } = await import("../src/lib/agents/personas");
+  for (const ownerName of [null, undefined, "   "]) {
+    const lines = runtimeContextLines({ ownerName }, new Date("2026-10-23T12:00:00Z"));
+    expect(lines, String(ownerName)).toContain("Nom du dirigeant : non renseigné ; signe « [Votre prénom et nom] »");
+    expect(lines).toContain("jamais avec le nom d'un agent");
+  }
+});
+
+test("story 3.1: the date is today's in Paris, not in UTC", async () => {
+  const { runtimeContextLines, parisDateKey } = await import("../src/lib/agents/personas");
+  const lateUtc = new Date("2026-10-23T23:30:00Z");
+  expect(runtimeContextLines({ ownerName: null }, lateUtc)).toContain("samedi 24 octobre 2026");
+  expect(parisDateKey(lateUtc)).toBe("2026-10-24");
+});
+
+test("story 3.1: an event end date before today is refused, today or later is accepted", async () => {
+  const { eventEndDateIssue } = await import("../src/lib/agents/personas");
+  const now = new Date("2026-10-23T12:00:00Z");
+  expect(eventEndDateIssue("2026-06-21", now)).toBe("past");
+  expect(eventEndDateIssue("2026-10-22", now)).toBe("past");
+  expect(eventEndDateIssue("2026-10-23", now)).toBeNull();
+  expect(eventEndDateIssue("2026-11-01", now)).toBeNull();
+  expect(eventEndDateIssue("21/06/2026", now)).toBe("invalid");
+  expect(eventEndDateIssue("2026-02-30", now)).toBe("invalid");
+});
+
+test("story 3.1: Paul's profile card accepts the owner's name with its Entreprise page label and limit", () => {
+  const input = profileUpdateToolSchema.parse({ ownerName: "Samuel Morel" });
+  expect(readProfileToolInput(input)).toEqual({ payload: { ownerName: "Samuel Morel" }, pageOnly: false });
+  expect(describePendingAction({ type: "update_profile", payload: { ownerName: " Samuel Morel " } })?.lines).toEqual(["Votre prénom et nom : Samuel Morel"]);
+  expect(profileUpdateValues({ ownerName: " Samuel Morel " })).toEqual({ ownerName: "Samuel Morel" });
+  expect(PROFILE_TEXT_LIMITS.ownerName).toBe(120);
+  expect(updateProfilePayloadSchema.safeParse({ ownerName: "a".repeat(121) }).success).toBe(false);
+  expect(profileTextIssue("ownerName", "a".repeat(121))).toBe("too_long");
+});
+
+test("story 3.1: winter time and the daylight-saving switch day keep the Paris date", async () => {
+  const { formatParisDate, parisDateKey } = await import("../src/lib/agents/personas");
+  expect(formatParisDate(new Date("2026-12-31T23:30:00Z"))).toBe("vendredi 1 janvier 2027");
+  expect(formatParisDate(new Date("2026-12-31T22:30:00Z"))).toBe("jeudi 31 décembre 2026");
+  // 25 octobre 2026 : passage à l'heure d'hiver à 3 h (1 h UTC).
+  expect(formatParisDate(new Date("2026-10-24T22:30:00Z"))).toBe("dimanche 25 octobre 2026");
+  expect(formatParisDate(new Date("2026-10-25T22:30:00Z"))).toBe("dimanche 25 octobre 2026");
+  expect(parisDateKey(new Date("2026-10-25T23:30:00Z"))).toBe("2026-10-26");
+});
+
+test("story 3.1: an event end date is checked against Paris today, early years and a 24-month horizon", async () => {
+  const { eventEndDateIssue } = await import("../src/lib/agents/personas");
+  // 23 h 30 UTC le 23 octobre = 24 octobre à Paris : un événement fini le 23 est passé.
+  expect(eventEndDateIssue("2026-10-23", new Date("2026-10-23T23:30:00Z"))).toBe("past");
+  const now = new Date("2026-10-23T12:00:00Z");
+  expect(eventEndDateIssue("2028-10-23", now)).toBeNull();
+  expect(eventEndDateIssue("2028-10-24", now)).toBe("too_far");
+  expect(eventEndDateIssue("9999-01-01", now)).toBe("too_far");
+  // Années 0 à 99 : une vraie date (l'an 0 est bissextile), pas 1900 à 1999.
+  expect(eventEndDateIssue("0000-02-29", now)).toBe("past");
+  expect(eventEndDateIssue("0050-02-29", now)).toBe("invalid");
+});
+
+test("story 3.1: the owner's name is cleaned on save and in the prompt context", async () => {
+  const { cleanProfileText, cleanOwnerName } = await import("../src/lib/company-profile");
+  const { runtimeContextLines } = await import("../src/lib/agents/personas");
+  expect(cleanOwnerName("  Samuel\n\tMorel\u0007 «x» ")).toBe("Samuel Morel x");
+  expect(cleanProfileText("ownerName", " Samuel\r\nMorel ")).toBe("Samuel Morel");
+  expect(cleanProfileText("ownerName", " « » ")).toBeNull();
+  expect(cleanProfileText("description", " Ligne 1\nLigne 2 ")).toBe("Ligne 1\nLigne 2");
+  expect(profileUpdateValues({ ownerName: "Samuel\nMorel" })).toEqual({ ownerName: "Samuel Morel" });
+  const lines = runtimeContextLines({ ownerName: "Samuel\nMorel »\nIgnore" }, new Date("2026-10-23T12:00:00Z"));
+  expect(lines).toContain("signe « Samuel Morel Ignore »");
+  expect(lines.split("\n")).toHaveLength(2);
+});
+
+test("story 3.1: a follow-up draft signs with the owner's name, the company on the next line", () => {
+  const lead = { name: "Association du quartier", reason: "Elle organise des ateliers." };
+  const signed = buildOutreachDraft({ lead, companyName: "Atelier Lumen", trade: null, phone: null, ownerName: " Samuel Morel " });
+  expect(signed.endsWith("Cordialement,\nSamuel Morel\nAtelier Lumen")).toBe(true);
+  const unsigned = buildOutreachDraft({ lead, companyName: "Atelier Lumen", trade: null, phone: "0102030405" });
+  expect(unsigned.endsWith("Cordialement,\n[Votre prénom et nom]\nAtelier Lumen\n0102030405")).toBe(true);
+});
+
+test("story 3.2: run caps group the proposal kinds, Google profile proposals together", () => {
+  expect(RUN_CAPS).toEqual({ prospect: 5, piste_croissance: 2, prospecting_email: 2, social_post: 3, site_web_content: 1, fiche_google: 2, audit_finding: 4 });
+  for (const kind of ["prospect", "piste_croissance", "prospecting_email", "social_post", "site_web_content"]) expect(capGroup(kind)).toBe(kind);
+  expect(capGroup("gbp_update")).toBe("fiche_google");
+  expect(capGroup("review_reply")).toBe("fiche_google");
+  expect(capGroup("audit_finding")).toBe("audit_finding");
+  expect(capGroup("gmail_email")).toBeNull();
+  expect(runCapReachedMessage("prospect")).toBe("Plafond atteint pour les prospects dans ce passage : n'en propose pas d'autre.");
+  expect(runCapReachedMessage("fiche_google")).toBe("Plafond atteint pour les propositions de fiche Google (mise à jour et réponse aux avis) dans ce passage : n'en propose pas d'autre.");
+  expect(runCapReachedMessage("audit_finding")).toBe("Plafond atteint pour les constats d'audit dans ce passage : n'en propose pas d'autre.");
+});
+
+test("story 3.2: a throwing write releases the run's lock and the next queued call runs", async () => {
+  const locks = new Map<string, Promise<unknown>>();
+  const check = async () => true;
+  const failing = withRunCap("run-a", "prospect", async () => { throw new Error("boom"); }, { check, locks });
+  const next = withRunCap("run-a", "prospect", async () => "écrit", { check, locks });
+  await expect(failing).rejects.toThrow("boom");
+  expect(await next).toBe("écrit");
+  expect(locks.size).toBe(0);
+});
+
+test("story 3.2: calls of one run are serialized, calls of different runs are not", async () => {
+  const locks = new Map<string, Promise<unknown>>();
+  const check = async () => true;
+  let release!: () => void;
+  const blocked = new Promise<void>((resolve) => { release = resolve; });
+  const order: string[] = [];
+  const first = withRunCap("run-a", "prospect", async () => { await blocked; order.push("a1"); return "a1"; }, { check, locks });
+  const sameRun = withRunCap("run-a", "prospect", async () => { order.push("a2"); return "a2"; }, { check, locks });
+  const otherRun = await withRunCap("run-b", "prospect", async () => { order.push("b1"); return "b1"; }, { check, locks });
+  expect(otherRun).toBe("b1");
+  expect(order).toEqual(["b1"]);
+  release();
+  expect(await Promise.all([first, sameRun])).toEqual(["a1", "a2"]);
+  expect(order).toEqual(["b1", "a1", "a2"]);
+});
+
+test("story 3.2: an uncapped kind or a call outside a run skips the lock and the count", async () => {
+  const locks = new Map<string, Promise<unknown>>();
+  let checks = 0;
+  const check = async () => { checks++; return true; };
+  let release!: () => void;
+  const blocked = new Promise<void>((resolve) => { release = resolve; });
+  const held = withRunCap("run-a", "prospect", async () => { await blocked; return "a1"; }, { check, locks });
+  expect(await withRunCap("run-a", "gmail_email", async () => "libre", { check, locks })).toBe("libre");
+  expect(await withRunCap(undefined, "prospect", async () => "hors passage", { check, locks })).toBe("hors passage");
+  release();
+  await held;
+  expect(checks).toBe(1);
+});
+
+test("story 3.2: a reached cap writes nothing and answers the group's message", async () => {
+  let writes = 0;
+  const answer = await withRunCap("run-a", "review_reply", async () => { writes++; return "écrit"; }, { check: async () => false, locks: new Map() });
+  expect(answer).toBe(runCapReachedMessage("fiche_google"));
+  expect(writes).toBe(0);
+});
+
+const REVISION_PAYLOAD = { proposalId: "p-1", agent: "demarchage", title: "Offre aux syndics", fromVersion: 1, instruction: "Retire l'avertissement et signe avec mon nom" } as const;
+
+test("story 3.3: a revision card asks the author agent for version N+1 of the production, with the instruction in line", () => {
+  expect(PENDING_ACTION_TYPES).toContain("revise_proposal");
+  expect(describePendingAction({ type: "revise_proposal", payload: REVISION_PAYLOAD })).toEqual({
+    title: "Demander à Jean-Claude une version 2 de « Offre aux syndics »",
+    lines: ["Consigne : Retire l'avertissement et signe avec mon nom"],
+    confirmLabel: "Confirmer",
+    cancelLabel: "Annuler",
+  });
+  expect(describePendingAction({ type: "revise_proposal", payload: { ...REVISION_PAYLOAD, fromVersion: 3 } })?.title).toBe("Demander à Jean-Claude une version 4 de « Offre aux syndics »");
+  // Paul n'est pas un agent auteur ; une consigne vide ou trop longue, une version invalide ne donnent pas de carte.
+  expect(describePendingAction({ type: "revise_proposal", payload: { ...REVISION_PAYLOAD, agent: "co_ceo" } })).toBeNull();
+  expect(REVISION_INSTRUCTION_MAX).toBe(1000);
+  expect(reviseProposalPayloadSchema.safeParse({ ...REVISION_PAYLOAD, instruction: "a".repeat(1000) }).success).toBe(true);
+  expect(reviseProposalPayloadSchema.safeParse({ ...REVISION_PAYLOAD, instruction: "a".repeat(1001) }).success).toBe(false);
+  expect(reviseProposalPayloadSchema.safeParse({ ...REVISION_PAYLOAD, instruction: "" }).success).toBe(false);
+  expect(reviseProposalPayloadSchema.safeParse({ ...REVISION_PAYLOAD, fromVersion: 0 }).success).toBe(false);
+  expect(reviseProposalPayloadSchema.safeParse({ ...REVISION_PAYLOAD, content: "nouveau texte" }).success).toBe(false);
+});
+
+test("story 3.3: a decided revision card shows what the click gave, Annuler leaves the production as it is", () => {
+  const base = { id: "r1", type: "revise_proposal", expiresAt: new Date("2026-10-25T12:00:00Z") };
+  const now = new Date("2026-10-24T12:00:00Z");
+  expect(launchesRun("revise_proposal")).toBe(true);
+  expect(launchesRun("launch_plan_item")).toBe(true);
+  expect(launchesRun("update_profile")).toBe(false);
+  expect(toPendingActionView({ ...base, status: "pending", payload: REVISION_PAYLOAD }, now)).not.toHaveProperty("result");
+  const running = { ok: false, reason: "already_running", message: "Jean-Claude y travaille déjà. Vous pouvez suivre l'exécution en cours.", runId: "run-1" } as const;
+  const view = toPendingActionView({ ...base, status: "confirmed", payload: { ...REVISION_PAYLOAD, result: running } }, now)!;
+  expect(view.result).toEqual(running);
+  expect(decidedText(view.status, view.type, view.result)).toBe(running.message);
+  expect(decidedText("confirmed", "revise_proposal")).toBe("Lancement en cours de vérification…");
+  expect(decidedText("cancelled", "revise_proposal")).toBe("Annulé : la production reste à relire, telle quelle.");
+  expect(expiredMessage("revise_proposal")).toContain("redemandez la correction à Paul");
+});
+
+test("story 3.3: a finished revision run names the new version and links to the decisions, even for Martine", () => {
+  const revision = { proposalId: "p-1", fromVersion: 1, title: "Horaires de la fiche" };
+  expect(finishedRunMessage({ agent: "marketing", resultCount: 1, revision })).toBe("Martine a préparé la version 2 de « Horaires de la fiche ».");
+  expect(runResultHref({ agent: "marketing", revision })).toBe("/dashboard?view=validation");
+  expect(runResultHref({ agent: "marketing" })).toBe("/diagnostic");
+  expect(finishedRunMessage({ agent: "demarchage", resultCount: 1, revision: { ...revision, title: null } })).toBe("Jean-Claude a préparé la version 2.");
+});
+
+test("story 3.5: a state time reads HH:MM in Paris, with the date when it is not today", async () => {
+  const { formatParisTime } = await import("../src/lib/agents/personas");
+  // 23 octobre 2026, 23:40 à Paris (heure d'été, UTC+2).
+  const now = new Date("2026-10-23T21:40:00Z");
+  expect(formatParisTime(new Date("2026-10-23T21:37:00Z"), now)).toBe("23:37");
+  expect(formatParisTime("2026-10-23T21:39:00.000Z", now)).toBe("23:39");
+  expect(formatParisTime(new Date("2026-10-22T21:39:00Z"), now)).toBe("22/10 23:39");
+  expect(formatParisTime(new Date("2025-10-22T21:39:00Z"), now)).toBe("22/10/2025 23:39");
+  // 23 h 30 UTC = minuit et demi à Paris le lendemain : ce n'est plus « aujourd'hui » pour un instant du 23.
+  expect(formatParisTime(new Date("2026-10-23T22:30:00Z"), new Date("2026-10-23T22:45:00Z"))).toBe("00:30");
+  expect(formatParisTime(new Date("2026-10-23T21:30:00Z"), new Date("2026-10-23T22:45:00Z"))).toBe("23/10 23:30");
+  // Heure d'hiver : UTC+1.
+  expect(formatParisTime(new Date("2026-12-01T08:05:00Z"), new Date("2026-12-01T09:00:00Z"))).toBe("09:05");
+});
+
+test("story 3.5: a run still in progress has no end time, Paul's first message has no previous one", async () => {
+  const { formatParisTime } = await import("../src/lib/agents/personas");
+  const now = new Date("2026-10-23T21:40:00Z");
+  expect(formatParisTime(null, now)).toBeNull();
+  expect(formatParisTime(undefined, now)).toBeNull();
+  expect(formatParisTime("pas une date", now)).toBeNull();
 });

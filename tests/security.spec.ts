@@ -59,6 +59,7 @@ const GUARDED_ROUTES: Guarded[] = [
   { method: "GET", path: "/api/proposals", denied: 401 },
   { method: "PATCH", path: "/api/proposals/[id]", denied: 401 },
   { method: "POST", path: "/api/proposals/[id]/execute", denied: 401 },
+  { method: "GET", path: "/api/proposals/[id]/revisions", denied: 401 },
   { method: "POST", path: "/api/onboarding/interpret", denied: 401 },
 ];
 
@@ -484,6 +485,7 @@ test("a signed-in company cannot read or change another company's data", async (
     const writes: [Pick<Guarded, "method" | "path">, unknown][] = [
       [{ method: "PATCH", path: `/api/proposals/${proposal.id}` }, { status: "rejetee" }],
       [{ method: "POST", path: `/api/proposals/${proposal.id}/execute` }, {}],
+      [{ method: "GET", path: `/api/proposals/${proposal.id}/revisions` }, {}],
       [{ method: "PATCH", path: `/api/leads/${lead.id}` }, { stage: "gagne" }],
       [{ method: "PATCH", path: `/api/action-plan/${planItem.id}` }, { status: "ecarte" }],
       [{ method: "POST", path: `/api/action-plan/${planItem.id}/launch` }, {}],

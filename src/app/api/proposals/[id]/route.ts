@@ -4,6 +4,7 @@ import { getSessionCompany } from "@/lib/session";
 import { syncPlanItemStatus } from "@/lib/plan-item-status";
 import { isPublicSource } from "@/lib/proposal-review";
 import { readJsonObject } from "@/lib/request-body";
+import { REVISION_IN_PROGRESS_MESSAGE, activeRevisionRun } from "@/lib/agents/revision-state";
 
 const MAX_CONTENT_LENGTH = 100_000;
 
@@ -104,6 +105,10 @@ export async function PATCH(
   if (status === "brouillon" && !contentChanged) {
     return NextResponse.json(existing);
   }
+  // Pendant une révision (story 3.3), l'agent écrit la version suivante : on n'approuve pas celle qui va être remplacée.
+  if ((status === "validee" || status === "modifiee") && await activeRevisionRun(company.id, id)) {
+    return NextResponse.json({ error: REVISION_IN_PROGRESS_MESSAGE }, { status: 409 });
+  }
 
   // Décision humaine actée ici — aucune exécution réelle déclenchée
   // automatiquement (cf. docs/architecture-technique.md § Flux de validation).
@@ -118,7 +123,9 @@ export async function PATCH(
         : {
             content: newContent,
             version,
-            status: version > 1 ? "modifiee" : "validee",
+            // « modifiée » seulement si le dirigeant a écrit cette version : contenu changé par cette approbation, ou
+            // brouillon qu'il a enregistré. Une version révisée par l'agent, approuvée telle quelle, est « validée ».
+            status: contentChanged || existing.draftSavedAt ? "modifiee" : "validee",
             approvedVersion: version,
             approvedAt: now,
             decidedAt: now,
@@ -126,9 +133,18 @@ export async function PATCH(
           };
 
   // Mise à jour conditionnée à la version lue : deux écritures concurrentes ne peuvent pas réussir toutes les deux.
-  const { count } = await prisma.agentProposal.updateMany({
-    where: { id, companyId: company.id, version: existing.version },
-    data,
+  // Un nouveau contenu conserve la version remplacée (ProposalRevision, source owner), dans la même transaction.
+  const count = await prisma.$transaction(async (tx) => {
+    const updated = await tx.agentProposal.updateMany({
+      where: { id, companyId: company.id, version: existing.version },
+      data,
+    });
+    if (updated.count === 1 && contentChanged) {
+      await tx.proposalRevision.create({
+        data: { proposalId: id, fromVersion: existing.version, previousContent: existing.content, source: "owner", instruction: null },
+      });
+    }
+    return updated.count;
   });
   if (count === 0) {
     return NextResponse.json({ error: VERSION_CONFLICT }, { status: 409 });

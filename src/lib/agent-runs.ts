@@ -8,9 +8,10 @@ import { runContenuAgent } from "@/lib/agents/contenu";
 import { runDemarchageAgent } from "@/lib/agents/demarchage";
 import { executePlanItem, type PlanRunExtras } from "@/lib/agents/plan-runner";
 import { isPlanAgent, type PlanAgent } from "@/lib/agents/plan-items";
-import { AgentRunConflictError, AgentRunQuotaError, classifyRunError, failureMessage } from "@/lib/agents/agent-errors";
+import { AgentRunConflictError, AgentRunQuotaError, RevisionConflictError, classifyRunError, failureMessage } from "@/lib/agents/agent-errors";
 import { PERSONAS } from "@/lib/agents/personas";
 import { isSerializationConflict } from "@/lib/serialization-conflict";
+import { revisionActiveKey } from "@/lib/agents/revision-state";
 
 export const AGENT_RUN_MAX_DURATION_SECONDS = 300;
 export const AGENT_RUN_COST_RESERVATION_USD = 1;
@@ -20,7 +21,11 @@ const DIRECT_DEDUPE_SECONDS = 5 * 60;
 type AgentRunPayload =
   | { kind: "plan_item"; planItemId: string; extras: PlanRunExtras }
   | { kind: "plan_generation" }
-  | { kind: "direct"; agent: PlanAgent; newsContext?: string; prospectDescription?: string };
+  | { kind: "direct"; agent: PlanAgent; newsContext?: string; prospectDescription?: string }
+  | RevisionRunPayload;
+
+/** Révision d'une production par son agent auteur (story 3.3) : la version fromVersion devient fromVersion + 1 ; title sert à l'affichage de l'exécution. */
+export type RevisionRunPayload = { kind: "revision"; proposalId: string; fromVersion: number; instruction: string; title?: string };
 
 // Classes déplacées dans agent-errors (point unique de conversion en motif), réexportées pour les imports existants.
 export { AgentRunConflictError, AgentRunQuotaError };
@@ -69,7 +74,10 @@ async function persistRun(params: {
   payload: AgentRunPayload;
   planItemId?: string;
   retryRunId?: string;
+  /** Durée pendant laquelle une exécution réussie bloque une demande identique ; 0 : seule une exécution active la bloque. */
+  succeededDedupeSeconds?: number;
 }) {
+  const succeededDedupeSeconds = params.succeededDedupeSeconds ?? DIRECT_DEDUPE_SECONDS;
   try {
     return await prisma.$transaction(async (tx) => {
       const existing = await tx.agentRun.findUnique({
@@ -105,7 +113,7 @@ async function persistRun(params: {
       });
       if (active) {
         const dedupeExpired = active.status === "succeeded" && active.finishedAt !== null &&
-          Date.now() - active.finishedAt.getTime() > DIRECT_DEDUPE_SECONDS * 1000;
+          (succeededDedupeSeconds === 0 || Date.now() - active.finishedAt.getTime() > succeededDedupeSeconds * 1000);
         if (!dedupeExpired) return active;
         await tx.agentRun.update({ where: { id: active.id }, data: { activeDedupeKey: null } });
       }
@@ -196,6 +204,32 @@ export async function enqueueDirectRun(params: {
   return run;
 }
 
+/**
+ * Révision d'une production : une exécution de l'agent auteur, avec quota,
+ * budget et carte d'exécution comme tout lancement. Une révision déjà en
+ * cours de la même production est renvoyée telle quelle (clé active) ; une
+ * révision terminée ne bloque pas la suivante (la version a changé).
+ */
+export async function enqueueRevisionRun(params: {
+  companyId: string;
+  agent: PlanAgent;
+  proposalId: string;
+  fromVersion: number;
+  instruction: string;
+  title: string;
+}) {
+  const run = await persistRun({
+    companyId: params.companyId,
+    agent: params.agent,
+    requestKey: `revision:${params.proposalId}:${randomUUID()}`,
+    activeDedupeKey: revisionActiveKey(params.proposalId),
+    payload: { kind: "revision", proposalId: params.proposalId, fromVersion: params.fromVersion, instruction: params.instruction, title: params.title },
+    succeededDedupeSeconds: 0,
+  });
+  schedule(run.id);
+  return run;
+}
+
 export async function enqueuePlanGeneration(companyId: string, requestKey: string) {
   const run = await persistRun({
     companyId,
@@ -270,6 +304,12 @@ async function executeRun(run: AgentRun) {
     return result.producedCount;
   }
 
+  if (payload.kind === "revision") {
+    if (!isPlanAgent(run.agent)) throw new AgentRunConflictError("Révision invalide.", "outage");
+    const { runRevision } = await import("@/lib/agents/revision");
+    return runRevision(run.companyId, payload, { agentRunId: run.id, agent: run.agent });
+  }
+
   if (payload.kind !== "direct" || payload.agent !== run.agent) throw new AgentRunConflictError("Demande de lancement invalide.", "outage");
   switch (payload.agent) {
     case "marketing": {
@@ -314,8 +354,9 @@ export async function processAgentRun(runId: string) {
   } catch (error) {
     console.error("Échec du run agent:", error);
     const failureReason = classifyRunError(error) ?? "outage";
-    // Seul un doublon garde son propre texte : toute autre erreur est dite par son motif, sans détail technique.
-    const message = failureReason === "already_running" && error instanceof AgentRunConflictError
+    // Seuls un doublon et une révision devancée par une modification gardent leur propre texte :
+    // toute autre erreur est dite par son motif, sans détail technique.
+    const message = (failureReason === "already_running" && error instanceof AgentRunConflictError) || error instanceof RevisionConflictError
       ? error.message
       : failureMessage(failureReason, PERSONAS[run.agent as PlanAgent]?.name ?? "L'agent");
     // Un seul commit : l'exécution ne doit jamais être lue échouée alors que son action reste « en cours ».

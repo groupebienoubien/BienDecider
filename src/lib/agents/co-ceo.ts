@@ -6,9 +6,10 @@ import { anthropic, AGENT_MODEL } from "@/lib/anthropic";
 import { prisma } from "@/lib/prisma";
 import { getRejectionContext } from "@/lib/agents/rejection-context";
 import { AgentRunQuotaError, classifyRunError, failureMessage, isRunFailureReason, type RunFailureReason } from "@/lib/agents/agent-errors";
-import { PERSONAS, objectiveLine, directionLine, companyProfileLines } from "@/lib/agents/personas";
+import { PERSONAS, objectiveLine, directionLine, companyProfileLines, runtimeContextLines, formatParisTime, formatParisDate } from "@/lib/agents/personas";
+import { WEEKLY_REVIEW_MARKER } from "@/lib/weekly-review";
 import { enqueuePlanRun } from "@/lib/agent-runs";
-import { createChatPlanItem, findLaunchablePlanItem, type PlanAgent } from "@/lib/agents/plan-items";
+import { createChatPlanItem, findLaunchablePlanItem, isPlanAgent, type PlanAgent } from "@/lib/agents/plan-items";
 import { PLAN_THEMES, type PlanTheme } from "@/lib/plan-themes";
 import { recordUsage, runStreamingToolLoop, runToolLoop } from "@/lib/usage";
 import { getFunnelStats, funnelLines } from "@/lib/funnel";
@@ -17,7 +18,8 @@ import { getChatInstructionsForPlan, loadRecentChatHistory } from "@/lib/agents/
 import { getTeamState } from "@/lib/team-state";
 import { resolvePaulReferences } from "@/lib/paul-references";
 import { attachPendingActions, cancelOrphanPendingActions, createPendingAction, recentPendingActions } from "@/lib/agents/pending-actions";
-import { LAUNCH_EXTRA_MAX, MAX_AMOUNT, PROFILE_PAGE_ONLY_MESSAGE, type PendingActionType, profileUpdateToolSchema, readProfileToolInput, updateObjectivePayloadSchema, updateProfilePayloadSchema } from "@/lib/agents/pending-action-view";
+import { activeRevisionRun, revisionRefusal } from "@/lib/agents/revision";
+import { LAUNCH_EXTRA_MAX, MAX_AMOUNT, PROFILE_PAGE_ONLY_MESSAGE, REVISION_INSTRUCTION_MAX, type PendingActionType, profileUpdateToolSchema, readProfileToolInput, updateObjectivePayloadSchema, updateProfilePayloadSchema } from "@/lib/agents/pending-action-view";
 
 const PERSONA = PERSONAS.co_ceo;
 
@@ -44,10 +46,12 @@ function uncoveredRequestTool(companyId: string, source: "chat" | "plan") {
 /**
  * État lu par Paul via get_current_status : actions et exécutions viennent
  * de getTeamState, la lecture unique partagée avec le menu et l'accueil.
+ * Chaque état porte son heure (Europe/Paris), avec l'heure courante et celle
+ * du message précédent de Paul, pour qu'il distingue une mise à jour d'une erreur (story 3.5).
  */
-export async function buildCurrentStatus(companyId: string) {
-  const [teamState, funnel, pending, findings, leads, cards] = await Promise.all([
-    getTeamState(companyId),
+export async function buildCurrentStatus(companyId: string, now = new Date()) {
+  const [teamState, funnel, pending, findings, leads, cards, previousReply] = await Promise.all([
+    getTeamState(companyId, now),
     getFunnelStats(companyId),
     prisma.agentProposal.findMany({
       where: { companyId, status: "en_attente" },
@@ -65,10 +69,32 @@ export async function buildCurrentStatus(companyId: string) {
       select: { id: true, name: true, stage: true },
     }),
     recentPendingActions(companyId),
+    // Message de Paul précédant le tour en cours : celui du tour n'est enregistré qu'à la fin ;
+    // le point hebdomadaire du cron, écrit sans Paul, ne compte pas.
+    prisma.chatMessage.findFirst({
+      where: { companyId, role: "assistant", createdAt: { lte: now }, NOT: { content: { startsWith: WEEKLY_REVIEW_MARKER } } },
+      orderBy: { createdAt: "desc" },
+      select: { createdAt: true },
+    }),
   ]);
+  // Calculé ici à la milliseconde : à la minute près, Paul ne pourrait pas trancher.
+  const previousAt = previousReply?.createdAt.getTime() ?? null;
+  const since = (date: Date | string | null) => previousAt !== null && date !== null && new Date(date).getTime() > previousAt;
   return {
-    planEnCours: teamState.actions,
-    executionsRecentes: teamState.recentRuns,
+    maintenant: `${formatParisDate(now)}, ${formatParisTime(now, now)}`,
+    monMessagePrecedent: formatParisTime(previousReply?.createdAt, now),
+    planEnCours: teamState.actions.map(({ updatedAt, ...action }) => ({
+      ...action, misAJour: formatParisTime(updatedAt, now), depuisMonMessagePrecedent: since(updatedAt),
+    })),
+    // Heures de Paris uniquement (pas d'horodatage UTC brut) : enFileDepuis pour une exécution en file,
+    // debut nul tant qu'elle attend son tour, fin nulle tant qu'elle n'est pas terminée.
+    executionsRecentes: teamState.recentRuns.map(({ queuedAt, startedAt, finishedAt, ...run }) => ({
+      ...run,
+      enFileDepuis: run.status === "queued" ? formatParisTime(queuedAt, now) : null,
+      debut: formatParisTime(startedAt, now),
+      fin: formatParisTime(finishedAt, now),
+      depuisMonMessagePrecedent: since(startedAt) || since(finishedAt),
+    })),
     decisionsEnAttente: teamState.pendingDecisions,
     suiviProspects: funnelLines(funnel) || "Aucun prospect suivi pour l'instant.",
     refusRecents: await getRejectionContext(companyId),
@@ -77,6 +103,7 @@ export async function buildCurrentStatus(companyId: string) {
       agent: p.agent,
       kind: p.kind,
       title: p.title,
+      version: p.version,
       content: p.content,
     })),
     derniersConstatsAudit: findings.map((f) => ({
@@ -111,7 +138,7 @@ export type DelegationInput = {
 
 const ACTIVE_RUN_STATUSES = ["queued", "running"];
 
-/** Au plus 3 cartes par message de Paul, tous types confondus (objectif, profil, lancements). */
+/** Au plus 3 cartes par message de Paul, tous types confondus (objectif, profil, lancements, révisions). */
 export const MAX_CARDS_PER_REPLY = 3;
 export const CARDS_LIMIT_MESSAGE = `Aucune carte créée : ${MAX_CARDS_PER_REPLY} cartes sont déjà proposées dans cette réponse, c'est le maximum. Propose le reste au prochain message.`;
 
@@ -270,13 +297,15 @@ export async function runCoCeoTurn(
   // pour une entreprise donnée (aucune donnée recalculée par appel, Paul
   // passe par get_current_status plutôt que par un état injecté), donc mis
   // en cache en un seul bloc.
-  // Le contexte de page change à chaque tour : il précède le dernier message sans entrer dans le bloc mis en cache.
+  // Le contexte de page, la date du jour et le nom du dirigeant changent d'un tour ou d'un jour à l'autre :
+  // ils précèdent le dernier message, hors du système mis en cache (le cache de la conversation ne se réinitialise pas chaque jour).
   const messages: Anthropic.MessageParam[] = history.map((m, i) => ({
     role: m.role === "user" ? "user" : "assistant",
     content:
       i === history.length - 1
         ? [
             ...(pageContext ? [{ type: "text" as const, text: pageContext }] : []),
+            { type: "text" as const, text: runtimeContextLines(company, new Date()) },
             { type: "text" as const, text: m.content, cache_control: { type: "ephemeral" as const } },
           ]
         : m.content,
@@ -480,7 +509,7 @@ export async function runCoCeoTurn(
   const proposeProfileUpdate = betaZodTool({
     name: "propose_profile_update",
     description:
-      "Propose au dirigeant d'enregistrer dans son profil son site web, son compte Instagram ou Facebook, son téléphone, ses horaires ou sa description : crée une carte de confirmation sous ta réponse, rien n'est enregistré avant son clic sur « Confirmer ». Mets tous les champs donnés dans un seul appel (une seule carte par réponse) ; reprends chaque valeur telle qu'il l'a dite, une chaîne vide efface le champ. Le nom commercial, le métier et la zone de chalandise ne se modifient pas ici : ils se changent sur la page Entreprise.",
+      "Propose au dirigeant d'enregistrer dans son profil son prénom et nom, son site web, son compte Instagram ou Facebook, son téléphone, ses horaires ou sa description : crée une carte de confirmation sous ta réponse, rien n'est enregistré avant son clic sur « Confirmer ». Mets tous les champs donnés dans un seul appel (une seule carte par réponse) ; reprends chaque valeur telle qu'il l'a dite, une chaîne vide efface le champ. Le nom commercial, le métier et la zone de chalandise ne se modifient pas ici : ils se changent sur la page Entreprise.",
     inputSchema: profileUpdateToolSchema,
     run: async (input) => {
       // Drapeau posé avant tout await : deux appels dans le même message ne créent qu'une carte.
@@ -511,10 +540,76 @@ export async function runCoCeoTurn(
     },
   });
 
+  /**
+   * Proposition de révision (story 3.3) : la carte « Demander à {agent} une
+   * version N+1 de « {titre} » ». Aucune exécution n'est créée ici ; seule
+   * une production à relire se révise, jamais un prospect.
+   */
+  const proposeRevision = betaZodTool({
+    name: "propose_revision",
+    description:
+      `Propose au dirigeant de faire corriger une production existante par l'agent qui l'a écrite : la même production passe à la version suivante, avec sa consigne ; la version actuelle reste consultable. Aucune nouvelle production n'est créée. Crée une carte « Confirmer » sous ta réponse : rien n'est demandé avant son clic. Seule une production à relire (propositionsEnAttente) se révise ; un prospect se corrige dans sa fiche, dans Prospection.`,
+    inputSchema: z.object({
+      proposalId: z.string().describe("Identifiant exact de la production à corriger, lu dans propositionsEnAttente (get_current_status) ou dans le contexte de page"),
+      instruction: z.string().describe(`Consigne du dirigeant, telle qu'il l'a dite, en une ou deux phrases (${REVISION_INSTRUCTION_MAX} caractères au plus), ex: « retire l'avertissement et signe avec mon nom »`),
+    }),
+    run: async (input) => {
+      const instruction = input.instruction.trim();
+      if (!instruction) return "Aucune carte créée : la consigne est vide. Demande au dirigeant ce qu'il faut corriger.";
+      if (instruction.length > REVISION_INSTRUCTION_MAX) {
+        return `Aucune carte créée : la consigne dépasse ${REVISION_INSTRUCTION_MAX} caractères. Résume-la en moins de ${REVISION_INSTRUCTION_MAX} caractères, sans rien inventer.`;
+      }
+      const releaseCard = reserveCard();
+      if (!releaseCard) return CARDS_LIMIT_MESSAGE;
+      try {
+        const proposal = await prisma.agentProposal.findFirst({ where: { id: input.proposalId, companyId } });
+        if (!proposal) {
+          releaseCard();
+          return "Aucune carte créée : aucune production avec cet identifiant. Relis propositionsEnAttente avec get_current_status.";
+        }
+        const refusal = revisionRefusal(proposal);
+        if (refusal === "prospect") {
+          releaseCard();
+          return `Aucune carte créée : « ${proposal.title} » est un prospect, qui ne se révise pas. Dis au dirigeant de corriger sa fiche lui-même dans Prospection.`;
+        }
+        if (refusal === "decided") {
+          releaseCard();
+          return `Aucune carte créée : « ${proposal.title} » est déjà décidée (${proposal.status === "rejetee" ? "rejetée" : "validée ou diffusée"}) ; seule une production à relire se révise. Explique-le au dirigeant${proposal.status === "rejetee" ? " : il peut la rouvrir pour relecture depuis ses décisions, puis te redemander la correction" : ""}. Ne propose pas de nouvelle exécution à la place.`;
+        }
+        if (refusal === "too_long") {
+          releaseCard();
+          return `Aucune carte créée : « ${proposal.title} » est trop longue pour être réécrite d'un coup par l'agent. Dis au dirigeant de la corriger lui-même avec « Modifier ».`;
+        }
+        if (refusal === "agent" || !isPlanAgent(proposal.agent)) {
+          releaseCard();
+          return `Aucune carte créée : « ${proposal.title} » n'a pas été écrite par un agent de l'équipe. Le dirigeant peut la modifier lui-même avec « Modifier ».`;
+        }
+        const agentName = PERSONAS[proposal.agent].name;
+        const running = await activeRevisionRun(companyId, proposal.id);
+        if (running) {
+          releaseCard();
+          return `Aucune carte créée : ${agentName} révise déjà « ${proposal.title} » (exécution ${running.id}). Dis au dirigeant que la nouvelle version apparaîtra dans ses décisions.`;
+        }
+        const action = await createCard("revise_proposal", {
+          proposalId: proposal.id, agent: proposal.agent, title: proposal.title, fromVersion: proposal.version, instruction,
+        });
+        if (!action) {
+          releaseCard();
+          return CARD_FAILED;
+        }
+        return `Carte « Demander à ${agentName} une version ${proposal.version + 1} de « ${proposal.title} » » affichée sous ta réponse. RIEN N'EST DEMANDÉ tant que le dirigeant n'a pas cliqué sur « Confirmer » : ne dis pas que c'est corrigé. La même production passera en version ${proposal.version + 1}, la version ${proposal.version} restera consultable ; aucune nouvelle production n'est créée.`;
+      } catch (error) {
+        releaseCard();
+        console.error("Proposition de révision impossible :", error);
+        return CARD_FAILED;
+      }
+    },
+  });
+
   const runnerParams: BetaToolRunnerParams = {
     model: AGENT_MODEL,
     max_tokens: 2000,
-    tools: [getCurrentStatus, proposeObjectiveUpdate, proposeProfileUpdate, proposeLaunchMarketing, proposeLaunchContenu, proposeLaunchDemarchage, recordUncovered],
+    tools: [getCurrentStatus, proposeObjectiveUpdate, proposeProfileUpdate, proposeLaunchMarketing, proposeLaunchContenu, proposeLaunchDemarchage, proposeRevision, recordUncovered],
     system: [
       {
         type: "text",
@@ -532,11 +627,13 @@ Ton rôle concret : échanger avec le dirigeant, l'aider à prioriser, et lui pr
 Règles strictes, non négociables :
 - RÈGLE ABSOLUE : ne dis JAMAIS qu'une action a été faite (proposition créée, audit relancé, fiche vue, contenu consulté) sans avoir réellement appelé l'outil correspondant DANS CE TOUR. Tu n'as aucune mémoire fiable de ce qui a été fait avant ce message — si on te demande l'état actuel, le plan d'action, le suivi des prospects, le nombre ou le contenu de propositions/constats, appelle TOUJOURS get_current_status avant de répondre. Ne devine jamais.
 - Avant de proposer une priorité ou un lancement, appelle get_current_status pour partir du plan en cours et du suivi des prospects : ne propose pas ce qui est déjà au plan, et appuie-toi sur ce que le dirigeant t'a déjà dit dans cette conversation plutôt que de le lui redemander.
+- Chaque état de get_current_status porte son heure (heure de Paris, avec la date si ce n'est pas aujourd'hui) : maintenant (date et heure), monMessagePrecedent (l'heure de ton message précédent), enFileDepuis, debut et fin des exécutions, misAJour des actions (heure de la dernière modification de l'action, quelle qu'elle soit, pas forcément un changement de statut). Si un état a changé depuis ton message précédent (fin postérieure à ton message), dis "depuis mon dernier message, …". Un élément marqué depuisMonMessagePrecedent: true (exécution commencée ou terminée, action modifiée depuis ton message précédent) est un tel changement, à annoncer ainsi. Ne dis "je me suis trompé" que si l'état à l'heure de ton message contredisait ce que tu as écrit.
 - Une action au statut "en_cours" est déjà en train d'être réalisée (voir son exécution dans executionsRecentes) : ne la relance pas et ne crée pas d'action équivalente ; dis au dirigeant qu'elle est en cours.
 - Tu ne lances JAMAIS un agent toi-même. Les outils propose_launch_* créent l'action dans le plan (statut à lancer) et une carte « Lancer {agent} : {titre} » sous ta réponse ; rien n'est lancé tant que le dirigeant n'a pas cliqué sur « Lancer ». Même quand il te demande explicitement de lancer un agent (« lance ${PERSONAS.demarchage.name} »), tu passes par la carte. Ne dis JAMAIS « c'est lancé », « c'est parti » ni que l'agent y travaille après une proposition : dis qu'il peut lancer d'un clic sur la carte, ou choisir « Plus tard » (l'action reste alors dans son plan, à lancer).
 - Chaque proposition de lancement crée une action dans le plan, avec le brief que tu rédiges, et les productions y seront rattachées. Si sa demande correspond à une action déjà au plan avec le statut "propose", passe son identifiant (planItemId) au lieu d'en créer une seconde.
 - Avant de proposer un lancement, regarde cartesRecentes (get_current_status) : si une carte de lancement pour cette demande est encore en attente (status pending), ne la propose pas une seconde fois — même s'il répond « oui, lance-le » — : dis-lui de cliquer sur « Lancer » dans la carte déjà affichée.
-- Au plus ${MAX_CARDS_PER_REPLY} cartes par réponse, tous types confondus (objectif, profil, lancements) : si un outil refuse une carte de plus, propose le reste au message suivant.
+- Quand le dirigeant demande de corriger une production existante (« retire l'avertissement », « signe avec mon nom », « raccourcis ce post »), appelle propose_revision avec son identifiant (propositionsEnAttente) et sa consigne : c'est une révision de la même production, JAMAIS une nouvelle exécution (propose_launch_* créerait de nouvelles productions à côté de l'ancienne). Seule une production à relire se révise : déjà validée ou rejetée, explique-le sans rien proposer d'autre ; un prospect se corrige dans sa fiche, dans Prospection. Ce qu'a donné la carte se lit dans cartesRecentes (type revise_proposal, même lecture de lancement que pour un lancement), et l'issue de la révision dans executionsRecentes : pour une révision, lis toujours lancement.message ou le message de l'exécution ; si la production a été modifiée, validée ou rejetée entre-temps, dis-le simplement au dirigeant et ne repropose pas la même révision — la consigne « le dirigeant peut relancer » d'un no_result ne s'applique pas dans ce cas.
+- Au plus ${MAX_CARDS_PER_REPLY} cartes par réponse, tous types confondus (objectif, profil, lancements, révisions) : si un outil refuse une carte de plus, propose le reste au message suivant.
 - Ce qu'a donné une carte de lancement se lit au tour suivant dans cartesRecentes (get_current_status) : status cancelled = « Plus tard », l'action reste à lancer ; status confirmed avec lancement.ok true = lancé ; avec lancement.ok null, l'issue n'est pas encore connue : dis-le sans affirmer que c'est lancé et vérifie executionsRecentes ; avec lancement.ok false, rien n'a été lancé : reprends le sens de lancement.message sans présenter cela comme une panne quand ce n'en est pas une. Selon lancement.reason : already_running = l'agent y travaillait déjà (ce n'est pas un échec) ; quota_runs ou quota_budget = limite de lancements ou budget du jour atteint, à réessayer demain ; no_result = l'agent n'a rien produit, le dirigeant peut relancer ; outage = indisponibilité passagère, à réessayer plus tard. N'écris jamais le mot « ÉCHEC ».
 - Les productions des agents restent soumises à la validation du dirigeant dans le dashboard : rien n'est publié sans lui.
 - Tu ne construis pas de site web toi-même (${PERSONAS.contenu.name} ne fournit qu'un brief de contenu, pas le site), ni ne publies ou modifies quoi que ce soit toi-même sur les plateformes externes — sois honnête sur ce que tu ne sais pas faire plutôt que de promettre.
@@ -547,7 +644,8 @@ Règles strictes, non négociables :
 - Pour les pistes de prospection, seules des informations publiques et professionnelles sont acceptables — refuse poliment toute demande de cibler des particuliers avec leurs données personnelles.
 - Quand tu cites explicitement une production, un constat ou un prospect présent dans get_current_status ou dans le contexte de page, ajoute immédiatement après son nom le marqueur fourni [[bd:proposal:ID]], [[bd:finding:ID]] ou [[bd:lead:ID]]. Reprends uniquement un identifiant exact de ces données; ne crée jamais d'identifiant, de lien ou d'URL. N'ajoute pas de marqueur pour un objet absent de ces données.
 - Quand le dirigeant te donne son objectif de chiffre d'affaires (et éventuellement son chiffre actuel, la valeur d'un client, ses nouveaux clients, une échéance), appelle propose_objective_update : c'est lui qui confirme d'un clic sur la carte, tu n'enregistres rien toi-même et tu ne dis pas que c'est enregistré. Chaque montant garde la période dans laquelle il l'a dit (« 12 000 € par mois aujourd'hui, 200 000 € par an visés » : currentPeriod month, targetPeriod year) ; ne convertis rien toi-même. S'il ne précise pas la période de l'objectif, demande-lui « par mois ou par an ? » avant d'appeler l'outil. S'il ne donne pas son chiffre d'affaires actuel, demande-le aussi : sans lui, l'écart ne peut pas être calculé. S'il veut corriger, propose une nouvelle carte : elle remplace la précédente. cartesRecentes (get_current_status) te dit ce que sont devenues tes cartes.
-- Quand le dirigeant te donne son site web, son compte Instagram ou Facebook, son téléphone, ses horaires d'ouverture ou une description de son entreprise, appelle propose_profile_update avec tous ces champs en un seul appel : c'est lui qui confirme d'un clic sur la carte, tu ne dis pas que c'est enregistré. Si l'outil refuse un texte trop long, demande-lui une version plus courte. Le nom commercial, le métier et la zone de chalandise, tu ne les modifies jamais : dis-lui de les changer lui-même sur la page Entreprise.
+- Quand le dirigeant te donne son prénom et nom, son site web, son compte Instagram ou Facebook, son téléphone, ses horaires d'ouverture ou une description de son entreprise, appelle propose_profile_update avec tous ces champs en un seul appel : c'est lui qui confirme d'un clic sur la carte, tu ne dis pas que c'est enregistré. Si l'outil refuse un texte trop long, demande-lui une version plus courte. Le nom commercial, le métier et la zone de chalandise, tu ne les modifies jamais : dis-lui de les changer lui-même sur la page Entreprise.
+- La date du jour et le nom du dirigeant te sont donnés avec son dernier message. Quand un email, un message ou une signature est en jeu et que son nom n'est pas renseigné, propose-lui de l'enregistrer : demande son prénom et son nom, puis appelle propose_profile_update avec ownerName.
 - Ne calcule jamais toi-même un chiffre que tu affiches (conversion au mois, écart, nombre de clients nécessaires) : cite uniquement les chiffres calculés donnés plus haut dans ce message système. S'ils sont absents, dis que l'objectif chiffré n'est pas encore enregistré.
 - Réponds de façon brève et directe, comme un vrai point rapide entre dirigeants, pas un rapport formel.`,
       },
@@ -684,7 +782,8 @@ Règles :
 - ${CAPABILITY_CATALOG}
 - Si l'objectif du dirigeant, ou une partie de cet objectif, sort de ce catalogue : ne propose aucune action qui ferait croire le contraire. Appelle record_uncovered_request une fois pour cette partie non couverte, puis propose seulement les actions du catalogue qui s'en rapprochent, en disant dans leur justification ce qu'elles ne couvrent pas.`;
 
-  const dynamicSystem = `${await getRejectionContext(companyId)}
+  const dynamicSystem = `${runtimeContextLines(company, new Date())}
+${await getRejectionContext(companyId)}
 ${await getChatInstructionsForPlan(companyId)}
 Propositions déjà en attente de validation : ${pendingProposals.map((p) => `${p.agent}: ${p.title}`).join("; ") || "aucune"}.
 Derniers constats (audit, concurrence) : ${recentFindings.map((f) => f.title).join("; ") || "aucun"}.

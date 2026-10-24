@@ -13,6 +13,7 @@ export const PROFILE_TEXT_LIMITS = {
   phone: 100,
   certifications: 500,
   openingHours: 500,
+  ownerName: 120,
 } as const;
 export type ProfileTextField = keyof typeof PROFILE_TEXT_LIMITS;
 
@@ -29,12 +30,28 @@ export function clearableText(value: unknown): string | null | undefined {
   return typeof value === "string" ? value.trim() || null : null;
 }
 
+/**
+ * Prénom et nom du dirigeant, repris dans tous les prompts : espaces, retours à
+ * la ligne et caractères de contrôle ramenés à une espace, guillemets « » retirés.
+ */
+export function cleanOwnerName(value: string): string {
+  return value.replace(/[\s\p{Cc}«»]+/gu, " ").trim();
+}
+
+/** Nettoyage d'un champ du profil à l'enregistrement (page Entreprise, compléments, carte de Paul). */
+export function cleanProfileText(field: ProfileTextField, value: unknown): string | null | undefined {
+  const text = clearableText(value);
+  if (field !== "ownerName" || typeof text !== "string") return text;
+  return cleanOwnerName(text) || null;
+}
+
 /** Champs que Paul peut proposer de modifier ; nom commercial, métier et zone restent sur la page Entreprise. */
-export const PAUL_PROFILE_FIELDS = ["website", "socialHandles", "phone", "openingHours", "description"] as const;
+export const PAUL_PROFILE_FIELDS = ["ownerName", "website", "socialHandles", "phone", "openingHours", "description"] as const;
 export type PaulProfileField = (typeof PAUL_PROFILE_FIELDS)[number];
 
 /** Libellés de la page Entreprise (sans la mention « facultatif »). */
 export const PROFILE_FIELD_LABELS: Record<PaulProfileField, string> = {
+  ownerName: "Votre prénom et nom",
   website: "Site web",
   socialHandles: "Compte Instagram ou Facebook",
   phone: "Téléphone affiché aux clients",

@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { getRejectionContext, rejectedDuplicateNotice } from "@/lib/agents/rejection-context";
 import { getCompetitionContextForProspecting } from "@/lib/agents/findings-context";
 import { ensureAgentProduced } from "@/lib/agents/agent-errors";
+import { RUN_CAPS, withRunCap } from "@/lib/agents/run-caps";
 import { recordUsage, runToolLoop } from "@/lib/usage";
 import {
   PERSONAS,
@@ -12,6 +13,10 @@ import {
   directionLine,
   briefLine,
   companyProfileLines,
+  runtimeContextLines,
+  eventEndDateIssue,
+  EVENT_END_MAX_MONTHS,
+  OWNER_NAME_PLACEHOLDER,
   type AgentRunOptions,
 } from "@/lib/agents/personas";
 
@@ -39,11 +44,13 @@ export async function runDemarchageAgent(
   });
 
   const createdProposalIds: string[] = [];
+  // Un seul « maintenant » par exécution : la date du prompt et le contrôle des dates de fin concordent.
+  const now = new Date();
 
   const proposeLead = betaZodTool({
     name: "propose_growth_lead",
     description:
-      "Enregistre une piste de croissance trouvée via la recherche web (actualité locale, événement, opportunité, entreprise/contact professionnel public) — jamais une donnée personnelle d'un particulier.",
+      `Enregistre une piste de croissance trouvée via la recherche web (actualité locale, événement, opportunité, entreprise/contact professionnel public) — jamais une donnée personnelle d'un particulier. Pour un événement (salon, foire, marché…), indique isEvent et sa date de fin : un événement déjà terminé est refusé. Au plus ${RUN_CAPS.piste_croissance} pistes par passage : au-delà, l'outil refuse.`,
     inputSchema: z.object({
       title: z.string().describe("Titre court de la piste"),
       content: z
@@ -52,31 +59,51 @@ export async function runDemarchageAgent(
       source: z
         .string()
         .describe("URL ou référence de la source ayant permis de trouver cette piste — jamais inventée"),
+      isEvent: z
+        .boolean()
+        .describe("true si la piste est un événement daté (salon, foire, marché, conférence…), false sinon"),
+      eventEndDate: z
+        .string()
+        .optional()
+        .describe("Date de fin de l'événement, au format AAAA-MM-JJ (ex. 2026-11-01) — obligatoire si isEvent vaut true"),
     }),
     run: async (input) => {
-      const content = `${input.content}\n\nSource : ${input.source}`;
-      const alreadyRejected = await rejectedDuplicateNotice(company.id, { kind: "piste_croissance", title: input.title, content: content });
-      if (alreadyRejected) return alreadyRejected;
-      const proposal = await prisma.agentProposal.create({
-        data: {
-          companyId: company.id,
-          agentRunId: options.agentRunId,
-          agent: AGENT_NAME,
-          kind: "piste_croissance",
-          title: input.title,
-          content,
-          planItemId: options.planItemId,
-        },
+      const endDate = input.eventEndDate?.trim();
+      if (input.isEvent && !endDate) return "Piste non enregistrée : pour un événement, donne sa date de fin (eventEndDate, au format AAAA-MM-JJ). Si tu ne la trouves pas dans la source, ne propose pas cet événement.";
+      if (endDate) {
+        const issue = eventEndDateIssue(endDate, now);
+        if (issue === "invalid") return `Piste non enregistrée : la date de fin « ${endDate} » n'est pas au format AAAA-MM-JJ. Corrige-la.`;
+        if (issue === "past") return `Piste non enregistrée : cet événement est terminé (fin le ${endDate}, avant aujourd'hui). Ne le propose pas ; cherche un événement à venir.`;
+        if (issue === "too_far") return `Piste non enregistrée : la date de fin « ${endDate} » est à plus de ${EVENT_END_MAX_MONTHS} mois. Vérifie-la dans la source.`;
+      }
+      // Le doublon d'une piste refusée se compare sur le contenu d'origine, sans la ligne de date de fin.
+      const comparedContent = `${input.content}\n\nSource : ${input.source}`;
+      const content = `${input.content}${endDate ? `\n\nDate de fin : ${endDate}` : ""}\n\nSource : ${input.source}`;
+      // Le doublon d'un rejet se contrôle sous le verrou du plafond : deux appels identiques simultanés sont sérialisés.
+      return withRunCap(options.agentRunId, "piste_croissance", async () => {
+        const alreadyRejected = await rejectedDuplicateNotice(company.id, { kind: "piste_croissance", title: input.title, content: comparedContent });
+        if (alreadyRejected) return alreadyRejected;
+        const proposal = await prisma.agentProposal.create({
+          data: {
+            companyId: company.id,
+            agentRunId: options.agentRunId,
+            agent: AGENT_NAME,
+            kind: "piste_croissance",
+            title: input.title,
+            content,
+            planItemId: options.planItemId,
+          },
+        });
+        createdProposalIds.push(proposal.id);
+        return `Piste enregistrée (id: ${proposal.id}), en attente de validation.`;
       });
-      createdProposalIds.push(proposal.id);
-      return `Piste enregistrée (id: ${proposal.id}), en attente de validation.`;
     },
   });
 
   const proposeProspect = betaZodTool({
     name: "propose_prospect",
     description:
-      "Enregistre une organisation (entreprise, association, collectivité, établissement) correspondant à la cible, identifiée via la recherche web, pour que le dirigeant décide de la contacter. Uniquement des informations publiques et professionnelles — jamais un particulier, jamais un nom ou un email personnel.",
+      `Enregistre une organisation (entreprise, association, collectivité, établissement) correspondant à la cible, identifiée via la recherche web, pour que le dirigeant décide de la contacter. Uniquement des informations publiques et professionnelles — jamais un particulier, jamais un nom ou un email personnel. Au plus ${RUN_CAPS.prospect} prospects par passage : au-delà, l'outil refuse.`,
     inputSchema: z.object({
       name: z.string().describe("Nom de l'organisation"),
       reason: z.string().describe("Pourquoi elle correspond à la cible et à l'objectif du dirigeant (1-2 phrases, factuel)"),
@@ -93,67 +120,74 @@ export async function runDemarchageAgent(
       const content = `${input.reason}\n\nType de cible : ${input.segment}${
         input.publicContact ? `\nContact professionnel public : ${input.publicContact}` : ""
       }\nSource : ${input.source}`;
-      const alreadyRejected = await rejectedDuplicateNotice(company.id, { kind: "prospect", title: input.name, content: content });
-      if (alreadyRejected) return alreadyRejected;
-      const proposal = await prisma.agentProposal.create({
-        data: {
-          companyId: company.id,
-          agentRunId: options.agentRunId,
-          agent: AGENT_NAME,
-          kind: "prospect",
-          title: input.name,
-          content,
-          planItemId: options.planItemId,
-        },
+      return withRunCap(options.agentRunId, "prospect", async () => {
+        const alreadyRejected = await rejectedDuplicateNotice(company.id, { kind: "prospect", title: input.name, content: content });
+        if (alreadyRejected) return alreadyRejected;
+        // Le lead structuré naît avec la proposition, dans la même transaction ;
+        // il n'entre dans le funnel qu'à la validation du dirigeant (cf. api/proposals/[id]).
+        const proposal = await prisma.$transaction(async (tx) => {
+          const created = await tx.agentProposal.create({
+            data: {
+              companyId: company.id,
+              agentRunId: options.agentRunId,
+              agent: AGENT_NAME,
+              kind: "prospect",
+              title: input.name,
+              content,
+              planItemId: options.planItemId,
+            },
+          });
+          await tx.lead.create({
+            data: {
+              companyId: company.id,
+              proposalId: created.id,
+              name: input.name,
+              reason: input.reason,
+              publicContact: input.publicContact,
+              segment: input.segment.trim().toLowerCase(),
+              source: input.source,
+            },
+          });
+          return created;
+        });
+        createdProposalIds.push(proposal.id);
+        return `Prospect enregistré (id: ${proposal.id}), en attente de la décision du dirigeant.`;
       });
-      // Le lead structuré naît avec la proposition ; il n'entre dans le
-      // funnel qu'à la validation du dirigeant (cf. api/proposals/[id]).
-      await prisma.lead.create({
-        data: {
-          companyId: company.id,
-          proposalId: proposal.id,
-          name: input.name,
-          reason: input.reason,
-          publicContact: input.publicContact,
-          segment: input.segment.trim().toLowerCase(),
-          source: input.source,
-        },
-      });
-      createdProposalIds.push(proposal.id);
-      return `Prospect enregistré (id: ${proposal.id}), en attente de la décision du dirigeant.`;
     },
   });
 
   const proposeAction = betaZodTool({
     name: "propose_prospecting_email",
     description:
-      "Enregistre un template d'email de prospection générique, en attente de validation humaine. N'envoie rien, ne cible aucun destinataire réel.",
+      `Enregistre un template d'email de prospection générique, en attente de validation humaine. N'envoie rien, ne cible aucun destinataire réel. Au plus ${RUN_CAPS.prospecting_email} modèles par passage : au-delà, l'outil refuse.`,
     inputSchema: z.object({
       title: z.string().describe("Titre court de la proposition, affiché dans le cockpit"),
       subject: z.string().describe("Objet de l'email"),
       body: z
         .string()
         .describe(
-          "Corps du template, avec un placeholder [Prénom] pour la personnalisation manuelle — jamais de nom réel",
+          `Corps du template, avec un placeholder [Prénom] pour la personnalisation manuelle — jamais de nom réel de prospect. Signe avec le nom donné dans « Nom du dirigeant », ou « ${OWNER_NAME_PLACEHOLDER} » s'il n'est pas renseigné — jamais avec le nom d'un agent ni seulement le nom de l'entreprise`,
         ),
     }),
     run: async (input) => {
       const content = `Objet : ${input.subject}\n\n${input.body}\n\n⚠️ Template générique à adapter manuellement avant tout envoi. Vérifiez votre base de contacts et le cadre légal de la prospection (RGPD) avant envoi — en cas de doute, consultez un expert Conformité/Juridique.`;
-      const alreadyRejected = await rejectedDuplicateNotice(company.id, { kind: "prospecting_email", title: input.title, content: content });
-      if (alreadyRejected) return alreadyRejected;
-      const proposal = await prisma.agentProposal.create({
-        data: {
-          companyId: company.id,
-          agentRunId: options.agentRunId,
-          agent: AGENT_NAME,
-          kind: "prospecting_email",
-          title: input.title,
-          content,
-          planItemId: options.planItemId,
-        },
+      return withRunCap(options.agentRunId, "prospecting_email", async () => {
+        const alreadyRejected = await rejectedDuplicateNotice(company.id, { kind: "prospecting_email", title: input.title, content: content });
+        if (alreadyRejected) return alreadyRejected;
+        const proposal = await prisma.agentProposal.create({
+          data: {
+            companyId: company.id,
+            agentRunId: options.agentRunId,
+            agent: AGENT_NAME,
+            kind: "prospecting_email",
+            title: input.title,
+            content,
+            planItemId: options.planItemId,
+          },
+        });
+        createdProposalIds.push(proposal.id);
+        return `Proposition enregistrée (id: ${proposal.id}), en attente de validation.`;
       });
-      createdProposalIds.push(proposal.id);
-      return `Proposition enregistrée (id: ${proposal.id}), en attente de validation.`;
     },
   });
 
@@ -167,16 +201,17 @@ ${objectiveLine(company)}
 ${directionLine(company.direction)}
 
 Ton rôle a trois volets :
-1. Si un type de prospects est décrit : identifier via web_search 5 à 10 organisations RÉELLES correspondant à cette cible dans la zone (entreprises, associations, collectivités, établissements) — outil propose_prospect, une fois par organisation, avec le même libellé de "segment" pour les organisations du même type. C'est le volet prioritaire : le dirigeant décidera lesquelles contacter et déclarera ensuite les réponses, rendez-vous et clients obtenus.
-2. Rechercher 1 à 3 pistes de croissance réelles (actualités locales, événements, appels à projets pertinents pour ${company.trade} à ${company.servingArea}) — outil propose_growth_lead.
-3. Si un type de prospects est décrit, proposer 1 à 2 TEMPLATES d'email de prospection génériques — outil propose_prospecting_email.
+1. Si un type de prospects est décrit : identifier via web_search entre 3 et ${RUN_CAPS.prospect} organisations RÉELLES, les plus pertinentes, correspondant à cette cible dans la zone (entreprises, associations, collectivités, établissements) — outil propose_prospect, une fois par organisation, avec le même libellé de "segment" pour les organisations du même type. C'est le volet prioritaire : le dirigeant décidera lesquelles contacter et déclarera ensuite les réponses, rendez-vous et clients obtenus.
+2. Rechercher jusqu'à ${RUN_CAPS.piste_croissance} pistes de croissance réelles, les meilleures, (actualités locales, événements, appels à projets pertinents pour ${company.trade} à ${company.servingArea}) — outil propose_growth_lead.
+3. Si un type de prospects est décrit, proposer jusqu'à ${RUN_CAPS.prospecting_email} TEMPLATES (choisis les meilleurs) d'email de prospection génériques — outil propose_prospecting_email.
 
 Règles strictes, non négociables :
 - Tu ne fais QUE proposer, jamais de ciblage nominatif de particuliers ni d'envoi réel.
 - Pour les prospects et les pistes : UNIQUEMENT des organisations et des informations publiques et professionnelles, trouvées réellement via web_search avec leur source citée. JAMAIS de donnée personnelle d'un particulier (nom, adresse, email privé, propriétaire de maison…) — même si on te le demande, refuse poliment et explique pourquoi. N'invente jamais une organisation.
 - Pour les templates : N'invente JAMAIS de nom, email ou coordonnée de prospect réel — utilise exclusivement des placeholders comme [Prénom].
 - Reste factuel sur l'offre de l'entreprise, pas de promesse commerciale exagérée.
-- Un template = un email complet et directement adaptable, pas de placeholder du type "[à compléter]" pour le contenu métier.`;
+- Un template = un email complet et directement adaptable, pas de placeholder du type "[à compléter]" pour le contenu métier.
+- Plafonds par passage, au-delà l'outil refuse : ${RUN_CAPS.prospect} prospects, ${RUN_CAPS.piste_croissance} pistes, ${RUN_CAPS.prospecting_email} templates d'email. Choisis les plus utiles plutôt que d'en proposer davantage.`;
 
   const { finalMessage, usage } = await runToolLoop(anthropic.beta.messages.toolRunner({
     model: AGENT_MODEL,
@@ -192,6 +227,8 @@ Règles strictes, non négociables :
     ],
     system: [
       { type: "text", text: stableSystem, cache_control: { type: "ephemeral" } },
+      // Date du jour et nom du dirigeant : hors du bloc mis en cache.
+      { type: "text", text: runtimeContextLines(company, now) },
       { type: "text", text: await getRejectionContext(companyId) },
       { type: "text", text: await getCompetitionContextForProspecting(companyId) },
       ...(options.brief ? [{ type: "text" as const, text: briefLine(options.brief) }] : []),

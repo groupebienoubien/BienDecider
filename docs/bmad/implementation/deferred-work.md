@@ -49,3 +49,9 @@
 - source_spec: `docs/bmad/implementation/spec-2-4-pas-d-action-en-double.md`
   summary: Index (companyId, agent, theme, status) sur ActionPlanItem et test de concurrence déterministe.
   evidence: lecture sérialisable sans index ; le test Promise.all ne prouve pas le chevauchement.
+- source_spec: `docs/bmad/implementation/spec-3-1-date-du-jour-et-nom-du-dirigeant.md`
+  summary: Expirer ou signaler une piste de croissance dont l'événement est passé pendant qu'elle attendait la décision.
+  evidence: la date de fin n'est que dans le texte de la proposition ; aucun contrôle à la décision.
+- source_spec: `docs/bmad/implementation/spec-3-4-recette-du-scenario-atelier-lumen.md`
+  summary: Vérifier dans le parcours navigateur que le badge, le lien de l'accueil et l'en-tête de Décisions affichent le même nombre.
+  evidence: le test de recette compare des fonctions (badge et Paul lisent la même), pas ce que les pages affichent.

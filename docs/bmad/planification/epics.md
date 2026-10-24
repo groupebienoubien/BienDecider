@@ -35,6 +35,7 @@ Ce document découpe le PRD « Paul fiable » et son spine d'architecture en ép
 - FR13 : badge Décisions, accueil et page Décisions affichent le même nombre.
 - FR14 : une action dont l'exécution est terminée n'est plus présentée comme « action à valider ».
 - FR15 : Paul porte le titre « Partenaire de croissance » partout.
+- FR16 : Paul situe chaque état dans le temps : un changement depuis son dernier message est une mise à jour, pas une erreur (ajouté le 2026-10-23 après le second test en production).
 
 ### Exigences non fonctionnelles
 
@@ -75,6 +76,7 @@ Ce document découpe le PRD « Paul fiable » et son spine d'architecture en ép
 - FR13 : Épopée 1 — un seul compteur
 - FR14 : Épopée 1 — statut d'action cohérent
 - FR15 : Épopée 2 — un seul titre
+- FR16 : Épopée 3 — Paul et le temps
 
 ## Liste des épopées
 
@@ -91,7 +93,7 @@ Le dirigeant dit une fois son objectif et son profil, et garde la main sur chaqu
 ### Épopée 3 : Paul fait corriger, sans vous noyer
 
 Le dirigeant fait corriger une production en une phrase, reçoit des productions datées et signées de son nom, en quantité maîtrisée.
-**FR couvertes :** FR9, FR10, FR11, FR12
+**FR couvertes :** FR9, FR10, FR11, FR12, FR16
 
 Ordre : 1 → 2 → 3. L'épopée 1 donne la lecture d'état dont l'épopée 2 a besoin pour éviter les doublons. L'épopée 3 réutilise les cartes de l'épopée 2. Chaque épopée apporte de la valeur seule.
 
@@ -469,6 +471,31 @@ afin de vérifier que Paul reste fiable à chaque livraison.
 - Exposer les fabriques d'outils de Paul (`buildPaulTools(companyId)`) pour les appeler sans modèle.
 - Ajouter le script `test:paul` dans `package.json` et à la CI.
 - Rédiger la recette manuelle (pas à pas reprenant les messages du rapport de test).
+
+### Story 3.5: Paul situe chaque état dans le temps
+
+En tant que dirigeant,
+je veux que Paul me dise ce qui a changé depuis son dernier message, sans le présenter comme une erreur,
+afin de pouvoir croire ce qu'il m'annonce.
+
+**Critères d'acceptation :**
+
+**Étant donné** une exécution de Jean-Claude en cours au moment du message précédent de Paul, terminée depuis
+**Quand** le dirigeant redemande où en est l'équipe
+**Alors** Paul dit « depuis mon dernier message, Jean-Claude a terminé » (ou équivalent), jamais « c'était faux » ni « je dois corriger »
+
+**Étant donné** un statut que Paul a réellement mal annoncé (contradiction avec l'état du serveur à l'heure de son message)
+**Quand** il s'en aperçoit
+**Alors** il le corrige explicitement
+
+**Étant donné** l'état de l'équipe
+**Quand** Paul le lit
+**Alors** chaque action et chaque exécution porte son heure (début, fin) et Paul connaît l'heure de son message précédent
+
+**Notes techniques :**
+- `getTeamState` expose `startedAt`/`finishedAt` des exécutions (déjà dans `AgentRunView`) et `updatedAt` des actions ; `buildCurrentStatus` ajoute `heureDuMessagePrecedent` (dernier message de Paul) et l'heure courante.
+- Prompt de Paul : distinguer « changement depuis mon dernier message » (à annoncer comme une mise à jour) et « erreur de ma part » (seulement si l'état à l'heure de mon message contredisait ce que j'ai dit).
+- Test : `buildCurrentStatus` contient les heures ; test de prompt par fonction pure si une règle est extraite.
 
 ## Validation finale
 

@@ -145,6 +145,14 @@ Le premier audit lancé à la fin de l'onboarding est une action de Martine au p
 - Juste après « Valider et lancer mon audit », l'accueil affiche une carte d'exécution de Martine en cours, et non « Je n'ai pas encore examiné votre présence en ligne ».
 - Paul voit cette action en cours (FR-4) et ne relance pas un audit.
 
+#### FR-16 : Paul situe chaque état dans le temps
+
+*Ajoutée le 2026-10-23 après le second test en production.* Paul distingue un changement survenu depuis son dernier message (annoncé comme une mise à jour) d'une erreur de sa part (corrigée explicitement).
+
+**Conséquences :**
+- Une exécution terminée depuis le message précédent est annoncée « depuis mon dernier message, X a terminé », jamais « c'était faux ».
+- Paul lit l'heure de chaque exécution et l'heure de son message précédent.
+
 ### 4.3 Paul propose, le dirigeant lance
 
 **Description :** les délégations depuis le chat créent ou reprennent une action en « à lancer » et affichent une carte « Lancer / Plus tard ». Réalise UJ-3.
@@ -234,7 +242,7 @@ Paul est « Partenaire de croissance » partout, y compris l'en-tête du panneau
 
 ### 6.1 Inclus
 
-FR-1 à FR-15.
+FR-1 à FR-16.
 
 ### 6.2 Exclu de l'épopée
 

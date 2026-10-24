@@ -14,7 +14,7 @@ import { appendDictation, spokenText } from "@/lib/voice";
 import { dayKey, dayLabel, parseMessage, plainMessage, timeLabel, type Inline } from "@/lib/chat-format";
 import { NDJSON_CONTENT_TYPE, splitStreamEvents, streamPreview } from "@/lib/chat-stream";
 import { createVoiceConversation, supportsVoiceConversation, type VoicePhase } from "@/lib/speech";
-import { decidedText, type PendingActionView } from "@/lib/agents/pending-action-view";
+import { decidedText, launchesRun, type PendingActionView } from "@/lib/agents/pending-action-view";
 
 type PanelState = { open: boolean; draft: string };
 type ChatEntry = { id: string; role: string; content: string; createdAt: string; references?: PaulReference[]; actions?: PendingActionView[]; pending?: boolean; stopped?: boolean };
@@ -155,13 +155,15 @@ function DaySeparator({ iso }: { iso: string }) {
 function PendingActionCard({ action, busy, error, onDecide }: { action: PendingActionView; busy: boolean; error: string | null; onDecide: (decision: Decision) => void }) {
   const decided = action.status !== "pending";
   // Une carte de lancement confirmée n'est un succès que si le lancement a eu lieu ; sans résultat connu, texte neutre.
-  const succeeded = action.status === "confirmed" && (action.type !== "launch_plan_item" || action.result?.ok === true);
+  const succeeded = action.status === "confirmed" && (!launchesRun(action.type) || action.result?.ok === true);
   const statusRef = useRef<HTMLParagraphElement>(null);
   const clickedRef = useRef(false);
   // Après « Lancer » ou « Plus tard », les boutons disparaissent : le focus passe au résultat affiché sur la carte.
   useEffect(() => {
-    if (decided && clickedRef.current && action.type === "launch_plan_item") statusRef.current?.focus();
-  }, [decided, action.type]);
+    // Une révision annulée rend le focus au champ de saisie (comme objectif et profil) ; seul son résultat confirmé le prend.
+    const keepsFocus = action.type === "launch_plan_item" || (action.type === "revise_proposal" && action.status === "confirmed");
+    if (decided && clickedRef.current && keepsFocus) statusRef.current?.focus();
+  }, [decided, action.type, action.status]);
   const click = (decision: Decision) => {
     clickedRef.current = true;
     onDecide(decision);

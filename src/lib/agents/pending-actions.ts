@@ -10,6 +10,7 @@ import {
   mergeProfilePayloads,
   objectiveUpdateValues,
   profileUpdateValues,
+  reviseProposalPayloadSchema,
   toPendingActionView,
   updateObjectivePayloadSchema,
   updateProfilePayloadSchema,
@@ -17,6 +18,7 @@ import {
   type LaunchPlanItemPayload,
   type LaunchResult,
   type PendingActionView,
+  type ReviseProposalPayload,
   type UpdateObjectivePayload,
   type UpdateProfilePayload,
 } from "@/lib/agents/pending-action-view";
@@ -29,7 +31,12 @@ export { describePendingAction, toPendingActionView, type PendingActionView } fr
  * du dirigeant, qui passe par decidePendingAction.
  */
 
-type PayloadFor = { update_objective: UpdateObjectivePayload; update_profile: UpdateProfilePayload; launch_plan_item: LaunchPlanItemPayload };
+type PayloadFor = {
+  update_objective: UpdateObjectivePayload;
+  update_profile: UpdateProfilePayload;
+  launch_plan_item: LaunchPlanItemPayload;
+  revise_proposal: ReviseProposalPayload;
+};
 /** Renvoie false, sans rien écrire, quand l'intention enregistrée n'est plus valide. */
 type Executor = (tx: Prisma.TransactionClient, companyId: string, payload: unknown) => Promise<boolean>;
 
@@ -52,6 +59,8 @@ const EXECUTORS: { [K in PendingActionType]: Executor } = {
   // Le lancement lui-même se fait après la transaction (launchConfirmedPlanItem) : il a ses propres
   // transactions et programme l'exécution avec after(). Ici, on vérifie seulement que la carte est lisible.
   launch_plan_item: async (_tx, _companyId, payload) => launchPlanItemPayloadSchema.safeParse(payload).success,
+  // Comme un lancement : l'exécution de révision est créée après la transaction (reviseConfirmedProposal).
+  revise_proposal: async (_tx, _companyId, payload) => reviseProposalPayloadSchema.safeParse(payload).success,
 };
 
 /**
@@ -92,20 +101,57 @@ async function launchConfirmedPlanItem(companyId: string, id: string, payload: u
   return result;
 }
 
+/**
+ * Révision confirmée d'une carte (story 3.3) : crée l'exécution de révision
+ * de l'agent auteur, après la transition atomique de la carte. Le résultat
+ * est enregistré sur la carte, comme pour un lancement.
+ */
+async function reviseConfirmedProposal(companyId: string, id: string, payload: unknown): Promise<LaunchResult | null> {
+  const parsed = reviseProposalPayloadSchema.safeParse(payload);
+  if (!parsed.success) return null;
+  const { proposalId, agent, title, fromVersion, instruction } = parsed.data;
+  const card = { proposalId, agent, title, fromVersion, instruction };
+  let result: LaunchResult;
+  try {
+    // Import différé : revision.ts dépend d'agent-runs, chargé seulement au clic.
+    const { startRevisionFromCard } = await import("@/lib/agents/revision");
+    result = await startRevisionFromCard(companyId, card);
+  } catch (error) {
+    console.error(`Révision confirmée ${card.agent} impossible :`, error);
+    result = { ok: false, reason: "outage", message: failureMessage("outage", PERSONAS[card.agent].name) };
+  }
+  try {
+    await prisma.paulPendingAction.updateMany({
+      where: { id, companyId },
+      data: { payload: { ...card, result } as Prisma.InputJsonValue },
+    });
+  } catch (error) {
+    console.error("Résultat de la révision non enregistré sur la carte :", error);
+  }
+  return result;
+}
+
 /** Effets exécutés après la transition pending → confirmed, hors transaction. */
 const AFTER_CONFIRM: { [K in PendingActionType]?: (companyId: string, id: string, payload: unknown) => Promise<LaunchResult | null> } = {
   launch_plan_item: launchConfirmedPlanItem,
+  revise_proposal: reviseConfirmedProposal,
 };
 
 /**
  * Cible d'une intention : une nouvelle carte ne remplace que la carte en
  * attente de même type et de même cible. Objectif et profil n'ont qu'une
- * cible (l'entreprise) ; un lancement vise une action du plan.
+ * cible (l'entreprise) ; un lancement vise une action du plan, une révision une production.
  */
 function sameTarget(type: PendingActionType, payload: unknown): Prisma.PaulPendingActionWhereInput {
-  if (type !== "launch_plan_item") return {};
-  const parsed = launchPlanItemPayloadSchema.safeParse(payload);
-  return parsed.success ? { payload: { path: ["planItemId"], equals: parsed.data.planItemId } } : {};
+  if (type === "launch_plan_item") {
+    const parsed = launchPlanItemPayloadSchema.safeParse(payload);
+    return parsed.success ? { payload: { path: ["planItemId"], equals: parsed.data.planItemId } } : {};
+  }
+  if (type === "revise_proposal") {
+    const parsed = reviseProposalPayloadSchema.safeParse(payload);
+    return parsed.success ? { payload: { path: ["proposalId"], equals: parsed.data.proposalId } } : {};
+  }
+  return {};
 }
 
 /**
@@ -124,6 +170,7 @@ const PAYLOAD_SCHEMAS: { [K in PendingActionType]: { parse: (value: unknown) => 
   update_objective: updateObjectivePayloadSchema,
   update_profile: updateProfilePayloadSchema,
   launch_plan_item: launchPlanItemPayloadSchema,
+  revise_proposal: reviseProposalPayloadSchema,
 };
 
 const MAX_CREATE_ATTEMPTS = 3;
@@ -252,7 +299,8 @@ export async function pendingActionsByMessage(companyId: string, chatMessageIds:
 
 /**
  * Ce que Paul sait de ses dernières cartes (get_current_status) : type, statut
- * et date de décision ; pour un lancement, l'action visée et ce que le clic a donné.
+ * et date de décision ; pour un lancement, l'action visée et ce que le clic a donné ;
+ * pour une révision, la production visée, sa version et ce que le clic a donné.
  */
 export async function recentPendingActions(companyId: string, take = 10) {
   const actions = await prisma.paulPendingAction.findMany({
@@ -264,6 +312,7 @@ export async function recentPendingActions(companyId: string, take = 10) {
   const now = Date.now();
   return actions.map((action) => {
     const launch = action.type === "launch_plan_item" ? launchPlanItemPayloadSchema.safeParse(action.payload) : null;
+    const revision = action.type === "revise_proposal" ? reviseProposalPayloadSchema.safeParse(action.payload) : null;
     return {
       type: action.type,
       status: action.status === "pending" && action.expiresAt.getTime() <= now ? "expired" : action.status,
@@ -275,6 +324,16 @@ export async function recentPendingActions(companyId: string, take = 10) {
         ...(launch.data.result
           ? { lancement: { ok: launch.data.result.ok, reason: launch.data.result.reason ?? null, message: launch.data.result.message } }
           // Confirmée sans résultat enregistré : issue inconnue pour l'instant (voir executionsRecentes).
+          : action.status === "confirmed" ? { lancement: { ok: null } } : {}),
+      } : {}),
+      ...(revision?.success ? {
+        proposalId: revision.data.proposalId,
+        agent: revision.data.agent,
+        production: revision.data.title,
+        versionRevisee: revision.data.fromVersion,
+        consigne: revision.data.instruction,
+        ...(revision.data.result
+          ? { lancement: { ok: revision.data.result.ok, reason: revision.data.result.reason ?? null, message: revision.data.result.message } }
           : action.status === "confirmed" ? { lancement: { ok: null } } : {}),
       } : {}),
     };
