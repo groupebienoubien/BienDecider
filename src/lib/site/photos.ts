@@ -144,6 +144,14 @@ export function stripCssResources(css: string): string {
     .replace(/(?:-webkit-)?(?:url|image-set|image|cross-fade|element|src)\s*\([^)]*\)?/gi, "none");
 }
 
+/** Répète un remplacement jusqu'à ce que le texte ne change plus : une seule passe peut recomposer ce qu'elle retire (« <scr<script>ipt> »). */
+export function untilStable(text: string, step: (value: string) => string): string {
+  let previous: string;
+  let current = text;
+  do { previous = current; current = step(previous); } while (current !== previous);
+  return current;
+}
+
 const REMOVED_ELEMENTS = /<\/?(?:picture|source|link|object|embed|video|audio|track|image|feimage|use|input|iframe|frame|frameset|base|meta|form|script|noscript|svg:image)\b(?:"[^"]*"|'[^']*'|[^'">])*>/gi;
 const TAG = /<([a-z][a-z0-9:-]*)((?:"[^"]*"|'[^']*'|[^'">])*)>/gi;
 const REMOTE_URL = /(?:https?:|\/\/)/i;
@@ -157,8 +165,7 @@ const REMOTE_URL = /(?:https?:|\/\/)/i;
  */
 export function keepOnlyCompanyPhotos(html: string, photos: readonly { url: string; alt: string }[]): string {
   const byUrl = new Map(photos.map((photo) => [photo.url, photo]));
-  return html
-    .replace(REMOVED_ELEMENTS, "")
+  return untilStable(html, (value) => value.replace(REMOVED_ELEMENTS, ""))
     .replace(/(<style\b(?:"[^"]*"|'[^']*'|[^'">])*>)([\s\S]*?)(<\/style\s*>|$)/gi, (_, open: string, css: string, close: string) => `${open}${stripCssResources(css)}${close}`)
     .replace(TAG, (tag, rawName: string, rawAttributes: string) => {
       const name = rawName.toLowerCase();

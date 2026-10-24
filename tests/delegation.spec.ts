@@ -23,7 +23,7 @@ import { WEEKLY_REVIEW_MARKER } from "../src/lib/weekly-review";
 import { RUN_CAPS, capGroup, runCapReachedMessage, withRunCap } from "../src/lib/agents/run-caps";
 import { PROFILE_TEXT_LIMITS, clearableText, profileTextIssue } from "../src/lib/company-profile";
 import { parisQuotaWindows, usageCounterFor } from "../src/lib/quota-windows";
-import { SITE_PHOTO_BAD_TYPE, SITE_PHOTO_MAX_BYTES, SITE_PHOTO_TOO_LARGE, SITE_PHOTO_TOO_WIDE, checkSitePhoto, cleanSitePhotoAlt, detectSitePhotoType, keepOnlyCompanyPhotos, sitePhotoPathname, sitePhotoPromptLines } from "../src/lib/site/photos";
+import { SITE_PHOTO_BAD_TYPE, SITE_PHOTO_MAX_BYTES, SITE_PHOTO_TOO_LARGE, SITE_PHOTO_TOO_WIDE, checkSitePhoto, cleanSitePhotoAlt, detectSitePhotoType, keepOnlyCompanyPhotos, sitePhotoPathname, sitePhotoPromptLines, untilStable } from "../src/lib/site/photos";
 
 test("risk rules use registered kinds and contextual factors, then fail closed", () => {
   expect(assessActionRisk("piste_croissance").level).toBe("modere");
@@ -1041,4 +1041,11 @@ test("story 5.5: the model is given each photo's address and description, or tol
   const lines = sitePhotoPromptLines([{ url: "https://x.blob/a.webp", alt: "Terrasse \"bois\"", width: 1600, height: 1200 }]);
   expect(lines).toContain(`src="https://x.blob/a.webp" alt="Terrasse 'bois'"`);
   expect(sitePhotoPromptLines([])).toContain("aucune");
+});
+
+test("story 5.5: a removal that would rebuild what it removes runs until the text is stable", () => {
+  expect(untilStable("<scr<script>ipt>", (value) => value.replace(/<script>/g, ""))).toBe("");
+  const cleaned = keepOnlyCompanyPhotos('<p>A</p><scr<script>ipt>alert(1)</script ><iframe src="//evil"></iframe>', []);
+  expect(cleaned).not.toMatch(/<\/?script/i);
+  expect(cleaned).not.toMatch(/<iframe/i);
 });

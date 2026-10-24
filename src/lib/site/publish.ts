@@ -5,7 +5,7 @@ import { companyProfileLines } from "@/lib/agents/personas";
 import { prisma } from "@/lib/prisma";
 import { recordUsage } from "@/lib/usage";
 import { PublishRefusedError } from "@/lib/execution-error";
-import { keepOnlyCompanyPhotos, sitePhotoPromptLines } from "@/lib/site/photos";
+import { keepOnlyCompanyPhotos, sitePhotoPromptLines, untilStable } from "@/lib/site/photos";
 import { canExecuteAction } from "@/lib/delegation-risk";
 import { getConfiguredRiskLevels } from "@/lib/delegation-policy";
 import { reserveUsageBudget } from "@/lib/agent-runs";
@@ -34,15 +34,14 @@ function slugify(name: string): string {
  * qui n'est pas une photo de l'entreprise (story 5.5), et la page est servie dans une iframe sandbox sans scripts.
  */
 export function sanitizeHtml(html: string, photos: readonly { url: string; alt: string }[] = []): string {
-  return keepOnlyCompanyPhotos(
-    html
-      .replace(/```html\s*/gi, "")
-      .replace(/```\s*$/g, "")
-      .replace(/<script[\s\S]*?<\/script>/gi, "")
-      .replace(/\son\w+\s*=\s*(".*?"|'.*?'|[^\s>]+)/gi, "")
-      .replace(/javascript:/gi, ""),
-    photos,
-  ).trim();
+  const unfenced = html.replace(/```html\s*/gi, "").replace(/```\s*$/g, "");
+  // Chaque retrait est répété jusqu'à stabilité : une passe unique peut recomposer « <script » ou « on… = ».
+  const cleaned = untilStable(unfenced, (value) => value
+    .replace(/<script\b[\s\S]*?<\/script[^>]*>/gi, "")
+    .replace(/<\/?script\b[^>]*>?/gi, "")
+    .replace(/\son\w+\s*=\s*(".*?"|'.*?'|[^\s>]+)/gi, "")
+    .replace(/(?:javascript|vbscript|data)\s*:/gi, ""));
+  return keepOnlyCompanyPhotos(cleaned, photos).trim();
 }
 
 /** Refus de revue d'une republication : la liste des points à confirmer est renvoyée à l'interface. */
