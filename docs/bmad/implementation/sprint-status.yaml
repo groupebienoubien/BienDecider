@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 10-22-2026 22:00
-last_updated: 10-24-2026 12:30
+last_updated: 10-24-2026 14:00
 project: BienDecider
 project_key: NOKEY
 tracking_system: file-system
@@ -57,7 +57,15 @@ development_status:
   3-5-paul-situe-chaque-état-dans-le-temps: done
   epic-3-retrospective: optional
 
-  epic-4: in-progress
-  4-1-parler-à-paul-ne-consomme-pas-les-lancements: review
-  4-2-aucune-fausse-rectification: review
+  epic-4: done
+  4-1-parler-à-paul-ne-consomme-pas-les-lancements: done
+  4-2-aucune-fausse-rectification: done
   epic-4-retrospective: optional
+
+  epic-5: backlog
+  5-1-un-diagnostic-à-jour: backlog
+  5-2-du-diagnostic-au-plan-sans-boucle: backlog
+  5-3-le-plan-montre-d-abord-ce-qu-il-reste-à-faire: backlog
+  5-4-paul-utilisable-sur-smartphone: backlog
+  5-5-des-photos-sur-le-site: backlog
+  epic-5-retrospective: optional
