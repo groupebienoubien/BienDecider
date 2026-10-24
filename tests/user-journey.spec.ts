@@ -1336,6 +1336,47 @@ test("agents request only missing profile details and wait for successful partia
     await prisma.$disconnect();
   }
 });
+test("story 5.4: on a phone, Paul takes the whole screen, above the bottom bar, without zoom or page scroll", async ({ page, company }) => {
+  expect(company.id).toBeTruthy(); // la fixture ouvre la session du dirigeant
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.goto(`${baseURL}/dashboard`);
+  await page.locator('button[aria-controls="paul-panel"]:visible').first().click();
+  const panel = page.getByRole("dialog", { name: "Discussion avec Paul" });
+  await expect(panel).toBeVisible();
+  const layout = await page.evaluate(() => {
+    const node = document.getElementById("paul-panel")!;
+    const field = node.querySelector("textarea")!;
+    const bar = document.querySelector("nav.journey-tabbar");
+    const panelBox = node.getBoundingClientRect();
+    const atBottom = document.elementFromPoint(187, panelBox.bottom - 20);
+    return {
+      panel: { top: panelBox.top, bottom: panelBox.bottom, width: panelBox.width },
+      header: node.querySelector("header")!.getBoundingClientRect().height,
+      log: node.querySelector('[role="log"]')!.getBoundingClientRect().height,
+      fieldFont: parseFloat(getComputedStyle(field).fontSize),
+      messagesFont: parseFloat(getComputedStyle(node.querySelector(".chat-messages")!).fontSize),
+      barCoversPanel: Boolean(bar && atBottom && bar.contains(atBottom)),
+      pageOverflow: getComputedStyle(document.documentElement).overflow,
+      focused: document.activeElement === field,
+    };
+  });
+  expect(layout.panel).toEqual({ top: 0, bottom: 812, width: 375 });
+  expect(layout.header).toBeLessThanOrEqual(60);
+  expect(layout.log / 812).toBeGreaterThanOrEqual(0.7);
+  expect(layout.fieldFont).toBeGreaterThanOrEqual(16);
+  expect(layout.messagesFont).toBeGreaterThanOrEqual(16);
+  expect(layout.barCoversPanel).toBe(false);
+  expect(layout.pageOverflow).toBe("hidden");
+  // Pas de clavier ouvert d'office : le dirigeant lit d'abord.
+  expect(layout.focused).toBe(false);
+  await expect(panel.getByRole("button", { name: "Agrandir la fenêtre" })).toBeHidden();
+  await expect(panel).toHaveAttribute("aria-modal", "true");
+
+  await panel.getByRole("button", { name: "Replier" }).click();
+  await expect(panel).toHaveCount(0);
+  expect(await page.evaluate(() => getComputedStyle(document.documentElement).overflow)).not.toBe("hidden");
+});
+
 test("Paul's objective card is confirmed in one click and stays confirmed in the history", async ({ page, company }) => {
   const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }) });
   try {

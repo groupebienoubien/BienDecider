@@ -388,7 +388,16 @@
 .mq .chat-input textarea:focus-visible{outline:none}
 .mq .chat-input:focus-within{border-color:var(--green);box-shadow:0 0 0 2px var(--bd-focus)}
 @media(max-width:760px){
-.mq .paul-panel{inset:auto 8px 8px auto;width:calc(100% - 16px);height:620px;max-height:90dvh}
+/* Story 5.4 : plein écran par-dessus la barre du bas et les annonces (toast, célébration) ; la hauteur suit la zone visible (paul-panel.tsx, visualViewport). */
+.mq .paul-panel,.mq .paul-panel.wide{inset:0;z-index:110;width:100%;height:100dvh;max-height:none;border:0;border-radius:0;box-shadow:none;padding-bottom:env(safe-area-inset-bottom)}
+.mq .paul-panel>header{padding:6px 8px 6px 12px;gap:8px}
+.mq .paul-panel>header small{display:none}
+.mq .paul-panel .chat-context{padding:5px 12px;font-size:11px;text-transform:none}
+.mq .paul-panel .chat-messages{padding:14px 12px;font-size:16px;line-height:1.5}
+.mq .paul-panel [role="log"]{overscroll-behavior:contain}
+.mq .paul-panel form{margin:0 8px}
+.mq .paul-panel .chat-input textarea{font-size:16px}
+.mq .paul-panel .chat-disclaimer{display:block;font-size:11px;line-height:1.3;margin:4px 0 6px}
 }
 
 /* Charte (docs/charte.md) : carte de décision à trois informations, sections alternées, accent chaud. */

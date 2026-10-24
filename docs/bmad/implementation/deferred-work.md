@@ -64,3 +64,9 @@
 - source_spec: `docs/bmad/implementation/spec-4-1-parler-a-paul-ne-consomme-pas-les-lancements.md`
   summary: Tester par les vrais appelants que « Préremplir » compte comme message et la mise en ligne du site comme lancement.
   evidence: les tests appellent reserveUsageBudget avec des libellés écrits en dur ; changer le purpose dans onboarding/interpret ou publish.ts ne ferait échouer aucun test.
+- source_spec: `docs/bmad/implementation/spec-5-4-paul-utilisable-sur-smartphone.md`
+  summary: Fermer Paul avec le geste ou le bouton « retour » d'Android au lieu de quitter la page.
+  evidence: le panneau plein écran sur téléphone ressemble à un écran ; le retour système navigue ailleurs.
+- source_spec: `docs/bmad/implementation/spec-5-4-paul-utilisable-sur-smartphone.md`
+  summary: Vérifier sur un vrai iPhone le blocage du défilement et le champ au-dessus du clavier (visualViewport).
+  evidence: le test de parcours tourne sous Chromium de bureau, sans clavier virtuel ni Safari iOS.
