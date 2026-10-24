@@ -64,6 +64,15 @@
 - source_spec: `docs/bmad/implementation/spec-4-1-parler-a-paul-ne-consomme-pas-les-lancements.md`
   summary: Tester par les vrais appelants que « Préremplir » compte comme message et la mise en ligne du site comme lancement.
   evidence: les tests appellent reserveUsageBudget avec des libellés écrits en dur ; changer le purpose dans onboarding/interpret ou publish.ts ne ferait échouer aucun test.
+- source_spec: `docs/bmad/implementation/spec-gh-7-chiffrer-jetons-google-meta.md`
+  summary: Ajouter un timeout explicite et un diagnostic sûr au fetch d'échange OAuth Google.
+  evidence: `exchangeGoogleCode` utilise fetch sans AbortSignal.timeout; ce comportement préexistait à l'US #7 et le timeout de plateforme borne déjà la durée de la route.
+- source_spec: `docs/bmad/implementation/spec-gh-7-chiffrer-jetons-google-meta.md`
+  summary: Afficher au dirigeant le résultat par fournisseur de la révocation lors de la suppression de compte.
+  evidence: `/api/companies/delete` renvoie `revocations`, mais `DeleteAccountSection` redirige vers la connexion dès la réussite sans lire ce rapport; le comportement d'interface préexistait à l'US #7 et relève du parcours de suppression.
+- source_spec: `docs/bmad/implementation/spec-gh-7-chiffrer-jetons-google-meta.md`
+  summary: Ajouter une recette déterministe du timeout et de l'annulation du fetch OAuth Google.
+  evidence: Le timeout réseau de l'échange est déjà différé séparément; la revue confirme qu'aucun test simulé ne vérifie encore la réponse quand le fournisseur ne répond pas.
 
 - source_spec: `docs/bmad/implementation/spec-corrections-audit-agents-ia.md`
   summary: Réconcilier la consommation et la réservation d'une tentative dont le processus a été tué avant la finalisation d'usage.

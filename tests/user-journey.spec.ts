@@ -1372,7 +1372,7 @@ test("Paul's objective card is confirmed in one click and stays confirmed in the
     await attachPendingActions(company.id, [card.id], message.id);
     await page.unroute("**/api/co-ceo/message");
     await page.reload();
-    if (!(await panel.isVisible())) await page.getByRole("button", { name: "Échanger avec Paul", exact: true }).click();
+    await expect(panel).toBeVisible();
     await expect(panel.getByRole("group", { name: "Proposition de Paul à confirmer" }).getByText("C’est enregistré.")).toBeVisible();
     await expect(panel.getByRole("button", { name: "Confirmer" })).toHaveCount(0);
   } finally {

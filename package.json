@@ -12,6 +12,7 @@
     "test:brand": "playwright test tests/brand.spec.ts --workers=1",
     "test:gmail": "playwright test tests/gmail.spec.ts --workers=1",
     "test:facebook": "playwright test tests/facebook.spec.ts --workers=1",
+    "migrate:oauth-tokens": "node --experimental-strip-types scripts/migrate-oauth-token-encryption.cjs",
     "test:linkedin": "playwright test tests/linkedin.spec.ts --workers=1",
     "test:delegation": "playwright test tests/delegation.spec.ts --workers=1",
     "test:engine": "playwright test tests/engine.spec.ts --workers=1",

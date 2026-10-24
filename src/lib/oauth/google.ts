@@ -6,8 +6,17 @@
  */
 export const GOOGLE_SCOPE = "https://www.googleapis.com/auth/business.manage";
 
+export function googleOAuthConfigurationError(): string | null {
+  if (!process.env.GOOGLE_OAUTH_CLIENT_ID) return "GOOGLE_OAUTH_CLIENT_ID manquant.";
+  if (!process.env.GOOGLE_OAUTH_CLIENT_SECRET) return "GOOGLE_OAUTH_CLIENT_SECRET manquant.";
+  const key = process.env.GOOGLE_TOKEN_ENCRYPTION_KEY ?? "";
+  if (!key) return "GOOGLE_TOKEN_ENCRYPTION_KEY manquante.";
+  if (!/^[a-f0-9]{64}$/i.test(key)) return "GOOGLE_TOKEN_ENCRYPTION_KEY doit contenir 64 caractères hexadécimaux.";
+  return null;
+}
+
 export function isGoogleOAuthConfigured(): boolean {
-  return Boolean(process.env.GOOGLE_OAUTH_CLIENT_ID && process.env.GOOGLE_OAUTH_CLIENT_SECRET);
+  return googleOAuthConfigurationError() === null;
 }
 
 export function buildGoogleAuthUrl(redirectUri: string, state: string): string {
@@ -23,8 +32,8 @@ export function buildGoogleAuthUrl(redirectUri: string, state: string): string {
   return `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
 }
 
-export async function exchangeGoogleCode(code: string, redirectUri: string) {
-  const res = await fetch("https://oauth2.googleapis.com/token", {
+export async function exchangeGoogleCode(code: string, redirectUri: string, fetchImpl: typeof fetch = fetch) {
+  const res = await fetchImpl("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -36,7 +45,7 @@ export async function exchangeGoogleCode(code: string, redirectUri: string) {
     }),
   });
   if (!res.ok) {
-    throw new Error(`Échange de code Google échoué (${res.status}): ${await res.text()}`);
+    throw new Error("Échange OAuth Google refusé.");
   }
   return res.json() as Promise<{
     access_token: string;
