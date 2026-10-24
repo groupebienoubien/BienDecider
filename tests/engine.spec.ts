@@ -700,7 +700,8 @@ test("story 4.1: the admin page shows messages to Paul and launches as separate 
     const response = await request.get(`${baseURL}/admin`, { headers: { Cookie: `pepito_session=${createSessionToken(admins[0], adminCompany.sessionVersion, process.env.SESSION_SECRET)}` } });
     expect(response.status()).toBe(200);
     const page = (await response.text()).replace(/<!-- -->/g, "");
-    const rowStart = page.indexOf(company.ownerEmail);
+    // La cellule HTML (« >email< ») et non la charge RSC diffusée plus haut dans la page, qui contient aussi l'email.
+    const rowStart = page.indexOf(`>${company.ownerEmail}<`);
     expect(rowStart).toBeGreaterThan(-1);
     const row = page.slice(rowStart, page.indexOf("</tr>", rowStart));
     expect(row).toContain("3/50 messages à Paul · 2/10 lancements");
