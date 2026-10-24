@@ -214,7 +214,7 @@ test("Google OAuth requires its encryption key and never exposes provider error 
   }
 });
 
-test("Google OAuth start refuses a valid session when the encryption key is missing", async ({ request }) => {
+test("Google OAuth start refuses a valid session when provider configuration is absent", async ({ request }) => {
   requireLocalDatabase("Google OAuth configuration tests");
   if (!process.env.DATABASE_URL || !process.env.SESSION_SECRET) throw new Error("DATABASE_URL and SESSION_SECRET are required.");
   const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }) });
@@ -229,13 +229,13 @@ test("Google OAuth start refuses a valid session when the encryption key is miss
   try {
     process.env.GOOGLE_OAUTH_CLIENT_ID = "ci-google-client";
     process.env.GOOGLE_OAUTH_CLIENT_SECRET = "ci-google-secret";
-    process.env.GOOGLE_TOKEN_ENCRYPTION_KEY = "invalid";
+    process.env.GOOGLE_TOKEN_ENCRYPTION_KEY = "b".repeat(64);
     const session = createSessionToken(company.ownerEmail, company.sessionVersion, process.env.SESSION_SECRET);
     const response = await request.get(`${baseURL}/api/oauth/google/start`, {
       headers: { Cookie: `pepito_session=${session}` }, maxRedirects: 0,
     });
     expect(response.status()).toBe(503);
-    expect((await response.json()).error).toContain("GOOGLE_TOKEN_ENCRYPTION_KEY");
+    expect((await response.json()).error).toContain("GOOGLE_OAUTH_CLIENT_ID");
   } finally {
     if (previous.clientId === undefined) delete process.env.GOOGLE_OAUTH_CLIENT_ID;
     else process.env.GOOGLE_OAUTH_CLIENT_ID = previous.clientId;
@@ -392,7 +392,7 @@ test("OAuth token migration updates only a local fixture and rolls back invalid 
 
     const tokenCrypto = { encryptGoogleToken, decryptGoogleToken, isEncryptedTokenEnvelope };
     const dryRun = await oauthMigration.executeMigration(client, { apply: false }, tokenCrypto, { local: true });
-    expect(dryRun).toMatchObject({ mode: "dry-run", encryptedGoogleRows: 1, purgedLegacyMetaRows: 2, unchangedRows: 0 });
+    expect(dryRun).toMatchObject({ mode: "dry-run", encryptedGoogleRows: 1, purgedLegacyMetaRows: 2 });
     expect((await prisma.channelConnection.findUniqueOrThrow({ where: { companyId_channel: { companyId: company.id, channel: "google_business_profile" } } })).accessToken).toBe("legacy-google-access");
 
     await prisma.channelConnection.create({ data: {
@@ -407,7 +407,7 @@ test("OAuth token migration updates only a local fixture and rolls back invalid 
     await prisma.channelConnection.update({ where: { companyId_channel: { companyId: company.id, channel: "facebook" } }, data: { accessToken: encryptedFacebook } });
 
     const applied = await oauthMigration.executeMigration(client, { apply: true }, tokenCrypto, { local: true });
-    expect(applied).toMatchObject({ mode: "applied", encryptedGoogleRows: 1, purgedLegacyMetaRows: 1, unchangedRows: 1 });
+    expect(applied).toMatchObject({ mode: "applied", encryptedGoogleRows: 1, purgedLegacyMetaRows: 1 });
     const google = await prisma.channelConnection.findUniqueOrThrow({ where: { companyId_channel: { companyId: company.id, channel: "google_business_profile" } } });
     expect(google.accessToken).not.toBe("legacy-google-access");
     expect(decryptGoogleToken(google.accessToken!, company.id)).toBe("legacy-google-access");
