@@ -15,6 +15,8 @@ import { groupPlanItems, planItemStatusView } from "../src/lib/action-plan-view"
 import { facebookAuditSource } from "../src/lib/facebook-audit-source";
 import { businessTargetLines, clientGapLabel, clientsToMonthly, computeBusinessTarget, toMonthly } from "../src/lib/business-target";
 import { PROFILE_PAGE_ONLY_MESSAGE, PENDING_ACTION_TYPES, REVISION_INSTRUCTION_MAX, decidedText, launchesRun, launchPlanItemPayloadSchema, reviseProposalPayloadSchema, describePendingAction, expiredMessage, mergeProfilePayloads, objectiveUpdateValues, profileUpdateToolSchema, profileUpdateValues, readProfileToolInput, toPendingActionView, updateObjectivePayloadSchema, updateProfilePayloadSchema } from "../src/lib/agents/pending-action-view";
+import { chatWindow, lastMessageBefore, latestOf, paulMessageTimes } from "../src/lib/agents/paul-message-times";
+import { WEEKLY_REVIEW_MARKER } from "../src/lib/weekly-review";
 import { RUN_CAPS, capGroup, runCapReachedMessage, withRunCap } from "../src/lib/agents/run-caps";
 import { PROFILE_TEXT_LIMITS, clearableText, profileTextIssue } from "../src/lib/company-profile";
 
@@ -742,4 +744,65 @@ test("story 3.5: a run still in progress has no end time, Paul's first message h
   expect(formatParisTime(null, now)).toBeNull();
   expect(formatParisTime(undefined, now)).toBeNull();
   expect(formatParisTime("pas une date", now)).toBeNull();
+});
+
+// Story 4.2 — 24 octobre 2026 à Paris (UTC+2) : messages de Paul à 08:02:10 et 08:03:00,
+// en réponse aux messages du dirigeant de 08:02:00 et 08:02:50 (début de chaque tour).
+const paulAt = (time: string) => new Date(`2026-10-24T${time}+02:00`);
+const paulTimes = [
+  { at: paulAt("08:02:10"), turnStart: paulAt("08:02:00") },
+  { at: paulAt("08:03:00"), turnStart: paulAt("08:02:50") },
+];
+
+test("story 4.2: an audit finished between two messages of Paul changed after the first one", () => {
+  expect(lastMessageBefore(paulTimes, paulAt("08:02:40"))).toEqual(paulAt("08:02:10"));
+  // Ordre indifférent.
+  expect(lastMessageBefore([...paulTimes].reverse(), paulAt("08:02:40"))).toEqual(paulAt("08:02:10"));
+});
+
+test("story 4.2: a change after Paul's last turn started points to that message", () => {
+  expect(lastMessageBefore(paulTimes, paulAt("08:03:30"))).toEqual(paulAt("08:03:00"));
+  expect(lastMessageBefore(paulTimes, paulAt("08:03:30").toISOString())).toEqual(paulAt("08:03:00"));
+});
+
+test("story 4.2: a run finished while Paul was answering changed after that answer, not an older one", () => {
+  // Tour commencé à 08:02:00, exécution finie à 08:02:05, réponse enregistrée à 08:02:10.
+  expect(lastMessageBefore(paulTimes, paulAt("08:02:05"))).toEqual(paulAt("08:02:10"));
+});
+
+test("story 4.2: compared to the millisecond, a change at the exact start of a turn is not after its message", () => {
+  expect(lastMessageBefore(paulTimes, paulAt("08:02:50"))).toEqual(paulAt("08:02:10"));
+  expect(lastMessageBefore(paulTimes, new Date(paulAt("08:02:50").getTime() + 1))).toEqual(paulAt("08:03:00"));
+});
+
+test("story 4.2: a change before Paul's first turn, or without any message, has none", () => {
+  expect(lastMessageBefore(paulTimes, paulAt("08:01:00"))).toBeNull();
+  expect(lastMessageBefore(paulTimes, paulAt("08:02:00"))).toBeNull();
+  expect(lastMessageBefore([], paulAt("08:02:40"))).toBeNull();
+  expect(lastMessageBefore(paulTimes, null)).toBeNull();
+  expect(lastMessageBefore(paulTimes, undefined)).toBeNull();
+  expect(lastMessageBefore(paulTimes, "pas une date")).toBeNull();
+});
+
+test("story 4.2: a run changed at its latest of start and end", () => {
+  expect(latestOf(paulAt("08:01:00"), paulAt("08:02:40"))).toEqual(paulAt("08:02:40"));
+  expect(latestOf(paulAt("08:01:00"), null)).toEqual(paulAt("08:01:00"));
+  expect(latestOf(null, undefined)).toBeNull();
+});
+
+test("story 4.2: Paul's messages carry their turn start, skip the weekly review and messages before the window's first user message", () => {
+  const latestFirst = [
+    { role: "assistant", content: "Le mail est prêt.", createdAt: paulAt("08:03:00") },
+    { role: "user", content: "Prépare-moi un mail.", createdAt: paulAt("08:02:50") },
+    { role: "assistant", content: `${WEEKLY_REVIEW_MARKER}
+Rien de neuf.`, createdAt: paulAt("08:02:30") },
+    { role: "assistant", content: "Martine est en cours.", createdAt: paulAt("08:02:10") },
+    { role: "user", content: "Où en est l'équipe ?", createdAt: paulAt("08:02:00") },
+    // En tête de fenêtre, avant tout message du dirigeant : Paul ne le relit pas.
+    { role: "assistant", content: "Bonjour.", createdAt: paulAt("08:00:00") },
+  ];
+  expect(paulMessageTimes(latestFirst)).toEqual(paulTimes);
+  expect(chatWindow(latestFirst).map((message) => message.createdAt)).toEqual([paulAt("08:02:00"), paulAt("08:02:10"), paulAt("08:02:30"), paulAt("08:02:50"), paulAt("08:03:00")]);
+  expect(paulMessageTimes([])).toEqual([]);
+  expect(paulMessageTimes([{ role: "assistant", content: "Seul.", createdAt: paulAt("08:00:00") }])).toEqual([]);
 });

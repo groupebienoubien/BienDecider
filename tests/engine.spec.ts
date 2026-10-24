@@ -2326,6 +2326,88 @@ test("story 3.5: Paul's prompt tells a change since his last message apart from 
   expect(paul.system).toContain("pas forcément un changement de statut");
 });
 
+test("story 4.2: each run and action tells which of Paul's messages it changed after", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { buildCurrentStatus } = await import("../src/lib/agents/co-ceo");
+  // 24 octobre 2026 à Paris (UTC+2), le cas du troisième test en production.
+  const at = (time: string) => new Date(`2026-10-24T${time}+02:00`);
+  const now = at("08:05:00");
+  const run = (agent: string, startedAt: string, finishedAt: string | null) => prisma.agentRun.create({ data: {
+    companyId: company.id, agent, requestKey: `since-${randomUUID()}`, payload: {}, status: finishedAt ? "succeeded" : "running",
+    queuedAt: at(startedAt), startedAt: at(startedAt), finishedAt: finishedAt ? at(finishedAt) : null, createdAt: at(startedAt),
+  } });
+  const audit = await run("marketing", "08:01:00", "08:02:40");
+  const sinceLast = await run("demarchage", "08:02:20", "08:03:30");
+  const beforeAny = await run("contenu", "07:53:00", "07:54:30");
+  const stillRunning = await run("contenu", "08:02:30", null);
+  const afterWeekly = await run("contenu", "07:58:30", "07:59:00");
+  const beforeWindow = await run("contenu", "07:51:00", "07:52:00");
+  const action = await prisma.actionPlanItem.create({ data: {
+    companyId: company.id, agent: "marketing", title: "Audit de la fiche", rationale: "Raison", timing: "Aujourd'hui", status: "lance",
+    createdAt: at("07:50:00"), updatedAt: at("08:02:50"),
+  } });
+
+  // Aucun message de Paul : nul partout.
+  const empty = await buildCurrentStatus(company.id, now);
+  for (const item of [...empty.planEnCours, ...empty.executionsRecentes]) expect(item.aChangeApresMonMessageDe).toBeNull();
+
+  await prisma.chatMessage.createMany({ data: [
+    // En tête de fenêtre, avant tout message du dirigeant : Paul ne le relit pas.
+    { companyId: company.id, role: "assistant", content: "Bonjour.", createdAt: at("07:50:00") },
+    { companyId: company.id, role: "user", content: "Bonjour Paul.", createdAt: at("07:55:00") },
+    { companyId: company.id, role: "assistant", content: "Bonjour Samuel.", createdAt: at("07:57:00") },
+    // Écrit par le cron, pas par Paul : ignoré.
+    { companyId: company.id, role: "assistant", content: `${WEEKLY_REVIEW_MARKER}\nRien de neuf.`, createdAt: at("07:58:00") },
+    { companyId: company.id, role: "user", content: "Où en est l'équipe ?", createdAt: at("08:02:00") },
+    { companyId: company.id, role: "assistant", content: "L'audit de Martine est en cours.", createdAt: at("08:02:10") },
+    { companyId: company.id, role: "user", content: "Prépare-moi un mail.", createdAt: at("08:02:50") },
+    { companyId: company.id, role: "assistant", content: "Voici le mail.", createdAt: at("08:03:00") },
+    { companyId: company.id, role: "user", content: "Où en est l'équipe ?", createdAt: at("08:04:00") },
+    // Postérieur à l'instant lu : ignoré.
+    { companyId: company.id, role: "assistant", content: "Plus tard.", createdAt: at("08:06:00") },
+  ] });
+  const status = await buildCurrentStatus(company.id, now);
+  const byId = (id: string) => status.executionsRecentes.find((entry) => entry.id === id);
+  expect(byId(audit.id)).toMatchObject({ aChangeApresMonMessageDe: "08:02", depuisMonMessagePrecedent: false });
+  expect(byId(sinceLast.id)).toMatchObject({ aChangeApresMonMessageDe: "08:03", depuisMonMessagePrecedent: true });
+  // En cours, commencée après le début du tour de 08:02:00.
+  expect(byId(stillRunning.id)).toMatchObject({ status: "running", fin: null, aChangeApresMonMessageDe: "08:02" });
+  // Finie avant le premier tour relu (07:55:00).
+  expect(byId(beforeAny.id)?.aChangeApresMonMessageDe).toBeNull();
+  // Le point hebdomadaire de 07:58 ne compte pas : le message de Paul antérieur est celui de 07:57.
+  expect(byId(afterWeekly.id)?.aChangeApresMonMessageDe).toBe("07:57");
+  expect(byId(beforeWindow.id)?.aChangeApresMonMessageDe).toBeNull();
+  expect(status.planEnCours).toEqual([expect.objectContaining({ id: action.id, aChangeApresMonMessageDe: "08:02", depuisMonMessagePrecedent: false })]);
+});
+
+test("story 4.2: a Paul message that left the reread window does not count", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { buildCurrentStatus } = await import("../src/lib/agents/co-ceo");
+  const { CHAT_HISTORY_MESSAGES } = await import("../src/lib/agents/chat-context");
+  const start = new Date("2026-10-24T06:00:00Z");
+  const minute = (i: number) => new Date(start.getTime() + i * 60 * 1000);
+  // CHAT_HISTORY_MESSAGES + 2 messages alternés, une minute d'écart : les deux plus anciens (0 dirigeant, 1 Paul) sortent de la fenêtre.
+  const count = CHAT_HISTORY_MESSAGES + 2;
+  await prisma.chatMessage.createMany({ data: Array.from({ length: count }, (_, i) => ({
+    companyId: company.id, role: i % 2 === 0 ? "user" : "assistant", content: `Message ${i}`, createdAt: minute(i),
+  })) });
+  // Finie juste après le message de Paul sorti de la fenêtre, avant tout message restant.
+  const finishedAt = new Date(minute(1).getTime() + 30 * 1000);
+  const run = await prisma.agentRun.create({ data: {
+    companyId: company.id, agent: "contenu", requestKey: `window-${randomUUID()}`, payload: {}, status: "succeeded",
+    queuedAt: minute(1), startedAt: minute(1), finishedAt, createdAt: minute(1),
+  } });
+  const status = await buildCurrentStatus(company.id, minute(count));
+  expect(status.executionsRecentes.find((entry) => entry.id === run.id)?.aChangeApresMonMessageDe).toBeNull();
+});
+
+test("story 4.2: Paul's prompt announces a change after one of his messages as news, never as a correction", async ({ company }) => {
+  const paul = await capturePaulTools(company.id);
+  expect(paul.system).toContain("Un élément dont aChangeApresMonMessageDe n'est pas nul a changé après ton message de cette heure-là : ce que tu en disais était peut-être vrai à ce moment. Annonce-le comme une nouvelle (« depuis, Martine a terminé »), jamais avec « je rectifie », « je dois corriger » ou « c'était faux ».");
+  // La règle de la story 3.5 reste.
+  expect(paul.system).toContain("depuisMonMessagePrecedent: true");
+});
+
 // Story 3.4 — Recette du scénario Atelier Lumen : le parcours des tests en production du 22 et du 23 octobre,
 // rejoué sans appel au modèle sur une seule entreprise. Les tests s'enchaînent : chacun part de l'état laissé
 // par le précédent, comme le dirigeant dans une même session. Recette manuelle : docs/bmad/implementation/recette-paul-fiable.md.

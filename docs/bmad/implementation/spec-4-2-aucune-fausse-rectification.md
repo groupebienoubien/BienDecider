@@ -2,8 +2,8 @@
 title: 'Story 4.2 — Aucune fausse rectification'
 type: 'bugfix'
 created: '2026-10-24'
-status: 'ready-for-dev'
-baseline_commit: '4274785'
+status: 'done'
+baseline_commit: '23a3143254773e09aca144fddc2fd485ecc8b2f6'
 route: 'dispatch'
 review_loop_iteration: 0
 context:
@@ -49,11 +49,11 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] fonction pure du dernier message antérieur -- milliseconde, liste vide -- testable
-- [ ] `buildCurrentStatus` -- `aChangeApresMonMessageDe` sur `planEnCours` et `executionsRecentes` -- Paul situe chaque changement
-- [ ] prompt de Paul -- règle ci-dessus -- plus de fausse rectification
-- [ ] recette manuelle -- étape « un message sans rapport pendant l'audit, puis « Où en est l'équipe ? » après la fin » -- le cas du test est rejoué
-- [ ] tests -- une ligne de la matrice par test -- non-régression
+- [x] fonction pure du dernier message antérieur -- milliseconde, liste vide -- testable
+- [x] `buildCurrentStatus` -- `aChangeApresMonMessageDe` sur `planEnCours` et `executionsRecentes` -- Paul situe chaque changement
+- [x] prompt de Paul -- règle ci-dessus -- plus de fausse rectification
+- [x] recette manuelle -- étape « un message sans rapport pendant l'audit, puis « Où en est l'équipe ? » après la fin » -- le cas du test est rejoué
+- [x] tests -- une ligne de la matrice par test -- non-régression
 
 **Acceptance Criteria:**
 - Étant donné le cas du test du 24 octobre, quand Paul lit `get_current_status`, alors l'audit porte `aChangeApresMonMessageDe: "08:02"`.
@@ -62,3 +62,22 @@ context:
 ## Spec Change Log
 
 ## Review Triage Log
+
+| # | Source | Constat | Verdict | Preuve | Route |
+|---|--------|---------|---------|--------|-------|
+| 1 | edge | Réponse de Paul enregistrée en fin de tour : une fin survenue entre la lecture de l'état et l'enregistrement paraît antérieure au message | medium | `chatMessage.create` après la boucle d'outils ; `lastMessageBefore` compare à `createdAt` | patch |
+| 2 | verification-gap, blind | Troncature à 40 messages de `loadPaulMessageTimes` non testée | low | aucun test au-delà de 10 messages | patch |
+| 3 | verification-gap | Exécution en cours (fin nulle) non testée via `buildCurrentStatus` | low | toutes les exécutions du test ont une fin | patch |
+| 4 | blind | Recette : pas de lien vers le rapport du 24 octobre ; rien si l'audit finit avant 1 bis | low | intro et étapes 1 bis à 1 quater | patch |
+| 5 | blind | Champ non nul pour presque tout : Paul pourrait annoncer des éléments dont personne n'a parlé | maybe-false | dépend du modèle ; à observer à la recette (étape 8) | defer |
+| 6 | edge | `depuisMonMessagePrecedent` (story 3.5) a le même biais de fin de tour que le n° 1 | medium | `previousReply.createdAt` | defer (préexistant) |
+| 7 | blind | La règle interdit « c'était faux » même pour une vraie erreur sur un élément changé depuis | false | voulu par l'intention figée : une correction ne vise qu'un élément inchangé | rejet |
+| 8 | blind | Doublon avec `depuisMonMessagePrecedent` dans le cas courant | low | les deux champs sont voulus par la spec ; aucun tort nommé | rejet |
+| 9 | blind, edge | Heure à la minute : deux messages de Paul dans la même minute | low | format imposé par la spec ; cas rare | rejet |
+| 10 | blind, edge | Exécution en file : champ nul | false | la spec définit le changement par début ou fin | rejet |
+| 11 | blind | `latestOf` perd une date valide si l'autre est invalide | false | les entrées viennent de Prisma (`Date` ou null) | rejet |
+| 12 | blind, edge | Fenêtre lue à l'appel d'outil (`lte now`) et `previousReply` hors fenêtre | low | message concurrent ou 40 messages du dirigeant d'affilée : improbable ; correctif plus que direct | rejet |
+| 13 | blind | Bloc automatique « Recette Atelier Lumen » non complété | low | le cas est couvert par le test story 4.2 | rejet |
+| 14 | blind | Attendu de 1 ter (« sans parler de l'audit ») arbitraire | false | nécessaire pour reproduire le cas du test (message intermédiaire muet) | rejet |
+| 15 | blind | Statuts différents entre spec et sprint-status | false | synchronisés à l'étape de présentation | rejet |
+| 16 | edge | Action modifiée par un outil de Paul pendant le tour annoncée comme une nouvelle | low | même comportement que `depuisMonMessagePrecedent` ; Paul voit son propre appel | rejet |
