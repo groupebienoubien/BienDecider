@@ -41,7 +41,7 @@ Le branding OAuth, la propriété du domaine et les documents publics peuvent ê
 3. Menu **API et services → Écran de consentement OAuth** :
    - Type d'utilisateur : *Externe*.
    - Nom de l'application : "BienDecider". Sélectionner un email de support disponible dans la console ; une simple redirection `contact@biendecider.com` vers Gmail ne rend pas forcément cette adresse sélectionnable. Valider la réception et l'éligibilité de l'adresse, sinon utiliser le compte Google gestionnaire pour ce champ. Logo final à préparer.
-   - Champs d'application (scopes) : ajouter `https://www.googleapis.com/auth/business.manage`.
+   - Champs d'application (scopes) : ajouter `https://www.googleapis.com/auth/business.manage` et le scope non sensible `openid`, qui fournit l'identifiant stable du compte Google pour conserver un refresh token seulement lors d'une réautorisation du même compte.
    - Tant que l'app est en statut **Test**, seuls les comptes Google que vous ajoutez explicitement comme "utilisateurs test" peuvent se connecter — suffisant pour le pilote, pas besoin de validation Google immédiatement.
 4. Menu **API et services → Identifiants** → **Créer des identifiants → ID client OAuth** :
    - Type d'application : *Application Web*.
@@ -78,6 +78,21 @@ Le branding OAuth, la propriété du domaine et les documents publics peuvent ê
 - La migration et son rollback transactionnel doivent être testés sur une base jetable. Une sauvegarde antérieure peut contenir les anciennes valeurs en clair jusqu'à expiration de la rétention de l'hébergeur; protéger cette sauvegarde et ne pas la restaurer sur une base active après la migration.
 
 En mode OAuth **Testing**, les autorisations avec des scopes comme `business.manage` et les refresh tokens sont limités à **7 jours** : prévoir une réautorisation pendant le pilote. Le renouvellement du jeton d'accès ne supprime pas cette limite. [Durée des autorisations Google](https://support.google.com/cloud/answer/15549945).
+
+### Renouvellement et erreurs des jetons GBP
+
+Le renouvellement est **à la demande** : `getGoogleBusinessProfileAccess()` ([src/lib/oauth/google-access.ts](../src/lib/oauth/google-access.ts)) rend un jeton valide ou renouvelle l'accès expiré (marge de 60 secondes). Aucune tâche planifiée n'appelle Google, et aucune fonctionnalité ne consomme encore ce jeton : les futures fonctions GBP devront passer par ce service. Un verrou de ligne PostgreSQL sérialise les appels concurrents, y compris entre instances : un seul appel part chez Google, les autres relisent le jeton renouvelé.
+
+| Réponse de Google | Effet sur la connexion | Message utilisateur |
+|---|---|---|
+| `invalid_grant` (révocation, expiration, limite Testing de 7 jours) | Jetons effacés, statut `erreur` | « Connexion à renouveler » |
+| Panne réseau, 429, 5xx, `invalid_client` | Aucune modification | Le service rend `unavailable` ; réessayer plus tard |
+| Refus de l'utilisateur sur l'écran Google | Aucune écriture | « Autorisation Google refusée ou annulée » ; connexion précédente conservée |
+| Enveloppe illisible (clé changée, altération) | Statut `erreur`, jetons conservés | « Connexion à renouveler » |
+
+Lors d'une réautorisation, un nouveau refresh token remplace l'ancien. S'il n'y en a pas, l'ancien n'est conservé que si Google confirme le même compte (`sub` identique via `openid`). Les autorisations données avant l'ajout d'`openid` ne peuvent pas être prouvées : elles perdent leur refresh et exigent une réautorisation complète, y compris pour les comptes déjà ajoutés comme utilisateurs test (si l'écran de consentement est déjà configuré, y ajouter `openid`). La vérification est volontairement stricte : une panne de Google pendant cette vérification est aussi traitée comme non prouvée, l'ancien refresh est effacé et une nouvelle autorisation sera nécessaire à l'expiration de l'accès. Une autorisation qui n'accorde pas `business.manage` (consentement granulaire) est refusée sans rien enregistrer. Les corps de réponse Google ne sont ni journalisés ni renvoyés.
+
+**Meta** n'a rien à renouveler : le jeton de Page n'expire pas tant que l'autorisation tient, et le jeton utilisateur (environ 60 jours) ne sert qu'à la révocation. Un jeton de Page refusé par Meta (code 190, révocation depuis Facebook) passe la connexion en `erreur` et la page Connexions demande de refaire l'autorisation.
 
 **Pour sortir du mode Test** (accepter n'importe quel utilisateur, pas seulement les comptes test ajoutés manuellement) : revenir à l'écran de consentement OAuth et cliquer *Publier l'application*. Pour un scope sensible comme `business.manage`, Google peut demander une **vérification** (quelques jours) avant la mise en production réelle à grande échelle — mais le mode Test suffit largement pour le pilote à 5 entreprises.
 
@@ -169,6 +184,6 @@ Les anciennes lignes Facebook et Instagram enregistrées en clair par le premier
 
 ## Ce que je peux faire dès que vous avez les identifiants
 
-Pour Google Business Profile, les variables rendent le démarrage OAuth disponible mais ne suffisent pas : le jeton est encore enregistré en clair, sans vérification de la fiche, sans renouvellement ni déconnexion applicative. `/connexions` distingue autorisation enregistrée, expirée et erreur, sans prétendre confirmer une fiche. Ces limites sont des tâches prioritaires, pas des fonctionnalités livrées.
+Pour Google Business Profile, les variables rendent le démarrage OAuth disponible mais ne suffisent pas : le jeton est chiffré et renouvelable à la demande (voir plus haut), mais sans vérification de la fiche ni déconnexion applicative. `/connexions` distingue autorisation enregistrée, expirée et erreur, sans prétendre confirmer une fiche. Ces limites sont des tâches prioritaires, pas des fonctionnalités livrées.
 
 Pour Instagram, le moment venu : vérifier le nom exact des permissions dans la documentation du flux Facebook Login (la documentation App Review mentionne `instagram_content_publishing`), confirmer le contrat de la version Graph cible, et ne pas mélanger les permissions `instagram_business_*` d'Instagram Login avec Facebook Login.

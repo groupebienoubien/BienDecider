@@ -15,7 +15,8 @@ import { buildMetaAuthUrl, createMetaState, decryptFacebookAccount, encryptFaceb
 import { publishProposalToFacebook } from "../src/lib/social/facebook-publish";
 import { persistGoogleBusinessProfileConnection } from "../src/lib/oauth/google-connection";
 import { decryptGoogleToken, encryptGoogleConnectionTokens, encryptGoogleToken, isEncryptedTokenEnvelope, isGoogleTokenEncryptionConfigured } from "../src/lib/oauth/google-token";
-import { exchangeGoogleCode, googleOAuthConfigurationError, isGoogleOAuthConfigured } from "../src/lib/oauth/google";
+import { exchangeGoogleCode, googleOAuthConfigurationError, googleSubject, isGoogleOAuthConfigured, buildGoogleAuthUrl, refreshGoogleAccessToken } from "../src/lib/oauth/google";
+import { getGoogleBusinessProfileAccess } from "../src/lib/oauth/google-access";
 import { handleGoogleOAuthCallback } from "../src/lib/oauth/google-callback";
 
 const require = createRequire(resolve("tests/facebook.spec.ts"));
@@ -467,6 +468,254 @@ test("company deletion revocation decrypts GBP tokens and refuses corrupted enve
     console.error = previousConsoleError;
     if (previousKey === undefined) delete process.env.GOOGLE_TOKEN_ENCRYPTION_KEY;
     else process.env.GOOGLE_TOKEN_ENCRYPTION_KEY = previousKey;
+    await prisma.company.delete({ where: { id: company.id } });
+    await prisma.$disconnect();
+  }
+});
+
+const GOOGLE_TEST_CLIENT = "ci-google-client";
+
+function googleIdToken(sub: string, audience = GOOGLE_TEST_CLIENT, issuer = "https://accounts.google.com") {
+  const part = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
+  return `${part({ alg: "none" })}.${part({ sub, aud: audience, iss: issuer })}.signature`;
+}
+
+async function withGoogleEnv<T>(run: () => Promise<T>) {
+  const names = ["GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET", "GOOGLE_TOKEN_ENCRYPTION_KEY"] as const;
+  const previous = names.map((name) => process.env[name]);
+  process.env.GOOGLE_OAUTH_CLIENT_ID = GOOGLE_TEST_CLIENT;
+  process.env.GOOGLE_OAUTH_CLIENT_SECRET = "ci-google-secret";
+  process.env.GOOGLE_TOKEN_ENCRYPTION_KEY = "a".repeat(64);
+  try {
+    return await run();
+  } finally {
+    names.forEach((name, index) => {
+      const value = previous[index];
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    });
+  }
+}
+
+// Faux point d'accès de jetons Google : garde les demandes et laisse les appels concurrents se chevaucher.
+function fakeGoogleToken(respond: (grant: URLSearchParams) => Response) {
+  const grants: URLSearchParams[] = [];
+  const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    expect(String(input)).toBe("https://oauth2.googleapis.com/token");
+    grants.push(new URLSearchParams(String(init?.body)));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    return respond(grants[grants.length - 1]);
+  }) as typeof fetch;
+  return { fetchImpl, grants };
+}
+
+test("Google authorization asks for openid and the account identifier is read only from a matching token", async () => {
+  await withGoogleEnv(async () => {
+    expect(new URL(buildGoogleAuthUrl("https://www.biendecider.com/api/oauth/google/callback", "state")).searchParams.get("scope"))
+      .toBe("openid https://www.googleapis.com/auth/business.manage");
+    expect(googleSubject(googleIdToken("account-1"))).toBe("account-1");
+    expect(googleSubject(googleIdToken("account-1", "another-client"))).toBeNull();
+    expect(googleSubject(googleIdToken("account-1", GOOGLE_TEST_CLIENT, "https://attacker.example"))).toBeNull();
+    for (const malformed of [undefined, null, "", "garbage", "a.b.c"]) expect(googleSubject(malformed)).toBeNull();
+
+    // Consentement granulaire : un code accordé pour openid seul ne donne pas accès à la fiche.
+    const granted = (scope: string) => (async () => json({ access_token: "access", expires_in: 3600, scope })) as typeof fetch;
+    await expect(exchangeGoogleCode("code", "https://example.invalid/callback", granted("openid"))).rejects.toThrow("Échange OAuth Google refusé.");
+    expect((await exchangeGoogleCode("code", "https://example.invalid/callback", granted("openid https://www.googleapis.com/auth/business.manage"))).access_token).toBe("access");
+  });
+});
+
+test("Google renewal separates revoked grants from outages and never returns provider bodies", async () => {
+  await withGoogleEnv(async () => {
+    const renewed = fakeGoogleToken(() => json({ access_token: "new-access", expires_in: 3600, id_token: googleIdToken("account-1") }));
+    expect(await refreshGoogleAccessToken("refresh-1", renewed.fetchImpl)).toEqual({ status: "ok", accessToken: "new-access", expiresIn: 3600, subject: "account-1" });
+    expect(Object.fromEntries(renewed.grants[0])).toMatchObject({ grant_type: "refresh_token", refresh_token: "refresh-1", client_id: GOOGLE_TEST_CLIENT });
+
+    const revoked = fakeGoogleToken(() => json({ error: "invalid_grant", error_description: "Token has been expired or revoked." }, 400));
+    const result = await refreshGoogleAccessToken("refresh-1", revoked.fetchImpl);
+    expect(result).toEqual({ status: "reauthorization_required" });
+    expect(JSON.stringify(result)).not.toContain("expired or revoked");
+
+    for (const answer of [() => json({ error: "invalid_client" }, 401), () => json({ error: "backend_error" }, 503), () => json({}, 429), () => json({ error: "invalid_grant" }, 500), () => json({ access_token: "", expires_in: 3600 })]) {
+      expect(await refreshGoogleAccessToken("refresh-1", fakeGoogleToken(answer).fetchImpl)).toEqual({ status: "unavailable" });
+    }
+    expect(await refreshGoogleAccessToken("refresh-1", (async () => { throw new Error("network down"); }) as typeof fetch)).toEqual({ status: "unavailable" });
+
+    delete process.env.GOOGLE_OAUTH_CLIENT_SECRET;
+    const unconfigured = fakeGoogleToken(() => json({}));
+    expect(await refreshGoogleAccessToken("refresh-1", unconfigured.fetchImpl)).toEqual({ status: "unavailable" });
+    expect(unconfigured.grants).toHaveLength(0);
+  });
+});
+
+test("Google callback keeps the previous connection untouched when the user refuses", async () => {
+  const calls: string[] = [];
+  const dependencies = (validState: boolean) => ({
+    getSessionEmail: async () => "owner@example.invalid",
+    findCompany: async () => ({ id: "company-google-a" }),
+    verifyAndClearOAuthState: async () => validState,
+    exchangeGoogleCode: async () => { calls.push("exchange"); throw new Error("no exchange expected"); },
+    persistConnection: async () => { calls.push("persist"); },
+  });
+  const denied = new NextRequest("https://www.biendecider.com/api/oauth/google/callback?error=access_denied&state=valid-state");
+  expect((await handleGoogleOAuthCallback(denied, dependencies(true))).headers.get("location")).toBe("https://www.biendecider.com/connexions?error=google_denied");
+  expect((await handleGoogleOAuthCallback(denied, dependencies(false))).headers.get("location")).toBe("https://www.biendecider.com/connexions?error=oauth_state");
+  const providerError = new NextRequest("https://www.biendecider.com/api/oauth/google/callback?error=invalid_scope&state=valid-state");
+  expect((await handleGoogleOAuthCallback(providerError, dependencies(true))).headers.get("location")).toBe("https://www.biendecider.com/connexions?error=oauth_exchange");
+  expect(calls).toEqual([]);
+});
+
+test("Google access renewal is locked per company, encrypted and classifies every provider answer", async () => {
+  requireLocalDatabase("Google access renewal tests");
+  if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is required for Google access renewal tests.");
+  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }) });
+  const company = await prisma.company.create({ data: {
+    ownerEmail: `google-renewal-${randomUUID()}@example.invalid`, name: "Atelier renouvellement Google", trade: "Artisan", servingArea: "Paris",
+  } });
+  const consoleMethods = ["log", "info", "warn", "error"] as const;
+  const previousConsole = consoleMethods.map((method) => console[method]);
+  const logs: string[] = [];
+  try {
+    await withGoogleEnv(async () => {
+      for (const method of consoleMethods) console[method] = (...values: unknown[]) => { logs.push(values.join(" ")); };
+      const where = { companyId_channel: { companyId: company.id, channel: "google_business_profile" } };
+      const row = () => prisma.channelConnection.findUniqueOrThrow({ where });
+      const seed = (data: { status?: string; access?: string | null; refresh?: string | null; expiresInMs?: number | null }) => {
+        const stored = {
+          status: data.status ?? "connecte",
+          accessToken: data.access === undefined ? encryptGoogleToken("old-access", company.id) : data.access,
+          refreshToken: data.refresh === undefined ? encryptGoogleToken("refresh-1", company.id) : data.refresh,
+          expiresAt: data.expiresInMs === null ? null : new Date(Date.now() + (data.expiresInMs ?? -60_000)),
+        };
+        return prisma.channelConnection.upsert({ where, create: { companyId: company.id, channel: "google_business_profile", ...stored }, update: stored });
+      };
+      const renewed = () => fakeGoogleToken(() => json({ access_token: "new-access", expires_in: 3600 }));
+
+      expect(await getGoogleBusinessProfileAccess(company.id)).toEqual({ status: "not_connected" });
+
+      await seed({ access: encryptGoogleToken("valid-access", company.id), expiresInMs: 3_600_000 });
+      const valid = renewed();
+      expect(await getGoogleBusinessProfileAccess(company.id, { fetchImpl: valid.fetchImpl })).toMatchObject({ status: "ok", accessToken: "valid-access" });
+      expect(valid.grants).toHaveLength(0);
+
+      // Marge de 60 s : au-delà le jeton est rendu tel quel, en deçà il est renouvelé.
+      await seed({ expiresInMs: 90_000 });
+      const beyondMargin = renewed();
+      expect(await getGoogleBusinessProfileAccess(company.id, { fetchImpl: beyondMargin.fetchImpl })).toMatchObject({ status: "ok", accessToken: "old-access" });
+      expect(beyondMargin.grants).toHaveLength(0);
+      await seed({ expiresInMs: 30_000 });
+      const insideMargin = renewed();
+      expect(await getGoogleBusinessProfileAccess(company.id, { fetchImpl: insideMargin.fetchImpl })).toMatchObject({ status: "ok", accessToken: "new-access" });
+      expect(insideMargin.grants).toHaveLength(1);
+      await seed({ expiresInMs: null });
+      const unknownExpiry = renewed();
+      expect(await getGoogleBusinessProfileAccess(company.id, { fetchImpl: unknownExpiry.fetchImpl })).toMatchObject({ status: "ok", accessToken: "new-access" });
+      expect(unknownExpiry.grants).toHaveLength(1);
+
+      await seed({});
+      const single = renewed();
+      expect(await getGoogleBusinessProfileAccess(company.id, { fetchImpl: single.fetchImpl })).toMatchObject({ status: "ok", accessToken: "new-access" });
+      const refreshed = await row();
+      expect(single.grants).toHaveLength(1);
+      expect(refreshed.accessToken).not.toContain("new-access");
+      expect(decryptGoogleToken(refreshed.accessToken!, company.id)).toBe("new-access");
+      expect(decryptGoogleToken(refreshed.refreshToken!, company.id)).toBe("refresh-1");
+      expect(refreshed.expiresAt!.getTime()).toBeGreaterThan(Date.now() + 3_000_000);
+
+      await seed({});
+      const concurrent = renewed();
+      const results = await Promise.all([1, 2, 3].map(() => getGoogleBusinessProfileAccess(company.id, { fetchImpl: concurrent.fetchImpl })));
+      expect(results.every((result) => result.status === "ok" && result.accessToken === "new-access")).toBe(true);
+      expect(concurrent.grants).toHaveLength(1);
+
+      for (const answer of [() => json({ error: "backend_error" }, 503), () => json({ error: "invalid_client" }, 401)]) {
+        const before = await seed({});
+        expect(await getGoogleBusinessProfileAccess(company.id, { fetchImpl: fakeGoogleToken(answer).fetchImpl })).toEqual({ status: "unavailable" });
+        const after = await row();
+        expect(after).toMatchObject({ status: "connecte", accessToken: before.accessToken, refreshToken: before.refreshToken });
+      }
+
+      await seed({});
+      const revoked = fakeGoogleToken(() => json({ error: "invalid_grant", error_description: "Token has been expired or revoked." }, 400));
+      expect(await getGoogleBusinessProfileAccess(company.id, { fetchImpl: revoked.fetchImpl })).toEqual({ status: "reauthorization_required" });
+      expect(await row()).toMatchObject({ status: "erreur", accessToken: null, refreshToken: null, expiresAt: null });
+      expect(await getGoogleBusinessProfileAccess(company.id, { fetchImpl: revoked.fetchImpl })).toEqual({ status: "reauthorization_required" });
+      expect(revoked.grants).toHaveLength(1);
+
+      await seed({ refresh: null });
+      const withoutRefresh = renewed();
+      expect(await getGoogleBusinessProfileAccess(company.id, { fetchImpl: withoutRefresh.fetchImpl })).toEqual({ status: "reauthorization_required" });
+      expect(withoutRefresh.grants).toHaveLength(0);
+
+      await seed({ access: "v1.bad.bad.bad", expiresInMs: 3_600_000 });
+      const unreadable = renewed();
+      expect(await getGoogleBusinessProfileAccess(company.id, { fetchImpl: unreadable.fetchImpl })).toEqual({ status: "reauthorization_required" });
+      expect((await row()).status).toBe("erreur");
+      expect(unreadable.grants).toHaveLength(0);
+    });
+    for (const secret of ["refresh-1", "new-access", "valid-access", "old-access", "expired or revoked", "ci-google-secret"]) {
+      expect(logs.join("\n")).not.toContain(secret);
+    }
+  } finally {
+    consoleMethods.forEach((method, index) => { console[method] = previousConsole[index]; });
+    await prisma.company.delete({ where: { id: company.id } });
+    await prisma.$disconnect();
+  }
+});
+
+test("Google reauthorization keeps an older refresh token only for the same verified account", async () => {
+  requireLocalDatabase("Google reauthorization tests");
+  if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is required for Google reauthorization tests.");
+  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }) });
+  const company = await prisma.company.create({ data: {
+    ownerEmail: `google-reauth-${randomUUID()}@example.invalid`, name: "Atelier réautorisation Google", trade: "Artisan", servingArea: "Paris",
+  } });
+  try {
+    await withGoogleEnv(async () => {
+      const where = { companyId_channel: { companyId: company.id, channel: "google_business_profile" } };
+      const seedOldRefresh = async () => {
+        await prisma.channelConnection.deleteMany({ where: { companyId: company.id } });
+        await prisma.channelConnection.create({ data: {
+          companyId: company.id, channel: "google_business_profile", status: "connecte",
+          accessToken: encryptGoogleToken("previous-access", company.id), refreshToken: encryptGoogleToken("old-refresh", company.id), expiresAt: new Date(Date.now() - 1000),
+        } });
+      };
+      const reauthorize = async (tokens: { id_token?: string; refresh_token?: string }, provider: ReturnType<typeof fakeGoogleToken>) => {
+        await persistGoogleBusinessProfileConnection(company.id, { access_token: "reauthorized-access", expires_in: 3600, ...tokens }, { fetchImpl: provider.fetchImpl });
+        const saved = await prisma.channelConnection.findUniqueOrThrow({ where });
+        expect(decryptGoogleToken(saved.accessToken!, company.id)).toBe("reauthorized-access");
+        expect(saved.status).toBe("connecte");
+        return saved.refreshToken === null ? null : decryptGoogleToken(saved.refreshToken, company.id);
+      };
+      const knownAccount = (id: string | null) => fakeGoogleToken(() => json({ access_token: "check-only", expires_in: 3600, ...(id ? { id_token: googleIdToken(id) } : {}) }));
+
+      await seedOldRefresh();
+      const replacing = knownAccount("account-1");
+      expect(await reauthorize({ refresh_token: "new-refresh" }, replacing)).toBe("new-refresh");
+      expect(replacing.grants).toHaveLength(0);
+
+      await seedOldRefresh();
+      const same = knownAccount("account-1");
+      expect(await reauthorize({ id_token: googleIdToken("account-1") }, same)).toBe("old-refresh");
+      expect(same.grants[0].get("refresh_token")).toBe("old-refresh");
+
+      for (const [label, tokens, provider] of [
+        ["another account", { id_token: googleIdToken("account-1") }, knownAccount("account-2")],
+        ["identity not returned by the new authorization", {}, knownAccount("account-1")],
+        ["older refresh issued before openid", { id_token: googleIdToken("account-1") }, knownAccount(null)],
+        ["older refresh revoked", { id_token: googleIdToken("account-1") }, fakeGoogleToken(() => json({ error: "invalid_grant" }, 400))],
+        ["provider unavailable", { id_token: googleIdToken("account-1") }, fakeGoogleToken(() => json({}, 503))],
+      ] as const) {
+        await seedOldRefresh();
+        expect(await reauthorize(tokens, provider), label).toBeNull();
+      }
+
+      await prisma.channelConnection.deleteMany({ where: { companyId: company.id } });
+      const first = knownAccount("account-1");
+      expect(await reauthorize({ id_token: googleIdToken("account-1") }, first)).toBeNull();
+      expect(first.grants).toHaveLength(0);
+    });
+  } finally {
     await prisma.company.delete({ where: { id: company.id } });
     await prisma.$disconnect();
   }

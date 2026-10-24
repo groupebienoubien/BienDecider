@@ -250,6 +250,15 @@ test("OAuth authorization is not advertised as a verified business connection", 
     await page.reload();
     await expect(page.locator("main").getByText("Compte non relié", { exact: true })).toHaveCount(1);
     await expect(page.getByRole("region", { name: "Facebook · Page" }).getByText("Non autorisé", { exact: true })).toBeVisible();
+
+    // Google révoqué ou expiré (invalid_grant) : jetons effacés, la page demande de relier le compte.
+    await prisma.channelConnection.create({ data: { companyId: company.id, channel: "google_business_profile", status: "erreur" } });
+    await page.goto(`${baseURL}/connexions`);
+    await expect(page.getByText("Connexion à renouveler", { exact: true })).toBeVisible();
+    await page.goto(`${baseURL}/connexions?error=google_denied`);
+    await expect(page.getByText("L'autorisation Google a été refusée ou annulée.", { exact: false })).toBeVisible();
+    await page.goto(`${baseURL}/connexions?error=oauth_exchange`);
+    await expect(page.getByText("Google n'a pas pu confirmer l'autorisation.", { exact: false })).toBeVisible();
   } finally { await prisma.$disconnect(); }
 });
 
