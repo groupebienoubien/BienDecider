@@ -9,7 +9,9 @@ import { isPlanAgent, type PlanAgent } from "@/lib/agents/plan-items";
 import { PERSONAS, companyProfileLines, directionLine, runtimeContextLines } from "@/lib/agents/personas";
 import { activeRevisionRun } from "@/lib/agents/revision-state";
 import type { LaunchResult } from "@/lib/agents/pending-action-view";
-import { recordUsage, runToolLoop } from "@/lib/usage";
+import { runToolLoop } from "@/lib/usage";
+import { agentRunnerOptions, assertAgentExecutionActive, bindAgentTools, withAgentRunWrite } from "@/lib/agent-run-execution";
+import { AGENT_RUN_MAX_TURNS } from "@/lib/agent-run-limits";
 
 export { activeRevisionRun } from "@/lib/agents/revision-state";
 
@@ -121,18 +123,20 @@ export async function runRevision(companyId: string, payload: RevisionRunPayload
         const issue = gmailContentIssue(proposal.content, content);
         if (issue) return issue;
       }
-      const saved = await prisma.$transaction(async (tx) => {
+      const saved = await withAgentRunWrite(companyId, agentRunId, async (tx) => {
         // Le contenu conservé est relu dans la transaction, à la version révisée.
         const current = await tx.agentProposal.findFirst({
           where: { id: proposal.id, companyId, version: payload.fromVersion, status: "en_attente" },
           select: { content: true },
         });
+        assertAgentExecutionActive();
         if (!current) return false;
         const updated = await tx.agentProposal.updateMany({
           where: { id: proposal.id, companyId, version: payload.fromVersion, status: "en_attente" },
           // Version écrite par l'agent : un ancien brouillon du dirigeant ne la décrit plus.
           data: { content, version: payload.fromVersion + 1, draftSavedAt: null },
         });
+        assertAgentExecutionActive();
         if (updated.count !== 1) return false;
         await tx.proposalRevision.create({
           data: { proposalId: proposal.id, fromVersion: payload.fromVersion, previousContent: current.content, source: "agent", instruction: payload.instruction, agentRunId },
@@ -165,8 +169,9 @@ Règles strictes :
 
   const { finalMessage, usage } = await runToolLoop(anthropic.beta.messages.toolRunner({
     model: AGENT_MODEL,
+    max_iterations: AGENT_RUN_MAX_TURNS,
     max_tokens: revisionMaxTokens(proposal.content),
-    tools: [reviseProposal],
+    tools: bindAgentTools([reviseProposal]),
     system: [
       { type: "text", text: stableSystem, cache_control: { type: "ephemeral" } },
       { type: "text", text: dynamicSystem },
@@ -177,12 +182,14 @@ Règles strictes :
         content: `Production à réviser (version ${payload.fromVersion}) — titre : « ${proposal.title} »\n\nContenu actuel :\n${proposal.content}\n\nConsigne du dirigeant : ${payload.instruction}\n\nEnregistre la version ${payload.fromVersion + 1} avec revise_proposal.`,
       },
     ],
-  }));
-
-  await recordUsage({ companyId, agentRunId, agent, model: AGENT_MODEL, usage });
+  }, agentRunnerOptions()), { companyId, agentRunId, agent, model: AGENT_MODEL });
 
   if (conflict && !written) throw new RevisionConflictError(persona.name, conflict, proposal.title);
-  ensureAgentProduced(persona.name, written ? 1 : 0, { stopReason: finalMessage.stop_reason, usage });
+  const persisted = written && await prisma.proposalRevision.findFirst({
+    where: { proposalId: proposal.id, fromVersion: payload.fromVersion, agentRunId, proposal: { companyId } },
+    select: { id: true },
+  });
+  ensureAgentProduced(persona.name, persisted ? 1 : 0, { stopReason: finalMessage.stop_reason, usage });
   return 1;
 }
 

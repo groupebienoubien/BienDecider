@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { AgentRunConflictError, AgentRunQuotaError, enqueuePlanRun } from "@/lib/agent-runs";
-import { isPlanAgent } from "@/lib/agents/plan-items";
+import { isPlanAgent, resolvePlanLaunchExtras } from "@/lib/agents/plan-items";
 import { getSessionCompany } from "@/lib/session";
 import { classifyRunError } from "@/lib/agents/agent-errors";
 
@@ -45,7 +45,8 @@ export async function POST(
   }
 
   try {
-    const run = await enqueuePlanRun({ companyId: company.id, item: { ...item, agent }, retryRunId: parsed.data.retryRunId });
+    const extras = await resolvePlanLaunchExtras(company.id, item);
+    const run = await enqueuePlanRun({ companyId: company.id, item: { ...item, agent }, extras, retryRunId: parsed.data.retryRunId });
     if (run.status === "failed") return NextResponse.json({ error: run.errorMessage ?? "L'agent a échoué. Relancez explicitement l'action.", reason: run.failureReason ?? "outage", run: { id: run.id, status: run.status } }, { status: 409 });
     return NextResponse.json({ run }, { status: run.status === "succeeded" ? 200 : 202 });
   } catch (error) {

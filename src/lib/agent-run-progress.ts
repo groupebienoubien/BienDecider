@@ -67,6 +67,7 @@ export function finishedRunMessage(run: Pick<AgentRunView, "agent" | "resultCoun
     const title = run.revision.title ? ` de « ${run.revision.title} »` : "";
     return `${name} a préparé la version ${run.revision.fromVersion + 1}${title}.`;
   }
+  if (run.agent === "co_ceo" && run.resultCount === 0) return `${name} a terminé sans créer d'action : rien de nouveau à examiner.`;
   if (run.agent === "co_ceo") return `${name} a terminé : le plan est prêt à examiner.`;
   if (run.resultCount === 0) return `${name} a terminé : rien de nouveau à examiner.`;
   return `${name} a terminé : ${run.resultCount} élément(s) à examiner.`;

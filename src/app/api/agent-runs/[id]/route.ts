@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAgentRun } from "@/lib/agent-runs";
 import { getSessionCompany } from "@/lib/session";
 
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const company = await getSessionCompany();

@@ -113,3 +113,42 @@ export async function withRunCap(
     if (locks.get(agentRunId) === current) locks.delete(agentRunId);
   }
 }
+
+/** Le contrôle de tentative, le plafond et toutes les écritures partagent le même commit. */
+export async function withRunCapWrite<T>(
+  companyId: string,
+  agentRunId: string | undefined,
+  kind: string,
+  write: (tx: import("@prisma/client").Prisma.TransactionClient) => Promise<T>,
+): Promise<T | string> {
+  const perform = async () => {
+    // Import différé : les règles pures ci-dessus restent utilisables sans Prisma.
+    const { assertAgentExecutionActive, withAgentRunWrite } = await import("@/lib/agent-run-execution");
+    return withAgentRunWrite(companyId, agentRunId, async (tx) => {
+      const group = capGroup(kind);
+      if (agentRunId && group) {
+        const run = await tx.agentRun.findFirst({ where: { id: agentRunId, companyId }, select: { startedAt: true } });
+        assertAgentExecutionActive();
+        const since = run?.startedAt ? { createdAt: { gte: run.startedAt } } : {};
+        const count = group === "audit_finding"
+          ? await tx.auditFinding.count({ where: { companyId, agentRunId, ...since } })
+          : await tx.agentProposal.count({ where: { companyId, agentRunId, kind: { in: GROUP_KINDS[group] }, ...since } });
+        assertAgentExecutionActive();
+        if (count >= RUN_CAPS[group]) return runCapReachedMessage(group);
+      }
+      assertAgentExecutionActive();
+      return write(tx);
+    });
+  };
+  if (!agentRunId) return perform();
+  // Évite des conflits de sérialisation entre les outils parallèles du SDK.
+  // Le verrou SQL de la garde reste l'autorité entre processus et tentatives.
+  const previous = runLocks.get(agentRunId) ?? Promise.resolve();
+  const current = previous.catch(() => undefined).then(perform);
+  runLocks.set(agentRunId, current);
+  try {
+    return await current;
+  } finally {
+    if (runLocks.get(agentRunId) === current) runLocks.delete(agentRunId);
+  }
+}
