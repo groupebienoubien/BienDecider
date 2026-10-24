@@ -76,3 +76,13 @@
 - source_spec: `docs/bmad/implementation/spec-5-2-du-diagnostic-au-plan-sans-boucle.md`
   summary: Tester le retour au bouton « Préparer le plan » après « Actualiser le diagnostic », et un plan entièrement écarté.
   evidence: `setPlanUpToDate(false)` et le filtre `ecarte` ne sont couverts par aucun test.
+
+- source_spec: `docs/bmad/implementation/spec-corrections-audit-agents-ia.md`
+  summary: Réconcilier la consommation et la réservation d'une tentative dont le processus a été tué avant la finalisation d'usage.
+  evidence: Revue B4, medium : getAgentRun libère déjà le budget d'un worker périmé sans connaître son cumul en mémoire ; il faut une source durable et une reprise serveur indépendante du suivi individuel.
+- source_spec: `docs/bmad/implementation/spec-corrections-audit-agents-ia.md`
+  summary: Prévoir la reprise idempotente d'un enregistrement d'usage après indisponibilité de la base.
+  evidence: Revue B5, medium : sans journal durable du cumul, une finalisation échouée conserve prudemment le budget mais aucun service ne peut la rejouer ; cette réconciliation dépasse les huit corrections approuvées.
+- source_spec: `docs/bmad/implementation/spec-corrections-audit-agents-ia.md`
+  summary: Montrer le nombre et un lien vers les productions conservées dans le suivi d'un run échoué partiellement.
+  evidence: Revue B9, medium : les productions restent dans les décisions et le diagnostic, mais le suivi d'échec préexistant propose surtout la relance ; l'arrêt explicite et la conservation restent couverts par le lot actuel.

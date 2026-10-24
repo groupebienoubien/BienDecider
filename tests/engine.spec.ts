@@ -32,6 +32,8 @@ async function deleteCompany(id: string) {
   }
 }
 
+const capturedTurns: (() => Promise<unknown>)[] = [];
+
 const test = base.extend<{ company: Company }>({
   company: async ({}, runFixture) => {
     const { prisma } = await import("../src/lib/prisma");
@@ -41,6 +43,7 @@ const test = base.extend<{ company: Company }>({
     try {
       await runFixture(company);
     } finally {
+      for (const finish of capturedTurns.splice(0)) await finish();
       await deleteCompany(company.id);
     }
   },
@@ -54,6 +57,476 @@ async function inRequestScope<T>(scheduled: unknown[], fn: () => Promise<T>): Pr
     { afterContext: { after: (task: unknown) => { scheduled.push(task); } } } as never,
     () => workUnitAsyncStorage.run({} as never, fn),
   );
+}
+
+/** Session d'une vraie route, en mémoire : permet une concurrence déterministe au moment de lire son corps. */
+async function inSessionScope<T>(company: Company, fn: () => Promise<T>, scheduled: unknown[] = []): Promise<T> {
+  const { workAsyncStorage } = await import("next/dist/server/app-render/work-async-storage.external.js");
+  const { workUnitAsyncStorage } = await import("next/dist/server/app-render/work-unit-async-storage.external.js");
+  const { RequestCookies } = await import("next/dist/compiled/@edge-runtime/cookies/index.js");
+  if (!process.env.SESSION_SECRET) throw new Error("SESSION_SECRET is required for engine tests.");
+  const cookie = createSessionToken(company.ownerEmail, company.sessionVersion, process.env.SESSION_SECRET);
+  const cookies = new RequestCookies(new Headers({ Cookie: `pepito_session=${cookie}` }));
+  return workAsyncStorage.run({ route: "/api/action-plan/[id]", afterContext: { after: (task: unknown) => { scheduled.push(task); } } } as never,
+    () => workUnitAsyncStorage.run({ type: "request", phase: "render", cookies } as never, fn));
+}
+
+/** Identité capturée une seule fois pour les outils extraits d'une tentative de test. */
+async function capturedToolScope(runId?: string) {
+  const { prisma } = await import("../src/lib/prisma");
+  const { createAgentExecution, withAgentExecution } = await import("../src/lib/agent-run-execution");
+  const run = runId ? await prisma.agentRun.findUniqueOrThrow({ where: { id: runId } }) : null;
+  const startedAt = run?.startedAt ?? new Date();
+  return <T extends { run: (input: Record<string, unknown>) => Promise<string> }>(tool: T): T => ({
+    ...tool, run: (input) => run ? withAgentExecution(createAgentExecution({
+      companyId: run.companyId, agentRunId: run.id, attempt: run.attempts, startedAt,
+    }), () => tool.run(input)) : tool.run(input),
+  });
+}
+
+test("audit A05: delayed launch from the plan keeps the news and prospect target of its card", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { decidePendingAction } = await import("../src/lib/agents/pending-actions");
+  const { POST } = await import("../src/app/api/action-plan/[id]/launch/route");
+  const { NextRequest } = await import("next/server.js");
+  for (const [agent, extra, status] of [
+    ["contenu", { newsContext: "Notre atelier ouvre samedi." }, "cancelled"],
+    ["demarchage", { prospectDescription: "Syndics de copropriété" }, "expired"],
+  ] as const) {
+    const paul = await capturePaulTools(company.id);
+    await paul.tool(`propose_launch_${agent}`).run({ ...LAUNCH_TOOL_INPUT, ...extra });
+    const item = await prisma.actionPlanItem.findFirstOrThrow({ where: { companyId: company.id, agent } });
+    const card = await prisma.paulPendingAction.findFirstOrThrow({ where: { companyId: company.id, type: "launch_plan_item", payload: { path: ["planItemId"], equals: item.id } } });
+    expect(item.launchExtras).toEqual(extra);
+    if (status === "cancelled") await decidePendingAction(company.id, card.id, "cancel");
+    else await prisma.paulPendingAction.update({ where: { id: card.id }, data: { status, expiresAt: new Date(Date.now() - 1000) } });
+    const request = new NextRequest(`http://localhost:3000/api/action-plan/${item.id}/launch`, { method: "POST", headers: { Origin: "http://localhost:3000" }, body: "{}" });
+    const response = await inSessionScope(company, () => POST(request, { params: Promise.resolve({ id: item.id }) }));
+    expect(response.status).toBe(202);
+    const run = await prisma.agentRun.findFirstOrThrow({ where: { companyId: company.id, planItemId: item.id } });
+    expect(run.payload).toMatchObject({ extras: extra });
+  }
+});
+
+test("audit A05: historical cards backfill only their company's durable request", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { resolvePlanLaunchExtras } = await import("../src/lib/agents/plan-items");
+  const item = await prisma.actionPlanItem.create({ data: { companyId: company.id, agent: "demarchage", title: "Prospection", rationale: "Trouver des clients", timing: "Aujourd'hui" } });
+  const extra = { prospectDescription: "Syndics de copropriété" };
+  await prisma.paulPendingAction.create({ data: {
+    companyId: company.id, type: "launch_plan_item", status: "expired", expiresAt: new Date(Date.now() - 1000),
+    payload: { planItemId: item.id, agent: "demarchage", title: item.title, extras: extra },
+  } });
+  const other = await prisma.company.create({ data: { ownerEmail: `audit-other-${randomUUID()}@example.invalid`, name: "Autre", trade: "Artisan", servingArea: "Lyon" } });
+  try {
+    await prisma.paulPendingAction.create({ data: {
+      companyId: other.id, type: "launch_plan_item", expiresAt: new Date(Date.now() + 1000),
+      payload: { planItemId: item.id, agent: "demarchage", title: item.title, extras: { prospectDescription: "À ignorer" } },
+    } });
+    expect(await resolvePlanLaunchExtras(company.id, item)).toEqual(extra);
+    expect((await prisma.actionPlanItem.findUniqueOrThrow({ where: { id: item.id } })).launchExtras).toEqual(extra);
+    expect(await resolvePlanLaunchExtras(other.id, item)).toEqual({});
+    expect(await resolvePlanLaunchExtras(company.id, item)).toEqual(extra);
+    await prisma.actionPlanItem.update({ where: { id: item.id }, data: { launchExtras: {} } });
+    expect(await resolvePlanLaunchExtras(company.id, item)).toEqual({});
+  } finally {
+    await deleteCompany(other.id);
+  }
+});
+
+test("audit A05: reusing an action preserves its original target, including a legacy action without extras", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { delegatePlanAction } = await import("../src/lib/agents/co-ceo");
+  for (const originalExtras of [{ prospectDescription: "Cible d'origine" }, undefined]) {
+    const item = await prisma.actionPlanItem.create({ data: {
+      companyId: company.id, agent: "demarchage", title: "Demande initiale", rationale: "Brief initial", timing: "Aujourd'hui", theme: "Prospection",
+      ...(originalExtras ? { launchExtras: originalExtras } : {}),
+    } });
+    const paul = await capturePaulTools(company.id);
+    await paul.tool("propose_launch_demarchage").run({ ...LAUNCH_TOOL_INPUT, prospectDescription: "Nouvelle cible" });
+    expect(await prisma.actionPlanItem.findUniqueOrThrow({ where: { id: item.id } })).toMatchObject({ title: "Demande initiale", rationale: "Brief initial", launchExtras: originalExtras ?? {} });
+    const launched = await inRequestScope([], () => delegatePlanAction(company.id, "demarchage", { ...LAUNCH_TOOL_INPUT, planItemId: item.id }, { prospectDescription: "Autre cible" }));
+    expect(launched.ok).toBe(true);
+    expect((await prisma.agentRun.findUniqueOrThrow({ where: { id: launched.runId } })).payload).toMatchObject({ extras: originalExtras ?? {} });
+    await prisma.actionPlanItem.update({ where: { id: item.id }, data: { status: "termine" } });
+  }
+});
+
+test("audit A04/A05: retry renews queuedAt and preserves its original payload", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { enqueuePlanRun, getAgentRun } = await import("../src/lib/agent-runs");
+  const item = await prisma.actionPlanItem.create({ data: { companyId: company.id, agent: "contenu", title: "Posts", rationale: "Actualité", timing: "Aujourd'hui", launchExtras: { newsContext: "Ouverture samedi" } } });
+  const original = await inRequestScope([], () => enqueuePlanRun({ companyId: company.id, item }));
+  const oldDate = new Date(Date.now() - 3600_000);
+  await prisma.agentRun.update({ where: { id: original.id }, data: { status: "failed", queuedAt: oldDate, finishedAt: oldDate, reservedCostUsd: 0 } });
+  await prisma.actionPlanItem.update({ where: { id: item.id }, data: { status: "propose", launchExtras: { newsContext: "Consigne ultérieure" } } });
+  const retry = await inRequestScope([], () => enqueuePlanRun({ companyId: company.id, item, extras: { newsContext: "Autre demande" }, retryRunId: original.id }));
+  expect(retry.id).toBe(original.id);
+  expect(retry.payload).toEqual(original.payload);
+  expect(retry.queuedAt.getTime()).toBeGreaterThan(oldDate.getTime());
+  const scheduled: unknown[] = [];
+  expect(await inRequestScope(scheduled, () => getAgentRun(company.id, retry.id))).toMatchObject({ status: "queued" });
+  expect(scheduled).toHaveLength(1);
+  expect((await prisma.actionPlanItem.findUniqueOrThrow({ where: { id: item.id } })).status).toBe("en_cours");
+});
+
+test("audit A06: the follow-up route permits the same 300 seconds as launch routes", async () => {
+  const followup = await import("../src/app/api/agent-runs/[id]/route");
+  const launch = await import("../src/app/api/action-plan/[id]/launch/route");
+  expect(followup.maxDuration).toBe(300);
+  expect(followup.maxDuration).toBe(launch.maxDuration);
+});
+
+test("audit A07: a launch between PATCH's read and update wins and returns HTTP 409", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { enqueuePlanRun } = await import("../src/lib/agent-runs");
+  const { PATCH } = await import("../src/app/api/action-plan/[id]/route");
+  const { NextRequest } = await import("next/server.js");
+  const item = await prisma.actionPlanItem.create({ data: { companyId: company.id, agent: "contenu", title: "Posts", rationale: "R", timing: "Aujourd'hui" } });
+  const request = new NextRequest(`http://localhost:3000/api/action-plan/${item.id}`, { method: "PATCH", body: JSON.stringify({ status: "ecarte" }) });
+  request.json = async () => {
+    await inRequestScope([], () => enqueuePlanRun({ companyId: company.id, item }));
+    return { status: "ecarte", feedback: "À écarter" };
+  };
+  const response = await inSessionScope(company, () => PATCH(request, { params: Promise.resolve({ id: item.id }) }));
+  expect(response.status).toBe(409);
+  expect(await prisma.actionPlanItem.findUniqueOrThrow({ where: { id: item.id } })).toMatchObject({ status: "en_cours", feedback: null });
+  expect(await prisma.agentRun.count({ where: { planItemId: item.id, status: "queued" } })).toBe(1);
+
+  const normal = await prisma.actionPlanItem.create({ data: { companyId: company.id, agent: "contenu", title: "Autre", rationale: "R", timing: "Demain" } });
+  const ordinary = new NextRequest(`http://localhost:3000/api/action-plan/${normal.id}`, { method: "PATCH", body: JSON.stringify({ status: "ecarte", feedback: "Plus tard" }) });
+  expect((await inSessionScope(company, () => PATCH(ordinary, { params: Promise.resolve({ id: normal.id }) }))).status).toBe(200);
+  expect((await prisma.actionPlanItem.findUniqueOrThrow({ where: { id: normal.id } })).status).toBe("ecarte");
+});
+
+test("audit A08: a text-only planning response records usage once and fails in no_result", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { enqueuePlanGeneration } = await import("../src/lib/agent-runs");
+  const { finishedRunMessage } = await import("../src/lib/agent-run-progress");
+  const run = await inRequestScope([], () => enqueuePlanGeneration(company.id, `audit-empty-${randomUUID()}`));
+  await processWithScenario(run.id, async () => {}, { input_tokens: 1000, output_tokens: 100 });
+  expect(await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })).toMatchObject({ status: "failed", failureReason: "no_result", resultCount: 0, reservedCostUsd: 0 });
+  expect(await prisma.usageEvent.findMany({ where: { agentRunId: run.id } })).toMatchObject([{ inputTokens: 1000, outputTokens: 100 }]);
+  expect(await prisma.actionPlanItem.count({ where: { companyId: company.id } })).toBe(0);
+  expect(finishedRunMessage({ agent: "co_ceo", resultCount: 0 })).toContain("sans créer d'action");
+
+  const good = await inRequestScope([], () => enqueuePlanGeneration(company.id, `audit-good-${randomUUID()}`));
+  await processWithScenario(good.id, async (tool) => {
+    await tool("propose_plan_item").run({ agent: "contenu", title: "Montrer les chantiers", rationale: "Pour être visible", outcome: "Trois posts prêts à relire", timing: "Cette semaine", theme: "Visibilité", priority: 1 });
+  }, { input_tokens: 500, output_tokens: 50 });
+  expect(await prisma.agentRun.findUniqueOrThrow({ where: { id: good.id } })).toMatchObject({ status: "succeeded", resultCount: 1 });
+  expect(finishedRunMessage({ agent: "co_ceo", resultCount: 1 })).toContain("prêt à examiner");
+});
+
+test("audit A01: a later model error preserves the measured cache-aware usage once", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { anthropic } = await import("../src/lib/anthropic");
+  const { processAgentRun, enqueuePlanGeneration } = await import("../src/lib/agent-runs");
+  const run = await inRequestScope([], () => enqueuePlanGeneration(company.id, `audit-usage-${randomUUID()}`));
+  const messages = anthropic.beta.messages as unknown as { toolRunner: (params: unknown) => unknown };
+  const original = messages.toolRunner;
+  messages.toolRunner = () => (async function* () {
+    yield { usage: { input_tokens: 1000, output_tokens: 100, cache_creation_input_tokens: 200, cache_read_input_tokens: 300 }, stop_reason: "tool_use", content: [] };
+    throw new Error("Panne fournisseur au tour suivant");
+  })();
+  try {
+    await processAgentRun(run.id);
+    const usage = await prisma.usageEvent.findMany({ where: { agentRunId: run.id } });
+    expect(usage).toHaveLength(1);
+    expect(usage[0]).toMatchObject({ inputTokens: 1500, outputTokens: 100 });
+    expect(usage[0].costUsd).toBeCloseTo(0.00356, 8);
+    expect(await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })).toMatchObject({ status: "failed", failureReason: "outage", reservedCostUsd: 0 });
+  } finally {
+    messages.toolRunner = original;
+  }
+});
+
+test("audit A01: a usage persistence failure retains the failed run's budget reservation", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { enqueuePlanRun, reserveUsageBudget } = await import("../src/lib/agent-runs");
+  type Tx = import("@prisma/client").Prisma.TransactionClient;
+  const transactions = prisma as unknown as { $transaction: (work: (tx: Tx) => Promise<unknown>, options?: unknown) => Promise<unknown> };
+  const original = transactions.$transaction;
+  const item = await prisma.actionPlanItem.create({ data: { companyId: company.id, agent: "contenu", title: "Posts", rationale: "R", timing: "Aujourd'hui" } });
+  const run = await inRequestScope([], () => enqueuePlanRun({ companyId: company.id, item }));
+  transactions.$transaction = function (work, options) {
+    return original.call(prisma, (tx) => work(new Proxy(tx, {
+      get(target, key) {
+        if (key !== "usageEvent") return Reflect.get(target, key);
+        return new Proxy(target.usageEvent, {
+          get(delegate, method) {
+            if (method === "create") return () => Promise.reject(new Error("Écriture usage indisponible"));
+            return Reflect.get(delegate, method);
+          },
+        });
+      },
+    })), options);
+  };
+  try {
+    await processWithScenario(run.id, async () => {}, { input_tokens: 1000, output_tokens: 100 });
+  } finally {
+    transactions.$transaction = original;
+  }
+  expect(await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })).toMatchObject({ status: "failed", reservedCostUsd: 1 });
+  expect(await prisma.usageEvent.count({ where: { agentRunId: run.id } })).toBe(0);
+  const attemptsBeforeRetry = await prisma.agentRunAttempt.count({ where: { agentRunId: run.id } });
+  await expect(inRequestScope([], () => enqueuePlanRun({ companyId: company.id, item, retryRunId: run.id }))).rejects.toMatchObject({ reason: "quota_budget" });
+  expect(await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })).toMatchObject({ status: "failed", payload: run.payload, reservedCostUsd: 1 });
+  expect(await prisma.agentRunAttempt.count({ where: { agentRunId: run.id } })).toBe(attemptsBeforeRetry);
+  await prisma.company.update({ where: { id: company.id }, data: { dailySpendLimitUsd: 1 } });
+  await expect(reserveUsageBudget(company.id, "co_ceo_chat")).rejects.toMatchObject({ reason: "quota_budget" });
+});
+
+test("audit A03: a suspended old worker cannot write or complete the action of its running retry", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { anthropic } = await import("../src/lib/anthropic");
+  const { processAgentRun, enqueuePlanRun, getAgentRun } = await import("../src/lib/agent-runs");
+  const run = await queuePlanItemDemarchageRun(company.id);
+  const item = await prisma.actionPlanItem.findUniqueOrThrow({ where: { id: run.planItemId! } });
+  const reachedOld = Promise.withResolvers<void>();
+  const releaseOld = Promise.withResolvers<void>();
+  const reachedNew = Promise.withResolvers<void>();
+  const releaseNew = Promise.withResolvers<void>();
+  type Tool = { name: string; run: (input: Record<string, unknown>) => Promise<string> };
+  const messages = anthropic.beta.messages as unknown as { toolRunner: (params: unknown) => unknown };
+  const original = messages.toolRunner;
+  let calls = 0;
+  messages.toolRunner = (params) => {
+    const tools = (params as { tools: Tool[] }).tools;
+    const first = ++calls === 1;
+    return (async function* () {
+      if (first) {
+        await tools.find((tool) => tool.name === "propose_prospect")!.run({ ...PROSPECT_INPUT, name: "Production avant suspension" });
+        reachedOld.resolve();
+        await releaseOld.promise;
+        await expect(tools.find((tool) => tool.name === "propose_prospect")!.run({ ...PROSPECT_INPUT, name: "Écriture obsolète" })).rejects.toMatchObject({ name: "AgentRunLimitError", limit: "cancelled" });
+        yield { usage: { input_tokens: 100, output_tokens: 10 }, stop_reason: "end_turn", content: [] };
+        return;
+      }
+      reachedNew.resolve();
+      await releaseNew.promise;
+      await tools.find((tool) => tool.name === "propose_prospect")!.run({ ...PROSPECT_INPUT, name: "Écriture courante" });
+      yield { usage: { input_tokens: 100, output_tokens: 10 }, stop_reason: "end_turn", content: [] };
+    })();
+  };
+  let oldWork: Promise<void> | undefined;
+  let newWork: Promise<void> | undefined;
+  try {
+    oldWork = processAgentRun(run.id);
+    await reachedOld.promise;
+    await prisma.agentRun.update({ where: { id: run.id }, data: { startedAt: new Date(Date.now() - 400_000) } });
+    expect(await getAgentRun(company.id, run.id)).toMatchObject({ status: "failed" });
+    await inRequestScope([], () => enqueuePlanRun({ companyId: company.id, item, retryRunId: run.id }));
+    newWork = processAgentRun(run.id);
+    await reachedNew.promise;
+    releaseOld.resolve();
+    await oldWork;
+    expect(await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })).toMatchObject({ status: "running", attempts: 2 });
+    expect((await prisma.actionPlanItem.findUniqueOrThrow({ where: { id: item.id } })).status).toBe("en_cours");
+    expect(await prisma.agentProposal.count({ where: { agentRunId: run.id } })).toBe(1);
+    expect(await prisma.agentRunAttempt.count({ where: { agentRunId: run.id, status: "running" } })).toBe(1);
+    releaseNew.resolve();
+    await newWork;
+    expect(await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })).toMatchObject({ status: "succeeded", attempts: 2, resultCount: 1 });
+    expect((await prisma.agentProposal.findMany({ where: { agentRunId: run.id } })).map((proposal) => proposal.title).sort()).toEqual(["Production avant suspension", "Écriture courante"].sort());
+  } finally {
+    releaseOld.resolve();
+    releaseNew.resolve();
+    await Promise.allSettled([oldWork, newWork].filter((work): work is Promise<void> => Boolean(work)));
+    messages.toolRunner = original;
+  }
+});
+
+test("audit A03: ownership changes wait for the same transaction as the guarded business write", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { withAgentRunWrite, createAgentExecution, withAgentExecution } = await import("../src/lib/agent-run-execution");
+  const run = await createCapTestRun(company.id, "contenu");
+  const execution = () => createAgentExecution({ companyId: company.id, agentRunId: run.id, attempt: run.attempts, startedAt: run.startedAt! });
+  const locked = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const contender = Promise.withResolvers<number>();
+  const write = withAgentExecution(execution(), () => withAgentRunWrite(company.id, run.id, async (tx) => {
+    locked.resolve();
+    await release.promise;
+    return tx.agentProposal.create({ data: { companyId: company.id, agentRunId: run.id, agent: "contenu", kind: "social_post", title: "Écriture avant la relance", content: "Texte" } });
+  }));
+  await locked.promise;
+  const change = prisma.$transaction(async (tx) => {
+    const [connection] = await tx.$queryRaw<{ pid: number }[]>`SELECT pg_backend_pid() AS pid`;
+    contender.resolve(connection.pid);
+    await tx.agentRun.update({ where: { id: run.id }, data: { attempts: { increment: 1 } } });
+  });
+  try {
+    const pid = await contender.promise;
+    await expect.poll(async () => {
+      const [activity] = await prisma.$queryRaw<{ wait_event_type: string | null }[]>`SELECT wait_event_type FROM pg_stat_activity WHERE pid = ${pid}`;
+      return activity?.wait_event_type;
+    }).toBe("Lock");
+    release.resolve();
+    await Promise.all([write, change]);
+    expect(await prisma.agentProposal.count({ where: { agentRunId: run.id } })).toBe(1);
+    await expect(withAgentExecution(execution(), () => withAgentRunWrite(company.id, run.id, async (tx) => tx.agentProposal.deleteMany({ where: { agentRunId: run.id } })))).rejects.toMatchObject({ name: "AgentRunLimitError", limit: "cancelled" });
+    await expect(withAgentExecution(execution(), () => withAgentRunWrite("autre-entreprise", run.id, async () => "interdit"))).rejects.toMatchObject({ name: "AgentRunLimitError", limit: "cancelled" });
+    expect(await prisma.agentProposal.count({ where: { agentRunId: run.id } })).toBe(1);
+  } finally {
+    release.resolve();
+    await Promise.allSettled([write, change]);
+  }
+});
+
+test("audit A03: stale cleanup cannot overwrite a newer attempt observed after its initial read", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { getAgentRun } = await import("../src/lib/agent-runs");
+  const item = await prisma.actionPlanItem.create({ data: { companyId: company.id, agent: "contenu", title: "Posts", rationale: "R", timing: "Aujourd'hui", status: "en_cours" } });
+  const run = await prisma.agentRun.create({ data: {
+    companyId: company.id, planItemId: item.id, agent: "contenu", requestKey: `audit-snapshot-${randomUUID()}`, payload: {}, status: "running", attempts: 1,
+    startedAt: new Date(Date.now() - 400_000), attemptHistory: { create: { companyId: company.id, status: "running" } },
+  } });
+  const observed = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const runs = prisma.agentRun as unknown as { findFirst: (args: unknown) => Promise<unknown> };
+  const original = runs.findFirst;
+  let first = true;
+  runs.findFirst = async (args) => {
+    const found = await original.call(prisma.agentRun, args);
+    if (first && (found as { id?: string } | null)?.id === run.id) {
+      first = false;
+      observed.resolve();
+      await release.promise;
+    }
+    return found;
+  };
+  const cleanup = getAgentRun(company.id, run.id);
+  try {
+    await observed.promise;
+    await prisma.agentRunAttempt.updateMany({ where: { agentRunId: run.id }, data: { status: "failed" } });
+    await prisma.agentRun.update({ where: { id: run.id }, data: {
+      attempts: 2, startedAt: new Date(), queuedAt: new Date(),
+      attemptHistory: { create: { companyId: company.id, status: "running" } },
+    } });
+    release.resolve();
+    expect(await cleanup).toMatchObject({ status: "running", attempts: 2 });
+    expect((await prisma.actionPlanItem.findUniqueOrThrow({ where: { id: item.id } })).status).toBe("en_cours");
+    expect(await prisma.agentRunAttempt.count({ where: { agentRunId: run.id, status: "running" } })).toBe(1);
+  } finally {
+    release.resolve();
+    await cleanup;
+    runs.findFirst = original;
+  }
+});
+
+/** Flux simulé du fournisseur ; la comptabilité et les réservations restent réelles. */
+function auditPaulStream(message: { usage: { input_tokens: number; output_tokens: number; cache_creation_input_tokens?: number; cache_read_input_tokens?: number }; stop_reason: string; content: { type: string; text: string }[] }) {
+  return {
+    currentMessage: message,
+    on(event: string, listener: unknown) { void event; void listener; return this; },
+    async finalMessage() { return message; },
+  };
+}
+
+for (const streaming of [false, true]) {
+  for (const interrupted of [false, true]) {
+    test(`audit A01 Paul : comptabilité réelle ${streaming ? "en flux" : "JSON"}, ${interrupted ? "après interruption" : "réussie"}`, async ({ company }) => {
+      const { prisma } = await import("../src/lib/prisma");
+      const { anthropic, AGENT_MODEL } = await import("../src/lib/anthropic");
+      const { runCoCeoTurn } = await import("../src/lib/agents/co-ceo");
+      const { reserveUsageBudget } = await import("../src/lib/agent-runs");
+      const reservation = await reserveUsageBudget(company.id, "co_ceo_chat");
+      const messages = anthropic.beta.messages as unknown as { toolRunner: (params: unknown) => unknown };
+      const original = messages.toolRunner;
+      const failure = new Error("Interruption simulée au tour suivant");
+      messages.toolRunner = () => (async function* () {
+        const first = { usage: { input_tokens: 1000, output_tokens: 100, cache_creation_input_tokens: 200, cache_read_input_tokens: 300 }, stop_reason: "tool_use", content: [{ type: "text", text: "Je prépare la réponse." }] };
+        yield streaming ? auditPaulStream(first) : first;
+        if (interrupted) throw failure;
+        const last = { usage: { input_tokens: 500, output_tokens: 50 }, stop_reason: "end_turn", content: [{ type: "text", text: "Voici la réponse." }] };
+        yield streaming ? auditPaulStream(last) : last;
+      })();
+      try {
+        const work = runCoCeoTurn(company.id, "Préparons mon activité", reservation.id, undefined, streaming ? { onTurnStart() {}, onText() {} } : undefined);
+        if (interrupted) await expect(work).rejects.toBe(failure);
+        else expect(await work).toMatchObject({ content: "Voici la réponse.", actions: [] });
+        const events = await prisma.usageEvent.findMany({ where: { companyId: company.id } });
+        expect(events).toHaveLength(1);
+        expect(events[0]).toMatchObject({ companyId: company.id, reservationId: reservation.id, agent: "co_ceo", model: AGENT_MODEL, inputTokens: interrupted ? 1500 : 2000, outputTokens: interrupted ? 100 : 150 });
+        expect(events[0].costUsd).toBeCloseTo(interrupted ? 0.00356 : 0.00506, 8);
+        expect((await prisma.usageReservation.findUniqueOrThrow({ where: { id: reservation.id } })).releasedAt).not.toBeNull();
+        expect(await prisma.chatMessage.count({ where: { companyId: company.id, role: "assistant" } })).toBe(interrupted ? 0 : 1);
+      } finally {
+        messages.toolRunner = original;
+      }
+    });
+  }
+}
+
+test("audit A01 Paul : une consommation non finalisée reste réservée après expiration du bail", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { anthropic } = await import("../src/lib/anthropic");
+  const { runCoCeoTurn } = await import("../src/lib/agents/co-ceo");
+  const { reserveUsageBudget } = await import("../src/lib/agent-runs");
+  const reservation = await reserveUsageBudget(company.id, "co_ceo_chat");
+  type Tx = import("@prisma/client").Prisma.TransactionClient;
+  const transactions = prisma as unknown as { $transaction: (work: (tx: Tx) => Promise<unknown>, options?: unknown) => Promise<unknown> };
+  const transaction = transactions.$transaction;
+  const messages = anthropic.beta.messages as unknown as { toolRunner: (params: unknown) => unknown };
+  const runner = messages.toolRunner;
+  messages.toolRunner = () => (async function* () { yield { usage: { input_tokens: 1000, output_tokens: 100 }, stop_reason: "end_turn", content: [{ type: "text", text: "Réponse" }] }; })();
+  transactions.$transaction = function (work, options) {
+    return transaction.call(prisma, (tx) => work(new Proxy(tx, {
+      get(target, key) {
+        if (key !== "usageEvent") return Reflect.get(target, key);
+        return new Proxy(target.usageEvent, { get(delegate, method) {
+          return method === "create" ? () => Promise.reject(new Error("Persistance temporairement indisponible")) : Reflect.get(delegate, method);
+        } });
+      },
+    })), options);
+  };
+  try {
+    await expect(runCoCeoTurn(company.id, "Ma demande", reservation.id)).rejects.toThrow("Persistance temporairement indisponible");
+  } finally {
+    messages.toolRunner = runner;
+    transactions.$transaction = transaction;
+  }
+  expect(await prisma.usageEvent.count({ where: { reservationId: reservation.id } })).toBe(0);
+  await prisma.usageReservation.update({ where: { id: reservation.id }, data: { expiresAt: new Date(Date.now() - 1000) } });
+  await prisma.company.update({ where: { id: company.id }, data: { dailySpendLimitUsd: 1.5, monthlySpendLimitUsd: 1.5 } });
+  await expect(reserveUsageBudget(company.id, "co_ceo_chat")).rejects.toMatchObject({ reason: "quota_budget" });
+});
+
+test("audit A05 : les consignes acceptées entourées d'espaces sont conservées sur l'action et la carte", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const text = "a".repeat(999);
+  const paul = await capturePaulTools(company.id);
+  expect(await paul.tool("propose_launch_demarchage").run({ ...LAUNCH_TOOL_INPUT, prospectDescription: `  ${text}  ` })).toContain("RIEN N'EST LANCÉ");
+  expect((await prisma.actionPlanItem.findFirstOrThrow({ where: { companyId: company.id } })).launchExtras).toEqual({ prospectDescription: text });
+  expect((await prisma.paulPendingAction.findFirstOrThrow({ where: { companyId: company.id } })).payload).toMatchObject({ extras: { prospectDescription: text } });
+});
+
+for (const streaming of [false, true]) {
+  test(`audit A02 Paul : motif d'arrêt partiel transmis par la route ${streaming ? "en flux" : "JSON"}`, async ({ company }) => {
+    const { anthropic } = await import("../src/lib/anthropic");
+    const { AgentRunLimitError } = await import("../src/lib/agent-run-limits");
+    const { POST } = await import("../src/app/api/co-ceo/message/route");
+    const { NextRequest } = await import("next/server.js");
+    const messages = anthropic.beta.messages as unknown as { toolRunner: (params: unknown) => unknown };
+    const original = messages.toolRunner;
+    const failure = new AgentRunLimitError("turns");
+    messages.toolRunner = () => (async function* () {
+      const first = { usage: { input_tokens: 100, output_tokens: 10 }, stop_reason: "tool_use", content: [] };
+      yield streaming ? auditPaulStream(first) : first;
+      throw failure;
+    })();
+    try {
+      const request = new NextRequest("http://localhost:3187/api/co-ceo/message", { method: "POST", headers: streaming ? { Accept: "application/x-ndjson" } : {}, body: JSON.stringify({ message: "Mes priorités" }) });
+      const response = await inSessionScope(company, () => POST(request));
+      if (streaming) {
+        const events = (await response.text()).trim().split("\n").map((line) => JSON.parse(line));
+        expect(events.find((event) => event.type === "error")).toMatchObject({ error: failure.message });
+      } else expect(await response.json()).toMatchObject({ error: failure.message });
+    } finally {
+      messages.toolRunner = original;
+    }
+  });
 }
 
 const DELEGATION_INPUT = {
@@ -345,7 +818,7 @@ test("Paul delegating an action whose run failed relaunches that same run", asyn
   const item = await prisma.actionPlanItem.create({ data: { companyId: company.id, agent: "contenu", title: "Posts à relancer", rationale: "R", timing: "Aujourd'hui" } });
   const failed = await prisma.agentRun.create({ data: {
     companyId: company.id, planItemId: item.id, agent: "contenu", requestKey: `plan:${item.id}`, payload: { kind: "plan_item", planItemId: item.id, extras: {} },
-    status: "failed", attempts: 1, failureReason: "no_result", errorMessage: "Camille n'a pas pu produire de résultat exploitable cette fois-ci. Réessayez.", finishedAt: new Date(),
+    status: "failed", attempts: 1, reservedCostUsd: 0, failureReason: "no_result", errorMessage: "Camille n'a pas pu produire de résultat exploitable cette fois-ci. Réessayez.", finishedAt: new Date(),
     attemptHistory: { create: { companyId: company.id, status: "failed" } },
   } });
 
@@ -384,7 +857,7 @@ test("a failed run records its failure reason, read back by the team state", asy
   expect(staleView?.errorMessage).toContain("délai maximal");
 
   const noResult = await prisma.agentRun.create({ data: {
-    companyId: company.id, agent: "demarchage", requestKey: `empty-${randomUUID()}`, payload: {}, status: "failed", failureReason: "no_result", finishedAt: new Date(),
+    companyId: company.id, agent: "demarchage", requestKey: `empty-${randomUUID()}`, payload: {}, status: "failed", reservedCostUsd: 0, failureReason: "no_result", finishedAt: new Date(),
   } });
   const { recentRuns } = await getTeamState(company.id);
   expect(recentRuns.find((run) => run.id === broken.id)?.failureReason).toBe("outage");
@@ -550,7 +1023,7 @@ async function seedUsage(companyId: string, usage: { attempts?: number; reservat
   const { prisma } = await import("../src/lib/prisma");
   const at = usage.at ?? new Date();
   if (usage.attempts) {
-    const run = await prisma.agentRun.create({ data: { companyId, agent: "contenu", requestKey: `seed:${randomUUID()}`, payload: {}, status: "succeeded", finishedAt: at } });
+    const run = await prisma.agentRun.create({ data: { companyId, agent: "contenu", requestKey: `seed:${randomUUID()}`, payload: {}, status: "succeeded", reservedCostUsd: 0, finishedAt: at } });
     await prisma.agentRunAttempt.createMany({ data: Array.from({ length: usage.attempts }, () => ({ companyId, agentRunId: run.id, status: "succeeded", queuedAt: at })) });
   }
   if (usage.reservations) {
@@ -1343,31 +1816,12 @@ test("an expired profile card is refused by the route with a profile wording", a
 
 test("Paul's profile tool creates one card per reply and answers refusals in plain words", async ({ company }) => {
   const { prisma } = await import("../src/lib/prisma");
-  const { anthropic } = await import("../src/lib/anthropic");
-  const { runCoCeoTurn } = await import("../src/lib/agents/co-ceo");
   await prisma.company.update({ where: { id: company.id }, data: { website: "https://deja.fr", socialHandles: "@deja" } });
 
-  // Aucun appel au modèle : le lancement est intercepté pour récupérer les outils de Paul.
-  type CapturedTool = { name: string; run: (input: Record<string, unknown>) => Promise<string> };
-  const messages = anthropic.beta.messages as unknown as { toolRunner: (params: unknown) => unknown };
-  const original = messages.toolRunner;
-  const captured: { params?: { tools: CapturedTool[]; system: { text: string }[] } } = {};
-  messages.toolRunner = (params: unknown) => {
-    captured.params = params as typeof captured.params;
-    throw new Error("intercepted");
-  };
-  try {
-    await expect(runCoCeoTurn(company.id, "Mon Instagram est @atelierlumen.nantes")).rejects.toThrow("intercepted");
-  } finally {
-    messages.toolRunner = original;
-  }
-  const params = captured.params!;
-  // Paul voit le site et les réseaux déjà enregistrés.
-  const system = params.system.map((block) => block.text).join(" ");
-  expect(system).toContain("Site : https://deja.fr");
-  expect(system).toContain("Réseaux sociaux : @deja");
-
-  const tool = params.tools.find((candidate) => candidate.name === "propose_profile_update")!;
+  const paul = await capturePaulTools(company.id);
+  expect(paul.system).toContain("Site : https://deja.fr");
+  expect(paul.system).toContain("Réseaux sociaux : @deja");
+  const tool = paul.tool("propose_profile_update");
   const tooLongFirst = await tool.run({ description: "a".repeat(2001) });
   expect(tooLongFirst).toContain("Aucune carte créée");
   expect(tooLongFirst).toContain("limité à 2000 caractères");
@@ -1388,19 +1842,28 @@ async function capturePaulTools(companyId: string) {
   const { anthropic } = await import("../src/lib/anthropic");
   const { runCoCeoTurn } = await import("../src/lib/agents/co-ceo");
   type CapturedTool = { name: string; run: (input: Record<string, unknown>) => Promise<string> };
+  type Params = { tools: CapturedTool[]; system: { text: string }[] };
   const messages = anthropic.beta.messages as unknown as { toolRunner: (params: unknown) => unknown };
   const original = messages.toolRunner;
-  const captured: { params?: { tools: CapturedTool[]; system: { text: string }[] } } = {};
-  messages.toolRunner = (params: unknown) => {
-    captured.params = params as typeof captured.params;
-    throw new Error("intercepted");
+  const captured = Promise.withResolvers<Params>();
+  const release = Promise.withResolvers<void>();
+  messages.toolRunner = (raw) => {
+    const params = raw as Params;
+    captured.resolve({ ...params, tools: params.tools.map((tool) => ({ ...tool, run: AsyncLocalStorage.bind(tool.run) })) });
+    return (async function* () {
+      await release.promise;
+      yield { usage: { input_tokens: 0, output_tokens: 0 }, stop_reason: "end_turn", content: [{ type: "text", text: "Propositions préparées." }] };
+    })();
   };
+  const work = runCoCeoTurn(companyId, "Lance Jean-Claude sur les pistes du quartier");
+  work.catch(() => undefined);
+  capturedTurns.push(async () => { release.resolve(); return work; });
+  let params: Params;
   try {
-    await expect(runCoCeoTurn(companyId, "Lance Jean-Claude sur les pistes du quartier")).rejects.toThrow("intercepted");
+    params = await Promise.race([captured.promise, work.then(() => { throw new Error("Outils de Paul non capturés"); })]);
   } finally {
     messages.toolRunner = original;
   }
-  const params = captured.params!;
   return {
     system: params.system.map((block) => block.text).join(" "),
     names: params.tools.map((tool) => tool.name),
@@ -1768,6 +2231,7 @@ test("delegatePlanAction reuses an active action of the same agent and theme: la
 
 /** Paramètres donnés au modèle par Jean-Claude, sans appel au modèle : le lancement est intercepté. */
 async function captureDemarchageParams(companyId: string, options: { agentRunId?: string } = {}) {
+  const scope = await capturedToolScope(options.agentRunId);
   const { anthropic } = await import("../src/lib/anthropic");
   const { runDemarchageAgent } = await import("../src/lib/agents/demarchage");
   type CapturedTool = { name: string; description?: string; run: (input: Record<string, unknown>) => Promise<string> };
@@ -1784,7 +2248,7 @@ async function captureDemarchageParams(companyId: string, options: { agentRunId?
     messages.toolRunner = original;
   }
   const params = captured.params!;
-  return { system: params.system, tool: (name: string) => params.tools.find((candidate) => candidate.name === name)! };
+  return { system: params.system, tool: (name: string) => scope(params.tools.find((candidate) => candidate.name === name)!) };
 }
 
 test("story 3.1: Paul's profile card with the owner's name writes it on confirmation", async ({ company }) => {
@@ -1924,7 +2388,8 @@ test("story 3.1: the Entreprise page and the completion prompt store a cleaned o
 });
 
 /** Outils d'écriture d'un agent, sans appel au modèle : le lancement est intercepté. */
-async function captureAgentTools(launch: () => Promise<unknown>) {
+async function captureAgentTools(launch: () => Promise<unknown>, runId?: string) {
+  const scope = await capturedToolScope(runId);
   const { anthropic } = await import("../src/lib/anthropic");
   type CapturedTool = { name: string; run: (input: Record<string, unknown>) => Promise<string> };
   const messages = anthropic.beta.messages as unknown as { toolRunner: (params: unknown) => unknown };
@@ -1939,7 +2404,7 @@ async function captureAgentTools(launch: () => Promise<unknown>) {
   } finally {
     messages.toolRunner = original;
   }
-  return (name: string) => captured.tools!.find((candidate) => candidate.name === name)!;
+  return (name: string) => scope(captured.tools!.find((candidate) => candidate.name === name)!);
 }
 
 async function createCapTestRun(companyId: string, agent: string) {
@@ -2014,7 +2479,7 @@ test("story 3.2: Martine's Google profile proposals share one cap, and a 5th fin
   const { prisma } = await import("../src/lib/prisma");
   const { runMarketingAgent } = await import("../src/lib/agents/marketing");
   const run = await createCapTestRun(company.id, "marketing");
-  const tool = await captureAgentTools(() => runMarketingAgent(company.id, { agentRunId: run.id }));
+  const tool = await captureAgentTools(() => runMarketingAgent(company.id, { agentRunId: run.id }), run.id);
   const action = tool("propose_action");
   expect(await action.run({ kind: "gbp_update", title: "Horaires", content: "Ajouter le samedi." })).toContain("Proposition enregistrée");
   expect(await action.run({ kind: "gbp_update", title: "Catégorie", content: "Ajouter une catégorie." })).toContain("Proposition enregistrée");
@@ -2031,7 +2496,7 @@ test("story 3.2: Camille stops at 3 posts and 1 site content per run", async ({ 
   const { prisma } = await import("../src/lib/prisma");
   const { runContenuAgent } = await import("../src/lib/agents/contenu");
   const run = await createCapTestRun(company.id, "contenu");
-  const content = (await captureAgentTools(() => runContenuAgent(company.id, undefined, { agentRunId: run.id })))("propose_content");
+  const content = (await captureAgentTools(() => runContenuAgent(company.id, undefined, { agentRunId: run.id }), run.id))("propose_content");
   for (let index = 1; index <= 3; index++) expect(await content.run({ kind: "social_post", title: `Post ${index}`, content: `Légende ${index}` })).toContain("Proposition enregistrée");
   expect(await content.run({ kind: "social_post", title: "Post 4", content: "Légende 4" })).toBe(capMessage("social_post"));
   expect(await content.run({ kind: "site_web_content", title: "Site", content: "Brief du site" })).toContain("Proposition enregistrée");
@@ -2045,7 +2510,7 @@ test("story 3.2: one run of Jean-Claude and one of Martine leave at most 11 deci
   const jeanClaudeRun = await createCapTestRun(company.id, "demarchage");
   const martineRun = await createCapTestRun(company.id, "marketing");
   const jeanClaude = await captureDemarchageParams(company.id, { agentRunId: jeanClaudeRun.id });
-  const martine = await captureAgentTools(() => runMarketingAgent(company.id, { agentRunId: martineRun.id }));
+  const martine = await captureAgentTools(() => runMarketingAgent(company.id, { agentRunId: martineRun.id }), martineRun.id);
   for (let index = 0; index < 9; index++) await jeanClaude.tool("propose_prospect").run({ ...PROSPECT_INPUT, name: `Syndic ${index}` });
   for (let index = 0; index < 4; index++) {
     await jeanClaude.tool("propose_growth_lead").run({ title: `Piste ${index}`, content: `Piste ${index}`, source: "https://example.invalid/piste", isEvent: false });
@@ -2059,7 +2524,7 @@ test("story 3.2: one run of Jean-Claude and one of Martine leave at most 11 deci
 });
 
 /** Lance une exécution en file par le worker ; le Tool Runner est remplacé par un scénario qui appelle les outils sans modèle. */
-async function processWithScenario(runId: string, scenario: (tool: (name: string) => { run: (input: Record<string, unknown>) => Promise<string> }) => Promise<void>) {
+async function processWithScenario(runId: string, scenario: (tool: (name: string) => { run: (input: Record<string, unknown>) => Promise<string> }) => Promise<void>, usage = { input_tokens: 0, output_tokens: 0 }) {
   const { anthropic } = await import("../src/lib/anthropic");
   const { processAgentRun } = await import("../src/lib/agent-runs");
   type CapturedTool = { name: string; run: (input: Record<string, unknown>) => Promise<string> };
@@ -2069,7 +2534,7 @@ async function processWithScenario(runId: string, scenario: (tool: (name: string
     const tools = (params as { tools: CapturedTool[] }).tools;
     return (async function* () {
       await scenario((name) => tools.find((candidate) => candidate.name === name)!);
-      yield { usage: { input_tokens: 0, output_tokens: 0 }, stop_reason: "end_turn", content: [] };
+      yield { usage, stop_reason: "end_turn", content: [] };
     })();
   };
   try {
@@ -2103,6 +2568,7 @@ test("story 3.2: a plan run processed by the worker refuses the 6th prospect", a
 
 test("story 3.2: a relaunched run counts only the writes of its current attempt", async ({ company }) => {
   const { prisma } = await import("../src/lib/prisma");
+  const { enqueuePlanRun } = await import("../src/lib/agent-runs");
   const run = await queuePlanItemDemarchageRun(company.id);
   await processWithScenario(run.id, async (tool) => {
     for (let index = 1; index <= 5; index++) await tool("propose_prospect").run({ ...PROSPECT_INPUT, name: `Premier essai ${index}` });
@@ -2113,7 +2579,8 @@ test("story 3.2: a relaunched run counts only the writes of its current attempt"
 
   // Relance : même exécution, nouvelle tentative ; les 5 écritures du premier essai ne comptent plus.
   await new Promise((resolve) => setTimeout(resolve, 10));
-  await prisma.agentRun.update({ where: { id: run.id }, data: { status: "queued" } });
+  const item = await prisma.actionPlanItem.findUniqueOrThrow({ where: { id: run.planItemId! } });
+  await inRequestScope([], () => enqueuePlanRun({ companyId: company.id, item, retryRunId: run.id }));
   const answers: string[] = [];
   await processWithScenario(run.id, async (tool) => {
     for (let index = 1; index <= 6; index++) answers.push(await tool("propose_prospect").run({ ...PROSPECT_INPUT, name: `Second essai ${index}` }));

@@ -165,6 +165,7 @@ model ActionPlanItem {
   agent       String // marketing, contenu, demarchage
   title       String
   rationale   String
+  launchExtras Json? // actualité ou cible de prospection conservée avec la demande ; null pour les actions historiques
   outcome     String? // résultat attendu, une phrase écrite pour le dirigeant (charte, #218) ; null pour les actions antérieures
   timing      String // ex: "cette semaine", "aujourd'hui"
   theme       String?

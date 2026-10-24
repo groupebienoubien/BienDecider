@@ -1,4 +1,6 @@
 import { prisma } from "@/lib/prisma";
+import { assertAgentExecutionActive, awaitAgentOperation, createAgentExecution, currentAgentExecution, withAgentExecution } from "@/lib/agent-run-execution";
+import { AGENT_RUN_COST_RESERVATION_USD, AGENT_RUN_MAX_TURNS, AgentRunLimitError } from "@/lib/agent-run-limits";
 
 /**
  * Tarifs par modèle (USD / million de tokens). Source : tarification
@@ -23,7 +25,7 @@ const PRICING: Record<string, { input: number; output: number }> = {
 const CACHE_WRITE_MULTIPLIER = 1.25;
 const CACHE_READ_MULTIPLIER = 0.1;
 
-function estimateCostUsd(
+export function estimateCostUsd(
   model: string,
   tokens: { input: number; output: number; cacheWrite: number; cacheRead: number },
 ): number {
@@ -38,7 +40,7 @@ function estimateCostUsd(
   );
 }
 
-type UsageLike =
+export type UsageLike =
   | {
       input_tokens?: number;
       output_tokens?: number;
@@ -47,86 +49,110 @@ type UsageLike =
     }
   | undefined;
 
-/**
- * `await anthropic.beta.messages.toolRunner({...})` ne résout qu'au DERNIER
- * tour de la boucle d'outils — si l'agent fait plusieurs aller-retours
- * (web_search, plusieurs propositions...), son `.usage` ne reflète que ce
- * dernier appel, pas la somme réelle facturée par Anthropic. Bug réel
- * signalé le 2026-10-05 : le crédit API se consommait bien plus vite que
- * les coûts affichés dans /admin. Corrigé en itérant la boucle
- * (`for await`, cf. doc Tool Runner) et en sommant l'usage de CHAQUE tour,
- * cache compris.
- */
-export async function runToolLoop<
-  T extends {
-    usage: {
-      input_tokens: number;
-      output_tokens: number;
-      cache_creation_input_tokens?: number | null;
-      cache_read_input_tokens?: number | null;
-    };
-  },
->(runner: AsyncIterable<T>): Promise<{ finalMessage: T; usage: Required<UsageLike> }> {
-  let input_tokens = 0;
-  let output_tokens = 0;
-  let cache_creation_input_tokens = 0;
-  let cache_read_input_tokens = 0;
-  let finalMessage: T | undefined;
-  for await (const message of runner) {
-    input_tokens += message.usage.input_tokens;
-    output_tokens += message.usage.output_tokens;
-    cache_creation_input_tokens += message.usage.cache_creation_input_tokens ?? 0;
-    cache_read_input_tokens += message.usage.cache_read_input_tokens ?? 0;
-    finalMessage = message;
-  }
-  if (!finalMessage) {
-    throw new Error("Le modèle n'a renvoyé aucun message.");
-  }
-  return {
-    finalMessage,
-    usage: { input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens },
-  };
+export type UsageTotal = { input_tokens: number; output_tokens: number; cache_creation_input_tokens: number; cache_read_input_tokens: number };
+export type ToolLoopOptions = {
+  companyId?: string; agentRunId?: string; reservationId?: string; agent?: string; model?: string;
+  persistUsage?: (usage: UsageTotal) => Promise<void>;
+  maxTurns?: number; maxCostUsd?: number;
+};
+type MeasuredMessage = { usage: Exclude<UsageLike, undefined>; stop_reason?: string | null };
+type ToolRunner<T> = AsyncIterable<T> & { generateToolResponse?: () => Promise<unknown> };
+const emptyUsage = (): UsageTotal => ({ input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 });
+function addUsage(total: UsageTotal, usage: UsageLike) {
+  total.input_tokens += usage?.input_tokens ?? 0;
+  total.output_tokens += usage?.output_tokens ?? 0;
+  total.cache_creation_input_tokens += usage?.cache_creation_input_tokens ?? 0;
+  total.cache_read_input_tokens += usage?.cache_read_input_tokens ?? 0;
 }
 
-/**
- * Même boucle que runToolLoop, en flux : chaque tour du runner est un flux dont
- * le texte est transmis au fur et à mesure, et dont l'usage est sommé à la fin.
- */
-export async function runStreamingToolLoop<
-  T extends {
-    usage: {
-      input_tokens: number;
-      output_tokens: number;
-      cache_creation_input_tokens?: number | null;
-      cache_read_input_tokens?: number | null;
-    };
-  },
->(
-  runner: AsyncIterable<{ on(event: "text", listener: (delta: string) => void): unknown; finalMessage(): Promise<T> }>,
-  handlers: { onTurnStart: () => void; onText: (delta: string) => void },
-): Promise<{ finalMessage: T; usage: Required<UsageLike> }> {
-  let input_tokens = 0;
-  let output_tokens = 0;
-  let cache_creation_input_tokens = 0;
-  let cache_read_input_tokens = 0;
+async function measuredLoop<T extends MeasuredMessage, R>(runner: ToolRunner<R>, read: (item: R, partial: (usage: UsageLike) => void) => Promise<T>, options: ToolLoopOptions, partialOf?: (item: R) => UsageLike): Promise<{ finalMessage: T; usage: UsageTotal }> {
+  const context = currentAgentExecution();
+  if (!context) return withAgentExecution(createAgentExecution({ companyId: options.companyId ?? "" }), () => measuredLoop(runner, read, options, partialOf));
+  const usage = emptyUsage();
+  const iterator = runner[Symbol.asyncIterator]();
   let finalMessage: T | undefined;
-  for await (const stream of runner) {
+  let primaryError: unknown;
+  let finished = false;
+  let turns = 0;
+  try {
+    while (true) {
+      assertAgentExecutionActive(context);
+      const item = await awaitAgentOperation(iterator.next(), context);
+      if (item.done) { finished = true; break; }
+      let partialUsage: UsageLike;
+      let message: T;
+      try { message = await awaitAgentOperation(read(item.value, (partial) => { partialUsage = partial; }), context); }
+      catch (error) { addUsage(usage, partialOf?.(item.value) ?? partialUsage); throw error; }
+      addUsage(usage, message.usage);
+      finalMessage = message;
+      turns++;
+      assertAgentExecutionActive(context);
+      const cost = estimateCostUsd(options.model ?? "claude-sonnet-5-5", { input: usage.input_tokens, output: usage.output_tokens, cacheWrite: usage.cache_creation_input_tokens, cacheRead: usage.cache_read_input_tokens });
+      const limit = turns >= Math.min(options.maxTurns ?? AGENT_RUN_MAX_TURNS, AGENT_RUN_MAX_TURNS) ? "turns"
+        : cost >= Math.min(options.maxCostUsd ?? AGENT_RUN_COST_RESERVATION_USD, AGENT_RUN_COST_RESERVATION_USD) ? "cost" : undefined;
+      if (limit) {
+        // The installed SDK yields the assistant before executing its tools.
+        // Complete this paid turn without resuming next() into a new request.
+        const continues = message.stop_reason === "tool_use" || message.stop_reason === "pause_turn" || message.stop_reason === "compaction" || message.stop_reason === undefined;
+        if (continues) {
+          if (runner.generateToolResponse) await awaitAgentOperation(runner.generateToolResponse(), context);
+          assertAgentExecutionActive(context);
+          throw new AgentRunLimitError(limit);
+        }
+        finished = true;
+        break;
+      }
+    }
+    if (!finalMessage) throw new Error("Le modele n'a renvoye aucun message.");
+    return { finalMessage, usage };
+  } catch (error) {
+    primaryError = error;
+    // Revoke writes immediately while still awaiting accounting on ordinary
+    // failures. The invocation aborts its provider signal after finalization;
+    // its deadline can still interrupt a stalled finalizer in the meantime.
+    context.active = false;
+    throw error;
+  } finally {
+    // A suspended tool cannot hold the worker; the guard rejects late writes.
+    if (!finished) void Promise.resolve(iterator.return?.()).catch(() => undefined);
+    const finalize = async () => {
+      if (options.persistUsage) await options.persistUsage(usage);
+      else if (options.companyId && options.agent && options.model) await recordUsage({ companyId: options.companyId, agentRunId: options.agentRunId, reservationId: options.reservationId, agent: options.agent, model: options.model, usage, required: true });
+      else return;
+      context.usageFinalized = true;
+    };
+    const finalization = finalize();
+    finalization.catch(() => undefined);
+    try {
+      const remaining = context.deadlineAt - Date.now();
+      if (remaining <= 0) throw new AgentRunLimitError("deadline");
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try { await Promise.race([finalization, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new AgentRunLimitError("deadline")), remaining); })]); }
+      finally { clearTimeout(timer); }
+    } catch (error) {
+      if (!primaryError) throw error;
+      console.error("Finalisation de la consommation du tour echoue :", error);
+    }
+  }
+}
+
+/** Aggregate every received turn and finalize once on success or failure. */
+export async function runToolLoop<T extends MeasuredMessage>(runner: ToolRunner<T>, options: ToolLoopOptions = {}): Promise<{ finalMessage: T; usage: UsageTotal }> {
+  return measuredLoop(runner, async (message) => message, options);
+}
+
+type MeasuredStream<T> = {
+  on(event: "text", listener: (delta: string) => void): unknown;
+  finalMessage(): Promise<T>;
+  readonly currentMessage?: { usage: UsageLike };
+};
+export async function runStreamingToolLoop<T extends MeasuredMessage>(runner: ToolRunner<MeasuredStream<T>>, handlers: { onTurnStart: () => void; onText: (delta: string) => void }, options: ToolLoopOptions = {}): Promise<{ finalMessage: T; usage: UsageTotal }> {
+  return measuredLoop(runner, async (stream, partial) => {
     handlers.onTurnStart();
-    stream.on("text", (delta) => handlers.onText(delta));
-    const message = await stream.finalMessage();
-    input_tokens += message.usage.input_tokens;
-    output_tokens += message.usage.output_tokens;
-    cache_creation_input_tokens += message.usage.cache_creation_input_tokens ?? 0;
-    cache_read_input_tokens += message.usage.cache_read_input_tokens ?? 0;
-    finalMessage = message;
-  }
-  if (!finalMessage) {
-    throw new Error("Le modèle n'a renvoyé aucun message.");
-  }
-  return {
-    finalMessage,
-    usage: { input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens },
-  };
+    stream.on("text", (delta) => { if (!currentAgentExecution()?.signal.aborted) handlers.onText(delta); });
+    try { return await stream.finalMessage(); }
+    finally { partial(stream.currentMessage?.usage); }
+  }, options, (stream) => stream.currentMessage?.usage);
 }
 
 /** Enregistre le coût mesuré ; les appels soumis à un budget ne peuvent ignorer un échec d'écriture. */
@@ -137,11 +163,13 @@ export async function recordUsage(params: {
   agent: string;
   model: string;
   usage: UsageLike;
+  required?: boolean;
 }) {
   const inputTokens = params.usage?.input_tokens ?? 0;
   const outputTokens = params.usage?.output_tokens ?? 0;
   const cacheWriteTokens = params.usage?.cache_creation_input_tokens ?? 0;
   const cacheReadTokens = params.usage?.cache_read_input_tokens ?? 0;
+  const context = currentAgentExecution();
   try {
     await prisma.$transaction(async (tx) => {
       await tx.usageEvent.create({
@@ -164,6 +192,9 @@ export async function recordUsage(params: {
           }),
         },
       });
+      if (params.agentRunId && context?.attempt !== undefined) {
+        await tx.agentRun.updateMany({ where: { id: params.agentRunId, companyId: params.companyId, attempts: context.attempt }, data: { reservedCostUsd: 0 } });
+      }
       if (params.reservationId) {
         await tx.usageReservation.updateMany({
           where: { id: params.reservationId, companyId: params.companyId, releasedAt: null },
@@ -172,7 +203,7 @@ export async function recordUsage(params: {
       }
     });
   } catch (error) {
-    if (params.agentRunId || params.reservationId) throw error;
+    if (params.required || params.agentRunId || params.reservationId) throw error;
     console.error("Erreur enregistrement usage (non bloquant):", error);
   }
 }

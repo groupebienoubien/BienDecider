@@ -1,3 +1,4 @@
+import { AgentRunLimitError } from "@/lib/agent-run-limits";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { runCoCeoTurn } from "@/lib/agents/co-ceo";
@@ -48,7 +49,7 @@ export async function POST(request: NextRequest) {
         } catch (error) {
           console.error("Erreur Co-CEO:", error);
           const reason = classifyRunError(error) ?? "outage";
-          send({ type: "error", error: error instanceof AgentRunQuotaError ? error.message : failureMessage(reason, "Paul"), reason });
+          send({ type: "error", error: error instanceof AgentRunQuotaError || error instanceof AgentRunLimitError ? error.message : failureMessage(reason, "Paul"), reason });
         }
         try { controller.close(); } catch { /* client parti */ }
       },
@@ -59,6 +60,6 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     if (error instanceof AgentRunQuotaError) return NextResponse.json({ error: error.message, reason: classifyRunError(error) }, { status: 429 });
     console.error("Erreur Co-CEO:", error);
-    return NextResponse.json({ error: "Échec de la réponse" }, { status: 500 });
+    return NextResponse.json({ error: error instanceof AgentRunLimitError ? error.message : "Échec de la réponse", reason: classifyRunError(error) ?? "outage" }, { status: 500 });
   }
 }

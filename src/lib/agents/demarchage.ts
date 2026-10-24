@@ -5,8 +5,10 @@ import { prisma } from "@/lib/prisma";
 import { getRejectionContext, rejectedDuplicateNotice } from "@/lib/agents/rejection-context";
 import { getCompetitionContextForProspecting } from "@/lib/agents/findings-context";
 import { ensureAgentProduced } from "@/lib/agents/agent-errors";
-import { RUN_CAPS, withRunCap } from "@/lib/agents/run-caps";
-import { recordUsage, runToolLoop } from "@/lib/usage";
+import { RUN_CAPS, withRunCapWrite } from "@/lib/agents/run-caps";
+import { runToolLoop } from "@/lib/usage";
+import { agentRunnerOptions, assertAgentExecutionActive, bindAgentTools } from "@/lib/agent-run-execution";
+import { AGENT_RUN_MAX_TURNS } from "@/lib/agent-run-limits";
 import {
   PERSONAS,
   objectiveLine,
@@ -80,10 +82,10 @@ export async function runDemarchageAgent(
       const comparedContent = `${input.content}\n\nSource : ${input.source}`;
       const content = `${input.content}${endDate ? `\n\nDate de fin : ${endDate}` : ""}\n\nSource : ${input.source}`;
       // Le doublon d'un rejet se contrôle sous le verrou du plafond : deux appels identiques simultanés sont sérialisés.
-      return withRunCap(options.agentRunId, "piste_croissance", async () => {
-        const alreadyRejected = await rejectedDuplicateNotice(company.id, { kind: "piste_croissance", title: input.title, content: comparedContent });
+      const result = await withRunCapWrite(company.id, options.agentRunId, "piste_croissance", async (tx) => {
+        const alreadyRejected = await rejectedDuplicateNotice(company.id, { kind: "piste_croissance", title: input.title, content: comparedContent }, tx);
         if (alreadyRejected) return alreadyRejected;
-        const proposal = await prisma.agentProposal.create({
+        const proposal = await tx.agentProposal.create({
           data: {
             companyId: company.id,
             agentRunId: options.agentRunId,
@@ -94,9 +96,11 @@ export async function runDemarchageAgent(
             planItemId: options.planItemId,
           },
         });
-        createdProposalIds.push(proposal.id);
-        return `Piste enregistrée (id: ${proposal.id}), en attente de validation.`;
+        return { id: proposal.id, message: `Piste enregistrée (id: ${proposal.id}), en attente de validation.` };
       });
+      if (typeof result === "string") return result;
+      createdProposalIds.push(result.id);
+      return result.message;
     },
   });
 
@@ -120,39 +124,39 @@ export async function runDemarchageAgent(
       const content = `${input.reason}\n\nType de cible : ${input.segment}${
         input.publicContact ? `\nContact professionnel public : ${input.publicContact}` : ""
       }\nSource : ${input.source}`;
-      return withRunCap(options.agentRunId, "prospect", async () => {
-        const alreadyRejected = await rejectedDuplicateNotice(company.id, { kind: "prospect", title: input.name, content: content });
+      const result = await withRunCapWrite(company.id, options.agentRunId, "prospect", async (tx) => {
+        const alreadyRejected = await rejectedDuplicateNotice(company.id, { kind: "prospect", title: input.name, content }, tx);
         if (alreadyRejected) return alreadyRejected;
         // Le lead structuré naît avec la proposition, dans la même transaction ;
         // il n'entre dans le funnel qu'à la validation du dirigeant (cf. api/proposals/[id]).
-        const proposal = await prisma.$transaction(async (tx) => {
-          const created = await tx.agentProposal.create({
-            data: {
-              companyId: company.id,
-              agentRunId: options.agentRunId,
-              agent: AGENT_NAME,
-              kind: "prospect",
-              title: input.name,
-              content,
-              planItemId: options.planItemId,
-            },
-          });
-          await tx.lead.create({
-            data: {
-              companyId: company.id,
-              proposalId: created.id,
-              name: input.name,
-              reason: input.reason,
-              publicContact: input.publicContact,
-              segment: input.segment.trim().toLowerCase(),
-              source: input.source,
-            },
-          });
-          return created;
+        const proposal = await tx.agentProposal.create({
+          data: {
+            companyId: company.id,
+            agentRunId: options.agentRunId,
+            agent: AGENT_NAME,
+            kind: "prospect",
+            title: input.name,
+            content,
+            planItemId: options.planItemId,
+          },
         });
-        createdProposalIds.push(proposal.id);
-        return `Prospect enregistré (id: ${proposal.id}), en attente de la décision du dirigeant.`;
+        assertAgentExecutionActive();
+        await tx.lead.create({
+          data: {
+            companyId: company.id,
+            proposalId: proposal.id,
+            name: input.name,
+            reason: input.reason,
+            publicContact: input.publicContact,
+            segment: input.segment.trim().toLowerCase(),
+            source: input.source,
+          },
+        });
+        return { id: proposal.id, message: `Prospect enregistré (id: ${proposal.id}), en attente de la décision du dirigeant.` };
       });
+      if (typeof result === "string") return result;
+      createdProposalIds.push(result.id);
+      return result.message;
     },
   });
 
@@ -171,10 +175,10 @@ export async function runDemarchageAgent(
     }),
     run: async (input) => {
       const content = `Objet : ${input.subject}\n\n${input.body}\n\n⚠️ Template générique à adapter manuellement avant tout envoi. Vérifiez votre base de contacts et le cadre légal de la prospection (RGPD) avant envoi — en cas de doute, consultez un expert Conformité/Juridique.`;
-      return withRunCap(options.agentRunId, "prospecting_email", async () => {
-        const alreadyRejected = await rejectedDuplicateNotice(company.id, { kind: "prospecting_email", title: input.title, content: content });
+      const result = await withRunCapWrite(company.id, options.agentRunId, "prospecting_email", async (tx) => {
+        const alreadyRejected = await rejectedDuplicateNotice(company.id, { kind: "prospecting_email", title: input.title, content }, tx);
         if (alreadyRejected) return alreadyRejected;
-        const proposal = await prisma.agentProposal.create({
+        const proposal = await tx.agentProposal.create({
           data: {
             companyId: company.id,
             agentRunId: options.agentRunId,
@@ -185,9 +189,11 @@ export async function runDemarchageAgent(
             planItemId: options.planItemId,
           },
         });
-        createdProposalIds.push(proposal.id);
-        return `Proposition enregistrée (id: ${proposal.id}), en attente de validation.`;
+        return { id: proposal.id, message: `Proposition enregistrée (id: ${proposal.id}), en attente de validation.` };
       });
+      if (typeof result === "string") return result;
+      createdProposalIds.push(result.id);
+      return result.message;
     },
   });
 
@@ -215,14 +221,13 @@ Règles strictes, non négociables :
 
   const { finalMessage, usage } = await runToolLoop(anthropic.beta.messages.toolRunner({
     model: AGENT_MODEL,
+    max_iterations: AGENT_RUN_MAX_TURNS,
     // Plus élevé que la base : "20 entreprises alentours" + web_search peut
     // consommer beaucoup de tours avant de conclure — un run à 4000 a brûlé
     // 32k tokens d'entrée sans produire une seule proposition (cf. backlog.md).
     max_tokens: 8000,
     tools: [
-      proposeProspect,
-      proposeLead,
-      proposeAction,
+      ...bindAgentTools([proposeProspect, proposeLead, proposeAction]),
       { type: "web_search_20260209", name: "web_search", max_uses: 8 },
     ],
     system: [
@@ -241,19 +246,11 @@ Règles strictes, non négociables :
           : "Recherche des pistes de croissance pour cette entreprise (actualités locales, événements, opportunités professionnelles).",
       },
     ],
-  }));
+  }, agentRunnerOptions()), { companyId: company.id, agentRunId: options.agentRunId, agent: AGENT_NAME, model: AGENT_MODEL });
 
-  await recordUsage({
-    companyId: company.id,
-    agentRunId: options.agentRunId,
-    agent: AGENT_NAME,
-    model: AGENT_MODEL,
-    usage,
+  const proposals = await prisma.agentProposal.findMany({
+    where: { companyId: company.id, id: { in: createdProposalIds } },
   });
-
-  ensureAgentProduced(PERSONA.name, createdProposalIds.length, { stopReason: finalMessage.stop_reason, usage });
-
-  return prisma.agentProposal.findMany({
-    where: { id: { in: createdProposalIds } },
-  });
+  ensureAgentProduced(PERSONA.name, proposals.length, { stopReason: finalMessage.stop_reason, usage });
+  return proposals;
 }

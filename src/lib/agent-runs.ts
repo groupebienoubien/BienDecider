@@ -7,7 +7,10 @@ import { runMarketingAgent } from "@/lib/agents/marketing";
 import { runContenuAgent } from "@/lib/agents/contenu";
 import { runDemarchageAgent } from "@/lib/agents/demarchage";
 import { executePlanItem, type PlanRunExtras } from "@/lib/agents/plan-runner";
-import { isPlanAgent, type PlanAgent } from "@/lib/agents/plan-items";
+import { isPlanAgent, resolvePlanLaunchExtras, type PlanAgent } from "@/lib/agents/plan-items";
+import { createAgentExecution, withAgentExecution, withAgentRunWrite } from "@/lib/agent-run-execution";
+import { AGENT_RUN_MAX_DURATION_SECONDS, AGENT_RUN_COST_RESERVATION_USD, AgentRunLimitError } from "@/lib/agent-run-limits";
+export { AGENT_RUN_MAX_DURATION_SECONDS, AGENT_RUN_COST_RESERVATION_USD } from "@/lib/agent-run-limits";
 import { isAuditPlanItemTitle } from "@/lib/agents/plan-item-shared";
 import { AgentRunConflictError, AgentRunQuotaError, RevisionConflictError, classifyRunError, failureMessage } from "@/lib/agents/agent-errors";
 import { PERSONAS } from "@/lib/agents/personas";
@@ -15,8 +18,6 @@ import { isSerializationConflict } from "@/lib/serialization-conflict";
 import { revisionActiveKey } from "@/lib/agents/revision-state";
 import { CHAT_USAGE_PURPOSES, parisQuotaWindows, usageCounterFor, type UsageCounter } from "@/lib/quota-windows";
 
-export const AGENT_RUN_MAX_DURATION_SECONDS = 300;
-export const AGENT_RUN_COST_RESERVATION_USD = 1;
 const STALE_GRACE_SECONDS = 10;
 const DIRECT_DEDUPE_SECONDS = 5 * 60;
 
@@ -87,13 +88,16 @@ async function persistRun(params: {
       });
       if (existing) {
         if (existing.status !== "failed" || params.retryRunId !== existing.id) return existing;
+        if (existing.reservedCostUsd > 0) {
+          throw new AgentRunQuotaError("La consommation du passage précédent n'a pas pu être finalisée. Son budget reste réservé ; réessayez après sa finalisation.", "quota_budget");
+        }
         await assertRunQuota(tx, params.companyId, "runs");
         const retry = await tx.agentRun.updateMany({
-          where: { id: existing.id, status: "failed" },
+          where: { id: existing.id, companyId: params.companyId, status: "failed", attempts: existing.attempts },
           data: {
             status: "queued", activeDedupeKey: params.activeDedupeKey, reservedCostUsd: AGENT_RUN_COST_RESERVATION_USD,
             maxDurationSeconds: AGENT_RUN_MAX_DURATION_SECONDS,
-            startedAt: null, finishedAt: null, resultCount: 0, errorMessage: null, failureReason: null,
+            queuedAt: new Date(), startedAt: null, finishedAt: null, resultCount: 0, errorMessage: null, failureReason: null,
           },
         });
         if (retry.count === 0) return tx.agentRun.findUniqueOrThrow({ where: { id: existing.id } });
@@ -161,18 +165,20 @@ async function persistRun(params: {
 
 export async function enqueuePlanRun(params: {
   companyId: string;
-  item: Pick<ActionPlanItem, "id" | "agent" | "title" | "rationale">;
+  item: Pick<ActionPlanItem, "id" | "agent" | "title" | "rationale"> & { launchExtras?: unknown };
   extras?: PlanRunExtras;
   retryRunId?: string;
 }) {
   if (!isPlanAgent(params.item.agent)) throw new AgentRunConflictError("Agent inconnu.", "outage");
+  const storedItem = await prisma.actionPlanItem.findFirst({ where: { id: params.item.id, companyId: params.companyId } });
+  const extras = await resolvePlanLaunchExtras(params.companyId, storedItem ?? params.item);
   const run = await persistRun({
     companyId: params.companyId,
     agent: params.item.agent,
     planItemId: params.item.id,
     requestKey: `plan:${params.item.id}`,
     activeDedupeKey: `plan:${params.item.id}`,
-    payload: { kind: "plan_item", planItemId: params.item.id, extras: params.extras ?? {} },
+    payload: { kind: "plan_item", planItemId: params.item.id, extras },
     retryRunId: params.retryRunId,
   });
   schedule(run.id);
@@ -255,7 +261,7 @@ export async function getAgentRun(companyId: string, runId: string) {
     // Un seul commit : l'exécution ne doit jamais être lue échouée alors que son action reste « en cours ».
     await prisma.$transaction(async (tx) => {
       const failed = await tx.agentRun.updateMany({
-        where: { id: stale.id, companyId, status: stale.status },
+        where: { id: stale.id, companyId, status: stale.status, attempts: stale.attempts, queuedAt: stale.queuedAt, startedAt: stale.startedAt },
         data: {
           status: "failed",
           activeDedupeKey: null,
@@ -361,54 +367,65 @@ export async function closeAuditPlanItems(companyId: string) {
 }
 
 export async function processAgentRun(runId: string) {
-  const attemptId = await prisma.$transaction(async (tx) => {
+  // Capture the run and attempt under the claim's lock, never reread a later
+  // attempt after another worker has expired/retried this one.
+  const claimed = await prisma.$transaction(async (tx) => {
+    const startedAt = new Date();
     const claim = await tx.agentRun.updateMany({
       where: { id: runId, status: "queued" },
-      data: { status: "running", startedAt: new Date(), attempts: { increment: 1 }, errorMessage: null, failureReason: null },
+      data: { status: "running", startedAt, attempts: { increment: 1 }, errorMessage: null, failureReason: null },
     });
     if (claim.count !== 1) return null;
-    let attempt = await tx.agentRunAttempt.findFirst({ where: { agentRunId: runId, status: "queued" }, orderBy: { queuedAt: "desc" } });
-    attempt ??= await tx.agentRunAttempt.create({ data: { companyId: (await tx.agentRun.findUniqueOrThrow({ where: { id: runId }, select: { companyId: true } })).companyId, agentRunId: runId } });
-    await tx.agentRunAttempt.update({ where: { id: attempt.id }, data: { status: "running", startedAt: new Date() } });
-    return attempt.id;
+    const run = await tx.agentRun.findUniqueOrThrow({ where: { id: runId } });
+    let attempt = await tx.agentRunAttempt.findFirst({ where: { agentRunId: runId, companyId: run.companyId, status: "queued" }, orderBy: { queuedAt: "desc" } });
+    attempt ??= await tx.agentRunAttempt.create({ data: { companyId: run.companyId, agentRunId: runId } });
+    await tx.agentRunAttempt.update({ where: { id: attempt.id }, data: { status: "running", startedAt } });
+    return { run, attemptId: attempt.id };
   });
-  if (!attemptId) return;
-
-  const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: runId } });
+  if (!claimed) return;
+  const { run, attemptId } = claimed;
+  const context = createAgentExecution({ companyId: run.companyId, agentRunId: run.id, attempt: run.attempts, startedAt: run.startedAt! });
   try {
-    const resultCount = await executeRun(run);
-    const completed = await prisma.agentRun.updateMany({
-      where: { id: run.id, status: "running", attempts: run.attempts },
-      data: { status: "succeeded", reservedCostUsd: 0, resultCount, finishedAt: new Date() },
+    let succeeded = false;
+    await withAgentExecution(context, async () => {
+      const resultCount = await executeRun(run);
+      await withAgentRunWrite(run.companyId, run.id, async (tx) => {
+      const completed = await tx.agentRun.updateMany({
+        where: { id: run.id, companyId: run.companyId, status: "running", attempts: run.attempts },
+        data: { status: "succeeded", ...(context.usageFinalized ? { reservedCostUsd: 0 } : {}), resultCount, finishedAt: new Date() },
+      });
+      if (completed.count === 1) {
+        await tx.agentRunAttempt.updateMany({ where: { id: attemptId, status: "running" }, data: { status: "succeeded", finishedAt: new Date() } });
+        succeeded = true;
+      }
+      });
     });
-    if (completed.count === 1) {
-      await prisma.agentRunAttempt.updateMany({ where: { id: attemptId, status: "running" }, data: { status: "succeeded", finishedAt: new Date() } });
-      // L'audit est fait : le garder « à lancer » renverrait le plan au diagnostic (story 5.2).
+    // L'audit est fait : le garder « à lancer » renverrait le plan au diagnostic (story 5.2).
+    if (succeeded) {
       await (async () => { if (await isAuditRun(run)) await closeAuditPlanItems(run.companyId); })()
         .catch((closeError) => console.error("Clôture des actions d'audit :", closeError));
     }
   } catch (error) {
-    console.error("Échec du run agent:", error);
+    console.error("Echec du run agent:", error);
     const failureReason = classifyRunError(error) ?? "outage";
-    // Seuls un doublon et une révision devancée par une modification gardent leur propre texte :
-    // toute autre erreur est dite par son motif, sans détail technique.
-    const message = (failureReason === "already_running" && error instanceof AgentRunConflictError) || error instanceof RevisionConflictError
-      ? error.message
-      : failureMessage(failureReason, PERSONAS[run.agent as PlanAgent]?.name ?? "L'agent");
-    // Un seul commit : l'exécution ne doit jamais être lue échouée alors que son action reste « en cours ».
-    await prisma.$transaction(async (tx) => {
+    const message = error instanceof AgentRunLimitError || (failureReason === "already_running" && error instanceof AgentRunConflictError) || error instanceof RevisionConflictError
+      ? error.message : failureMessage(failureReason, PERSONAS[run.agent as PlanAgent]?.name ?? "L'agent");
+    const finalization = prisma.$transaction(async (tx) => {
       const failed = await tx.agentRun.updateMany({
-        where: { id: run.id, status: "running", attempts: run.attempts },
-        data: { status: "failed", activeDedupeKey: null, reservedCostUsd: 0, errorMessage: message, failureReason, finishedAt: new Date() },
+        where: { id: run.id, companyId: run.companyId, status: "running", attempts: run.attempts },
+        data: { status: "failed", activeDedupeKey: null, ...(context.usageFinalized ? { reservedCostUsd: 0 } : {}), errorMessage: message, failureReason, finishedAt: new Date() },
       });
+      if (failed.count !== 1) return;
       await tx.agentRunAttempt.updateMany({ where: { id: attemptId, status: "running" }, data: { status: "failed", finishedAt: new Date(), errorMessage: message } });
-      if (failed.count === 1 && run.planItemId) {
-        await tx.actionPlanItem.updateMany({
-          where: { id: run.planItemId, companyId: run.companyId, status: "en_cours" },
-          data: { status: "propose" },
-        });
-      }
+      if (run.planItemId) await tx.actionPlanItem.updateMany({ where: { id: run.planItemId, companyId: run.companyId, status: "en_cours" }, data: { status: "propose" } });
     });
+    finalization.catch((failure) => console.error("Finalisation du run agent:", failure));
+    const remaining = context.deadlineAt - Date.now();
+    if (remaining > 0) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try { await Promise.race([finalization, new Promise<void>((resolve) => { timer = setTimeout(resolve, remaining); })]); }
+      finally { clearTimeout(timer); }
+    }
   }
 }
 
@@ -450,8 +467,8 @@ async function assertRunQuota(tx: Prisma.TransactionClient, companyId: string, c
   const [dailyUsage, monthlyUsage, reservedRuns, reservedCalls] = await Promise.all([
     tx.usageEvent.aggregate({ where: { companyId, createdAt: { gte: dayStart } }, _sum: { costUsd: true } }),
     tx.usageEvent.aggregate({ where: { companyId, createdAt: { gte: monthStart } }, _sum: { costUsd: true } }),
-    tx.agentRun.aggregate({ where: { companyId, status: { in: ["queued", "running"] } }, _sum: { reservedCostUsd: true } }),
-    tx.usageReservation.aggregate({ where: { companyId, expiresAt: { gt: now }, releasedAt: null }, _sum: { amountUsd: true } }),
+    tx.agentRun.aggregate({ where: { companyId, reservedCostUsd: { gt: 0 } }, _sum: { reservedCostUsd: true } }),
+    tx.usageReservation.aggregate({ where: { companyId, releasedAt: null, OR: [{ expiresAt: { gt: now } }, { purpose: "co_ceo_chat" }] }, _sum: { amountUsd: true } }),
   ]);
   const dailyCost = dailyUsage._sum.costUsd ?? 0;
   const monthlyCost = monthlyUsage._sum.costUsd ?? 0;

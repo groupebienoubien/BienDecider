@@ -5,8 +5,10 @@ import { prisma } from "@/lib/prisma";
 import { getRejectionContext, rejectedDuplicateNotice } from "@/lib/agents/rejection-context";
 import { getFindingsContextForContent } from "@/lib/agents/findings-context";
 import { ensureAgentProduced } from "@/lib/agents/agent-errors";
-import { RUN_CAPS, withRunCap } from "@/lib/agents/run-caps";
-import { recordUsage, runToolLoop } from "@/lib/usage";
+import { RUN_CAPS, withRunCapWrite } from "@/lib/agents/run-caps";
+import { runToolLoop } from "@/lib/usage";
+import { agentRunnerOptions, bindAgentTools } from "@/lib/agent-run-execution";
+import { AGENT_RUN_MAX_TURNS } from "@/lib/agent-run-limits";
 import {
   PERSONAS,
   objectiveLine,
@@ -55,10 +57,10 @@ export async function runContenuAgent(
         .describe("Contenu complet, prêt à être relu et validé (pour un post : légende + visuel suggéré + date)"),
     }),
     run: async (input) => {
-      return withRunCap(options.agentRunId, input.kind, async () => {
-        const alreadyRejected = await rejectedDuplicateNotice(company.id, { kind: input.kind, title: input.title, content: input.content });
+      const result = await withRunCapWrite(company.id, options.agentRunId, input.kind, async (tx) => {
+        const alreadyRejected = await rejectedDuplicateNotice(company.id, { kind: input.kind, title: input.title, content: input.content }, tx);
         if (alreadyRejected) return alreadyRejected;
-        const proposal = await prisma.agentProposal.create({
+        const proposal = await tx.agentProposal.create({
           data: {
             companyId: company.id,
             agentRunId: options.agentRunId,
@@ -69,9 +71,11 @@ export async function runContenuAgent(
             planItemId: options.planItemId,
           },
         });
-        createdProposalIds.push(proposal.id);
-        return `Proposition enregistrée (id: ${proposal.id}), en attente de validation.`;
+        return { id: proposal.id, message: `Proposition enregistrée (id: ${proposal.id}), en attente de validation.` };
       });
+      if (typeof result === "string") return result;
+      createdProposalIds.push(result.id);
+      return result.message;
     },
   });
 
@@ -108,8 +112,9 @@ ${await getFindingsContextForContent(companyId)}`;
 
   const { finalMessage, usage } = await runToolLoop(anthropic.beta.messages.toolRunner({
     model: AGENT_MODEL,
+    max_iterations: AGENT_RUN_MAX_TURNS,
     max_tokens: 6000,
-    tools: [proposeContent],
+    tools: bindAgentTools([proposeContent]),
     system: [
       { type: "text", text: stableSystem, cache_control: { type: "ephemeral" } },
       { type: "text", text: dynamicSystem },
@@ -122,13 +127,11 @@ ${await getFindingsContextForContent(companyId)}`;
           : "Aucune actualité particulière. Propose tes propres idées de contenu.",
       },
     ],
-  }));
+  }, agentRunnerOptions()), { companyId: company.id, agentRunId: options.agentRunId, agent: AGENT_NAME, model: AGENT_MODEL });
 
-  await recordUsage({ companyId: company.id, agentRunId: options.agentRunId, agent: AGENT_NAME, model: AGENT_MODEL, usage });
-
-  ensureAgentProduced(PERSONA.name, createdProposalIds.length, { stopReason: finalMessage.stop_reason, usage });
-
-  return prisma.agentProposal.findMany({
-    where: { id: { in: createdProposalIds } },
+  const proposals = await prisma.agentProposal.findMany({
+    where: { companyId: company.id, id: { in: createdProposalIds } },
   });
+  ensureAgentProduced(PERSONA.name, proposals.length, { stopReason: finalMessage.stop_reason, usage });
+  return proposals;
 }
