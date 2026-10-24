@@ -40,7 +40,8 @@ context:
 
 - `src/lib/oauth/meta.ts` -- format Meta `v1`, AES-256-GCM/AAD `facebook:<companyId>`; erreurs déjà filtrées.
 - `src/app/api/oauth/meta/callback/route.ts` -- Meta est chiffré avant upsert; ancien plaintext non lu mais conservé.
-- `src/lib/oauth/google.ts` et `src/app/api/oauth/google/callback/route.ts` -- échange OAuth, exigence de clé, chiffrement avant upsert et filtrage des erreurs.
+- `src/lib/oauth/google.ts`, `src/lib/oauth/google-callback.ts` et `src/app/api/oauth/google/callback/route.ts` -- échange OAuth, configuration sûre, handler injectable et chiffrement avant upsert.
+- `src/lib/oauth/google-connection.ts` -- upsert réel des jetons GBP chiffrés; utilisé par le callback et testé avec la fixture PostgreSQL.
 - `src/lib/account-deletion.ts` -- déchiffrer GBP côté serveur avant révocation; ne pas toucher au flux Gmail.
 - `tests/facebook.spec.ts` -- tests unitaires de crypto/migration, redaction des erreurs et fixture DB locale; exécuté par `test:facebook` en CI.
 - `prisma/schema.prisma` -- `ChannelConnection` accepte les enveloppes dans ses colonnes texte; migration SQL non présumée.
@@ -97,6 +98,29 @@ context:
 **Commands:**
 - `npm run test:facebook` et tests GBP -- chiffrement, AAD, altération, purge, logs; aucun appel fournisseur réel.
 - `npm run test:security`, `npm run test:ux`, `npm run lint`, `npm run build` -- succès sur les données fictives/DB jetable de CI.
-- Validations locales exécutées: 4 tests Playwright ciblés GBP/Google/migration (succès), checks syntaxe Node (succès), diagnostics éditeur sur les fichiers touchés (aucune erreur), checks du plan transactionnel avec client simulé (succès).
+- Validations locales exécutées: 5 tests Playwright ciblés GBP/Google/callback/migration (succès), checks syntaxe Node (succès), diagnostics éditeur sur les fichiers touchés (aucune erreur), checks du plan transactionnel avec client simulé (succès).
+- `tsc --noEmit` du worktree isolé n'est pas une vérification valide: son `node_modules` relié contient un client Prisma généré depuis un ancien schéma; aucune erreur citée ne vise les fichiers #7. Le build/CI avec génération Prisma propre reste requis.
 
 **Manual checks:** Le test d'intégration PostgreSQL ajouté n'a pas été exécuté localement (aucun PostgreSQL local; dépendances incomplètes dans le dépôt principal); Checks CI doit le valider. Répéter migration et rollback transactionnel sur une base jetable; jamais sur Production. Ne pas mettre les clés ou jetons dans les Issues/logs.
+
+## Review Triage Log
+
+| Finding | Verdict / route | Evidence |
+|---|---|---|
+| Blind: diagnostic de configuration OAuth trop générique | patch | `googleOAuthConfigurationError()` distingue ID, secret, clé absente et clé mal formée sans exposer leurs valeurs; tests couvrent les cas. |
+| Blind: regex d'enveloppe dupliquée | patch | La migration utilise `isEncryptedTokenEnvelope()` partagé par le helper Google; aucune regex de format en double dans le chemin migrateur. |
+| Blind: reprise d'une rotation interrompue | patch | La doc ordonne révocation, purge confirmée, changement de clé et réautorisation; la purge est transactionnelle et interdit restauration de plaintext. |
+| Blind: erreur de fermeture PG masquée | patch | Le test ferme le client sans catch silencieux et nettoie Prisma dans un `finally` garanti. |
+| Blind: échec de déchiffrement sans signal | patch | La révocation journalise une catégorie fixe clé/enveloppe, sans entreprise ni jeton; test vérifie `non_revoque`, zéro fetch et message sans valeur sensible. |
+| Blind: chemin refresh null/non-null | false | Après suppression de la lecture concurrente, le callback omet `refreshToken` quand Google n'en renvoie pas; Prisma laisse le refresh existant intact. Tests couvrent l'omission, la protection du legacy par migration et le refus d'enveloppe corrompue. |
+| Blind: justification du réglage SSL | patch | Le commentaire renvoie à la politique TLS partagée, identique à `src/lib/database-url.ts`. |
+| Blind: vérification de clé après accès DB | false | `main()` contrôle la clé avant de construire le client PG et avant toute transaction. |
+| Blind: récupération du callback trop générique | patch | Le démarrage donne le nom des variables à corriger; le callback garde un diagnostic public/log neutre pour ne pas révéler le corps OAuth. |
+| Edge: `expires_in` peut manquer | false | Prisma refuse une date invalide et le callback intercepte l'échec avant de confirmer la connexion; ce comportement précède le chiffrement. |
+| Edge: tokens chiffrés incomplets avant upsert | patch | Le callback passe par `persistGoogleBusinessProfileConnection`; test DB ajouté vérifie les deux valeurs réellement écrites chiffrées. |
+| Edge: course d'upsert refresh | patch | Aucune lecture préalable n'est faite; un callback sans refresh omet le champ update au lieu de restaurer une valeur lue avant une course. |
+| Verification gap: persistance callback non couverte | patch | Handler callback testé avec échange simulé; service d'upsert testé sur fixture PostgreSQL. La partie DB attend CI. |
+| Verification gap: déchiffrement avant révocation non couvert | patch | Test DB simule le fetch Google et vérifie le jeton déchiffré; ciphertext invalide n'est pas envoyé. Attend CI. |
+| Verification gap: route start sans clé non couverte | patch | Test DB-backed ajouté: session valide + clé invalide donnent 503 avec le nom de variable. Attend CI. |
+| Edge: résultat de révocation non affiché après suppression | defer | `DeleteAccountSection` redirige après succès sans afficher `revocations`; interface de suppression préexistante et hors intention chiffrer les jetons. |
+| Edge: timeout explicite du fetch Google | defer | Le fetch sans `AbortSignal.timeout` préexistait dans `exchangeGoogleCode`; différé séparément, pas causé par #7. |

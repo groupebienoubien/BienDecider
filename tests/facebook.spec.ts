@@ -159,11 +159,11 @@ test("Google Business Profile tokens are encrypted, company-bound and reject tam
   expect(() => decryptGoogleToken(encrypted, "company-b")).toThrow();
   expect(() => decryptGoogleToken(token, "company-a")).toThrow();
   expect(isEncryptedTokenEnvelope(encrypted)).toBe(true);
-  const stored = encryptGoogleConnectionTokens({ access_token: "callback-access", refresh_token: "callback-refresh" }, "company-a");
+  const stored = encryptGoogleConnectionTokens({ access_token: "callback-access", refresh_token: "callback-refresh", expires_in: 3600 }, "company-a");
   expect(decryptGoogleToken(stored.accessToken, "company-a")).toBe("callback-access");
   expect(decryptGoogleToken(stored.refreshToken!, "company-a")).toBe("callback-refresh");
-  expect(encryptGoogleConnectionTokens({ access_token: "access-without-refresh" }, "company-a")).not.toHaveProperty("refreshToken");
-  const withoutNewRefresh = encryptGoogleConnectionTokens({ access_token: "reauthorized-access" }, "company-a");
+  expect(encryptGoogleConnectionTokens({ access_token: "access-without-refresh", expires_in: 3600 }, "company-a")).not.toHaveProperty("refreshToken");
+  const withoutNewRefresh = encryptGoogleConnectionTokens({ access_token: "reauthorized-access", expires_in: 3600 }, "company-a");
   expect(withoutNewRefresh).not.toHaveProperty("refreshToken");
 
   const parts = encrypted.split(".");
