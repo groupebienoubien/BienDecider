@@ -17,6 +17,7 @@ import { CAPABILITY_CATALOG, recordUncoveredRequest } from "@/lib/agents/capabil
 import { getChatInstructionsForPlan, loadPaulMessageTimes, loadRecentChatHistory } from "@/lib/agents/chat-context";
 import { lastMessageBefore, latestOf } from "@/lib/agents/paul-message-times";
 import { getTeamState } from "@/lib/team-state";
+import { getLatestAuditFindings } from "@/lib/audit-findings";
 import { resolvePaulReferences } from "@/lib/paul-references";
 import { attachPendingActions, cancelOrphanPendingActions, createPendingAction, recentPendingActions } from "@/lib/agents/pending-actions";
 import { activeRevisionRun, revisionRefusal } from "@/lib/agents/revision";
@@ -59,11 +60,8 @@ export async function buildCurrentStatus(companyId: string, now = new Date()) {
       where: { companyId, status: "en_attente" },
       orderBy: { createdAt: "desc" },
     }),
-    prisma.auditFinding.findMany({
-      where: { companyId },
-      orderBy: { createdAt: "desc" },
-      take: 5,
-    }),
+    // Story 5.1 : seuls les constats du dernier audit terminé.
+    getLatestAuditFindings(companyId, { take: 5 }),
     prisma.lead.findMany({
       where: { companyId, stage: { notIn: ["propose", "ecarte"] } },
       orderBy: { updatedAt: "desc" },
@@ -712,11 +710,7 @@ export async function runCoCeoPlanning(companyId: string, agentRunId?: string) {
       where: { companyId, status: "en_attente" },
       orderBy: { createdAt: "desc" },
     }),
-    prisma.auditFinding.findMany({
-      where: { companyId },
-      orderBy: { createdAt: "desc" },
-      take: 6,
-    }),
+    getLatestAuditFindings(companyId, { take: 6 }),
     prisma.actionPlanItem.findMany({
       where: { companyId, status: { in: ["propose", "en_cours", "lance"] } },
       orderBy: { createdAt: "desc" },

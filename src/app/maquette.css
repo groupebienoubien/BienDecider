@@ -587,3 +587,6 @@
 .mq .history-item>div{flex:1;min-width:0}
 .mq .history-item strong{overflow-wrap:anywhere}
 }
+/* Story 5.1 : l'audit d'avant, replié sous le dernier diagnostic. */
+.mq .diagnostic-previous{margin:16px 0;padding:12px 16px;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
+.mq .diagnostic-previous>summary{cursor:pointer;font-weight:600;min-height:44px;display:flex;align-items:center}

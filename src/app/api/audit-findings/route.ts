@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { getAuditFindingsView } from "@/lib/audit-findings";
 import { getSessionCompany } from "@/lib/session";
 
 export async function GET() {
@@ -8,9 +8,6 @@ export async function GET() {
     return NextResponse.json({ error: "Non connecté" }, { status: 401 });
   }
 
-  const findings = await prisma.auditFinding.findMany({
-    where: { companyId: company.id },
-    orderBy: { createdAt: "desc" },
-  });
-  return NextResponse.json(findings);
+  // Story 5.1 : dernier audit terminé et audit d'avant, pas l'accumulation de tous les constats.
+  return NextResponse.json(await getAuditFindingsView(company.id));
 }

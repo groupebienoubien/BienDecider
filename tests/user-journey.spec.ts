@@ -770,6 +770,28 @@ test("the diagnostic is grouped by topic with a one-line summary, and a link to 
   } finally { await prisma.$disconnect(); }
 });
 
+test("story 5.1: after a refresh, the diagnostic shows the latest audit and folds the previous one", async ({ page, company }) => {
+  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }) });
+  try {
+    const hour = 60 * 60 * 1000;
+    const run = (finishedAt: Date) => prisma.agentRun.create({ data: { companyId: company.id, agent: "marketing", requestKey: `audit-${randomUUID()}`, payload: {}, status: "succeeded", finishedAt } });
+    const [first, second] = [await run(new Date(Date.now() - 2 * hour)), await run(new Date(Date.now() - hour))];
+    await prisma.auditFinding.create({ data: { companyId: company.id, agentRunId: first.id, category: "site_web", title: "Point réglé depuis", content: "Ancien." } });
+    await prisma.auditFinding.create({ data: { companyId: company.id, agentRunId: second.id, category: "site_web", title: "Point actuel", content: "Actuel." } });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`${baseURL}/diagnostic`);
+    await expect(page.getByText("DIAGNOSTIC · 1 CONSTAT", { exact: true })).toBeVisible();
+    const current = page.locator("details.diagnostic-group");
+    await expect(current).toHaveCount(1);
+    await expect(current.getByRole("heading", { name: "Point actuel" })).toBeVisible();
+    const previous = page.locator("details.diagnostic-previous");
+    await expect(previous.locator("summary")).toContainText("Diagnostic précédent du");
+    await expect(previous.getByRole("heading", { name: "Point réglé depuis" })).toBeHidden();
+    await previous.locator("summary").click();
+    await expect(previous.getByRole("heading", { name: "Point réglé depuis" })).toBeVisible();
+  } finally { await prisma.$disconnect(); }
+});
+
 test("the review queue shows one production at a time, moves forward and filters by agent", async ({ page, company }) => {
   const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }) });
   try {

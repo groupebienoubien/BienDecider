@@ -8,13 +8,18 @@ import { groupFindings } from "@/lib/diagnostic-groups";
 import { Icon } from "@/components/icon";
 import { EmptyState, PageHeading, SectionTitle } from "@/components/mockup-ui";
 import { useAgentProfileCompletion } from "@/components/agent-profile-completion";
+import { waitForAgentRun } from "@/lib/agent-runs-client";
+import type { AuditFindingsView } from "@/lib/audit-split";
 
 const ANALYSIS_DATE = new Intl.DateTimeFormat("fr-FR", { day: "numeric", month: "long", timeZone: "Europe/Paris" });
+const PREVIOUS_DATE = new Intl.DateTimeFormat("fr-FR", { day: "2-digit", month: "2-digit", timeZone: "Europe/Paris" });
 const ANALYSIS_TIME = new Intl.DateTimeFormat("fr-FR", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Paris" });
 
-export function DiagnosticClient({ initialFindings, feedback, leadCount }: { initialFindings: AuditFinding[]; feedback: string[]; leadCount: number }) {
+export function DiagnosticClient({ initialAudits, feedback, leadCount }: { initialAudits: AuditFindingsView<AuditFinding>; feedback: string[]; leadCount: number }) {
   const { requestProfile, profileDialog, checking } = useAgentProfileCompletion();
-  const [findings, setFindings] = useState(initialFindings);
+  // Story 5.1 : le dernier audit terminé, et l'audit d'avant dans un lien repliable.
+  const [audits, setAudits] = useState(initialAudits);
+  const findings = audits.latest;
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
@@ -27,9 +32,15 @@ export function DiagnosticClient({ initialFindings, feedback, leadCount }: { ini
       const response = await fetch("/api/agents/marketing/run", { method: "POST" });
       const data = await response.json().catch(() => null);
       if (!response.ok) throw new Error(data?.error ?? "Le diagnostic a échoué. Réessayez.");
+      // 202 : l'audit tourne encore ; ses constats ne comptent qu'une fois terminé (story 5.1).
+      if (response.status === 202 && data?.run?.id) {
+        const finished = await waitForAgentRun(data.run.id, () => undefined);
+        if (finished?.status === "failed") throw new Error(finished.errorMessage ?? "Le diagnostic a échoué. Réessayez.");
+        if (!finished) throw new Error("Le diagnostic prend plus de temps que prévu : il apparaîtra ici une fois terminé. Rechargez la page plus tard.");
+      }
       const refreshed = await fetch("/api/audit-findings");
       if (!refreshed.ok) throw new Error("Impossible d'actualiser le diagnostic. Rechargez la page.");
-      setFindings(await refreshed.json());
+      setAudits(await refreshed.json());
       setDone(true);
     } catch (error) {
       setError(error instanceof Error ? error.message : "Le diagnostic a échoué.");
@@ -38,7 +49,7 @@ export function DiagnosticClient({ initialFindings, feedback, leadCount }: { ini
     }
   }
 
-  const latest = findings[0] ? new Date(findings[0].createdAt) : null;
+  const latest = audits.latestAt ? new Date(audits.latestAt) : null;
   const groups = groupFindings(findings);
   // Un seul sujet : ouvert d'office. Un lien vers un constat (#finding-…) ouvre son sujet.
   const [openGroups, setOpenGroups] = useState<string[]>(() => groups.length === 1 ? [groups[0].category] : []);
@@ -80,6 +91,13 @@ export function DiagnosticClient({ initialFindings, feedback, leadCount }: { ini
           </details>
         ))}
       </div>}
+      {audits.previous.length > 0 && audits.previousAt && (
+        <details className="diagnostic-previous">
+          <summary>Diagnostic précédent du {PREVIOUS_DATE.format(new Date(audits.previousAt))} à {ANALYSIS_TIME.format(new Date(audits.previousAt))} · {audits.previous.length} constat{audits.previous.length > 1 ? "s" : ""}</summary>
+          <p className="legend">Ces constats datent de l’analyse d’avant ; certains points ont pu être réglés depuis.</p>
+          {audits.previous.map((finding) => <FindingCard key={finding.id} finding={finding} />)}
+        </details>
+      )}
       {findings.length > 0 && <p className="legend"><Link href="/dashboard?view=plan">Voir le plan d’action qui en découle →</Link></p>}
       <SectionTitle title="Ce que votre équipe retient" />
       <div className="notice">{feedback.length ? `${feedback.length} retour(s) explicite(s) pris en compte dans la prochaine préparation.` : "Aucune préférence nouvelle enregistrée. Vos corrections ne changent pas votre objectif sans votre accord."}</div>

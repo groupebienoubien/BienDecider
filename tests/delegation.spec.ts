@@ -11,6 +11,7 @@ import { decideProposalReview, reviewProposal, reviewPublishedSiteHtml } from ".
 import { describePage } from "../src/lib/paul-context";
 import { buildOutreachDraft, dayToDate, formatDay, hasPlaceholders, leadReadiness, pickNextLead } from "../src/lib/lead-followup";
 import { describeRunProgress, finishedRunMessage, formatDuration, recentSucceededRuns, runResultHref } from "../src/lib/agent-run-progress";
+import { splitAudits } from "../src/lib/audit-split";
 import { groupPlanItems, planItemStatusView, planTabFromParam, splitPlanItems } from "../src/lib/action-plan-view";
 import { facebookAuditSource } from "../src/lib/facebook-audit-source";
 import { businessTargetLines, clientGapLabel, clientsToMonthly, computeBusinessTarget, toMonthly } from "../src/lib/business-target";
@@ -849,4 +850,33 @@ test("story 5.3: the plan puts actions to launch first and keeps running and exe
   expect(planTabFromParam("menees")).toBe("menees");
   expect(planTabFromParam(undefined)).toBe("a_faire");
   expect(planTabFromParam("autre")).toBe("a_faire");
+});
+
+test("story 5.1: only the latest finished audit counts, the one before stays apart, a running one is ignored", () => {
+  const at = (minute: number) => new Date(Date.UTC(2026, 9, 24, 8, minute));
+  const runs = [
+    { id: "ancien", status: "succeeded", finishedAt: at(10) },
+    { id: "dernier", status: "succeeded", finishedAt: at(30) },
+    { id: "en-cours", status: "running", finishedAt: null },
+    { id: "echoue", status: "failed", finishedAt: at(40) },
+  ];
+  const findings = [
+    { id: "f5", agentRunId: "en-cours", createdAt: at(45) },
+    { id: "f4", agentRunId: "echoue", createdAt: at(39) },
+    { id: "f3", agentRunId: "dernier", createdAt: at(29) },
+    { id: "f2", agentRunId: "dernier", createdAt: at(28) },
+    { id: "f1", agentRunId: "ancien", createdAt: at(9) },
+    { id: "f0", agentRunId: null, createdAt: at(1) },
+  ];
+  const view = splitAudits(findings, runs);
+  expect(view.latest.map((finding) => finding.id)).toEqual(["f3", "f2"]);
+  expect(view.previous.map((finding) => finding.id)).toEqual(["f1"]);
+  expect(view.previousAt).toBe(at(10).toISOString());
+  // Constats sans exécution : un audit ancien, seul s'il n'y en a pas d'autre.
+  expect(view.latestAt).toBe(at(30).toISOString());
+  expect(splitAudits([findings[5]], runs)).toEqual({ latest: [findings[5]], latestAt: at(1).toISOString(), previous: [], previousAt: null });
+  expect(splitAudits([], runs)).toEqual({ latest: [], latestAt: null, previous: [], previousAt: null });
+  // Exécution supprimée après coup (agentRunId remis à nul) : ces constats récents ne passent pas devant un audit rattaché.
+  const orphan = { id: "f6", agentRunId: null, createdAt: at(50) };
+  expect(splitAudits([orphan, findings[2]], runs).latest.map((finding) => finding.id)).toEqual(["f3"]);
 });

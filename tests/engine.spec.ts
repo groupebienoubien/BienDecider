@@ -826,6 +826,35 @@ test("Camille gets the diagnosis detail and Jean-Claude the competition findings
   expect(competition).not.toContain("Menu illisible");
 });
 
+test("story 5.1: the diagnostic, Paul and the agents read only the latest finished audit", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { getAuditFindingsView } = await import("../src/lib/audit-findings");
+  const { getFindingsContextForContent } = await import("../src/lib/agents/findings-context");
+  const { buildCurrentStatus } = await import("../src/lib/agents/co-ceo");
+  const run = (status: string, finishedAt: Date | null) => prisma.agentRun.create({ data: {
+    companyId: company.id, agent: "marketing", requestKey: `audit-${randomUUID()}`, payload: {}, status, finishedAt,
+  } });
+  const hour = 60 * 60 * 1000;
+  const first = await run("succeeded", new Date(Date.now() - 2 * hour));
+  const second = await run("succeeded", new Date(Date.now() - hour));
+  const running = await run("running", null);
+  const finding = (agentRunId: string, title: string) => ({ companyId: company.id, agentRunId, category: "site_web", title, content: title });
+  await prisma.auditFinding.createMany({ data: [
+    finding(first.id, "Point réglé depuis"),
+    finding(second.id, "Point actuel"),
+    finding(running.id, "Point en cours d'analyse"),
+  ] });
+
+  const view = await getAuditFindingsView(company.id);
+  expect(view.latest.map((item) => item.title)).toEqual(["Point actuel"]);
+  expect(view.previous.map((item) => item.title)).toEqual(["Point réglé depuis"]);
+  expect(await getFindingsContextForContent(company.id)).not.toContain("Point réglé depuis");
+  const status = await buildCurrentStatus(company.id);
+  expect(JSON.stringify(status.derniersConstatsAudit)).toContain("Point actuel");
+  expect(JSON.stringify(status.derniersConstatsAudit)).not.toContain("Point réglé depuis");
+  expect(JSON.stringify(status.derniersConstatsAudit)).not.toContain("Point en cours d'analyse");
+});
+
 test("a proposal the owner rejected is not recorded again as is", async ({ company }) => {
   const { prisma } = await import("../src/lib/prisma");
   const { rejectedDuplicateNotice, normalizeForComparison, getRejectionContext } = await import("../src/lib/agents/rejection-context");
