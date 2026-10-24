@@ -2893,3 +2893,106 @@ test.describe("Recette Atelier Lumen", () => {
     expect({ badge, dashboard, paul }).toEqual({ badge: 11, dashboard: 11, paul: 11 });
   });
 });
+
+/** Audit direct de Martine en file, comme le bouton « Actualiser le diagnostic ». */
+async function queueDirectAudit(companyId: string) {
+  const { prisma } = await import("../src/lib/prisma");
+  return prisma.agentRun.create({ data: { companyId, agent: "marketing", requestKey: `audit-${randomUUID()}`, payload: { kind: "direct", agent: "marketing" } } });
+}
+
+async function createMartineItems(companyId: string) {
+  const { prisma } = await import("../src/lib/prisma");
+  const base = { companyId, agent: "marketing", rationale: "Test", timing: "Aujourd'hui" };
+  return {
+    audit: await prisma.actionPlanItem.create({ data: { ...base, title: "Audit de présence en ligne et fiche Google" } }),
+    diagnostic: await prisma.actionPlanItem.create({ data: { ...base, title: "Refaire le DIAGNOSTIC" } }),
+    reviews: await prisma.actionPlanItem.create({ data: { ...base, title: "Répondre aux avis" } }),
+    content: await prisma.actionPlanItem.create({ data: { ...base, agent: "contenu", title: "Audit des posts" } }),
+  };
+}
+
+test("story 5.2: a successful audit moves Martine's audit actions to the executed ones, other actions stay to launch", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const items = await createMartineItems(company.id);
+  const run = await queueDirectAudit(company.id);
+  await processWithScenario(run.id, async (tool) => {
+    expect(await tool("record_audit_finding").run({ category: "site_web", title: "Site sans horaires", summary: "Résumé.", whatWorks: "Photos.", toImprove: "Afficher les horaires.", actionItems: [] })).toContain("Constat enregistré");
+  });
+  expect((await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })).status).toBe("succeeded");
+  const status = async (id: string) => (await prisma.actionPlanItem.findUniqueOrThrow({ where: { id } })).status;
+  expect(await status(items.audit.id)).toBe("lance");
+  expect(await status(items.diagnostic.id)).toBe("lance");
+  expect(await status(items.reviews.id)).toBe("propose");
+  expect(await status(items.content.id)).toBe("propose");
+  expect(await prisma.actionPlanItem.count({ where: { companyId: company.id } })).toBe(4);
+});
+
+test("story 5.2: a failed audit keeps the audit action to launch", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const items = await createMartineItems(company.id);
+  const run = await queueDirectAudit(company.id);
+  await processWithScenario(run.id, async () => { throw new Error("audit interrompu"); });
+  expect((await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })).status).toBe("failed");
+  expect((await prisma.actionPlanItem.findUniqueOrThrow({ where: { id: items.audit.id } })).status).toBe("propose");
+});
+
+/** Exécution de Martine issue d'une action du plan, en file. */
+async function queueMartinePlanRun(companyId: string, title: string) {
+  const { prisma } = await import("../src/lib/prisma");
+  const item = await prisma.actionPlanItem.create({ data: { companyId, agent: "marketing", title, rationale: "Test", timing: "Aujourd'hui", status: "en_cours" } });
+  return prisma.agentRun.create({ data: { companyId, planItemId: item.id, agent: "marketing", requestKey: `plan:${item.id}`, payload: { kind: "plan_item", planItemId: item.id, extras: {} } } });
+}
+
+test("story 5.2: a Martine plan run that records a finding closes the audit actions", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const items = await createMartineItems(company.id);
+  const run = await queueMartinePlanRun(company.id, "Vérifier la fiche Google");
+  await processWithScenario(run.id, async (tool) => {
+    expect(await tool("record_audit_finding").run({ category: "site_web", title: "Fiche sans horaires", summary: "Résumé.", whatWorks: "Photos.", toImprove: "Ajouter les horaires.", actionItems: [] })).toContain("Constat enregistré");
+  });
+  expect((await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })).status).toBe("succeeded");
+  expect((await prisma.actionPlanItem.findUniqueOrThrow({ where: { id: items.audit.id } })).status).toBe("lance");
+  expect((await prisma.actionPlanItem.findUniqueOrThrow({ where: { id: items.reviews.id } })).status).toBe("propose");
+});
+
+test("story 5.2: a Martine plan run without any finding leaves the audit actions to launch", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const items = await createMartineItems(company.id);
+  const run = await queueMartinePlanRun(company.id, "Répondre à l'avis de Claire");
+  await processWithScenario(run.id, async (tool) => {
+    expect(await tool("propose_action").run({ kind: "review_reply", title: "Réponse à Claire", content: "Merci Claire." })).toContain("Proposition enregistrée");
+  });
+  expect((await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })).status).toBe("succeeded");
+  expect((await prisma.actionPlanItem.findUniqueOrThrow({ where: { id: items.audit.id } })).status).toBe("propose");
+  expect((await prisma.actionPlanItem.findUniqueOrThrow({ where: { id: items.diagnostic.id } })).status).toBe("propose");
+});
+
+test("story 5.2: the plan is prepared from the latest audit's findings and recommendations, without repeating an action already in the plan", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { runCoCeoPlanning } = await import("../src/lib/agents/co-ceo");
+  const audit = await prisma.agentRun.create({ data: { companyId: company.id, agent: "marketing", requestKey: `audit-${randomUUID()}`, payload: {}, status: "succeeded", finishedAt: new Date() } });
+  for (const index of [1, 2, 3]) {
+    await prisma.auditFinding.create({ data: {
+      companyId: company.id, agentRunId: audit.id, category: "site_web", title: `Constat ${index}`, content: "Résumé.",
+      toImprove: `Point ${index} à améliorer`, actionItems: [{ agent: "contenu", title: `Recommandation ${index}`, rationale: `Raison ${index}` }],
+    } });
+  }
+  await prisma.actionPlanItem.create({ data: { companyId: company.id, agent: "marketing", title: "Répondre aux avis", rationale: "Test", timing: "Aujourd'hui" } });
+  await prisma.actionPlanItem.create({ data: { companyId: company.id, agent: "contenu", title: "Publier une vidéo", rationale: "Test", timing: "Aujourd'hui", status: "ecarte", feedback: "Pas de vidéo" } });
+
+  const system = await captureSystemBlocks(() => runCoCeoPlanning(company.id));
+  const uncached = system.filter((block) => !block.cache_control).map((block) => block.text).join("\n");
+  for (const index of [1, 2, 3]) {
+    expect(uncached).toContain(`Constat ${index} — À améliorer : Point ${index} à améliorer — Recommandations : contenu: Recommandation ${index} (Raison ${index})`);
+  }
+
+  const propose = (await captureAgentTools(() => runCoCeoPlanning(company.id)))("propose_plan_item");
+  const input = { agent: "marketing", rationale: "Des avis sans réponse", outcome: "Des avis à jour", timing: "cette semaine", theme: "Visibilité", priority: 2 };
+  expect(await propose.run({ ...input, title: "répondre aux AVIS" })).toContain("déjà au plan");
+  expect(await propose.run({ ...input, title: "Publier une vidéo" })).toContain("déjà au plan");
+  expect(await propose.run({ ...input, title: "Compléter la fiche Google" })).toContain("Action ajoutée au plan");
+  expect(await propose.run({ ...input, title: "Compléter la fiche Google" })).toContain("déjà au plan");
+  const created = await prisma.actionPlanItem.findMany({ where: { companyId: company.id, status: { not: "ecarte" } } });
+  expect(created.map((item) => item.title).sort()).toEqual(["Compléter la fiche Google", "Répondre aux avis"]);
+  expect(created.every((item) => item.status === "propose")).toBe(true);
+});

@@ -18,6 +18,8 @@ import { getChatInstructionsForPlan, loadPaulMessageTimes, loadRecentChatHistory
 import { lastMessageBefore, latestOf } from "@/lib/agents/paul-message-times";
 import { getTeamState } from "@/lib/team-state";
 import { getLatestAuditFindings } from "@/lib/audit-findings";
+import { latestAuditLines } from "@/lib/agents/audit-plan-context";
+import { isPlanTitleAlreadyTaken } from "@/lib/agents/plan-item-shared";
 import { resolvePaulReferences } from "@/lib/paul-references";
 import { attachPendingActions, cancelOrphanPendingActions, createPendingAction, recentPendingActions } from "@/lib/agents/pending-actions";
 import { activeRevisionRun, revisionRefusal } from "@/lib/agents/revision";
@@ -710,7 +712,8 @@ export async function runCoCeoPlanning(companyId: string, agentRunId?: string) {
       where: { companyId, status: "en_attente" },
       orderBy: { createdAt: "desc" },
     }),
-    getLatestAuditFindings(companyId, { take: 6 }),
+    // Story 5.2 : tous les constats du dernier audit, pour un plan qui en découle.
+    getLatestAuditFindings(companyId),
     prisma.actionPlanItem.findMany({
       where: { companyId, status: { in: ["propose", "en_cours", "lance"] } },
       orderBy: { createdAt: "desc" },
@@ -724,6 +727,8 @@ export async function runCoCeoPlanning(companyId: string, agentRunId?: string) {
   ]);
 
   const createdItemIds: string[] = [];
+  // Une action écartée par le dirigeant n'est pas reproposée non plus.
+  const plannedTitles = [...existingPlan, ...discarded].map((item) => item.title);
 
   const proposePlanItem = betaZodTool({
     name: "propose_plan_item",
@@ -745,6 +750,11 @@ export async function runCoCeoPlanning(companyId: string, agentRunId?: string) {
       priority: z.number().int().min(1).max(5).describe("Priorité de 1 (la plus urgente) à 5"),
     }),
     run: async (input) => {
+      // Story 5.2 : une action équivalente déjà au plan (ou proposée dans ce passage) n'est pas recréée.
+      if (isPlanTitleAlreadyTaken(input.title, plannedTitles)) {
+        return "Cette action est déjà au plan : ne la propose pas de nouveau, choisis-en une autre.";
+      }
+      plannedTitles.push(input.title);
       const item = await prisma.actionPlanItem.create({
         data: {
           companyId,
@@ -788,7 +798,7 @@ Règles :
 ${await getRejectionContext(companyId)}
 ${await getChatInstructionsForPlan(companyId)}
 Propositions déjà en attente de validation : ${pendingProposals.map((p) => `${p.agent}: ${p.title}`).join("; ") || "aucune"}.
-Derniers constats (audit, concurrence) : ${recentFindings.map((f) => f.title).join("; ") || "aucun"}.
+${latestAuditLines(recentFindings)}
 Actions déjà au plan (ne les répète pas) : ${existingPlan.map((i) => i.title).join("; ") || "aucune"}.
 Actions ÉCARTÉES par le dirigeant, avec sa raison — ne les repropose pas et tiens compte de la raison : ${discarded.map((i) => `"${i.title}" (${i.feedback || "sans raison"})`).join("; ") || "aucune"}.
 ${funnelLines(funnel)}`;

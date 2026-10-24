@@ -70,3 +70,9 @@
 - source_spec: `docs/bmad/implementation/spec-5-4-paul-utilisable-sur-smartphone.md`
   summary: Vérifier sur un vrai iPhone le blocage du défilement et le champ au-dessus du clavier (visualViewport).
   evidence: le test de parcours tourne sous Chromium de bureau, sans clavier virtuel ni Safari iOS.
+- source_spec: `docs/bmad/implementation/spec-5-2-du-diagnostic-au-plan-sans-boucle.md`
+  summary: Afficher une action d'audit fermée par un audit avec « Voir le diagnostic » plutôt que « Voir la production ».
+  evidence: statut `lance` sans production rattachée ; le bouton mène à l'historique.
+- source_spec: `docs/bmad/implementation/spec-5-2-du-diagnostic-au-plan-sans-boucle.md`
+  summary: Tester le retour au bouton « Préparer le plan » après « Actualiser le diagnostic », et un plan entièrement écarté.
+  evidence: `setPlanUpToDate(false)` et le filtre `ecarte` ne sont couverts par aucun test.

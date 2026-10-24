@@ -19,5 +19,9 @@ export default async function DiagnosticPage() {
     getRetainedFeedback(company.id),
     prisma.lead.count({ where: { companyId: company.id, stage: { notIn: ["propose", "ecarte"] } } }),
   ]);
-  return <AppShell {...await getShellProps(company)}><DiagnosticClient initialAudits={audits} feedback={feedback} leadCount={leadCount} /></AppShell>;
+  // Story 5.2 : le plan est à jour si Paul l'a préparé avec succès après la fin du dernier audit.
+  const planUpToDate = audits.latestAt
+    ? await prisma.agentRun.count({ where: { companyId: company.id, agent: "co_ceo", status: "succeeded", requestKey: { startsWith: "plan-generation:" }, finishedAt: { gt: new Date(audits.latestAt) } } }) > 0
+    : false;
+  return <AppShell {...await getShellProps(company)}><DiagnosticClient initialAudits={audits} feedback={feedback} leadCount={leadCount} initialPlanUpToDate={planUpToDate} /></AppShell>;
 }

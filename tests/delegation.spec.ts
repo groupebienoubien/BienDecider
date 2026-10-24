@@ -12,6 +12,8 @@ import { describePage } from "../src/lib/paul-context";
 import { buildOutreachDraft, dayToDate, formatDay, hasPlaceholders, leadReadiness, pickNextLead } from "../src/lib/lead-followup";
 import { describeRunProgress, finishedRunMessage, formatDuration, recentSucceededRuns, runResultHref } from "../src/lib/agent-run-progress";
 import { splitAudits } from "../src/lib/audit-split";
+import { isAuditPlanItemTitle, isPlanTitleAlreadyTaken } from "../src/lib/agents/plan-item-shared";
+import { latestAuditLines } from "../src/lib/agents/audit-plan-context";
 import { groupPlanItems, planItemStatusView, planTabFromParam, splitPlanItems } from "../src/lib/action-plan-view";
 import { facebookAuditSource } from "../src/lib/facebook-audit-source";
 import { businessTargetLines, clientGapLabel, clientsToMonthly, computeBusinessTarget, toMonthly } from "../src/lib/business-target";
@@ -879,4 +881,40 @@ test("story 5.1: only the latest finished audit counts, the one before stays apa
   // Exécution supprimée après coup (agentRunId remis à nul) : ces constats récents ne passent pas devant un audit rattaché.
   const orphan = { id: "f6", agentRunId: null, createdAt: at(50) };
   expect(splitAudits([orphan, findings[2]], runs).latest.map((finding) => finding.id)).toEqual(["f3"]);
+});
+
+test("story 5.2: an audit closes only Martine's actions about an audit or a diagnostic, whatever the case and accents", () => {
+  for (const title of ["Audit de présence en ligne et fiche Google", "AUDIT de la fiche", "Refaire le diagnostic", "Diagnostic complet", "Lancer un DIAGNOSTIC", "Audits des concurrents", "Réaliser l'audit du site", "Nouvel audit de la fiche"]) {
+    expect(isAuditPlanItemTitle(title), title).toBe(true);
+  }
+  for (const title of ["Répondre aux avis", "Mettre à jour la fiche Google", "Publier trois posts", "", "Corriger les points relevés par l'audit", "Appliquer les recommandations du diagnostic", "Diagnostiquer le site", "Auditer la fiche"]) {
+    expect(isAuditPlanItemTitle(title), title).toBe(false);
+  }
+});
+
+test("story 5.2: an equivalent action already in the plan is not created again", () => {
+  const existing = ["Audit de présence en ligne et fiche Google", "Répondre aux avis"];
+  expect(isPlanTitleAlreadyTaken("audit de presence en ligne et fiche google", existing)).toBe(true);
+  expect(isPlanTitleAlreadyTaken("  Répondre  aux avis ! ", existing)).toBe(true);
+  expect(isPlanTitleAlreadyTaken("Répondre aux avis négatifs", existing)).toBe(false);
+  expect(isPlanTitleAlreadyTaken("", existing)).toBe(false);
+});
+
+test("story 5.2: Paul reads each finding of the latest audit with what to improve and its recommendations", () => {
+  const lines = latestAuditLines([
+    { title: "Fiche Google incomplète", content: "Résumé", toImprove: "Ajouter les horaires", actionItems: [{ agent: "marketing", title: "Compléter la fiche Google", rationale: "Être trouvé le dimanche" }, { agent: "inconnu", title: "Ignoré", rationale: "x" }] },
+    { title: "Site lent", content: "Le site met 6 s à s'afficher", toImprove: null, actionItems: null },
+  ]);
+  expect(lines).toContain("1. Fiche Google incomplète — À améliorer : Ajouter les horaires — Recommandations : marketing: Compléter la fiche Google (Être trouvé le dimanche)");
+  expect(lines).toContain("2. Site lent — À améliorer : Le site met 6 s à s'afficher — Recommandations : aucune");
+  expect(lines).not.toContain("Ignoré");
+  expect(lines).toContain("ne propose pas de le refaire");
+  expect(latestAuditLines([])).toBe("Dernier audit : aucun constat.");
+  // Au plus 8 constats et 3 recommandations par constat.
+  const many = Array.from({ length: 10 }, (_, index) => ({ title: `Constat ${index + 1}`, content: "R", toImprove: "A", actionItems: Array.from({ length: 5 }, (__, rec) => ({ agent: "contenu", title: `Reco ${rec + 1}`, rationale: "r" })) }));
+  const bounded = latestAuditLines(many);
+  expect(bounded).toContain("8. Constat 8");
+  expect(bounded).not.toContain("Constat 9");
+  expect(bounded).toContain("Reco 3");
+  expect(bounded).not.toContain("Reco 4");
 });

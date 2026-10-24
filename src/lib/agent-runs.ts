@@ -8,6 +8,7 @@ import { runContenuAgent } from "@/lib/agents/contenu";
 import { runDemarchageAgent } from "@/lib/agents/demarchage";
 import { executePlanItem, type PlanRunExtras } from "@/lib/agents/plan-runner";
 import { isPlanAgent, type PlanAgent } from "@/lib/agents/plan-items";
+import { isAuditPlanItemTitle } from "@/lib/agents/plan-item-shared";
 import { AgentRunConflictError, AgentRunQuotaError, RevisionConflictError, classifyRunError, failureMessage } from "@/lib/agents/agent-errors";
 import { PERSONAS } from "@/lib/agents/personas";
 import { isSerializationConflict } from "@/lib/serialization-conflict";
@@ -328,6 +329,37 @@ async function executeRun(run: AgentRun) {
   }
 }
 
+/**
+ * Un audit de Martine : lancement direct ou issu d'une action du plan, pas une
+ * révision, et qui a enregistré au moins un constat (« Répondre aux avis »
+ * sans constat n'est pas un audit).
+ */
+async function isAuditRun(run: AgentRun) {
+  const kind = (run.payload as unknown as AgentRunPayload | null)?.kind;
+  if (run.agent !== "marketing" || (kind !== "direct" && kind !== "plan_item")) return false;
+  return (await prisma.auditFinding.count({ where: { companyId: run.companyId, agentRunId: run.id } })) > 0;
+}
+
+/**
+ * Story 5.2 : à la fin d'un audit de Martine réussi, ses actions encore
+ * « à lancer » dont la tâche est de faire l'audit ou le diagnostic passent dans les
+ * actions menées. Les autres actions de Martine restent à lancer ; aucune
+ * action n'est supprimée et aucun agent n'est lancé.
+ */
+export async function closeAuditPlanItems(companyId: string) {
+  const candidates = await prisma.actionPlanItem.findMany({
+    where: { companyId, agent: "marketing", status: "propose" },
+    select: { id: true, title: true },
+  });
+  const ids = candidates.filter((item) => isAuditPlanItemTitle(item.title)).map((item) => item.id);
+  if (!ids.length) return 0;
+  const closed = await prisma.actionPlanItem.updateMany({
+    where: { id: { in: ids }, companyId, status: "propose" },
+    data: { status: "lance" },
+  });
+  return closed.count;
+}
+
 export async function processAgentRun(runId: string) {
   const attemptId = await prisma.$transaction(async (tx) => {
     const claim = await tx.agentRun.updateMany({
@@ -351,6 +383,9 @@ export async function processAgentRun(runId: string) {
     });
     if (completed.count === 1) {
       await prisma.agentRunAttempt.updateMany({ where: { id: attemptId, status: "running" }, data: { status: "succeeded", finishedAt: new Date() } });
+      // L'audit est fait : le garder « à lancer » renverrait le plan au diagnostic (story 5.2).
+      await (async () => { if (await isAuditRun(run)) await closeAuditPlanItems(run.companyId); })()
+        .catch((closeError) => console.error("Clôture des actions d'audit :", closeError));
     }
   } catch (error) {
     console.error("Échec du run agent:", error);

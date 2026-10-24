@@ -792,6 +792,46 @@ test("story 5.1: after a refresh, the diagnostic shows the latest audit and fold
   } finally { await prisma.$disconnect(); }
 });
 
+test("story 5.2: the diagnostic prepares the plan on a click, then links to it once the plan is up to date", async ({ page, company }) => {
+  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }) });
+  try {
+    const audit = await prisma.agentRun.create({ data: { companyId: company.id, agent: "marketing", requestKey: `audit-${randomUUID()}`, payload: {}, status: "succeeded", finishedAt: new Date(Date.now() - 60_000) } });
+    await prisma.auditFinding.create({ data: { companyId: company.id, agentRunId: audit.id, category: "site_web", title: "Horaires absents", content: "Résumé." } });
+    // Action d'avant l'audit : le plan reste à préparer.
+    await prisma.actionPlanItem.create({ data: { companyId: company.id, agent: "marketing", title: "Répondre aux avis", rationale: "Test", timing: "Aujourd'hui", createdAt: new Date(Date.now() - 2 * 60_000) } });
+    await page.setViewportSize({ width: 1440, height: 900 });
+
+    // Quota atteint : le message de limite, et rien n'est préparé.
+    await page.route("**/api/co-ceo/plan", (route) => route.fulfill({ status: 429, json: { error: "Les agents ont atteint leur limite de lancements pour aujourd'hui. Ils reprendront demain matin.", reason: "quota_runs" } }));
+    await page.goto(`${baseURL}/diagnostic`);
+    const prepare = page.getByRole("button", { name: "Préparer le plan à partir du diagnostic" });
+    await expect(prepare).toHaveClass(/primary/);
+    await expect(page.getByRole("button", { name: /Actualiser le diagnostic/ })).not.toHaveClass(/primary/);
+    await prepare.click();
+    await expect(page.getByRole("alert")).toContainText("limite de lancements");
+    await page.unroute("**/api/co-ceo/plan");
+
+    // Préparation : le bouton dit qu'elle est en cours, puis mène au plan.
+    let finished = false;
+    await page.route("**/api/co-ceo/plan", (route) => route.fulfill({ status: 202, json: { run: { id: "plan-run", status: "queued" } } }));
+    await page.route("**/api/agent-runs/plan-run", (route) => route.fulfill({ json: { run: { id: "plan-run", agent: "co_ceo", status: finished ? "succeeded" : "running" } } }));
+    await prepare.click();
+    await expect(page.getByRole("button", { name: "Paul prépare le plan…" })).toBeDisabled();
+    finished = true;
+    await page.waitForURL(/\/dashboard\?view=plan/);
+
+    // Une action ajoutée après l'audit ne suffit pas : le plan reste à préparer.
+    await prisma.actionPlanItem.create({ data: { companyId: company.id, agent: "contenu", title: "Afficher les horaires sur le site", rationale: "Test", timing: "Cette semaine" } });
+    await page.goto(`${baseURL}/diagnostic`);
+    await expect(page.getByRole("button", { name: "Préparer le plan à partir du diagnostic" })).toBeVisible();
+    // Plan à jour : une préparation de Paul réussie après la fin du dernier audit, même sans action créée (doublons).
+    await prisma.agentRun.create({ data: { companyId: company.id, agent: "co_ceo", requestKey: `plan-generation:${randomUUID()}`, payload: { kind: "plan_generation" }, status: "succeeded", finishedAt: new Date() } });
+    await page.goto(`${baseURL}/diagnostic`);
+    await expect(page.getByRole("link", { name: "Voir le plan d’action", exact: true })).toHaveAttribute("href", "/dashboard?view=plan");
+    await expect(page.getByRole("button", { name: "Préparer le plan à partir du diagnostic" })).toHaveCount(0);
+  } finally { await prisma.$disconnect(); }
+});
+
 test("the review queue shows one production at a time, moves forward and filters by agent", async ({ page, company }) => {
   const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }) });
   try {
