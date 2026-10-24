@@ -36,6 +36,8 @@ Ce document découpe le PRD « Paul fiable » et son spine d'architecture en ép
 - FR14 : une action dont l'exécution est terminée n'est plus présentée comme « action à valider ».
 - FR15 : Paul porte le titre « Partenaire de croissance » partout.
 - FR16 : Paul situe chaque état dans le temps : un changement depuis son dernier message est une mise à jour, pas une erreur (ajouté le 2026-10-23 après le second test en production).
+- FR17 : parler à Paul ne consomme pas les lancements des agents ; une séance normale ne bloque ni Paul ni les agents ; le jour se compte en heure de Paris (ajouté le 2026-10-24 après le troisième test en production).
+- FR18 : Paul ne présente jamais comme une erreur un état qui a changé après l'un de ses messages, même si ce n'est pas le dernier (ajouté le 2026-10-24).
 
 ### Exigences non fonctionnelles
 
@@ -77,6 +79,8 @@ Ce document découpe le PRD « Paul fiable » et son spine d'architecture en ép
 - FR14 : Épopée 1 — statut d'action cohérent
 - FR15 : Épopée 2 — un seul titre
 - FR16 : Épopée 3 — Paul et le temps
+- FR17 : Épopée 4 — quota des messages à Paul
+- FR18 : Épopée 4 — aucune fausse rectification
 
 ## Liste des épopées
 
@@ -94,6 +98,11 @@ Le dirigeant dit une fois son objectif et son profil, et garde la main sur chaqu
 
 Le dirigeant fait corriger une production en une phrase, reçoit des productions datées et signées de son nom, en quantité maîtrisée.
 **FR couvertes :** FR9, FR10, FR11, FR12, FR16
+
+### Épopée 4 : Paul reste disponible et cohérent
+
+Le dirigeant peut échanger avec Paul toute une séance sans bloquer ses agents, et Paul ne se « corrige » jamais à tort. Ajoutée le 2026-10-24 après le troisième test en production ([proposition de changement](sprint-change-proposal-2026-10-24.md)).
+**FR couvertes :** FR17, FR18
 
 Ordre : 1 → 2 → 3. L'épopée 1 donne la lecture d'état dont l'épopée 2 a besoin pour éviter les doublons. L'épopée 3 réutilise les cartes de l'épopée 2. Chaque épopée apporte de la valeur seule.
 
@@ -497,9 +506,68 @@ afin de pouvoir croire ce qu'il m'annonce.
 - Prompt de Paul : distinguer « changement depuis mon dernier message » (à annoncer comme une mise à jour) et « erreur de ma part » (seulement si l'état à l'heure de mon message contredisait ce que j'ai dit).
 - Test : `buildCurrentStatus` contient les heures ; test de prompt par fonction pure si une règle est extraite.
 
+## Epic 4: Paul reste disponible et cohérent
+
+Le dirigeant peut échanger avec Paul toute une séance sans bloquer ses agents, et Paul ne se « corrige » jamais à tort.
+
+### Story 4.1: Parler à Paul ne consomme pas les lancements
+
+En tant que dirigeant,
+je veux pouvoir échanger avec Paul pendant toute une séance,
+afin de ne pas être bloqué jusqu'au lendemain après dix minutes d'usage.
+
+**Critères d'acceptation :**
+
+**Étant donné** le scénario Atelier Lumen (7 messages à Paul, l'audit, une exécution de Jean-Claude, une révision)
+**Quand** le dirigeant envoie un 8e message puis clique « Préremplir mon profil »
+**Alors** Paul répond et le préremplissage fonctionne ; les lancements d'agents restants sont inchangés (FR17)
+
+**Étant donné** la limite des messages à Paul atteinte
+**Quand** le dirigeant écrit à Paul
+**Alors** il lit quand il pourra réessayer (« demain matin »), sans « contactez l'administrateur » ; les cartes de lancement restent utilisables si les lancements ne sont pas épuisés
+
+**Étant donné** la limite des lancements atteinte
+**Quand** le dirigeant écrit à Paul
+**Alors** Paul répond, et dit que les agents reprendront demain
+
+**Étant donné** un message envoyé à 00:30, heure de Paris
+**Quand** le quota du jour est calculé
+**Alors** seuls les usages depuis minuit, heure de Paris, comptent
+
+**Notes techniques :**
+- Quota : option A de la [proposition de changement](sprint-change-proposal-2026-10-24.md), tranchée par les PF le 2026-10-24 : deux compteurs, `dailyChatMessageLimit` (50) et `monthlyChatMessageLimit` (500) sur `Company`, migration additive ; lancements inchangés (10 et 100).
+- `reserveUsageBudget(companyId, purpose)` : `co_ceo_chat` et `onboarding_interpret` vont au compteur de messages, `site_publish` aux lancements ; le plafond de dépense s'applique à tout, inchangé.
+- `utcQuotaWindows` remplacé par des fenêtres Europe/Paris (fonction pure, testée dans `tests/delegation.spec.ts`).
+- Page Admin (`company-quota-form.tsx`, route `limits`) et page Compte : les deux compteurs.
+
+### Story 4.2: Aucune fausse rectification
+
+En tant que dirigeant,
+je veux que Paul ne présente jamais comme une erreur un état qui a changé après qu'il en a parlé,
+afin de pouvoir le croire.
+
+**Critères d'acceptation :**
+
+**Étant donné** un audit de Martine annoncé en cours par Paul à 08:02, terminé à 08:02:40, et un message de Paul à 08:03 qui n'en parle pas
+**Quand** le dirigeant redemande où en est l'équipe à 08:05
+**Alors** l'exécution porte `aChangeApresMonMessageDe: "08:02"` et Paul dit « depuis, Martine a terminé », jamais « je rectifie », « je dois corriger » ni « c'était faux » (FR18)
+
+**Étant donné** un état qui n'a pas changé depuis le message où Paul l'a mal annoncé
+**Quand** Paul s'en aperçoit
+**Alors** il le corrige explicitement (inchangé, story 3.5)
+
+**Étant donné** la recette manuelle
+**Quand** un PF la rejoue
+**Alors** une étape vérifie ce cas : un message sans rapport envoyé pendant l'audit, puis « Où en est l'équipe ? » après la fin
+
+**Notes techniques :**
+- `buildCurrentStatus` lit les heures des messages de Paul de la fenêtre relue (`CHAT_HISTORY_MESSAGES`, sans le point hebdomadaire) ; pour chaque exécution et chaque action, `aChangeApresMonMessageDe` = heure du dernier de ces messages antérieur au changement (`startedAt`, `finishedAt`, `updatedAt`), nulle si aucun.
+- Règle du prompt de Paul ajoutée à celle de la story 3.5 ; `depuisMonMessagePrecedent` reste.
+- Tests : `buildCurrentStatus` dans `tests/engine.spec.ts` (deux messages de Paul, fin entre les deux) ; présence de la règle dans le prompt.
+
 ## Validation finale
 
-- Couverture : FR1 à FR15 couvertes (carte ci-dessus) ; UX-DR1 (2.1), UX-DR2 (1.2), UX-DR3 (3.3).
+- Couverture : FR1 à FR18 couvertes (carte ci-dessus) ; UX-DR1 (2.1), UX-DR2 (1.2), UX-DR3 (3.3).
 - Entités créées à la première story qui en a besoin : `failureReason` (1.2), `PaulPendingAction` (2.1), `ownerName` (3.1), `ProposalRevision` (3.3).
 - Dépendances : chaque story ne s'appuie que sur les précédentes. 1.3 utilise le motif de 1.2 ; 2.3 et 2.4 utilisent 1.1 et 1.2 ; 3.1 étend `update_profile` de 2.2 ; 3.3 utilise les intentions de 2.1.
 - Fichiers communs : `co-ceo.ts` est modifié par 1.1, 1.2, 2.1, 2.3 et 3.3. Le découpage en trois épopées est gardé quand même : chaque épopée est livrable seule et apporte un retour terrain avant la suivante.

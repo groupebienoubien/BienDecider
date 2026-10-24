@@ -153,6 +153,14 @@ Le premier audit lancé à la fin de l'onboarding est une action de Martine au p
 - Une exécution terminée depuis le message précédent est annoncée « depuis mon dernier message, X a terminé », jamais « c'était faux ».
 - Paul lit l'heure de chaque exécution et l'heure de son message précédent.
 
+#### FR-18 : Aucune fausse rectification
+
+*Ajoutée le 2026-10-24 après le troisième test en production.* Un état qui a changé après l'un des messages de Paul, même s'il ne s'agit pas du dernier, est une mise à jour : Paul ne le présente jamais comme une erreur.
+
+**Conséquences :**
+- Paul sait, pour chaque exécution et chaque action, après lequel de ses messages elle a changé.
+- « Je rectifie », « je dois corriger », « c'était faux » sont réservés aux états qui n'ont pas changé depuis le message qui les annonçait.
+
 ### 4.3 Paul propose, le dirigeant lance
 
 **Description :** les délégations depuis le chat créent ou reprennent une action en « à lancer » et affichent une carte « Lancer / Plus tard ». Réalise UJ-3.
@@ -225,6 +233,15 @@ Le badge Décisions, l'accueil et la page Décisions affichent le même nombre, 
 
 Une action dont l'exécution est terminée n'est plus présentée comme « action à valider » ; elle renvoie vers ses productions.
 
+#### FR-17 : Parler à Paul ne consomme pas les lancements
+
+*Ajoutée le 2026-10-24 après le troisième test en production :* 7 messages, l'audit, une exécution et une révision épuisaient le quota de 10 lancements par jour.
+
+**Conséquences :**
+- Les messages à Paul et « Préremplir mon profil » ne réduisent pas les lancements d'agents disponibles : deux compteurs, 50 messages à Paul par jour et 500 par mois ; lancements 10 et 100 (question ouverte 4, tranchée).
+- Le plafond de dépense reste la limite de coût.
+- Le jour se compte en heure de Paris ; un message de limite dit quand réessayer, sans renvoyer vers l'administrateur.
+
 ### 4.7 Identité de Paul
 
 #### FR-15 : Un seul titre
@@ -242,7 +259,7 @@ Paul est « Partenaire de croissance » partout, y compris l'en-tête du panneau
 
 ### 6.1 Inclus
 
-FR-1 à FR-16.
+FR-1 à FR-18.
 
 ### 6.2 Exclu de l'épopée
 
@@ -270,6 +287,7 @@ FR-1 à FR-16.
 1. ~~Une demande explicite passe-t-elle par la carte ?~~ Tranché le 2026-10-22 par les PF : oui (FR-7).
 2. ~~Valeurs des plafonds par exécution ?~~ Tranché le 2026-10-22 par les PF : 5 prospects, 2 pistes, 2 modèles d'email, 3 posts, 4 constats (FR-12).
 3. Faut-il que Paul puisse écarter une action ou rejeter une production en conversation ? Proposition : non dans cette épopée.
+4. ~~Forme et valeurs du quota des messages à Paul (FR-17) ?~~ Tranché le 2026-10-24 par les PF : deux compteurs, 50 messages à Paul par jour et 500 par mois, « Préremplir » compris ; lancements inchangés (10 et 100) ; voir la [proposition de changement du 2026-10-24](../../sprint-change-proposal-2026-10-24.md).
 
 ## 9. Index des hypothèses
 

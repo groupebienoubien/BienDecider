@@ -10,6 +10,7 @@ import { DeleteCompanyButton } from "./delete-company-button";
 import Link from "next/link";
 import { listUncoveredRequests } from "@/lib/agents/capabilities";
 import { CompanyQuotaForm } from "./company-quota-form";
+import { CHAT_USAGE_PURPOSES, parisQuotaWindows } from "@/lib/quota-windows";
 
 export const dynamic = "force-dynamic";
 
@@ -37,9 +38,9 @@ export default async function AdminPage() {
   }
 
   const now = new Date();
-  const dayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-  const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
-  const [companies, usageByCompany, usageByCompanyToday, usageByCompanyMonth, attemptsByCompanyToday, attemptsByCompanyMonth, inlineCallsByCompanyToday, inlineCallsByCompanyMonth, reservedByCompany, reservedInlineByCompany, usageByAgent, usageByModel, totals, companiesWithPlan, companiesWithValidated, companiesWithSite] =
+  const { dayStart, monthStart } = parisQuotaWindows(now);
+  const chatPurposes = [...CHAT_USAGE_PURPOSES];
+  const [companies, usageByCompany, usageByCompanyToday, usageByCompanyMonth, attemptsByCompanyToday, attemptsByCompanyMonth, inlineCallsByCompanyToday, inlineCallsByCompanyMonth, messagesByCompanyToday, messagesByCompanyMonth, reservedByCompany, reservedInlineByCompany, usageByAgent, usageByModel, totals, companiesWithPlan, companiesWithValidated, companiesWithSite] =
     await Promise.all([
       prisma.company.findMany({
         orderBy: { createdAt: "desc" },
@@ -53,8 +54,10 @@ export default async function AdminPage() {
       prisma.usageEvent.groupBy({ by: ["companyId"], where: { createdAt: { gte: monthStart } }, _sum: { costUsd: true } }),
       prisma.agentRunAttempt.groupBy({ by: ["companyId"], where: { queuedAt: { gte: dayStart } }, _count: { _all: true } }),
       prisma.agentRunAttempt.groupBy({ by: ["companyId"], where: { queuedAt: { gte: monthStart } }, _count: { _all: true } }),
-      prisma.usageReservation.groupBy({ by: ["companyId"], where: { createdAt: { gte: dayStart } }, _count: { _all: true } }),
-      prisma.usageReservation.groupBy({ by: ["companyId"], where: { createdAt: { gte: monthStart } }, _count: { _all: true } }),
+      prisma.usageReservation.groupBy({ by: ["companyId"], where: { purpose: { notIn: chatPurposes }, createdAt: { gte: dayStart } }, _count: { _all: true } }),
+      prisma.usageReservation.groupBy({ by: ["companyId"], where: { purpose: { notIn: chatPurposes }, createdAt: { gte: monthStart } }, _count: { _all: true } }),
+      prisma.usageReservation.groupBy({ by: ["companyId"], where: { purpose: { in: chatPurposes }, createdAt: { gte: dayStart } }, _count: { _all: true } }),
+      prisma.usageReservation.groupBy({ by: ["companyId"], where: { purpose: { in: chatPurposes }, createdAt: { gte: monthStart } }, _count: { _all: true } }),
       prisma.agentRun.groupBy({ by: ["companyId"], where: { status: { in: ["queued", "running"] } }, _sum: { reservedCostUsd: true } }),
       prisma.usageReservation.groupBy({ by: ["companyId"], where: { expiresAt: { gt: now }, releasedAt: null }, _sum: { amountUsd: true } }),
       prisma.usageEvent.groupBy({
@@ -85,6 +88,8 @@ export default async function AdminPage() {
   const attemptsMonthMap = new Map(attemptsByCompanyMonth.map((u) => [u.companyId, u._count._all]));
   const inlineCallsTodayMap = new Map(inlineCallsByCompanyToday.map((u) => [u.companyId, u._count._all]));
   const inlineCallsMonthMap = new Map(inlineCallsByCompanyMonth.map((u) => [u.companyId, u._count._all]));
+  const messagesTodayMap = new Map(messagesByCompanyToday.map((u) => [u.companyId, u._count._all]));
+  const messagesMonthMap = new Map(messagesByCompanyMonth.map((u) => [u.companyId, u._count._all]));
   const reservedMap = new Map(reservedByCompany.map((u) => [u.companyId, u._sum.reservedCostUsd ?? 0]));
   const reservedInlineMap = new Map(reservedInlineByCompany.map((u) => [u.companyId, u._sum.amountUsd ?? 0]));
 
@@ -144,7 +149,7 @@ export default async function AdminPage() {
                   <th>Dernière connexion</th>
                   <th>Propositions</th>
                   <th>Coût</th>
-                  {isExplicitAdminEmail(ownerEmail) && <th>Plafonds IA (UTC)</th>}
+                  {isExplicitAdminEmail(ownerEmail) && <th>Plafonds IA (heure de Paris)</th>}
                   <th></th>
                 </tr>
               </thead>
@@ -167,9 +172,11 @@ export default async function AdminPage() {
                       <td>{formatUsd(usage?._sum.costUsd ?? 0)}</td>
                       {isExplicitAdminEmail(ownerEmail) && <td><CompanyQuotaForm
                         companyId={c.id}
-                        limits={{ dailyAgentRunLimit: c.dailyAgentRunLimit, monthlyAgentRunLimit: c.monthlyAgentRunLimit, dailySpendLimitUsd: c.dailySpendLimitUsd, monthlySpendLimitUsd: c.monthlySpendLimitUsd }}
+                        limits={{ dailyAgentRunLimit: c.dailyAgentRunLimit, monthlyAgentRunLimit: c.monthlyAgentRunLimit, dailyChatMessageLimit: c.dailyChatMessageLimit, monthlyChatMessageLimit: c.monthlyChatMessageLimit, dailySpendLimitUsd: c.dailySpendLimitUsd, monthlySpendLimitUsd: c.monthlySpendLimitUsd }}
                         dailyRuns={(attemptsTodayMap.get(c.id) ?? 0) + (inlineCallsTodayMap.get(c.id) ?? 0)}
                         monthlyRuns={(attemptsMonthMap.get(c.id) ?? 0) + (inlineCallsMonthMap.get(c.id) ?? 0)}
+                        dailyMessages={messagesTodayMap.get(c.id) ?? 0}
+                        monthlyMessages={messagesMonthMap.get(c.id) ?? 0}
                         dailyCost={usageTodayMap.get(c.id) ?? 0}
                         monthlyCost={usageMonthMap.get(c.id) ?? 0}
                         reservedCost={(reservedMap.get(c.id) ?? 0) + (reservedInlineMap.get(c.id) ?? 0)}

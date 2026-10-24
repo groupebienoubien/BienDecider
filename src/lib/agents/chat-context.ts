@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { chatWindow, paulMessageTimes } from "@/lib/agents/paul-message-times";
 
 /** Nombre de messages de chat relus par Paul à chaque tour. */
 export const CHAT_HISTORY_MESSAGES = 40;
@@ -18,9 +19,21 @@ export async function loadRecentChatHistory(companyId: string, limit = CHAT_HIST
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     take: limit,
   });
-  const chronological = latest.reverse();
-  const firstUser = chronological.findIndex((message) => message.role === "user");
-  return firstUser === -1 ? [] : chronological.slice(firstUser);
+  return chatWindow(latest);
+}
+
+/**
+ * Heures des messages de Paul que relit le tour en cours : même fenêtre que loadRecentChatHistory,
+ * limitée aux messages antérieurs à now, sans le point hebdomadaire (story 4.2).
+ */
+export async function loadPaulMessageTimes(companyId: string, now: Date, limit = CHAT_HISTORY_MESSAGES) {
+  const latest = await prisma.chatMessage.findMany({
+    where: { companyId, createdAt: { lte: now } },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    take: limit,
+    select: { role: true, content: true, createdAt: true },
+  });
+  return paulMessageTimes(latest);
 }
 
 /**

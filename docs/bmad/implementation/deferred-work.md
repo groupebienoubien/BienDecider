@@ -55,3 +55,12 @@
 - source_spec: `docs/bmad/implementation/spec-3-4-recette-du-scenario-atelier-lumen.md`
   summary: Vérifier dans le parcours navigateur que le badge, le lien de l'accueil et l'en-tête de Décisions affichent le même nombre.
   evidence: le test de recette compare des fonctions (badge et Paul lisent la même), pas ce que les pages affichent.
+- source_spec: `docs/bmad/implementation/spec-4-2-aucune-fausse-rectification.md`
+  summary: Vérifier que Paul n'annonce pas, à chaque question d'état, des changements sans rapport parce que aChangeApresMonMessageDe est non nul pour presque tout.
+  evidence: non vérifié (dépend du modèle) ; à observer à l'étape 8 de la recette manuelle ; si c'est le cas, limiter la règle aux éléments dont Paul a parlé.
+- source_spec: `docs/bmad/implementation/spec-4-2-aucune-fausse-rectification.md`
+  summary: depuisMonMessagePrecedent (story 3.5) compare à l'heure d'enregistrement de la réponse de Paul, pas au début de son tour.
+  evidence: une fin survenue pendant le tour, après la lecture de l'état, n'est pas marquée « depuis mon dernier message ».
+- source_spec: `docs/bmad/implementation/spec-4-1-parler-a-paul-ne-consomme-pas-les-lancements.md`
+  summary: Tester par les vrais appelants que « Préremplir » compte comme message et la mise en ligne du site comme lancement.
+  evidence: les tests appellent reserveUsageBudget avec des libellés écrits en dur ; changer le purpose dans onboarding/interpret ou publish.ts ne ferait échouer aucun test.

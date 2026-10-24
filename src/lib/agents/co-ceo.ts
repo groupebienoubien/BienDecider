@@ -14,7 +14,8 @@ import { PLAN_THEMES, type PlanTheme } from "@/lib/plan-themes";
 import { recordUsage, runStreamingToolLoop, runToolLoop } from "@/lib/usage";
 import { getFunnelStats, funnelLines } from "@/lib/funnel";
 import { CAPABILITY_CATALOG, recordUncoveredRequest } from "@/lib/agents/capabilities";
-import { getChatInstructionsForPlan, loadRecentChatHistory } from "@/lib/agents/chat-context";
+import { getChatInstructionsForPlan, loadPaulMessageTimes, loadRecentChatHistory } from "@/lib/agents/chat-context";
+import { lastMessageBefore, latestOf } from "@/lib/agents/paul-message-times";
 import { getTeamState } from "@/lib/team-state";
 import { resolvePaulReferences } from "@/lib/paul-references";
 import { attachPendingActions, cancelOrphanPendingActions, createPendingAction, recentPendingActions } from "@/lib/agents/pending-actions";
@@ -47,10 +48,11 @@ function uncoveredRequestTool(companyId: string, source: "chat" | "plan") {
  * État lu par Paul via get_current_status : actions et exécutions viennent
  * de getTeamState, la lecture unique partagée avec le menu et l'accueil.
  * Chaque état porte son heure (Europe/Paris), avec l'heure courante et celle
- * du message précédent de Paul, pour qu'il distingue une mise à jour d'une erreur (story 3.5).
+ * du message précédent de Paul, pour qu'il distingue une mise à jour d'une erreur (story 3.5),
+ * et l'heure de son dernier message relu antérieur au changement (aChangeApresMonMessageDe, story 4.2).
  */
 export async function buildCurrentStatus(companyId: string, now = new Date()) {
-  const [teamState, funnel, pending, findings, leads, cards, previousReply] = await Promise.all([
+  const [teamState, funnel, pending, findings, leads, cards, previousReply, paulTimes] = await Promise.all([
     getTeamState(companyId, now),
     getFunnelStats(companyId),
     prisma.agentProposal.findMany({
@@ -76,15 +78,20 @@ export async function buildCurrentStatus(companyId: string, now = new Date()) {
       orderBy: { createdAt: "desc" },
       select: { createdAt: true },
     }),
+    loadPaulMessageTimes(companyId, now),
   ]);
   // Calculé ici à la milliseconde : à la minute près, Paul ne pourrait pas trancher.
   const previousAt = previousReply?.createdAt.getTime() ?? null;
   const since = (date: Date | string | null) => previousAt !== null && date !== null && new Date(date).getTime() > previousAt;
+  // Le changement est postérieur au début du tour de ce message de Paul (il a lu l'état pendant le tour) :
+  // ce qu'il y disait était peut-être vrai à ce moment. L'heure affichée reste celle du message.
+  const changedAfter = (changedAt: Date | string | null) => formatParisTime(lastMessageBefore(paulTimes, changedAt), now);
   return {
     maintenant: `${formatParisDate(now)}, ${formatParisTime(now, now)}`,
     monMessagePrecedent: formatParisTime(previousReply?.createdAt, now),
     planEnCours: teamState.actions.map(({ updatedAt, ...action }) => ({
       ...action, misAJour: formatParisTime(updatedAt, now), depuisMonMessagePrecedent: since(updatedAt),
+      aChangeApresMonMessageDe: changedAfter(updatedAt),
     })),
     // Heures de Paris uniquement (pas d'horodatage UTC brut) : enFileDepuis pour une exécution en file,
     // debut nul tant qu'elle attend son tour, fin nulle tant qu'elle n'est pas terminée.
@@ -94,6 +101,7 @@ export async function buildCurrentStatus(companyId: string, now = new Date()) {
       debut: formatParisTime(startedAt, now),
       fin: formatParisTime(finishedAt, now),
       depuisMonMessagePrecedent: since(startedAt) || since(finishedAt),
+      aChangeApresMonMessageDe: changedAfter(latestOf(startedAt, finishedAt)),
     })),
     decisionsEnAttente: teamState.pendingDecisions,
     suiviProspects: funnelLines(funnel) || "Aucun prospect suivi pour l'instant.",
@@ -627,7 +635,7 @@ Ton rôle concret : échanger avec le dirigeant, l'aider à prioriser, et lui pr
 Règles strictes, non négociables :
 - RÈGLE ABSOLUE : ne dis JAMAIS qu'une action a été faite (proposition créée, audit relancé, fiche vue, contenu consulté) sans avoir réellement appelé l'outil correspondant DANS CE TOUR. Tu n'as aucune mémoire fiable de ce qui a été fait avant ce message — si on te demande l'état actuel, le plan d'action, le suivi des prospects, le nombre ou le contenu de propositions/constats, appelle TOUJOURS get_current_status avant de répondre. Ne devine jamais.
 - Avant de proposer une priorité ou un lancement, appelle get_current_status pour partir du plan en cours et du suivi des prospects : ne propose pas ce qui est déjà au plan, et appuie-toi sur ce que le dirigeant t'a déjà dit dans cette conversation plutôt que de le lui redemander.
-- Chaque état de get_current_status porte son heure (heure de Paris, avec la date si ce n'est pas aujourd'hui) : maintenant (date et heure), monMessagePrecedent (l'heure de ton message précédent), enFileDepuis, debut et fin des exécutions, misAJour des actions (heure de la dernière modification de l'action, quelle qu'elle soit, pas forcément un changement de statut). Si un état a changé depuis ton message précédent (fin postérieure à ton message), dis "depuis mon dernier message, …". Un élément marqué depuisMonMessagePrecedent: true (exécution commencée ou terminée, action modifiée depuis ton message précédent) est un tel changement, à annoncer ainsi. Ne dis "je me suis trompé" que si l'état à l'heure de ton message contredisait ce que tu as écrit.
+- Chaque état de get_current_status porte son heure (heure de Paris, avec la date si ce n'est pas aujourd'hui) : maintenant (date et heure), monMessagePrecedent (l'heure de ton message précédent), enFileDepuis, debut et fin des exécutions, misAJour des actions (heure de la dernière modification de l'action, quelle qu'elle soit, pas forcément un changement de statut). Si un état a changé depuis ton message précédent (fin postérieure à ton message), dis "depuis mon dernier message, …". Un élément marqué depuisMonMessagePrecedent: true (exécution commencée ou terminée, action modifiée depuis ton message précédent) est un tel changement, à annoncer ainsi. Ne dis "je me suis trompé" que si l'état à l'heure de ton message contredisait ce que tu as écrit. Un élément dont aChangeApresMonMessageDe n'est pas nul a changé après ton message de cette heure-là : ce que tu en disais était peut-être vrai à ce moment. Annonce-le comme une nouvelle (« depuis, Martine a terminé »), jamais avec « je rectifie », « je dois corriger » ou « c'était faux ».
 - Une action au statut "en_cours" est déjà en train d'être réalisée (voir son exécution dans executionsRecentes) : ne la relance pas et ne crée pas d'action équivalente ; dis au dirigeant qu'elle est en cours.
 - Tu ne lances JAMAIS un agent toi-même. Les outils propose_launch_* créent l'action dans le plan (statut à lancer) et une carte « Lancer {agent} : {titre} » sous ta réponse ; rien n'est lancé tant que le dirigeant n'a pas cliqué sur « Lancer ». Même quand il te demande explicitement de lancer un agent (« lance ${PERSONAS.demarchage.name} »), tu passes par la carte. Ne dis JAMAIS « c'est lancé », « c'est parti » ni que l'agent y travaille après une proposition : dis qu'il peut lancer d'un clic sur la carte, ou choisir « Plus tard » (l'action reste alors dans son plan, à lancer).
 - Chaque proposition de lancement crée une action dans le plan, avec le brief que tu rédiges, et les productions y seront rattachées. Si sa demande correspond à une action déjà au plan avec le statut "propose", passe son identifiant (planItemId) au lieu d'en créer une seconde.

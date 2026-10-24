@@ -12,6 +12,7 @@ import { AgentRunConflictError, AgentRunQuotaError, RevisionConflictError, class
 import { PERSONAS } from "@/lib/agents/personas";
 import { isSerializationConflict } from "@/lib/serialization-conflict";
 import { revisionActiveKey } from "@/lib/agents/revision-state";
+import { CHAT_USAGE_PURPOSES, parisQuotaWindows, usageCounterFor, type UsageCounter } from "@/lib/quota-windows";
 
 export const AGENT_RUN_MAX_DURATION_SECONDS = 300;
 export const AGENT_RUN_COST_RESERVATION_USD = 1;
@@ -85,7 +86,7 @@ async function persistRun(params: {
       });
       if (existing) {
         if (existing.status !== "failed" || params.retryRunId !== existing.id) return existing;
-        await assertRunQuota(tx, params.companyId);
+        await assertRunQuota(tx, params.companyId, "runs");
         const retry = await tx.agentRun.updateMany({
           where: { id: existing.id, status: "failed" },
           data: {
@@ -133,7 +134,7 @@ async function persistRun(params: {
         }
       }
 
-      await assertRunQuota(tx, params.companyId);
+      await assertRunQuota(tx, params.companyId, "runs");
 
       return tx.agentRun.create({
         data: {
@@ -376,33 +377,47 @@ export async function processAgentRun(runId: string) {
   }
 }
 
-function utcQuotaWindows(now: Date) {
-  return {
-    dayStart: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())),
-    monthStart: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)),
-  };
-}
-
-async function assertRunQuota(tx: Prisma.TransactionClient, companyId: string, now = new Date()) {
+async function assertRunQuota(tx: Prisma.TransactionClient, companyId: string, counter: UsageCounter, now = new Date()) {
   const company = await tx.company.update({
     where: { id: companyId },
     data: { quotaEpoch: { increment: 1 } },
   });
-  const { dayStart, monthStart } = utcQuotaWindows(now);
-  const [dailyRuns, monthlyRuns, dailyInlineCalls, monthlyInlineCalls, dailyUsage, monthlyUsage, reservedRuns, reservedCalls] = await Promise.all([
-    tx.agentRunAttempt.count({ where: { companyId, queuedAt: { gte: dayStart } } }),
-    tx.agentRunAttempt.count({ where: { companyId, queuedAt: { gte: monthStart } } }),
-    tx.usageReservation.count({ where: { companyId, createdAt: { gte: dayStart } } }),
-    tx.usageReservation.count({ where: { companyId, createdAt: { gte: monthStart } } }),
+  const { dayStart, monthStart, nextMonthName } = parisQuotaWindows(now);
+  const chatPurposes = [...CHAT_USAGE_PURPOSES];
+
+  if (counter === "chat") {
+    const [dailyMessages, monthlyMessages] = await Promise.all([
+      tx.usageReservation.count({ where: { companyId, purpose: { in: chatPurposes }, createdAt: { gte: dayStart } } }),
+      tx.usageReservation.count({ where: { companyId, purpose: { in: chatPurposes }, createdAt: { gte: monthStart } } }),
+    ]);
+    // Le mois d'abord : si les deux limites sont atteintes, la reprise est le 1er, pas demain.
+    if (monthlyMessages >= company.monthlyChatMessageLimit) {
+      throw new AgentRunQuotaError(`Vous avez atteint la limite de messages à Paul pour ce mois-ci. Vous pourrez lui écrire de nouveau le 1er ${nextMonthName}.`, "quota_runs");
+    }
+    if (dailyMessages >= company.dailyChatMessageLimit) {
+      throw new AgentRunQuotaError("Vous avez atteint la limite de messages à Paul pour aujourd'hui. Vous pourrez lui écrire de nouveau demain matin.", "quota_runs");
+    }
+  } else {
+    const [dailyRuns, monthlyRuns, dailyInlineCalls, monthlyInlineCalls] = await Promise.all([
+      tx.agentRunAttempt.count({ where: { companyId, queuedAt: { gte: dayStart } } }),
+      tx.agentRunAttempt.count({ where: { companyId, queuedAt: { gte: monthStart } } }),
+      tx.usageReservation.count({ where: { companyId, purpose: { notIn: chatPurposes }, createdAt: { gte: dayStart } } }),
+      tx.usageReservation.count({ where: { companyId, purpose: { notIn: chatPurposes }, createdAt: { gte: monthStart } } }),
+    ]);
+    if (monthlyRuns + monthlyInlineCalls >= company.monthlyAgentRunLimit) {
+      throw new AgentRunQuotaError(`Les agents ont atteint leur limite de lancements pour ce mois-ci. Ils reprendront le 1er ${nextMonthName}.`, "quota_runs");
+    }
+    if (dailyRuns + dailyInlineCalls >= company.dailyAgentRunLimit) {
+      throw new AgentRunQuotaError("Les agents ont atteint leur limite de lancements pour aujourd'hui. Ils reprendront demain matin.", "quota_runs");
+    }
+  }
+
+  const [dailyUsage, monthlyUsage, reservedRuns, reservedCalls] = await Promise.all([
     tx.usageEvent.aggregate({ where: { companyId, createdAt: { gte: dayStart } }, _sum: { costUsd: true } }),
     tx.usageEvent.aggregate({ where: { companyId, createdAt: { gte: monthStart } }, _sum: { costUsd: true } }),
     tx.agentRun.aggregate({ where: { companyId, status: { in: ["queued", "running"] } }, _sum: { reservedCostUsd: true } }),
     tx.usageReservation.aggregate({ where: { companyId, expiresAt: { gt: now }, releasedAt: null }, _sum: { amountUsd: true } }),
   ]);
-
-  if (dailyRuns + dailyInlineCalls >= company.dailyAgentRunLimit) throw new AgentRunQuotaError("Le quota journalier de lancements est atteint. Réessayez demain ou contactez l'administrateur.", "quota_runs");
-  if (monthlyRuns + monthlyInlineCalls >= company.monthlyAgentRunLimit) throw new AgentRunQuotaError("Le quota mensuel de lancements est atteint. Contactez l'administrateur.", "quota_runs");
-
   const dailyCost = dailyUsage._sum.costUsd ?? 0;
   const monthlyCost = monthlyUsage._sum.costUsd ?? 0;
   const activeReservation = (reservedRuns._sum.reservedCostUsd ?? 0) + (reservedCalls._sum.amountUsd ?? 0);
@@ -410,14 +425,19 @@ async function assertRunQuota(tx: Prisma.TransactionClient, companyId: string, n
     throw new AgentRunQuotaError("Le budget journalier est atteint ou réservé par une exécution en cours. Réessayez plus tard.", "quota_budget");
   }
   if (monthlyCost + activeReservation + AGENT_RUN_COST_RESERVATION_USD > company.monthlySpendLimitUsd) {
-    throw new AgentRunQuotaError("Le budget mensuel est atteint ou réservé par une exécution en cours. Contactez l'administrateur.", "quota_budget");
+    throw new AgentRunQuotaError(`Le budget mensuel est atteint ou réservé par une exécution en cours. Réessayez le 1er ${nextMonthName}.`, "quota_budget");
   }
   return company;
 }
 
+/**
+ * Réserve 1 $ avant un appel direct au modèle. Un message à Paul ou
+ * « Préremplir mon profil » ne vérifie que la limite de messages et le
+ * budget ; la mise en ligne du site, que la limite de lancements et le budget.
+ */
 export async function reserveUsageBudget(companyId: string, purpose: string) {
   return prisma.$transaction(async (tx) => {
-    await assertRunQuota(tx, companyId);
+    await assertRunQuota(tx, companyId, usageCounterFor(purpose));
     return tx.usageReservation.create({
       data: {
         companyId,

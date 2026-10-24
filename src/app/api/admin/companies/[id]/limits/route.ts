@@ -7,10 +7,14 @@ import { prisma } from "@/lib/prisma";
 const limitsSchema = z.object({
   dailyAgentRunLimit: z.number().int().min(0).max(10000),
   monthlyAgentRunLimit: z.number().int().min(0).max(100000),
+  dailyChatMessageLimit: z.number().int().min(0).max(10000),
+  monthlyChatMessageLimit: z.number().int().min(0).max(100000),
   dailySpendLimitUsd: z.number().finite().min(0).max(100000),
   monthlySpendLimitUsd: z.number().finite().min(0).max(1000000),
 }).strict().refine((limits) => limits.dailyAgentRunLimit <= limits.monthlyAgentRunLimit, {
   message: "Le plafond journalier de lancements ne peut pas dépasser le plafond mensuel.",
+}).refine((limits) => limits.dailyChatMessageLimit <= limits.monthlyChatMessageLimit, {
+  message: "Le plafond journalier de messages à Paul ne peut pas dépasser le plafond mensuel.",
 }).refine((limits) => limits.dailySpendLimitUsd <= limits.monthlySpendLimitUsd, {
   message: "Le plafond journalier de dépense ne peut pas dépasser le plafond mensuel.",
 });

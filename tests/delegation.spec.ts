@@ -15,8 +15,11 @@ import { groupPlanItems, planItemStatusView } from "../src/lib/action-plan-view"
 import { facebookAuditSource } from "../src/lib/facebook-audit-source";
 import { businessTargetLines, clientGapLabel, clientsToMonthly, computeBusinessTarget, toMonthly } from "../src/lib/business-target";
 import { PROFILE_PAGE_ONLY_MESSAGE, PENDING_ACTION_TYPES, REVISION_INSTRUCTION_MAX, decidedText, launchesRun, launchPlanItemPayloadSchema, reviseProposalPayloadSchema, describePendingAction, expiredMessage, mergeProfilePayloads, objectiveUpdateValues, profileUpdateToolSchema, profileUpdateValues, readProfileToolInput, toPendingActionView, updateObjectivePayloadSchema, updateProfilePayloadSchema } from "../src/lib/agents/pending-action-view";
+import { chatWindow, lastMessageBefore, latestOf, paulMessageTimes } from "../src/lib/agents/paul-message-times";
+import { WEEKLY_REVIEW_MARKER } from "../src/lib/weekly-review";
 import { RUN_CAPS, capGroup, runCapReachedMessage, withRunCap } from "../src/lib/agents/run-caps";
 import { PROFILE_TEXT_LIMITS, clearableText, profileTextIssue } from "../src/lib/company-profile";
+import { parisQuotaWindows, usageCounterFor } from "../src/lib/quota-windows";
 
 test("risk rules use registered kinds and contextual factors, then fail closed", () => {
   expect(assessActionRisk("piste_croissance").level).toBe("modere");
@@ -742,4 +745,97 @@ test("story 3.5: a run still in progress has no end time, Paul's first message h
   expect(formatParisTime(null, now)).toBeNull();
   expect(formatParisTime(undefined, now)).toBeNull();
   expect(formatParisTime("pas une date", now)).toBeNull();
+});
+
+// Story 4.2 — 24 octobre 2026 à Paris (UTC+2) : messages de Paul à 08:02:10 et 08:03:00,
+// en réponse aux messages du dirigeant de 08:02:00 et 08:02:50 (début de chaque tour).
+const paulAt = (time: string) => new Date(`2026-10-24T${time}+02:00`);
+const paulTimes = [
+  { at: paulAt("08:02:10"), turnStart: paulAt("08:02:00") },
+  { at: paulAt("08:03:00"), turnStart: paulAt("08:02:50") },
+];
+
+test("story 4.2: an audit finished between two messages of Paul changed after the first one", () => {
+  expect(lastMessageBefore(paulTimes, paulAt("08:02:40"))).toEqual(paulAt("08:02:10"));
+  // Ordre indifférent.
+  expect(lastMessageBefore([...paulTimes].reverse(), paulAt("08:02:40"))).toEqual(paulAt("08:02:10"));
+});
+
+test("story 4.2: a change after Paul's last turn started points to that message", () => {
+  expect(lastMessageBefore(paulTimes, paulAt("08:03:30"))).toEqual(paulAt("08:03:00"));
+  expect(lastMessageBefore(paulTimes, paulAt("08:03:30").toISOString())).toEqual(paulAt("08:03:00"));
+});
+
+test("story 4.2: a run finished while Paul was answering changed after that answer, not an older one", () => {
+  // Tour commencé à 08:02:00, exécution finie à 08:02:05, réponse enregistrée à 08:02:10.
+  expect(lastMessageBefore(paulTimes, paulAt("08:02:05"))).toEqual(paulAt("08:02:10"));
+});
+
+test("story 4.2: compared to the millisecond, a change at the exact start of a turn is not after its message", () => {
+  expect(lastMessageBefore(paulTimes, paulAt("08:02:50"))).toEqual(paulAt("08:02:10"));
+  expect(lastMessageBefore(paulTimes, new Date(paulAt("08:02:50").getTime() + 1))).toEqual(paulAt("08:03:00"));
+});
+
+test("story 4.2: a change before Paul's first turn, or without any message, has none", () => {
+  expect(lastMessageBefore(paulTimes, paulAt("08:01:00"))).toBeNull();
+  expect(lastMessageBefore(paulTimes, paulAt("08:02:00"))).toBeNull();
+  expect(lastMessageBefore([], paulAt("08:02:40"))).toBeNull();
+  expect(lastMessageBefore(paulTimes, null)).toBeNull();
+  expect(lastMessageBefore(paulTimes, undefined)).toBeNull();
+  expect(lastMessageBefore(paulTimes, "pas une date")).toBeNull();
+});
+
+test("story 4.2: a run changed at its latest of start and end", () => {
+  expect(latestOf(paulAt("08:01:00"), paulAt("08:02:40"))).toEqual(paulAt("08:02:40"));
+  expect(latestOf(paulAt("08:01:00"), null)).toEqual(paulAt("08:01:00"));
+  expect(latestOf(null, undefined)).toBeNull();
+});
+
+test("story 4.2: Paul's messages carry their turn start, skip the weekly review and messages before the window's first user message", () => {
+  const latestFirst = [
+    { role: "assistant", content: "Le mail est prêt.", createdAt: paulAt("08:03:00") },
+    { role: "user", content: "Prépare-moi un mail.", createdAt: paulAt("08:02:50") },
+    { role: "assistant", content: `${WEEKLY_REVIEW_MARKER}
+Rien de neuf.`, createdAt: paulAt("08:02:30") },
+    { role: "assistant", content: "Martine est en cours.", createdAt: paulAt("08:02:10") },
+    { role: "user", content: "Où en est l'équipe ?", createdAt: paulAt("08:02:00") },
+    // En tête de fenêtre, avant tout message du dirigeant : Paul ne le relit pas.
+    { role: "assistant", content: "Bonjour.", createdAt: paulAt("08:00:00") },
+  ];
+  expect(paulMessageTimes(latestFirst)).toEqual(paulTimes);
+  expect(chatWindow(latestFirst).map((message) => message.createdAt)).toEqual([paulAt("08:02:00"), paulAt("08:02:10"), paulAt("08:02:30"), paulAt("08:02:50"), paulAt("08:03:00")]);
+  expect(paulMessageTimes([])).toEqual([]);
+  expect(paulMessageTimes([{ role: "assistant", content: "Seul.", createdAt: paulAt("08:00:00") }])).toEqual([]);
+});
+
+test("usage limit windows start at midnight in Paris, across daylight saving changes", async () => {
+  // Minuit à Paris : le 24 à 00:30 (heure d'été, UTC+2), le jour a commencé le 23 à 22:00 UTC.
+  const justAfterMidnight = parisQuotaWindows(new Date("2026-10-23T22:30:00Z"));
+  expect(justAfterMidnight.dayStart.toISOString()).toBe("2026-10-23T22:00:00.000Z");
+  // Un usage le 23 à 23:50, heure de Paris, appartient à la veille.
+  expect(new Date("2026-10-23T21:50:00Z").getTime()).toBeLessThan(justAfterMidnight.dayStart.getTime());
+  expect(justAfterMidnight.monthStart.toISOString()).toBe("2026-09-30T22:00:00.000Z");
+  expect(justAfterMidnight.nextMonthStart.toISOString()).toBe("2026-10-31T23:00:00.000Z");
+  expect(justAfterMidnight.nextMonthName).toBe("novembre");
+
+  // Passage à l'heure d'hiver le 25 octobre 2026 à 3 h : minuit est encore à UTC+2, le lendemain à UTC+1.
+  expect(parisQuotaWindows(new Date("2026-10-25T12:00:00Z")).dayStart.toISOString()).toBe("2026-10-24T22:00:00.000Z");
+  expect(parisQuotaWindows(new Date("2026-10-26T12:00:00Z")).dayStart.toISOString()).toBe("2026-10-25T23:00:00.000Z");
+  // Passage à l'heure d'été le 29 mars 2026 à 2 h.
+  expect(parisQuotaWindows(new Date("2026-03-29T12:00:00Z")).dayStart.toISOString()).toBe("2026-03-28T23:00:00.000Z");
+  expect(parisQuotaWindows(new Date("2026-03-30T12:00:00Z")).dayStart.toISOString()).toBe("2026-03-29T22:00:00.000Z");
+  expect(parisQuotaWindows(new Date("2026-03-15T12:00:00Z")).nextMonthStart.toISOString()).toBe("2026-03-31T22:00:00.000Z");
+
+  // Le 31 décembre à 23:30 à Paris, c'est encore décembre ; le 1er janvier à 00:30, c'est janvier.
+  const newYearsEve = parisQuotaWindows(new Date("2026-12-31T22:30:00Z"));
+  expect(newYearsEve.monthStart.toISOString()).toBe("2026-11-30T23:00:00.000Z");
+  expect(newYearsEve.nextMonthName).toBe("janvier");
+  expect(newYearsEve.nextMonthStart.toISOString()).toBe("2026-12-31T23:00:00.000Z");
+  expect(parisQuotaWindows(new Date("2026-12-31T23:30:00Z")).monthStart.toISOString()).toBe("2026-12-31T23:00:00.000Z");
+
+  // Messages à Paul et « Préremplir » d'un côté ; tout le reste, mise en ligne du site comprise, compte en lancements.
+  expect(usageCounterFor("co_ceo_chat")).toBe("chat");
+  expect(usageCounterFor("onboarding_interpret")).toBe("chat");
+  expect(usageCounterFor("site_publish")).toBe("runs");
+  expect(usageCounterFor("unit-test")).toBe("runs");
 });

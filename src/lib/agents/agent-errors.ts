@@ -90,7 +90,7 @@ export function failureMessage(reason: RunFailureReason, agentName: string): str
     case "already_running":
       return `${agentName} y travaille déjà. Vous pouvez suivre l'exécution en cours.`;
     case "quota_runs":
-      return "Le quota de lancements est atteint. Réessayez demain ou contactez l'administrateur.";
+      return "Les agents ont atteint leur limite de lancements. Réessayez plus tard.";
     case "quota_budget":
       return "Le budget du jour est atteint. Réessayez demain.";
     case "no_result":

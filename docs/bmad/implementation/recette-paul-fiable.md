@@ -1,6 +1,6 @@
 # Recette manuelle : Paul fiable (scénario Atelier Lumen)
 
-Le parcours des tests en production du 22 et du 23 octobre 2026 ([rapport du 23 octobre](../../../BienDecider-test-entrepreneur-2026-10-23.md)), à rejouer avec le vrai modèle avant chaque mise en production touchant Paul ou les agents. Durée : 20 minutes environ.
+Le parcours des tests en production du 22, du 23 et du 24 octobre 2026 ([rapport du 23 octobre](../../../BienDecider-test-entrepreneur-2026-10-23.md), [rapport du 24 octobre](../../../BienDecider-test-entrepreneur-2026-10-24.md)), à rejouer avec le vrai modèle avant chaque mise en production touchant Paul ou les agents. Durée : 20 minutes environ.
 
 **Persona.** Samuel Morel, Atelier Lumen, ébéniste à Nantes. 140 000 € de chiffre d'affaires par an, il vise 200 000 € par an ; un client rapporte 18 000 € ; 6 cuisines par an. Les chiffres ne se recoupent pas (6 × 18 000 € = 108 000 €, pas 140 000 €) : c'est voulu, ce sont ceux des deux tests ; le reste du chiffre d'affaires vient d'autres travaux, et Paul ne doit pas « corriger » le dirigeant. Un Instagram (`@atelierlumen.nantes`), pas de site.
 
@@ -8,13 +8,17 @@ Le parcours des tests en production du 22 et du 23 octobre 2026 ([rapport du 23 
 
 - Environnement : la production (`https://` du domaine BienDecider) ou une préversion Vercel déployée depuis la branche à livrer, avec la clé du modèle configurée. Noter l'URL et le commit testés.
 - Un compte neuf, avec une adresse jamais utilisée (par exemple `recette+AAAAMMJJ@…`). Aucune connexion (Gmail, Facebook) : rien ne doit partir.
-- Heures des messages : noter l'heure (montre ou horloge du système) à la fin de chaque réponse de Paul, à la minute. La page Équipe donne le début et la fin de chaque exécution : c'est la référence pour les étapes 8 et 9.
+- Heures des messages : noter l'heure (montre ou horloge du système) à la fin de chaque réponse de Paul, à la minute. La page Équipe donne le début et la fin de chaque exécution : c'est la référence pour les étapes 1 bis à 1 quater, 8 et 9.
+- Étapes 1 bis à 1 quater : si l'audit se termine avant 1 ter, les rejouer pendant l'exécution de Jean-Claude (étapes 5 à 7).
 
 ## Étapes
 
 | # | Ce que vous faites ou écrivez à Paul | Résultat attendu |
 | --- | --- | --- |
 | 1 | Onboarding : nom « Atelier Lumen », métier « Ébéniste », zone « Nantes », sans remplir votre nom. Arrivée sur l'accueil. | L'audit de Martine est **en cours** dès l'accueil ; une seule action d'audit au plan. |
+| 1 bis | Pendant l'audit : « Où en est l'équipe ? » | Paul dit que l'audit de Martine est en cours. Noter l'heure de sa réponse. |
+| 1 ter | Toujours pendant l'audit, un message sans rapport : « Quels jours suis-je le plus joignable pour mes clients ? » | Paul répond sans parler de l'audit. Noter l'heure. |
+| 1 quater | Après la fin de l'audit (page Équipe) : « Où en est l'équipe ? » | Paul annonce la fin comme une nouvelle (« depuis, Martine a terminé »), **jamais** « je rectifie », « je dois corriger » ni « c'était faux » : son message de 1 bis était vrai à son heure (cas du test du 24 octobre). |
 | 2 | « Je fais 140 000 € de chiffre d'affaires par an et je veux arriver à 200 000 € par an. Un client me rapporte 18 000 €, je fais 6 cuisines par an. » | La période étant dite, Paul ne repose pas la question « par an ou par mois ? » et affiche **une** carte d'objectif reprenant 200 000 € par an, 140 000 € par an, 18 000 € par client, 6 clients par an. Aucun montant converti au mois dans sa réponse. Rien n'apparaît sur l'accueil avant « Confirmer ». |
 | 3 | Cliquer « Confirmer » sur la carte d'objectif. | L'accueil montre l'objectif tout de suite ; l'écart est « environ 3,3 clients de plus par an » (calculé, jamais « 1 à 2 cuisines »). |
 | 4 | « Mon Instagram est @atelierlumen.nantes, je travaille du lundi au vendredi de 8h à 18h. Je m'appelle Samuel Morel. » | Une carte de profil : « Compte Instagram : @atelierlumen.nantes », horaires, « Votre prénom et nom : Samuel Morel ». Après « Confirmer », la page Entreprise affiche les trois valeurs. |
@@ -40,7 +44,7 @@ Le bloc « Recette Atelier Lumen » de `tests/engine.spec.ts` rejoue ce parcours
 
 ## En cas d'écart
 
-Noter l'étape, l'heure, la phrase exacte de Paul et une capture. Un écart aux étapes 2, 5, 6, 9 ou 12 bloque la mise en production : il touche une promesse de l'épopée (rien sans clic, pas de doublon, pas de fausse erreur, une correction sans nouvelle exécution). Les autres écarts vont dans `docs/bmad/implementation/deferred-work.md`.
+Noter l'étape, l'heure, la phrase exacte de Paul et une capture. Un écart aux étapes 1 quater, 2, 5, 6, 9 ou 12 bloque la mise en production : il touche une promesse de l'épopée (rien sans clic, pas de doublon, pas de fausse erreur, une correction sans nouvelle exécution). Les autres écarts vont dans `docs/bmad/implementation/deferred-work.md`.
 
 ## Nettoyage
 
