@@ -2,7 +2,8 @@
 title: 'Story 3.3 — Faire réviser une production par Paul'
 type: 'feature'
 created: '2026-10-23'
-status: 'ready-for-dev'
+status: 'done'
+baseline_commit: 'eeeeb91b6b3ef4ae05594b01195a9a91e858c818'
 route: 'dispatch'
 review_loop_iteration: 0
 context:
@@ -50,20 +51,58 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] schéma + migration -- `ProposalRevision` -- version précédente conservée
-- [ ] `agent-runs.ts` + `revision.ts` -- exécution de révision -- nouvelle version de la même production
-- [ ] intentions + outil de Paul + prompt -- carte de révision -- Paul propose une révision
-- [ ] file de relecture -- version précédente repliable -- le dirigeant compare
-- [ ] tests -- une ligne de la matrice par test (le modèle est remplacé par une réponse simulée via la capture du `toolRunner`) -- non-régression
+- [x] schéma + migration -- `ProposalRevision` -- version précédente conservée
+- [x] `agent-runs.ts` + `revision.ts` -- exécution de révision -- nouvelle version de la même production
+- [x] intentions + outil de Paul + prompt -- carte de révision -- Paul propose une révision
+- [x] file de relecture -- version précédente repliable -- le dirigeant compare
+- [x] tests -- une ligne de la matrice par test (le modèle est remplacé par une réponse simulée via la capture du `toolRunner`) -- non-régression
 
 **Acceptance Criteria:**
 - Étant donné une révision confirmée et terminée, quand on compte les productions de Jean-Claude, alors leur nombre n'a pas changé.
 
 ## Implementation Notes
 
+- Schéma : `ProposalRevision` avec `source` (`agent` | `owner`), `instruction` nullable (modification du dirigeant), `@@unique([proposalId, fromVersion])` (une version n'est remplacée qu'une fois) et `@@index([agentRunId])` ; `agentRunId` sans clé étrangère. Migration `20261024120000_proposal_revision`, écrite à la main.
+- « Modifier » (PATCH /api/proposals/[id]) conserve aussi la version remplacée (`source: owner`) dans la même transaction que l'écriture conditionnée à la version.
+- Approbation : « modifiée » seulement si cette approbation change le contenu ou si le dirigeant a enregistré un brouillon de cette version (`draftSavedAt`, remis à null par une révision de l'agent) ; une version révisée par l'agent approuvée telle quelle est « validée ».
+- Révision en cours (clé active `revision:{proposalId}`, src/lib/agents/revision-state.ts) : approbation et diffusion refusées en 409 « Une révision est en cours : attendez la nouvelle version. » ; la file de relecture et la fenêtre d'une production affichent « Révision en cours par {agent}… » et désactivent les boutons d'approbation. `AgentRunView.revision` (proposalId, fromVersion, titre) est lu de la charge de l'exécution ; le tableau de bord suit aussi une exécution lancée depuis une carte de Paul.
+- `persistRun` prend `succeededDedupeSeconds` (défaut : 5 min, inchangé pour les lancements directs) ; la révision passe 0 : une révision terminée ne bloque pas la suivante, seule une révision en file ou en cours est renvoyée.
+- Conflits : `RevisionConflictError` (sous-classe d'`AgentNoResultError`, donc motif `no_result`) porte trois messages en clair : modifiée (« … a été modifiée pendant la révision : votre version est conservée. »), décidée (« … a été validée ou rejetée entre-temps : rien n'a été changé. »), disparue. Version déjà changée avant l'appel : échec sans appel au modèle. Agent de l'exécution différent de l'auteur : refus (`outage`). Reprise d'une tentative qui avait déjà écrit la version suivante (`ProposalRevision` de cette exécution) : réussite, sans appel au modèle.
+- Taille : `max_tokens` = 2 × estimation du contenu (3 caractères par token), entre 2 000 et 16 000 ; au-delà de 24 000 caractères, pas de carte (`propose_revision`) ni d'exécution.
+- À la confirmation, `startRevisionFromCard` refuse sans rien lancer une production disparue, décidée, prospect, trop longue ou dont la version a changé depuis la carte (message sans motif) ; une révision en cours donne `already_running` et son `runId`.
+- Plafonds (3.2) : l'outil `revise_proposal` n'écrit qu'une fois par exécution (garde de version) ; `withRunCap` n'est pas utilisé.
+- Email Gmail (`gmail_email`, JSON `{ to, text }`) : refus si la version actuelle n'est pas un JSON lisible, si la révision n'en est pas un ou change le destinataire. Le contenu de l'agent est enregistré tel quel (pas de trim).
+- Paul : `propositionsEnAttente` porte la `version` ; `cartesRecentes` décrit une carte de révision (production, version révisée, consigne, `lancement`) ; le prompt lui fait lire `lancement.message` et ne pas reproposer une révision devancée par une modification ou une décision. Fin d'une exécution de révision : « {agent} a préparé la version N+1 de « titre » », lien vers les décisions.
+- Vue : `PreviousVersion` (production-preview.tsx), lue dès la version 2 et relue à chaque nouvelle version (état par production et version) : ligne « Révisée par {agent} : {consigne} » sur une version écrite par l'agent, « Voir la version précédente » replié avec « modifiée par vous » ou « révisée par {agent} : {consigne} » ; rien n'est affiché sans version conservée. Route `GET /api/proposals/[id]/revisions` déclarée dans tests/security.spec.ts. Après « Annuler » sur une carte de révision, le focus revient au champ de saisie de Paul.
+- Tests : 3 tests purs (delegation), 16 tests base de données (engine, CI uniquement : non exécutés localement).
+
 ## Spec Change Log
 
 ## Review Triage Log
+
+| # | Source | Constat | Verdict | Preuve | Route |
+|---|--------|---------|---------|--------|-------|
+| 1 | edge | Approuver une v2 écrite par l'agent l'enregistre « modifiée par le dirigeant » | medium | la route déduit `modifiee` de `version > 1` | patch |
+| 2 | blind | Aucune indication de révision en cours ; approuver pendant la révision gaspille l'appel | medium | rien ne bloque ni n'affiche l'état | patch |
+| 3 | blind, edge | « Modifier » ne garde aucune version : la v2 de l'agent se perd, libellés trompeurs | medium | pas de `ProposalRevision` côté route | patch |
+| 4 | blind, edge | Message de conflit faux quand la production est décidée ou supprimée | medium | un seul texte « la vôtre est conservée » | patch |
+| 5 | edge | Une relance après une tentative qui a déjà écrit est annoncée en conflit | medium | `fromVersion` déjà dépassé par le même run | patch |
+| 6 | blind | La carte d'exécution d'une révision parle d'« éléments à examiner » ; lien vers Diagnostic pour Martine | medium | `finishedRunMessage` / `runResultHref` génériques | patch |
+| 7 | blind | Consigne de Paul pour `no_result` inadaptée aux conflits de révision | medium | invite à relancer une révision impossible | patch |
+| 8 | blind, edge | `PreviousVersion` vide si la version change panneau ouvert ; cache sans `proposalId` | low | correctif direct | patch |
+| 9 | blind | La production révisée ne dit pas qu'elle a été révisée ni avec quelle consigne | low | correctif direct | patch |
+| 10 | blind | `runRevision` ne vérifie pas que l'agent du run est l'auteur | low | correctif direct | patch |
+| 11 | blind | `ProposalRevision.agentRunId` sans index ; pas de source (agent ou dirigeant) | low | correctif direct (avec le 3) | patch |
+| 12 | edge | Contenu long au-delà du budget de sortie : révision impossible | low | `max_tokens` fixe | patch |
+| 13 | edge | Email Gmail au contenu actuel illisible : destinataire modifiable | low | contrôle sauté si `before` nul | patch |
+| 14 | blind, edge | Contenu de l'agent tronqué de ses espaces | low | correctif direct | patch |
+| 15 | edge | Focus non rendu à la saisie après « Annuler » d'une carte de révision | low | correctif direct | patch |
+| 16 | gap | Remplacement des cartes de révision par production non testé | medium | aucun test `revise_proposal` du remplacement | patch |
+| 17 | gap, blind | Garde du destinataire Gmail, refus « version changée », ordre de deux révisions, `cartesRecentes`, vraie route « Modifier », modèle qui n'écrit rien : non testés | medium | aucun test correspondant | patch |
+| 18 | edge | Production rejetée puis rouverte pendant la révision : la révision s'applique | low | réouverture voulue par le dirigeant | rejeté |
+| 19 | edge | Confirmation concurrente qui reçoit le run d'une autre carte | low | cas très improbable | rejeté |
+| 20 | edge | Run de clé active « succeeded » sans fin | low | état inexistant en pratique | rejeté |
+| 21 | blind | Logique « confirmer puis enregistrer le résultat » dupliquée | low | refonte sans effet visible | rejeté |
 
 ## Verification
 

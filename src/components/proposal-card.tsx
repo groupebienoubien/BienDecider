@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { Icon } from "@/components/icon";
 import { Modal } from "@/components/modal";
-import { ProductionPreview } from "@/components/production-preview";
+import { PreviousVersion, ProductionPreview } from "@/components/production-preview";
 import { AgentByline, Tag } from "@/components/mockup-ui";
 import { productionNoun } from "@/lib/agent-voice";
 import { ReadAloudButton } from "@/components/voice-controls";
@@ -65,6 +65,7 @@ export function ProposalCard({
   companyCertifications,
   leadSource,
   plan,
+  revisingAgent,
 }: {
   proposal: AgentProposal;
   onDecision: (id: string, decision: ProposalDecision) => Promise<boolean>;
@@ -79,6 +80,8 @@ export function ProposalCard({
   companyCertifications?: string | null;
   leadSource?: string | null;
   plan?: PlanContext | null;
+  /** Agent qui écrit en ce moment la version suivante (révision en cours, story 3.3) : approuver et diffuser attendent. */
+  revisingAgent?: string | null;
 }) {
   const [modal, setModal] = useState<"edit" | "reject" | "confirm" | null>(null);
   const [editedContent, setEditedContent] = useState(proposal.content);
@@ -115,6 +118,7 @@ export function ProposalCard({
     (proposal.kind === "site_web_content" || (proposal.kind === "social_post" && facebookPageName !== null));
   const terminal = TERMINAL_STATUSES.includes(proposal.status);
   const destination = proposal.kind === "site_web_content" ? siteDestination ?? "Site public de votre entreprise sur BienDecider" : guidance.destination;
+  const revisingName = revisingAgent ? PERSONAS[revisingAgent as AgentKey]?.name ?? "l’agent" : null;
   const decide = (decision: Omit<ProposalDecision, "expectedVersion">) =>
     onDecision(proposal.id, { ...decision, expectedVersion: proposal.version });
 
@@ -159,6 +163,7 @@ export function ProposalCard({
         </div>
         <button type="button" className="icon-button" onClick={() => openPaul({ type: "proposal", id: proposal.id, title: proposal.title })} aria-label="Échanger avec Paul sur cette production" title="Échanger avec Paul"><Icon name="message-circle" /></button>
       </div>
+      {revisingName && <div role="status" className="warning">Révision en cours par {revisingName}…</div>}
       {proposal.status === "publication_incertaine" && <div role="status" className="warning">Facebook n’a pas confirmé cette publication. Vérifiez votre Page avant toute nouvelle tentative.</div>}
       {proposal.status === "envoi_incertain" && <div role="status" className="warning">Gmail n’a pas confirmé cet envoi. Vérifiez votre boîte d’envoi avant toute nouvelle tentative.</div>}
       {proposal.status === "rejetee" && (
@@ -171,6 +176,7 @@ export function ProposalCard({
         <div>
           <div className="preview-label"><span>{terminal ? "Contenu conservé" : "Aperçu de la version à diffuser"}</span><span>v{proposal.version}</span></div>
           <ProductionPreview kind={proposal.kind} title={proposal.title} content={proposal.content} version={proposal.version} companyName={companyName} siteDestination={siteDestination} />
+          <PreviousVersion proposalId={proposal.id} agent={proposal.agent} version={proposal.version} kind={proposal.kind} title={proposal.title} companyName={companyName} siteDestination={siteDestination} />
           {proposal.kind === "site_web_content" && <small className="legend">L’approbation porte sur ce brief : BienDecider génère la page au moment de la mise en ligne. Vérifiez ensuite la page publique.</small>}
           {!modal && <ReadAloudButton text={spokenText(`${proposal.title}. ${displayContent}`)} label={`Écouter la production de ${persona?.name ?? "l'agent"}`} />}
         </div>
@@ -269,9 +275,9 @@ export function ProposalCard({
           {guidance.canCopy && <button type="button" onClick={() => void copyContent()} disabled={busy}>Copier le contenu</button>}
           {terminal && <Link className="text-link" href={`/dashboard?view=historique&proposal=${encodeURIComponent(proposal.id)}`}><Icon name="history" /> Historique</Link>}
         </div>
-        {proposal.status === "en_attente" && <button type="button" className="primary" onClick={() => decide({ status: "validee" })} disabled={busy}><Icon name="check" /> Approuver cette version</button>}
-        {approvalNeedsConfirmation && <button type="button" className="primary" onClick={() => decide({ status: "validee" })} disabled={busy}><Icon name="check" /> Confirmer l’approbation de cette version</button>}
-        {canPublish && <button type="button" className="primary" onClick={() => setModal("confirm")} disabled={busy}>Préparer la publication <Icon name="arrow-right" /></button>}
+        {proposal.status === "en_attente" && <button type="button" className="primary" onClick={() => decide({ status: "validee" })} disabled={busy || Boolean(revisingName)}><Icon name="check" /> Approuver cette version</button>}
+        {approvalNeedsConfirmation && <button type="button" className="primary" onClick={() => decide({ status: "validee" })} disabled={busy || Boolean(revisingName)}><Icon name="check" /> Confirmer l’approbation de cette version</button>}
+        {canPublish && <button type="button" className="primary" onClick={() => setModal("confirm")} disabled={busy || Boolean(revisingName)}>Préparer la publication <Icon name="arrow-right" /></button>}
       </div>
       {copyNotice && <p role="status" className="version-line">{copyNotice}</p>}
       {(proposal.status === "executee" || proposal.status === "rejetee") && <div className="version-line">
@@ -286,7 +292,7 @@ export function ProposalCard({
         cancelLabel="Annuler la modification"
         actions={<>
           <button type="button" onClick={saveDraft} disabled={busy || !editedContent.trim()}>Enregistrer le brouillon</button>
-          <button type="submit" form={`edit-form-${proposal.id}`} className="primary" disabled={busy || !editedContent.trim()}>Approuver cette version</button>
+          <button type="submit" form={`edit-form-${proposal.id}`} className="primary" disabled={busy || !editedContent.trim() || Boolean(revisingName)}>Approuver cette version</button>
         </>}
       >
         <form id={`edit-form-${proposal.id}`} onSubmit={approveEditedContent}>

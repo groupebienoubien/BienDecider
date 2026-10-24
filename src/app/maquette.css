@@ -140,6 +140,7 @@
 .mq .production-head p{font-size:12px;color:var(--muted);margin:0}
 .mq .preview-layout{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(210px,1fr);gap:24px}
 .mq .preview-label{display:flex;align-items:center;justify-content:space-between;color:var(--muted);font-size:10px;text-transform:uppercase;margin:0 0 12px;font-weight:700;letter-spacing:.8px}
+.mq .previous-version{margin-top:12px;font-size:13px}.mq .previous-version>summary{cursor:pointer;color:var(--muted);font-weight:600}.mq .previous-version>p{margin:8px 0}
 .mq .preview{background:white;border:1px solid var(--line);border-radius:6px;overflow:hidden;align-self:start}
 .mq .social-header{display:flex;align-items:center;gap:10px;padding:16px}
 .mq .social-header strong{font-size:12px}

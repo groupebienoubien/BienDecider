@@ -61,14 +61,20 @@ export function agentName(agent: string): string {
   return PERSONAS[agent as AgentKey]?.name ?? agent;
 }
 
-export function finishedRunMessage(run: Pick<AgentRunView, "agent" | "resultCount">): string {
+export function finishedRunMessage(run: Pick<AgentRunView, "agent" | "resultCount" | "revision">): string {
   const name = agentName(run.agent);
+  if (run.revision) {
+    const title = run.revision.title ? ` de « ${run.revision.title} »` : "";
+    return `${name} a préparé la version ${run.revision.fromVersion + 1}${title}.`;
+  }
   if (run.agent === "co_ceo") return `${name} a terminé : le plan est prêt à examiner.`;
   if (run.resultCount === 0) return `${name} a terminé : rien de nouveau à examiner.`;
   return `${name} a terminé : ${run.resultCount} élément(s) à examiner.`;
 }
 
-export function runResultHref(run: Pick<AgentRunView, "agent">): string {
+export function runResultHref(run: Pick<AgentRunView, "agent" | "revision">): string {
+  // Une révision se relit dans les décisions, quel que soit l'agent (y compris Martine).
+  if (run.revision) return "/dashboard?view=validation";
   if (run.agent === "co_ceo") return "/dashboard?view=plan";
   if (run.agent === "marketing") return "/diagnostic";
   return "/dashboard?view=validation";

@@ -8,7 +8,7 @@ import { getRejectionContext } from "@/lib/agents/rejection-context";
 import { AgentRunQuotaError, classifyRunError, failureMessage, isRunFailureReason, type RunFailureReason } from "@/lib/agents/agent-errors";
 import { PERSONAS, objectiveLine, directionLine, companyProfileLines, runtimeContextLines } from "@/lib/agents/personas";
 import { enqueuePlanRun } from "@/lib/agent-runs";
-import { createChatPlanItem, findLaunchablePlanItem, type PlanAgent } from "@/lib/agents/plan-items";
+import { createChatPlanItem, findLaunchablePlanItem, isPlanAgent, type PlanAgent } from "@/lib/agents/plan-items";
 import { PLAN_THEMES, type PlanTheme } from "@/lib/plan-themes";
 import { recordUsage, runStreamingToolLoop, runToolLoop } from "@/lib/usage";
 import { getFunnelStats, funnelLines } from "@/lib/funnel";
@@ -17,7 +17,8 @@ import { getChatInstructionsForPlan, loadRecentChatHistory } from "@/lib/agents/
 import { getTeamState } from "@/lib/team-state";
 import { resolvePaulReferences } from "@/lib/paul-references";
 import { attachPendingActions, cancelOrphanPendingActions, createPendingAction, recentPendingActions } from "@/lib/agents/pending-actions";
-import { LAUNCH_EXTRA_MAX, MAX_AMOUNT, PROFILE_PAGE_ONLY_MESSAGE, type PendingActionType, profileUpdateToolSchema, readProfileToolInput, updateObjectivePayloadSchema, updateProfilePayloadSchema } from "@/lib/agents/pending-action-view";
+import { activeRevisionRun, revisionRefusal } from "@/lib/agents/revision";
+import { LAUNCH_EXTRA_MAX, MAX_AMOUNT, PROFILE_PAGE_ONLY_MESSAGE, REVISION_INSTRUCTION_MAX, type PendingActionType, profileUpdateToolSchema, readProfileToolInput, updateObjectivePayloadSchema, updateProfilePayloadSchema } from "@/lib/agents/pending-action-view";
 
 const PERSONA = PERSONAS.co_ceo;
 
@@ -77,6 +78,7 @@ export async function buildCurrentStatus(companyId: string) {
       agent: p.agent,
       kind: p.kind,
       title: p.title,
+      version: p.version,
       content: p.content,
     })),
     derniersConstatsAudit: findings.map((f) => ({
@@ -111,7 +113,7 @@ export type DelegationInput = {
 
 const ACTIVE_RUN_STATUSES = ["queued", "running"];
 
-/** Au plus 3 cartes par message de Paul, tous types confondus (objectif, profil, lancements). */
+/** Au plus 3 cartes par message de Paul, tous types confondus (objectif, profil, lancements, révisions). */
 export const MAX_CARDS_PER_REPLY = 3;
 export const CARDS_LIMIT_MESSAGE = `Aucune carte créée : ${MAX_CARDS_PER_REPLY} cartes sont déjà proposées dans cette réponse, c'est le maximum. Propose le reste au prochain message.`;
 
@@ -513,10 +515,76 @@ export async function runCoCeoTurn(
     },
   });
 
+  /**
+   * Proposition de révision (story 3.3) : la carte « Demander à {agent} une
+   * version N+1 de « {titre} » ». Aucune exécution n'est créée ici ; seule
+   * une production à relire se révise, jamais un prospect.
+   */
+  const proposeRevision = betaZodTool({
+    name: "propose_revision",
+    description:
+      `Propose au dirigeant de faire corriger une production existante par l'agent qui l'a écrite : la même production passe à la version suivante, avec sa consigne ; la version actuelle reste consultable. Aucune nouvelle production n'est créée. Crée une carte « Confirmer » sous ta réponse : rien n'est demandé avant son clic. Seule une production à relire (propositionsEnAttente) se révise ; un prospect se corrige dans sa fiche, dans Prospection.`,
+    inputSchema: z.object({
+      proposalId: z.string().describe("Identifiant exact de la production à corriger, lu dans propositionsEnAttente (get_current_status) ou dans le contexte de page"),
+      instruction: z.string().describe(`Consigne du dirigeant, telle qu'il l'a dite, en une ou deux phrases (${REVISION_INSTRUCTION_MAX} caractères au plus), ex: « retire l'avertissement et signe avec mon nom »`),
+    }),
+    run: async (input) => {
+      const instruction = input.instruction.trim();
+      if (!instruction) return "Aucune carte créée : la consigne est vide. Demande au dirigeant ce qu'il faut corriger.";
+      if (instruction.length > REVISION_INSTRUCTION_MAX) {
+        return `Aucune carte créée : la consigne dépasse ${REVISION_INSTRUCTION_MAX} caractères. Résume-la en moins de ${REVISION_INSTRUCTION_MAX} caractères, sans rien inventer.`;
+      }
+      const releaseCard = reserveCard();
+      if (!releaseCard) return CARDS_LIMIT_MESSAGE;
+      try {
+        const proposal = await prisma.agentProposal.findFirst({ where: { id: input.proposalId, companyId } });
+        if (!proposal) {
+          releaseCard();
+          return "Aucune carte créée : aucune production avec cet identifiant. Relis propositionsEnAttente avec get_current_status.";
+        }
+        const refusal = revisionRefusal(proposal);
+        if (refusal === "prospect") {
+          releaseCard();
+          return `Aucune carte créée : « ${proposal.title} » est un prospect, qui ne se révise pas. Dis au dirigeant de corriger sa fiche lui-même dans Prospection.`;
+        }
+        if (refusal === "decided") {
+          releaseCard();
+          return `Aucune carte créée : « ${proposal.title} » est déjà décidée (${proposal.status === "rejetee" ? "rejetée" : "validée ou diffusée"}) ; seule une production à relire se révise. Explique-le au dirigeant${proposal.status === "rejetee" ? " : il peut la rouvrir pour relecture depuis ses décisions, puis te redemander la correction" : ""}. Ne propose pas de nouvelle exécution à la place.`;
+        }
+        if (refusal === "too_long") {
+          releaseCard();
+          return `Aucune carte créée : « ${proposal.title} » est trop longue pour être réécrite d'un coup par l'agent. Dis au dirigeant de la corriger lui-même avec « Modifier ».`;
+        }
+        if (refusal === "agent" || !isPlanAgent(proposal.agent)) {
+          releaseCard();
+          return `Aucune carte créée : « ${proposal.title} » n'a pas été écrite par un agent de l'équipe. Le dirigeant peut la modifier lui-même avec « Modifier ».`;
+        }
+        const agentName = PERSONAS[proposal.agent].name;
+        const running = await activeRevisionRun(companyId, proposal.id);
+        if (running) {
+          releaseCard();
+          return `Aucune carte créée : ${agentName} révise déjà « ${proposal.title} » (exécution ${running.id}). Dis au dirigeant que la nouvelle version apparaîtra dans ses décisions.`;
+        }
+        const action = await createCard("revise_proposal", {
+          proposalId: proposal.id, agent: proposal.agent, title: proposal.title, fromVersion: proposal.version, instruction,
+        });
+        if (!action) {
+          releaseCard();
+          return CARD_FAILED;
+        }
+        return `Carte « Demander à ${agentName} une version ${proposal.version + 1} de « ${proposal.title} » » affichée sous ta réponse. RIEN N'EST DEMANDÉ tant que le dirigeant n'a pas cliqué sur « Confirmer » : ne dis pas que c'est corrigé. La même production passera en version ${proposal.version + 1}, la version ${proposal.version} restera consultable ; aucune nouvelle production n'est créée.`;
+      } catch (error) {
+        releaseCard();
+        console.error("Proposition de révision impossible :", error);
+        return CARD_FAILED;
+      }
+    },
+  });
+
   const runnerParams: BetaToolRunnerParams = {
     model: AGENT_MODEL,
     max_tokens: 2000,
-    tools: [getCurrentStatus, proposeObjectiveUpdate, proposeProfileUpdate, proposeLaunchMarketing, proposeLaunchContenu, proposeLaunchDemarchage, recordUncovered],
+    tools: [getCurrentStatus, proposeObjectiveUpdate, proposeProfileUpdate, proposeLaunchMarketing, proposeLaunchContenu, proposeLaunchDemarchage, proposeRevision, recordUncovered],
     system: [
       {
         type: "text",
@@ -538,7 +606,8 @@ Règles strictes, non négociables :
 - Tu ne lances JAMAIS un agent toi-même. Les outils propose_launch_* créent l'action dans le plan (statut à lancer) et une carte « Lancer {agent} : {titre} » sous ta réponse ; rien n'est lancé tant que le dirigeant n'a pas cliqué sur « Lancer ». Même quand il te demande explicitement de lancer un agent (« lance ${PERSONAS.demarchage.name} »), tu passes par la carte. Ne dis JAMAIS « c'est lancé », « c'est parti » ni que l'agent y travaille après une proposition : dis qu'il peut lancer d'un clic sur la carte, ou choisir « Plus tard » (l'action reste alors dans son plan, à lancer).
 - Chaque proposition de lancement crée une action dans le plan, avec le brief que tu rédiges, et les productions y seront rattachées. Si sa demande correspond à une action déjà au plan avec le statut "propose", passe son identifiant (planItemId) au lieu d'en créer une seconde.
 - Avant de proposer un lancement, regarde cartesRecentes (get_current_status) : si une carte de lancement pour cette demande est encore en attente (status pending), ne la propose pas une seconde fois — même s'il répond « oui, lance-le » — : dis-lui de cliquer sur « Lancer » dans la carte déjà affichée.
-- Au plus ${MAX_CARDS_PER_REPLY} cartes par réponse, tous types confondus (objectif, profil, lancements) : si un outil refuse une carte de plus, propose le reste au message suivant.
+- Quand le dirigeant demande de corriger une production existante (« retire l'avertissement », « signe avec mon nom », « raccourcis ce post »), appelle propose_revision avec son identifiant (propositionsEnAttente) et sa consigne : c'est une révision de la même production, JAMAIS une nouvelle exécution (propose_launch_* créerait de nouvelles productions à côté de l'ancienne). Seule une production à relire se révise : déjà validée ou rejetée, explique-le sans rien proposer d'autre ; un prospect se corrige dans sa fiche, dans Prospection. Ce qu'a donné la carte se lit dans cartesRecentes (type revise_proposal, même lecture de lancement que pour un lancement), et l'issue de la révision dans executionsRecentes : pour une révision, lis toujours lancement.message ou le message de l'exécution ; si la production a été modifiée, validée ou rejetée entre-temps, dis-le simplement au dirigeant et ne repropose pas la même révision — la consigne « le dirigeant peut relancer » d'un no_result ne s'applique pas dans ce cas.
+- Au plus ${MAX_CARDS_PER_REPLY} cartes par réponse, tous types confondus (objectif, profil, lancements, révisions) : si un outil refuse une carte de plus, propose le reste au message suivant.
 - Ce qu'a donné une carte de lancement se lit au tour suivant dans cartesRecentes (get_current_status) : status cancelled = « Plus tard », l'action reste à lancer ; status confirmed avec lancement.ok true = lancé ; avec lancement.ok null, l'issue n'est pas encore connue : dis-le sans affirmer que c'est lancé et vérifie executionsRecentes ; avec lancement.ok false, rien n'a été lancé : reprends le sens de lancement.message sans présenter cela comme une panne quand ce n'en est pas une. Selon lancement.reason : already_running = l'agent y travaillait déjà (ce n'est pas un échec) ; quota_runs ou quota_budget = limite de lancements ou budget du jour atteint, à réessayer demain ; no_result = l'agent n'a rien produit, le dirigeant peut relancer ; outage = indisponibilité passagère, à réessayer plus tard. N'écris jamais le mot « ÉCHEC ».
 - Les productions des agents restent soumises à la validation du dirigeant dans le dashboard : rien n'est publié sans lui.
 - Tu ne construis pas de site web toi-même (${PERSONAS.contenu.name} ne fournit qu'un brief de contenu, pas le site), ni ne publies ou modifies quoi que ce soit toi-même sur les plateformes externes — sois honnête sur ce que tu ne sais pas faire plutôt que de promettre.

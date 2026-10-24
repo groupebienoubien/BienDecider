@@ -14,7 +14,7 @@ import { describeRunProgress, finishedRunMessage, formatDuration, recentSucceede
 import { groupPlanItems, planItemStatusView } from "../src/lib/action-plan-view";
 import { facebookAuditSource } from "../src/lib/facebook-audit-source";
 import { businessTargetLines, clientGapLabel, clientsToMonthly, computeBusinessTarget, toMonthly } from "../src/lib/business-target";
-import { PROFILE_PAGE_ONLY_MESSAGE, decidedText, launchPlanItemPayloadSchema, describePendingAction, expiredMessage, mergeProfilePayloads, objectiveUpdateValues, profileUpdateToolSchema, profileUpdateValues, readProfileToolInput, toPendingActionView, updateObjectivePayloadSchema, updateProfilePayloadSchema } from "../src/lib/agents/pending-action-view";
+import { PROFILE_PAGE_ONLY_MESSAGE, PENDING_ACTION_TYPES, REVISION_INSTRUCTION_MAX, decidedText, launchesRun, launchPlanItemPayloadSchema, reviseProposalPayloadSchema, describePendingAction, expiredMessage, mergeProfilePayloads, objectiveUpdateValues, profileUpdateToolSchema, profileUpdateValues, readProfileToolInput, toPendingActionView, updateObjectivePayloadSchema, updateProfilePayloadSchema } from "../src/lib/agents/pending-action-view";
 import { RUN_CAPS, capGroup, runCapReachedMessage, withRunCap } from "../src/lib/agents/run-caps";
 import { PROFILE_TEXT_LIMITS, clearableText, profileTextIssue } from "../src/lib/company-profile";
 
@@ -674,4 +674,49 @@ test("story 3.2: a reached cap writes nothing and answers the group's message", 
   const answer = await withRunCap("run-a", "review_reply", async () => { writes++; return "écrit"; }, { check: async () => false, locks: new Map() });
   expect(answer).toBe(runCapReachedMessage("fiche_google"));
   expect(writes).toBe(0);
+});
+
+const REVISION_PAYLOAD = { proposalId: "p-1", agent: "demarchage", title: "Offre aux syndics", fromVersion: 1, instruction: "Retire l'avertissement et signe avec mon nom" } as const;
+
+test("story 3.3: a revision card asks the author agent for version N+1 of the production, with the instruction in line", () => {
+  expect(PENDING_ACTION_TYPES).toContain("revise_proposal");
+  expect(describePendingAction({ type: "revise_proposal", payload: REVISION_PAYLOAD })).toEqual({
+    title: "Demander à Jean-Claude une version 2 de « Offre aux syndics »",
+    lines: ["Consigne : Retire l'avertissement et signe avec mon nom"],
+    confirmLabel: "Confirmer",
+    cancelLabel: "Annuler",
+  });
+  expect(describePendingAction({ type: "revise_proposal", payload: { ...REVISION_PAYLOAD, fromVersion: 3 } })?.title).toBe("Demander à Jean-Claude une version 4 de « Offre aux syndics »");
+  // Paul n'est pas un agent auteur ; une consigne vide ou trop longue, une version invalide ne donnent pas de carte.
+  expect(describePendingAction({ type: "revise_proposal", payload: { ...REVISION_PAYLOAD, agent: "co_ceo" } })).toBeNull();
+  expect(REVISION_INSTRUCTION_MAX).toBe(1000);
+  expect(reviseProposalPayloadSchema.safeParse({ ...REVISION_PAYLOAD, instruction: "a".repeat(1000) }).success).toBe(true);
+  expect(reviseProposalPayloadSchema.safeParse({ ...REVISION_PAYLOAD, instruction: "a".repeat(1001) }).success).toBe(false);
+  expect(reviseProposalPayloadSchema.safeParse({ ...REVISION_PAYLOAD, instruction: "" }).success).toBe(false);
+  expect(reviseProposalPayloadSchema.safeParse({ ...REVISION_PAYLOAD, fromVersion: 0 }).success).toBe(false);
+  expect(reviseProposalPayloadSchema.safeParse({ ...REVISION_PAYLOAD, content: "nouveau texte" }).success).toBe(false);
+});
+
+test("story 3.3: a decided revision card shows what the click gave, Annuler leaves the production as it is", () => {
+  const base = { id: "r1", type: "revise_proposal", expiresAt: new Date("2026-10-25T12:00:00Z") };
+  const now = new Date("2026-10-24T12:00:00Z");
+  expect(launchesRun("revise_proposal")).toBe(true);
+  expect(launchesRun("launch_plan_item")).toBe(true);
+  expect(launchesRun("update_profile")).toBe(false);
+  expect(toPendingActionView({ ...base, status: "pending", payload: REVISION_PAYLOAD }, now)).not.toHaveProperty("result");
+  const running = { ok: false, reason: "already_running", message: "Jean-Claude y travaille déjà. Vous pouvez suivre l'exécution en cours.", runId: "run-1" } as const;
+  const view = toPendingActionView({ ...base, status: "confirmed", payload: { ...REVISION_PAYLOAD, result: running } }, now)!;
+  expect(view.result).toEqual(running);
+  expect(decidedText(view.status, view.type, view.result)).toBe(running.message);
+  expect(decidedText("confirmed", "revise_proposal")).toBe("Lancement en cours de vérification…");
+  expect(decidedText("cancelled", "revise_proposal")).toBe("Annulé : la production reste à relire, telle quelle.");
+  expect(expiredMessage("revise_proposal")).toContain("redemandez la correction à Paul");
+});
+
+test("story 3.3: a finished revision run names the new version and links to the decisions, even for Martine", () => {
+  const revision = { proposalId: "p-1", fromVersion: 1, title: "Horaires de la fiche" };
+  expect(finishedRunMessage({ agent: "marketing", resultCount: 1, revision })).toBe("Martine a préparé la version 2 de « Horaires de la fiche ».");
+  expect(runResultHref({ agent: "marketing", revision })).toBe("/dashboard?view=validation");
+  expect(runResultHref({ agent: "marketing" })).toBe("/diagnostic");
+  expect(finishedRunMessage({ agent: "demarchage", resultCount: 1, revision: { ...revision, title: null } })).toBe("Jean-Claude a préparé la version 2.");
 });

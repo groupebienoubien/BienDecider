@@ -314,8 +314,27 @@ model AgentProposal {
   planItem    ActionPlanItem? @relation(fields: [planItemId], references: [id], onDelete: SetNull)
   executionLog ExecutionLog?
   lead        Lead?
+  revisions   ProposalRevision[]
 
   // Plafonds par exécution (story 3.2) : comptés par agentRunId.
+  @@index([agentRunId])
+}
+
+/// Version précédente d'une production (story 3.3) : contenu de la version fromVersion, et qui a écrit la suivante —
+/// l'agent auteur sur consigne du dirigeant (révision), ou le dirigeant lui-même (« Modifier »).
+model ProposalRevision {
+  id              String        @id @default(cuid())
+  proposalId      String
+  proposal        AgentProposal @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+  fromVersion     Int
+  previousContent String
+  source          String        @default("agent") // agent (révision demandée via Paul) ou owner (modification du dirigeant)
+  instruction     String? // consigne d'une révision ; null pour une modification du dirigeant
+  agentRunId      String? // exécution de révision qui a écrit la version fromVersion + 1
+  createdAt       DateTime      @default(now())
+
+  // Une version n'est remplacée qu'une fois : l'écriture la fait passer à la suivante.
+  @@unique([proposalId, fromVersion])
   @@index([agentRunId])
 }
 

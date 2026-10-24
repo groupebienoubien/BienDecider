@@ -2,15 +2,15 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import type { AgentProposal, ActionPlanItem } from "@prisma/client";
 import type { AgentRunView } from "@/lib/agent-run-types";
 import { AgentRunTracker, useAgentRunMonitor } from "@/components/agent-run-tracker";
-import { finishedRunMessage } from "@/lib/agent-run-progress";
+import { finishedRunMessage, isActiveRun } from "@/lib/agent-run-progress";
 import type { SafeCompany } from "@/lib/safe-company";
 import { PERSONAS, type AgentKey } from "@/lib/agents/personas";
 import { ProposalCard, type ProposalDecision } from "@/components/proposal-card";
-import { ProductionPreview } from "@/components/production-preview";
+import { PreviousVersion, ProductionPreview } from "@/components/production-preview";
 import { JourneyProgress } from "@/components/journey-progress";
 import { useAgentProfileCompletion } from "@/components/agent-profile-completion";
 import { Icon, type IconName } from "@/components/icon";
@@ -98,6 +98,18 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
     },
     onError: reportError,
   });
+
+  // Une exécution lancée ailleurs (carte de Paul) arrive par le rafraîchissement de la page : elle est suivie ici aussi.
+  const monitoredRunIds = useRef(new Set(initialAgentRuns.map((run) => run.id)));
+  useEffect(() => {
+    for (const run of initialAgentRuns) {
+      if (!isActiveRun(run) || monitoredRunIds.current.has(run.id)) continue;
+      monitoredRunIds.current.add(run.id);
+      void monitorRun(run.id);
+    }
+  }, [initialAgentRuns, monitorRun]);
+  /** Production dont l'agent écrit la version suivante → agent qui révise. */
+  const revisingAgents = new Map(agentRuns.filter((run) => isActiveRun(run) && run.revision).map((run) => [run.revision!.proposalId, run.agent]));
 
   async function refresh() {
     const [planResponse, proposalResponse, runsResponse] = await Promise.all([
@@ -495,7 +507,7 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
                 })}
               </aside>
               <section>
-                <ProposalCard key={selectedProposal.id} proposal={selectedProposal} onDecision={decideInQueue} onExecute={handleExecute} onSetLeadSource={handleSetLeadSource} busy={locked} riskSettings={riskSettings} facebookPageName={facebookPageName} siteDestination={company.siteSlug ? `/site/${company.siteSlug}` : null} companyName={company.name} companyPhone={company.phone} companyCertifications={company.certifications} leadSource={currentLeadSources[selectedProposal.id]} plan={planOf(selectedProposal)} />
+                <ProposalCard key={selectedProposal.id} proposal={selectedProposal} onDecision={decideInQueue} onExecute={handleExecute} onSetLeadSource={handleSetLeadSource} busy={locked} riskSettings={riskSettings} facebookPageName={facebookPageName} siteDestination={company.siteSlug ? `/site/${company.siteSlug}` : null} companyName={company.name} companyPhone={company.phone} companyCertifications={company.certifications} leadSource={currentLeadSources[selectedProposal.id]} plan={planOf(selectedProposal)} revisingAgent={revisingAgents.get(selectedProposal.id) ?? null} />
               </section>
             </div>
           )}
@@ -610,6 +622,8 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
       >
         {inspected && <>
           <ProductionPreview kind={inspected.kind} title={inspected.title} content={inspected.content} version={inspected.version} companyName={company.name} siteDestination={company.siteSlug ? `/site/${company.siteSlug}` : null} />
+          {revisingAgents.has(inspected.id) && <div role="status" className="warning">Révision en cours par {PERSONAS[revisingAgents.get(inspected.id) as AgentKey]?.name ?? "l’agent"}…</div>}
+          <PreviousVersion proposalId={inspected.id} agent={inspected.agent} version={inspected.version} kind={inspected.kind} title={inspected.title} companyName={company.name} siteDestination={company.siteSlug ? `/site/${company.siteSlug}` : null} />
           <p>{inspected.status === "executee" ? "Exécution enregistrée" : "Décision enregistrée"}. Version {inspected.version}, {PERSONAS[inspected.agent as AgentKey]?.name ?? inspected.agent}.</p>
           {inspected.status === "rejetee" && inspected.rejectionReason && <div className="warning"><strong>Raison du rejet :</strong> <span className="whitespace-pre-wrap break-words">{inspected.rejectionReason}</span></div>}
         </>}

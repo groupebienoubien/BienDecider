@@ -9,6 +9,7 @@ import { AgentRunQuotaError } from "@/lib/agent-runs";
 import { syncPlanItemStatus } from "@/lib/plan-item-status";
 import { decideProposalReview, reviewProposal } from "@/lib/proposal-review";
 import { classifyRunError } from "@/lib/agents/agent-errors";
+import { REVISION_IN_PROGRESS_MESSAGE, activeRevisionRun } from "@/lib/agents/revision-state";
 
 export const maxDuration = 60;
 
@@ -49,6 +50,10 @@ export async function POST(
   }
   if (!Number.isInteger(expectedVersion)) {
     return NextResponse.json({ error: "La version à publier est obligatoire." }, { status: 400 });
+  }
+
+  if (await activeRevisionRun(company.id, proposal.id)) {
+    return NextResponse.json({ error: REVISION_IN_PROGRESS_MESSAGE }, { status: 409 });
   }
 
   if (proposal.kind === "social_post" || proposal.kind === "site_web_content") {
