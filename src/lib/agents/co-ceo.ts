@@ -1,3 +1,5 @@
+import { agentRunnerOptions, bindAgentTools, createAgentExecution, currentAgentExecution, withAgentExecution, withAgentRunWrite } from "@/lib/agent-run-execution";
+import { AGENT_RUN_MAX_TURNS } from "@/lib/agent-run-limits";
 import { z } from "zod";
 import { betaZodTool } from "@anthropic-ai/sdk/helpers/beta/zod";
 import type Anthropic from "@anthropic-ai/sdk";
@@ -5,13 +7,13 @@ import type { BetaToolRunnerParams } from "@anthropic-ai/sdk/lib/tools/BetaToolR
 import { anthropic, AGENT_MODEL } from "@/lib/anthropic";
 import { prisma } from "@/lib/prisma";
 import { getRejectionContext } from "@/lib/agents/rejection-context";
-import { AgentRunQuotaError, classifyRunError, failureMessage, isRunFailureReason, type RunFailureReason } from "@/lib/agents/agent-errors";
+import { AgentRunQuotaError, ensureAgentProduced, classifyRunError, failureMessage, isRunFailureReason, type RunFailureReason } from "@/lib/agents/agent-errors";
 import { PERSONAS, objectiveLine, directionLine, companyProfileLines, runtimeContextLines, formatParisTime, formatParisDate } from "@/lib/agents/personas";
 import { WEEKLY_REVIEW_MARKER } from "@/lib/weekly-review";
 import { enqueuePlanRun } from "@/lib/agent-runs";
-import { createChatPlanItem, findLaunchablePlanItem, isPlanAgent, type PlanAgent } from "@/lib/agents/plan-items";
+import { createChatPlanItem, findLaunchablePlanItem, isPlanAgent, cleanPlanLaunchExtras, resolvePlanLaunchExtras, type PlanAgent } from "@/lib/agents/plan-items";
 import { PLAN_THEMES, type PlanTheme } from "@/lib/plan-themes";
-import { recordUsage, runStreamingToolLoop, runToolLoop } from "@/lib/usage";
+import { runStreamingToolLoop, runToolLoop } from "@/lib/usage";
 import { getFunnelStats, funnelLines } from "@/lib/funnel";
 import { CAPABILITY_CATALOG, recordUncoveredRequest } from "@/lib/agents/capabilities";
 import { getChatInstructionsForPlan, loadPaulMessageTimes, loadRecentChatHistory } from "@/lib/agents/chat-context";
@@ -252,7 +254,7 @@ export async function delegatePlanAction(
     return launchItem(companyId, agent, item, extras, "du plan lancée");
   }
   // Une action active de même agent et même thème est reprise (AD-16), jamais recréée.
-  const { item, reused } = await createChatPlanItem(companyId, agent, input.actionTitle, input.brief, input.theme, input.priority, input.outcome);
+  const { item, reused } = await createChatPlanItem(companyId, agent, input.actionTitle, input.brief, input.theme, input.priority, input.outcome, cleanPlanLaunchExtras(extras));
   if (reused) {
     const running = await alreadyRunningResult(companyId, agent, item.id);
     if (running) return running;
@@ -280,7 +282,7 @@ export async function launchPlanItemFromCard(companyId: string, agent: PlanAgent
  * Garde-fou : ses outils ne créent que des cartes (propose_launch_*,
  * objectif, profil) ; aucune exécution avant le clic du dirigeant.
  */
-export async function runCoCeoTurn(
+async function runCoCeoTurnImpl(
   companyId: string,
   userMessage: string,
   reservationId?: string,
@@ -292,9 +294,9 @@ export async function runCoCeoTurn(
     where: { id: companyId },
   });
 
-  await prisma.chatMessage.create({
+  await withAgentRunWrite(companyId, undefined, (tx) => tx.chatMessage.create({
     data: { companyId, role: "user", content: userMessage },
-  });
+  }));
 
   const history = await loadRecentChatHistory(companyId);
 
@@ -403,9 +405,9 @@ export async function runCoCeoTurn(
         }
       } else {
         // Une action active (à lancer ou en cours) de même agent et même thème est reprise telle quelle (AD-16).
-        ({ item, reused } = await createChatPlanItem(companyId, agent, input.actionTitle, input.brief, input.theme, input.priority, input.outcome));
+        ({ item, reused } = await createChatPlanItem(companyId, agent, input.actionTitle, input.brief, input.theme, input.priority, input.outcome, cleanPlanLaunchExtras(extras)));
       }
-      const cleanExtras = Object.fromEntries(Object.entries(extras).flatMap(([key, value]) => (typeof value === "string" && value.trim() ? [[key, value.trim()]] : []))) as LaunchExtras;
+      const cleanExtras = await resolvePlanLaunchExtras(companyId, item);
       const action = await createCard("launch_plan_item", {
         planItemId: item.id, agent, title: item.title,
         ...(item.outcome ? { outcome: item.outcome } : {}),
@@ -617,7 +619,8 @@ export async function runCoCeoTurn(
   const runnerParams: BetaToolRunnerParams = {
     model: AGENT_MODEL,
     max_tokens: 2000,
-    tools: [getCurrentStatus, proposeObjectiveUpdate, proposeProfileUpdate, proposeLaunchMarketing, proposeLaunchContenu, proposeLaunchDemarchage, proposeRevision, recordUncovered],
+    max_iterations: AGENT_RUN_MAX_TURNS,
+    tools: bindAgentTools([getCurrentStatus, proposeObjectiveUpdate, proposeProfileUpdate, proposeLaunchMarketing, proposeLaunchContenu, proposeLaunchDemarchage, proposeRevision, recordUncovered]),
     system: [
       {
         type: "text",
@@ -661,9 +664,10 @@ Règles strictes, non négociables :
     messages,
   };
   try {
-    const { finalMessage, usage } = stream
-      ? await runStreamingToolLoop(anthropic.beta.messages.toolRunner({ ...runnerParams, stream: true as const }), stream)
-      : await runToolLoop(anthropic.beta.messages.toolRunner({ ...runnerParams, stream: false as const }));
+    const accounting = { companyId, reservationId, agent: "co_ceo", model: AGENT_MODEL };
+    const { finalMessage } = stream
+      ? await runStreamingToolLoop(anthropic.beta.messages.toolRunner({ ...runnerParams, stream: true as const }, agentRunnerOptions()), stream, accounting)
+      : await runToolLoop(anthropic.beta.messages.toolRunner({ ...runnerParams, stream: false as const }, agentRunnerOptions()), accounting);
 
     const assistantText = finalMessage.content
       .filter((block): block is Anthropic.TextBlock => block.type === "text")
@@ -674,17 +678,11 @@ Règles strictes, non négociables :
     const savedReply = assistantText || "(pas de réponse textuelle — vérifiez le dashboard pour les nouvelles propositions)";
     const [resolvedReply] = await resolvePaulReferences(companyId, [savedReply]);
 
-    await recordUsage({
-      companyId: company.id,
-      reservationId,
-      agent: "co_ceo",
-      model: AGENT_MODEL,
-      usage,
-    });
 
-    const savedMessage = await prisma.chatMessage.create({
+
+    const savedMessage = await withAgentRunWrite(companyId, undefined, (tx) => tx.chatMessage.create({
       data: { companyId, role: "assistant", content: resolvedReply.content },
-    });
+    }));
     const actions = await attachPendingActions(companyId, createdActionIds, savedMessage.id);
 
     return { ...resolvedReply, actions };
@@ -702,7 +700,7 @@ Règles strictes, non négociables :
  * pas à l'historique de chat, ne délègue jamais lui-même (chaque item du
  * plan n'est lancé que si l'utilisateur clique "Lancer" dans le dashboard).
  */
-export async function runCoCeoPlanning(companyId: string, agentRunId?: string) {
+async function runCoCeoPlanningImpl(companyId: string, agentRunId?: string) {
   const company = await prisma.company.findUniqueOrThrow({
     where: { id: companyId },
   });
@@ -751,7 +749,7 @@ export async function runCoCeoPlanning(companyId: string, agentRunId?: string) {
       priority: z.number().int().min(1).max(5).describe("Priorité de 1 (la plus urgente) à 5"),
     }),
     run: async (input) => {
-      const item = await prisma.actionPlanItem.create({
+      const item = await withAgentRunWrite(companyId, agentRunId, (tx) => tx.actionPlanItem.create({
         data: {
           companyId,
           agent: input.agent,
@@ -762,7 +760,7 @@ export async function runCoCeoPlanning(companyId: string, agentRunId?: string) {
           theme: input.theme,
           priority: input.priority,
         },
-      });
+      }));
       createdItemIds.push(item.id);
       return `Action ajoutée au plan (id: ${item.id}).`;
     },
@@ -802,7 +800,8 @@ ${funnelLines(funnel)}`;
   const { usage } = await runToolLoop(anthropic.beta.messages.toolRunner({
     model: AGENT_MODEL,
     max_tokens: 2000,
-    tools: [proposePlanItem, uncoveredRequestTool(companyId, "plan")],
+    max_iterations: AGENT_RUN_MAX_TURNS,
+    tools: bindAgentTools([proposePlanItem, uncoveredRequestTool(companyId, "plan")]),
     system: [
       { type: "text", text: stableSystem, cache_control: { type: "ephemeral" } },
       { type: "text", text: dynamicSystem },
@@ -813,17 +812,20 @@ ${funnelLines(funnel)}`;
         content: "Donne-moi ton plan d'action priorisé.",
       },
     ],
-  }));
+  }, agentRunnerOptions()), { companyId, agentRunId, agent: "co_ceo", model: AGENT_MODEL });
 
-  await recordUsage({
-    companyId: company.id,
-    agentRunId,
-    agent: "co_ceo",
-    model: AGENT_MODEL,
-    usage,
-  });
+  const items = await prisma.actionPlanItem.findMany({ where: { companyId, id: { in: createdItemIds } } });
+  ensureAgentProduced("Paul", items.length, { stopReason: "plan", usage });
+  return items;
+}
 
-  return prisma.actionPlanItem.findMany({
-    where: { id: { in: createdItemIds } },
-  });
+
+export async function runCoCeoTurn(...args: Parameters<typeof runCoCeoTurnImpl>) {
+  if (currentAgentExecution()) return runCoCeoTurnImpl(...args);
+  return withAgentExecution(createAgentExecution({ companyId: args[0] }), () => runCoCeoTurnImpl(...args));
+}
+
+export async function runCoCeoPlanning(...args: Parameters<typeof runCoCeoPlanningImpl>) {
+  if (currentAgentExecution()) return runCoCeoPlanningImpl(...args);
+  return withAgentExecution(createAgentExecution({ companyId: args[0], agentRunId: args[1] }), () => runCoCeoPlanningImpl(...args));
 }

@@ -1,3 +1,4 @@
+import { withAgentRunWrite } from "@/lib/agent-run-execution";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { withSerializableRetry } from "@/lib/serialization-conflict";
@@ -186,7 +187,7 @@ export async function createPendingAction<T extends PendingActionType>(companyId
   const target = sameTarget(type, valid);
   return withSerializableRetry(() => {
     const now = new Date();
-    return prisma.$transaction(async (tx) => {
+    return withAgentRunWrite(companyId, undefined, async (tx) => {
       await tx.paulPendingAction.updateMany({
         where: { companyId, type, status: "pending", expiresAt: { lte: now }, ...target },
         data: { status: "expired", decidedAt: now },
@@ -201,7 +202,7 @@ export async function createPendingAction<T extends PendingActionType>(companyId
       return tx.paulPendingAction.create({
         data: { companyId, type, payload: finalPayload as Prisma.InputJsonValue, expiresAt: new Date(now.getTime() + PENDING_ACTION_TTL_MS) },
       });
-    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    });
   }, MAX_CREATE_ATTEMPTS);
 }
 
@@ -274,10 +275,11 @@ export async function cancelOrphanPendingActions(companyId: string, ids: string[
 
 /** Rattache les intentions créées pendant un tour au message de Paul enregistré à la fin. */
 export async function attachPendingActions(companyId: string, ids: string[], chatMessageId: string): Promise<PendingActionView[]> {
-  if (ids.length === 0) return [];
-  await prisma.paulPendingAction.updateMany({ where: { companyId, id: { in: ids } }, data: { chatMessageId } });
-  const actions = await prisma.paulPendingAction.findMany({ where: { companyId, id: { in: ids } }, orderBy: { createdAt: "asc" } });
-  return actions.map((action) => toPendingActionView(action)).filter((view): view is PendingActionView => view !== null);
+  return withAgentRunWrite(companyId, undefined, async (tx) => {
+    await tx.paulPendingAction.updateMany({ where: { companyId, id: { in: ids } }, data: { chatMessageId } });
+    const actions = await tx.paulPendingAction.findMany({ where: { companyId, id: { in: ids } }, orderBy: { createdAt: "asc" } });
+    return actions.map((action) => toPendingActionView(action)).filter((view): view is PendingActionView => view !== null);
+  });
 }
 
 /** Cartes de chaque message de Paul, pour l'historique du panneau. */

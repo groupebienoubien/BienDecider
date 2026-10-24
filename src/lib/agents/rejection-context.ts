@@ -1,4 +1,6 @@
 import { prisma } from "@/lib/prisma";
+import type { Prisma } from "@prisma/client";
+import { assertAgentExecutionActive } from "@/lib/agent-run-execution";
 
 export async function getRejectionContext(companyId: string): Promise<string> {
   const rejected = await prisma.agentProposal.findMany({
@@ -29,11 +31,14 @@ export function normalizeForComparison(text: string): string {
 export async function rejectedDuplicateNotice(
   companyId: string,
   candidate: { kind: string; title: string; content: string },
+  db: Pick<Prisma.TransactionClient, "agentProposal"> = prisma,
 ): Promise<string | null> {
-  const rejected = await prisma.agentProposal.findMany({
+  assertAgentExecutionActive();
+  const rejected = await db.agentProposal.findMany({
     where: { companyId, status: "rejetee", kind: candidate.kind },
     select: { title: true, content: true, rejectionReason: true },
   });
+  assertAgentExecutionActive();
   const title = normalizeForComparison(candidate.title);
   const content = normalizeForComparison(candidate.content);
   const match = rejected.find(
