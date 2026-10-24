@@ -21,6 +21,12 @@ export async function handleGoogleOAuthCallback(request: NextRequest, dependenci
   const code = request.nextUrl.searchParams.get("code");
   const state = request.nextUrl.searchParams.get("state");
   const validState = await dependencies.verifyAndClearOAuthState(state);
+  if (validState && request.nextUrl.searchParams.get("error") === "access_denied") {
+    return NextResponse.redirect(new URL("/connexions?error=google_denied", request.url));
+  }
+  if (validState && !code && request.nextUrl.searchParams.has("error")) {
+    return NextResponse.redirect(new URL("/connexions?error=oauth_exchange", request.url));
+  }
   if (!code || !validState) return NextResponse.redirect(new URL("/connexions?error=oauth_state", request.url));
 
   try {

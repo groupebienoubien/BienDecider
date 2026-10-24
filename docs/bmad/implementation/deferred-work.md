@@ -83,3 +83,6 @@
 - source_spec: `docs/bmad/implementation/spec-corrections-audit-agents-ia.md`
   summary: Montrer le nombre et un lien vers les productions conservées dans le suivi d'un run échoué partiellement.
   evidence: Revue B9, medium : les productions restent dans les décisions et le diagnostic, mais le suivi d'échec préexistant propose surtout la relance ; l'arrêt explicite et la conservation restent couverts par le lot actuel.
+- source_spec: `docs/bmad/implementation/spec-gh-8-renouveler-jetons-google-meta.md`
+  summary: Ne pas afficher « Connexion expirée · reliez de nouveau le compte » quand un refresh token GBP permet le renouvellement à la demande.
+  evidence: `src/app/connexions/page.tsx` déduit l'expiration de `expiresAt` seul; l'accès dure environ une heure, donc une connexion renouvelable est présentée comme à relier. Le libellé préexistait à l'US #8 et la spec choisit un renouvellement à la demande sans tâche planifiée.
