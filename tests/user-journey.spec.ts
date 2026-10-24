@@ -808,7 +808,7 @@ test("story 5.2: the diagnostic prepares the plan on a click, then links to it o
     await expect(prepare).toHaveClass(/primary/);
     await expect(page.getByRole("button", { name: /Actualiser le diagnostic/ })).not.toHaveClass(/primary/);
     await prepare.click();
-    await expect(page.getByRole("alert")).toContainText("limite de lancements");
+    await expect(page.getByRole("alert").filter({ hasText: "limite de lancements" })).toBeVisible();
     await page.unroute("**/api/co-ceo/plan");
 
     // Préparation : le bouton dit qu'elle est en cours, puis mène au plan.
