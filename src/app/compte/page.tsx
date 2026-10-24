@@ -6,6 +6,7 @@ import { PageHeading } from "@/components/mockup-ui";
 import { getSessionCompany } from "@/lib/session";
 import { getShellProps } from "@/lib/shell-data";
 import { prisma } from "@/lib/prisma";
+import { parisQuotaWindows } from "@/lib/quota-windows";
 
 export const dynamic = "force-dynamic";
 
@@ -15,9 +16,7 @@ export default async function AccountPage() {
   const company = await getSessionCompany();
   if (!company) redirect("/login");
   if (!company.name) redirect("/onboarding");
-  const monthStart = new Date();
-  monthStart.setUTCDate(1);
-  monthStart.setUTCHours(0, 0, 0, 0);
+  const { monthStart } = parisQuotaWindows(new Date());
   const [shell, usage] = await Promise.all([
     getShellProps(company),
     prisma.usageEvent.aggregate({
@@ -34,13 +33,15 @@ export default async function AccountPage() {
         <h2 id="account-budget">Crédits &amp; limites</h2>
         <p>Budget IA : {MONEY.format(spent)} $ consommés sur {MONEY.format(company.monthlySpendLimitUsd)} $ par mois.</p>
         <progress value={Math.min(spent, company.monthlySpendLimitUsd)} max={company.monthlySpendLimitUsd} aria-label="Budget consommé" />
-        <p>Depuis le {monthStart.toLocaleDateString("fr-FR", { timeZone: "UTC" })} à 00:00 UTC. Coûts estimés des appels IA enregistrés, en dollars américains.</p>
+        <p>Depuis le {monthStart.toLocaleDateString("fr-FR", { timeZone: "Europe/Paris" })} à 00:00, heure de Paris. Coûts estimés des appels IA enregistrés, en dollars américains.</p>
         <dl className="modal-details">
           <dt>Appels</dt><dd>{usage._count} enregistrés ce mois-ci</dd>
           <dt>Tokens</dt><dd>{new Intl.NumberFormat("fr-FR", { notation: "compact" }).format((usage._sum.inputTokens ?? 0) + (usage._sum.outputTokens ?? 0))} traités</dd>
           <dt>Budget</dt><dd>{company.dailySpendLimitUsd} $ par jour / {company.monthlySpendLimitUsd} $ par mois</dd>
-          <dt>Agents</dt><dd>{company.dailyAgentRunLimit} lancements par jour / {company.monthlyAgentRunLimit} par mois</dd>
+          <dt>Paul</dt><dd>{company.dailyChatMessageLimit} messages par jour / {company.monthlyChatMessageLimit} par mois, « Préremplir mon profil » compris</dd>
+          <dt>Agents</dt><dd>{company.dailyAgentRunLimit} lancements par jour / {company.monthlyAgentRunLimit} par mois, mise en ligne du site comprise</dd>
         </dl>
+        <p>Les jours et les mois commencent à minuit, heure de Paris. Un message à Paul ne compte pas dans les lancements des agents ; un lancement que vous confirmez, si.</p>
         <p>Cette consommation n’est ni un solde de crédits ni une facture. Les réservations en cours peuvent réduire temporairement le budget disponible. Pour ajuster vos limites : <a href="mailto:contact@biendecider.com">contact@biendecider.com</a>.</p>
       </section>
       <section className="setting-section" aria-labelledby="account-access">

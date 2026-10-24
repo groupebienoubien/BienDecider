@@ -266,6 +266,7 @@ test("run errors are classified by type into one reason, each with a clear messa
     expect(message, reason).toMatch(/(Vous|Réessayez)/);
   }
   expect(failureMessage("already_running", "Martine")).toContain("y travaille déjà");
+  expect(failureMessage("quota_runs", "Martine")).not.toMatch(/administrateur/i);
   expect(failureMessage("quota_budget", "Martine")).toContain("budget du jour");
   expect(failureMessage("quota_budget", "Martine")).toContain("Réessayez demain");
   expect(failureMessage("no_result", "Martine")).toContain("n'a pas pu produire");
@@ -311,7 +312,7 @@ test("Paul delegating under a reached quota or budget gets the typed reason and 
   await prisma.company.update({ where: { id: company.id }, data: { dailyAgentRunLimit: 0 } });
   const runs = await delegatePlanAction(company.id, "contenu", { ...DELEGATION_INPUT, planItemId: item.id });
   expect(runs).toMatchObject({ ok: false, reason: "quota_runs", planItemId: item.id });
-  expect(runs.message).toContain("quota journalier de lancements");
+  expect(runs.message).toContain("limite de lancements pour aujourd'hui");
   expect(runs.message).not.toContain("ÉCHEC");
 
   await prisma.company.update({ where: { id: company.id }, data: { dailyAgentRunLimit: 10, dailySpendLimitUsd: 0.5 } });
@@ -488,7 +489,7 @@ test("agent launch quotas block daily and monthly limits before creating a run",
   const dailyBlocked = await request.post(`${baseURL}/api/action-plan/${item.id}/launch`, { headers, data: {} });
   expect(dailyBlocked.status()).toBe(429);
   const dailyBody = await dailyBlocked.json();
-  expect(dailyBody.error).toContain("journalier");
+  expect(dailyBody.error).toBe("Les agents ont atteint leur limite de lancements pour aujourd'hui. Ils reprendront demain matin.");
   expect(dailyBody.reason).toBe("quota_runs");
   expect(await prisma.agentRun.count({ where: { companyId: company.id } })).toBe(0);
   expect((await prisma.actionPlanItem.findUniqueOrThrow({ where: { id: item.id } })).status).toBe("propose");
@@ -497,7 +498,7 @@ test("agent launch quotas block daily and monthly limits before creating a run",
   const monthlyBlocked = await request.post(`${baseURL}/api/action-plan/${item.id}/launch`, { headers, data: {} });
   expect(monthlyBlocked.status()).toBe(429);
   const monthlyBody = await monthlyBlocked.json();
-  expect(monthlyBody.error).toContain("mensuel");
+  expect(monthlyBody.error).toContain("limite de lancements pour ce mois-ci. Ils reprendront le 1er ");
   expect(monthlyBody.reason).toBe("quota_runs");
   expect(await prisma.agentRunAttempt.count({ where: { companyId: company.id } })).toBe(0);
 });
@@ -542,6 +543,183 @@ test("synchronous model calls reserve spend and release it only after recording 
   expect(released.releasedAt).not.toBeNull();
   expect(released.usageEvent?.reservationId).toBe(reservation.id);
   expect(released.usageEvent?.costUsd).toBeGreaterThan(0);
+});
+
+/** Story 4.1 : usage déjà consommé, réservations libérées pour que seul le compteur testé bloque. */
+async function seedUsage(companyId: string, usage: { attempts?: number; reservations?: number; purpose?: string; at?: Date }) {
+  const { prisma } = await import("../src/lib/prisma");
+  const at = usage.at ?? new Date();
+  if (usage.attempts) {
+    const run = await prisma.agentRun.create({ data: { companyId, agent: "contenu", requestKey: `seed:${randomUUID()}`, payload: {}, status: "succeeded", finishedAt: at } });
+    await prisma.agentRunAttempt.createMany({ data: Array.from({ length: usage.attempts }, () => ({ companyId, agentRunId: run.id, status: "succeeded", queuedAt: at })) });
+  }
+  if (usage.reservations) {
+    await prisma.usageReservation.createMany({ data: Array.from({ length: usage.reservations }, () => ({
+      companyId, purpose: usage.purpose ?? "co_ceo_chat", amountUsd: 1, createdAt: at, expiresAt: at, releasedAt: at,
+    })) });
+  }
+}
+
+/** Libère les réservations ouvertes : seul le compteur testé bloque, jamais le budget réservé. */
+async function releaseReservations(companyId: string) {
+  const { prisma } = await import("../src/lib/prisma");
+  await prisma.usageReservation.updateMany({ where: { companyId, releasedAt: null }, data: { releasedAt: new Date() } });
+}
+
+function sessionHeaders(company: Company) {
+  if (!process.env.SESSION_SECRET) throw new Error("SESSION_SECRET is required for engine tests.");
+  const baseURL = process.env.UX_TEST_BASE_URL ?? "http://localhost:3000";
+  return { baseURL, headers: { Cookie: `pepito_session=${createSessionToken(company.ownerEmail, company.sessionVersion, process.env.SESSION_SECRET)}`, Origin: baseURL } };
+}
+
+test("story 4.1: new companies get 50 messages to Paul a day and 500 a month, launches unchanged", async ({ company }) => {
+  expect(company).toMatchObject({ dailyChatMessageLimit: 50, monthlyChatMessageLimit: 500, dailyAgentRunLimit: 10, monthlyAgentRunLimit: 100 });
+});
+
+test("story 4.1: after the test session's 10 launches and 7 messages, Paul and « Préremplir » still answer", async ({ company }) => {
+  const { reserveUsageBudget } = await import("../src/lib/agent-runs");
+  await seedUsage(company.id, { attempts: 10, reservations: 7, purpose: "co_ceo_chat" });
+  await expect(reserveUsageBudget(company.id, "co_ceo_chat")).resolves.toMatchObject({ purpose: "co_ceo_chat" });
+  await releaseReservations(company.id);
+  await expect(reserveUsageBudget(company.id, "onboarding_interpret")).resolves.toMatchObject({ purpose: "onboarding_interpret" });
+});
+
+test("story 4.1: exhausted launches refuse a launch and still accept a message to Paul", async ({ company, request }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { reserveUsageBudget } = await import("../src/lib/agent-runs");
+  const { baseURL, headers } = sessionHeaders(company);
+  const item = await prisma.actionPlanItem.create({ data: { companyId: company.id, agent: "contenu", title: "Posts", rationale: "R", timing: "Aujourd'hui" } });
+  await seedUsage(company.id, { attempts: 10 });
+
+  const refused = await request.post(`${baseURL}/api/action-plan/${item.id}/launch`, { headers, data: {} });
+  expect(refused.status()).toBe(429);
+  expect(await refused.json()).toMatchObject({ reason: "quota_runs", error: "Les agents ont atteint leur limite de lancements pour aujourd'hui. Ils reprendront demain matin." });
+  expect((await prisma.actionPlanItem.findUniqueOrThrow({ where: { id: item.id } })).status).toBe("propose");
+  await expect(reserveUsageBudget(company.id, "co_ceo_chat")).resolves.toMatchObject({ purpose: "co_ceo_chat" });
+});
+
+test("story 4.1: exhausted messages refuse a message to Paul and still accept a launch", async ({ company, request }) => {
+  const { reserveUsageBudget } = await import("../src/lib/agent-runs");
+  const { baseURL, headers } = sessionHeaders(company);
+  await seedUsage(company.id, { reservations: 30, purpose: "co_ceo_chat" });
+  await seedUsage(company.id, { reservations: 20, purpose: "onboarding_interpret" });
+
+  const refused = await request.post(`${baseURL}/api/co-ceo/message`, { headers, data: { message: "Bonjour Paul" } });
+  expect(refused.status()).toBe(429);
+  const body = await refused.json();
+  expect(body.reason).toBe("quota_runs");
+  expect(body.error).toBe("Vous avez atteint la limite de messages à Paul pour aujourd'hui. Vous pourrez lui écrire de nouveau demain matin.");
+  await expect(reserveUsageBudget(company.id, "onboarding_interpret")).rejects.toMatchObject({ reason: "quota_runs" });
+  await expect(reserveUsageBudget(company.id, "site_publish")).resolves.toMatchObject({ purpose: "site_publish" });
+  await releaseReservations(company.id);
+
+  // Un vrai lancement d'action reste accepté : seul le compteur de lancements le limite.
+  const { prisma } = await import("../src/lib/prisma");
+  const { enqueuePlanRun } = await import("../src/lib/agent-runs");
+  const item = await prisma.actionPlanItem.create({ data: { companyId: company.id, agent: "contenu", title: "Posts", rationale: "R", timing: "Aujourd'hui" } });
+  const run = await inRequestScope([], () => enqueuePlanRun({ companyId: company.id, item }));
+  expect(run).toMatchObject({ planItemId: item.id, status: "queued" });
+  expect(await prisma.agentRunAttempt.count({ where: { companyId: company.id, agentRunId: run.id } })).toBe(1);
+});
+
+test("story 4.1: a reached monthly limit says when to try again", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { reserveUsageBudget } = await import("../src/lib/agent-runs");
+  const { parisQuotaWindows } = await import("../src/lib/quota-windows");
+  const month = parisQuotaWindows(new Date()).nextMonthName;
+
+  await prisma.company.update({ where: { id: company.id }, data: { monthlyChatMessageLimit: 0 } });
+  await expect(reserveUsageBudget(company.id, "co_ceo_chat")).rejects.toMatchObject({
+    reason: "quota_runs", message: `Vous avez atteint la limite de messages à Paul pour ce mois-ci. Vous pourrez lui écrire de nouveau le 1er ${month}.`,
+  });
+
+  await prisma.company.update({ where: { id: company.id }, data: { monthlyChatMessageLimit: 500, monthlyAgentRunLimit: 0 } });
+  await expect(reserveUsageBudget(company.id, "site_publish")).rejects.toMatchObject({
+    reason: "quota_runs", message: `Les agents ont atteint leur limite de lancements pour ce mois-ci. Ils reprendront le 1er ${month}.`,
+  });
+
+  await prisma.company.update({ where: { id: company.id }, data: { monthlyAgentRunLimit: 100, dailySpendLimitUsd: 5, monthlySpendLimitUsd: 0.5 } });
+  const message = await reserveUsageBudget(company.id, "co_ceo_chat").then(() => "accepté", (error: Error & { reason?: string }) => `${error.reason} ${error.message}`);
+  expect(message).toContain("quota_budget");
+  expect(message).toContain(`Réessayez le 1er ${month}.`);
+  expect(message).not.toMatch(/administrateur/i);
+});
+
+test("story 4.1: when the day and month limits are both reached, the message gives the 1st of next month", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { reserveUsageBudget } = await import("../src/lib/agent-runs");
+  const { parisQuotaWindows } = await import("../src/lib/quota-windows");
+  const month = parisQuotaWindows(new Date()).nextMonthName;
+  await prisma.company.update({ where: { id: company.id }, data: { dailyChatMessageLimit: 2, monthlyChatMessageLimit: 2, dailyAgentRunLimit: 2, monthlyAgentRunLimit: 2 } });
+  await seedUsage(company.id, { attempts: 2, reservations: 2, purpose: "co_ceo_chat" });
+  await expect(reserveUsageBudget(company.id, "co_ceo_chat")).rejects.toMatchObject({
+    reason: "quota_runs", message: `Vous avez atteint la limite de messages à Paul pour ce mois-ci. Vous pourrez lui écrire de nouveau le 1er ${month}.`,
+  });
+  await expect(reserveUsageBudget(company.id, "site_publish")).rejects.toMatchObject({
+    reason: "quota_runs", message: `Les agents ont atteint leur limite de lancements pour ce mois-ci. Ils reprendront le 1er ${month}.`,
+  });
+});
+
+test("story 4.1: usage before midnight in Paris does not count for today", async ({ company }) => {
+  const { reserveUsageBudget } = await import("../src/lib/agent-runs");
+  const { parisQuotaWindows } = await import("../src/lib/quota-windows");
+  const { dayStart } = parisQuotaWindows(new Date());
+  // Veille à 23:50, heure de Paris : ni les messages ni les lancements ne comptent aujourd'hui.
+  const lastNight = new Date(dayStart.getTime() - 10 * 60 * 1000);
+  await seedUsage(company.id, { attempts: 10, reservations: 50, purpose: "co_ceo_chat", at: lastNight });
+  await expect(reserveUsageBudget(company.id, "co_ceo_chat")).resolves.toMatchObject({ purpose: "co_ceo_chat" });
+  await releaseReservations(company.id);
+  await expect(reserveUsageBudget(company.id, "site_publish")).resolves.toMatchObject({ purpose: "site_publish" });
+});
+
+test("story 4.1: usage just after midnight in Paris counts for today", async ({ company }) => {
+  const { reserveUsageBudget } = await import("../src/lib/agent-runs");
+  const { parisQuotaWindows } = await import("../src/lib/quota-windows");
+  const { dayStart } = parisQuotaWindows(new Date());
+  // 00:01 à Paris, encore la veille en UTC : compté aujourd'hui (des fenêtres UTC l'ignoreraient).
+  const justAfterMidnight = new Date(dayStart.getTime() + 60 * 1000);
+  await seedUsage(company.id, { attempts: 10, reservations: 50, purpose: "co_ceo_chat", at: justAfterMidnight });
+  await expect(reserveUsageBudget(company.id, "co_ceo_chat")).rejects.toMatchObject({ reason: "quota_runs", message: expect.stringContaining("demain matin") });
+  await expect(reserveUsageBudget(company.id, "site_publish")).rejects.toMatchObject({ reason: "quota_runs", message: expect.stringContaining("demain matin") });
+});
+
+test("story 4.1: the admin page shows messages to Paul and launches as separate counters", async ({ company, request }) => {
+  if (!process.env.SESSION_SECRET) throw new Error("SESSION_SECRET is required for engine tests.");
+  const admins = (process.env.ADMIN_EMAILS ?? "").split(",").map((email) => email.trim()).filter(Boolean);
+  test.skip(admins.length === 0, "Page check needs ADMIN_EMAILS shared by the server and the tests, as in CI.");
+  const { prisma } = await import("../src/lib/prisma");
+  const baseURL = process.env.UX_TEST_BASE_URL ?? "http://localhost:3000";
+  let adminCompany = await prisma.company.findUnique({ where: { ownerEmail: admins[0] } });
+  const createdAdminCompany = !adminCompany;
+  adminCompany ??= await prisma.company.create({ data: { ownerEmail: admins[0], name: "Admin Test", trade: "Artisan", servingArea: "Paris" } });
+  try {
+    // 3 messages (2 à Paul, 1 « Préremplir ») ; 2 lancements (1 tentative, 1 mise en ligne du site).
+    await seedUsage(company.id, { reservations: 2, purpose: "co_ceo_chat" });
+    await seedUsage(company.id, { reservations: 1, purpose: "onboarding_interpret" });
+    await seedUsage(company.id, { attempts: 1, reservations: 1, purpose: "site_publish" });
+    const response = await request.get(`${baseURL}/admin`, { headers: { Cookie: `pepito_session=${createSessionToken(admins[0], adminCompany.sessionVersion, process.env.SESSION_SECRET)}` } });
+    expect(response.status()).toBe(200);
+    const page = (await response.text()).replace(/<!-- -->/g, "");
+    const rowStart = page.indexOf(company.ownerEmail);
+    expect(rowStart).toBeGreaterThan(-1);
+    const row = page.slice(rowStart, page.indexOf("</tr>", rowStart));
+    expect(row).toContain("3/50 messages à Paul · 2/10 lancements");
+    expect(row).toContain("3/500 messages à Paul · 2/100 lancements");
+    expect(row).toContain("Messages à Paul/jour");
+    expect(row).toContain("Lancements/jour");
+  } finally {
+    if (createdAdminCompany) await prisma.company.delete({ where: { id: adminCompany.id } });
+  }
+});
+
+test("story 4.1: putting the site online counts as a launch, not as a message to Paul", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { reserveUsageBudget } = await import("../src/lib/agent-runs");
+  await prisma.company.update({ where: { id: company.id }, data: { dailyAgentRunLimit: 1, dailyChatMessageLimit: 1 } });
+  await reserveUsageBudget(company.id, "site_publish");
+  await releaseReservations(company.id);
+  await expect(reserveUsageBudget(company.id, "site_publish")).rejects.toMatchObject({ reason: "quota_runs", message: expect.stringContaining("limite de lancements") });
+  await expect(reserveUsageBudget(company.id, "co_ceo_chat")).resolves.toMatchObject({ purpose: "co_ceo_chat" });
 });
 
 test("the page context reads an element only from the signed-in company and never echoes the raw path", async ({ company }) => {
@@ -1278,7 +1456,7 @@ test("a launch refused for quota keeps the card confirmed, gives the typed reaso
   const result = await inRequestScope([], () => decidePendingAction(company.id, card.id, "confirm"));
   expect(result).toMatchObject({ ok: true, action: { status: "confirmed", result: { ok: false, reason: "quota_runs" } }, launch: { ok: false, reason: "quota_runs" } });
   const message = result.ok ? result.launch?.message : "";
-  expect(message).toContain("quota journalier de lancements");
+  expect(message).toContain("limite de lancements pour aujourd'hui");
   expect(message).not.toContain("ÉCHEC");
   expect((await prisma.actionPlanItem.findUniqueOrThrow({ where: { id: item.id } })).status).toBe("propose");
   expect(await prisma.agentRun.count({ where: { companyId: company.id } })).toBe(0);

@@ -424,6 +424,8 @@ test("only an explicit administrator can configure company agent quotas", async 
   const original = {
     dailyAgentRunLimit: company.dailyAgentRunLimit,
     monthlyAgentRunLimit: company.monthlyAgentRunLimit,
+    dailyChatMessageLimit: company.dailyChatMessageLimit,
+    monthlyChatMessageLimit: company.monthlyChatMessageLimit,
     dailySpendLimitUsd: company.dailySpendLimitUsd,
     monthlySpendLimitUsd: company.monthlySpendLimitUsd,
   };
@@ -434,12 +436,16 @@ test("only an explicit administrator can configure company agent quotas", async 
     expect((await request.patch(path, { headers: userHeaders, data: original })).status()).toBe(403);
     expect((await request.patch(path, { headers: { ...adminHeaders, Origin: "https://attacker.invalid" }, data: original })).status()).toBe(403);
     expect((await request.patch(path, { headers: adminHeaders, data: { ...original, dailyAgentRunLimit: 31, monthlyAgentRunLimit: 30 } })).status()).toBe(400);
-    const updated = await request.patch(path, { headers: adminHeaders, data: {
-      dailyAgentRunLimit: 4, monthlyAgentRunLimit: 30, dailySpendLimitUsd: 2.5, monthlySpendLimitUsd: 20,
-    } });
+    // Story 4.1 : messages à Paul, jour au plus égal au mois.
+    const chatRefused = await request.patch(path, { headers: adminHeaders, data: { ...original, dailyChatMessageLimit: 501, monthlyChatMessageLimit: 500 } });
+    expect(chatRefused.status()).toBe(400);
+    expect((await chatRefused.json()).error).toContain("messages à Paul");
+    expect((await request.patch(path, { headers: adminHeaders, data: { ...original, monthlyChatMessageLimit: undefined } })).status()).toBe(400);
+    const limits = { dailyAgentRunLimit: 4, monthlyAgentRunLimit: 30, dailyChatMessageLimit: 60, monthlyChatMessageLimit: 600, dailySpendLimitUsd: 2.5, monthlySpendLimitUsd: 20 };
+    const updated = await request.patch(path, { headers: adminHeaders, data: limits });
     expect(updated.status()).toBe(200);
-    expect(await updated.json()).toMatchObject({ companyId: company.id, dailyAgentRunLimit: 4, monthlyAgentRunLimit: 30, dailySpendLimitUsd: 2.5, monthlySpendLimitUsd: 20 });
-    expect(await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).toMatchObject({ dailyAgentRunLimit: 4, monthlyAgentRunLimit: 30, dailySpendLimitUsd: 2.5, monthlySpendLimitUsd: 20 });
+    expect(await updated.json()).toMatchObject({ companyId: company.id, ...limits });
+    expect(await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).toMatchObject(limits);
   } finally {
     await prisma.company.delete({ where: { id: company.id } });
     if (createdAdmin) await prisma.company.delete({ where: { id: adminCompany.id } });

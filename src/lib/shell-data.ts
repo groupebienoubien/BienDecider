@@ -1,6 +1,7 @@
 // Données du menu latéral communes à toutes les pages connectées (cf. docs/maquette : décisions en attente et budget IA du mois).
 import { prisma } from "@/lib/prisma";
 import { getTeamState } from "@/lib/team-state";
+import { parisQuotaWindows } from "@/lib/quota-windows";
 
 type ShellCompany = {
   id: string;
@@ -14,7 +15,7 @@ type ShellCompany = {
 
 export async function getShellProps(company: ShellCompany) {
   const now = new Date();
-  const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  const { monthStart } = parisQuotaWindows(now);
   const [teamState, monthUsage] = await Promise.all([
     getTeamState(company.id, now),
     prisma.usageEvent.aggregate({ where: { companyId: company.id, createdAt: { gte: monthStart } }, _sum: { costUsd: true } }),

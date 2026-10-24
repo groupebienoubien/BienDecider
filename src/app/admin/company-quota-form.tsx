@@ -6,6 +6,8 @@ import { useRouter } from "next/navigation";
 type Limits = {
   dailyAgentRunLimit: number;
   monthlyAgentRunLimit: number;
+  dailyChatMessageLimit: number;
+  monthlyChatMessageLimit: number;
   dailySpendLimitUsd: number;
   monthlySpendLimitUsd: number;
 };
@@ -15,10 +17,12 @@ export function CompanyQuotaForm({
   limits,
   dailyRuns,
   monthlyRuns,
+  dailyMessages,
+  monthlyMessages,
   dailyCost,
   monthlyCost,
   reservedCost,
-}: { companyId: string; limits: Limits; dailyRuns: number; monthlyRuns: number; dailyCost: number; monthlyCost: number; reservedCost: number }) {
+}: { companyId: string; limits: Limits; dailyRuns: number; monthlyRuns: number; dailyMessages: number; monthlyMessages: number; dailyCost: number; monthlyCost: number; reservedCost: number }) {
   const router = useRouter();
   const [values, setValues] = useState(limits);
   const [saving, setSaving] = useState(false);
@@ -56,13 +60,15 @@ export function CompanyQuotaForm({
 
   return <form onSubmit={save} style={{ minWidth: 352 }}>
     <div className="settings-grid" style={{ gap: 8 }}>
-      {numberField("dailyAgentRunLimit", "Runs/jour")}
-      {numberField("monthlyAgentRunLimit", "Runs/mois")}
+      {numberField("dailyChatMessageLimit", "Messages à Paul/jour")}
+      {numberField("monthlyChatMessageLimit", "Messages à Paul/mois")}
+      {numberField("dailyAgentRunLimit", "Lancements/jour")}
+      {numberField("monthlyAgentRunLimit", "Lancements/mois")}
       {numberField("dailySpendLimitUsd", "USD/jour", "0.01")}
       {numberField("monthlySpendLimitUsd", "USD/mois", "0.01")}
     </div>
-    <small>Jour UTC : {dailyRuns}/{limits.dailyAgentRunLimit} runs · ${dailyCost.toFixed(2)} utilisés + ${reservedCost.toFixed(2)} réservés</small>
-    <small>Mois UTC : {monthlyRuns}/{limits.monthlyAgentRunLimit} runs · ${monthlyCost.toFixed(2)} utilisés + ${reservedCost.toFixed(2)} réservés</small>
+    <small>Aujourd&apos;hui (heure de Paris) : {dailyMessages}/{limits.dailyChatMessageLimit} messages à Paul · {dailyRuns}/{limits.dailyAgentRunLimit} lancements · ${dailyCost.toFixed(2)} utilisés + ${reservedCost.toFixed(2)} réservés</small>
+    <small>Ce mois-ci (heure de Paris) : {monthlyMessages}/{limits.monthlyChatMessageLimit} messages à Paul · {monthlyRuns}/{limits.monthlyAgentRunLimit} lancements · ${monthlyCost.toFixed(2)} utilisés + ${reservedCost.toFixed(2)} réservés</small>
     <div className="heading-actions">
       <button type="submit" disabled={saving} className="primary">{saving ? "…" : "Enregistrer"}</button>
       {message && <span role="status" className="tag green">{message}</span>}

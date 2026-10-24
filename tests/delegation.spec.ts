@@ -19,6 +19,7 @@ import { chatWindow, lastMessageBefore, latestOf, paulMessageTimes } from "../sr
 import { WEEKLY_REVIEW_MARKER } from "../src/lib/weekly-review";
 import { RUN_CAPS, capGroup, runCapReachedMessage, withRunCap } from "../src/lib/agents/run-caps";
 import { PROFILE_TEXT_LIMITS, clearableText, profileTextIssue } from "../src/lib/company-profile";
+import { parisQuotaWindows, usageCounterFor } from "../src/lib/quota-windows";
 
 test("risk rules use registered kinds and contextual factors, then fail closed", () => {
   expect(assessActionRisk("piste_croissance").level).toBe("modere");
@@ -805,4 +806,36 @@ Rien de neuf.`, createdAt: paulAt("08:02:30") },
   expect(chatWindow(latestFirst).map((message) => message.createdAt)).toEqual([paulAt("08:02:00"), paulAt("08:02:10"), paulAt("08:02:30"), paulAt("08:02:50"), paulAt("08:03:00")]);
   expect(paulMessageTimes([])).toEqual([]);
   expect(paulMessageTimes([{ role: "assistant", content: "Seul.", createdAt: paulAt("08:00:00") }])).toEqual([]);
+});
+
+test("usage limit windows start at midnight in Paris, across daylight saving changes", async () => {
+  // Minuit à Paris : le 24 à 00:30 (heure d'été, UTC+2), le jour a commencé le 23 à 22:00 UTC.
+  const justAfterMidnight = parisQuotaWindows(new Date("2026-10-23T22:30:00Z"));
+  expect(justAfterMidnight.dayStart.toISOString()).toBe("2026-10-23T22:00:00.000Z");
+  // Un usage le 23 à 23:50, heure de Paris, appartient à la veille.
+  expect(new Date("2026-10-23T21:50:00Z").getTime()).toBeLessThan(justAfterMidnight.dayStart.getTime());
+  expect(justAfterMidnight.monthStart.toISOString()).toBe("2026-09-30T22:00:00.000Z");
+  expect(justAfterMidnight.nextMonthStart.toISOString()).toBe("2026-10-31T23:00:00.000Z");
+  expect(justAfterMidnight.nextMonthName).toBe("novembre");
+
+  // Passage à l'heure d'hiver le 25 octobre 2026 à 3 h : minuit est encore à UTC+2, le lendemain à UTC+1.
+  expect(parisQuotaWindows(new Date("2026-10-25T12:00:00Z")).dayStart.toISOString()).toBe("2026-10-24T22:00:00.000Z");
+  expect(parisQuotaWindows(new Date("2026-10-26T12:00:00Z")).dayStart.toISOString()).toBe("2026-10-25T23:00:00.000Z");
+  // Passage à l'heure d'été le 29 mars 2026 à 2 h.
+  expect(parisQuotaWindows(new Date("2026-03-29T12:00:00Z")).dayStart.toISOString()).toBe("2026-03-28T23:00:00.000Z");
+  expect(parisQuotaWindows(new Date("2026-03-30T12:00:00Z")).dayStart.toISOString()).toBe("2026-03-29T22:00:00.000Z");
+  expect(parisQuotaWindows(new Date("2026-03-15T12:00:00Z")).nextMonthStart.toISOString()).toBe("2026-03-31T22:00:00.000Z");
+
+  // Le 31 décembre à 23:30 à Paris, c'est encore décembre ; le 1er janvier à 00:30, c'est janvier.
+  const newYearsEve = parisQuotaWindows(new Date("2026-12-31T22:30:00Z"));
+  expect(newYearsEve.monthStart.toISOString()).toBe("2026-11-30T23:00:00.000Z");
+  expect(newYearsEve.nextMonthName).toBe("janvier");
+  expect(newYearsEve.nextMonthStart.toISOString()).toBe("2026-12-31T23:00:00.000Z");
+  expect(parisQuotaWindows(new Date("2026-12-31T23:30:00Z")).monthStart.toISOString()).toBe("2026-12-31T23:00:00.000Z");
+
+  // Messages à Paul et « Préremplir » d'un côté ; tout le reste, mise en ligne du site comprise, compte en lancements.
+  expect(usageCounterFor("co_ceo_chat")).toBe("chat");
+  expect(usageCounterFor("onboarding_interpret")).toBe("chat");
+  expect(usageCounterFor("site_publish")).toBe("runs");
+  expect(usageCounterFor("unit-test")).toBe("runs");
 });
