@@ -4,9 +4,11 @@ import { anthropic, AGENT_MODEL } from "@/lib/anthropic";
 import { prisma } from "@/lib/prisma";
 import { getRejectionContext, rejectedDuplicateNotice } from "@/lib/agents/rejection-context";
 import { ensureAgentProduced } from "@/lib/agents/agent-errors";
-import { RUN_CAPS, withRunCap } from "@/lib/agents/run-caps";
+import { RUN_CAPS, withRunCapWrite } from "@/lib/agents/run-caps";
 import { facebookAuditSource } from "@/lib/facebook-audit-source";
-import { recordUsage, runToolLoop } from "@/lib/usage";
+import { runToolLoop } from "@/lib/usage";
+import { agentRunnerOptions, bindAgentTools } from "@/lib/agent-run-execution";
+import { AGENT_RUN_MAX_TURNS } from "@/lib/agent-run-limits";
 import {
   PERSONAS,
   objectiveLine,
@@ -79,24 +81,28 @@ export async function runMarketingAgent(
         .max(3)
         .describe("0 à 3 actions concrètes pour corriger ce qui a été constaté — le dirigeant pourra les ajouter au plan en un clic."),
     }),
-    run: async (input) => withRunCap(options.agentRunId, "audit_finding", async () => {
-      const finding = await prisma.auditFinding.create({
-        data: {
-          companyId: company.id,
-          agentRunId: options.agentRunId,
-          category: input.category,
-          title: input.title,
-          content: input.summary,
-          whatWorks: input.whatWorks,
-          toImprove: input.toImprove,
-          actionItems: input.actionItems,
-          sourceUrl: input.sourceUrl,
-          sourceStatus: input.sourceStatus,
-        },
+    run: async (input) => {
+      const result = await withRunCapWrite(company.id, options.agentRunId, "audit_finding", async (tx) => {
+        const finding = await tx.auditFinding.create({
+          data: {
+            companyId: company.id,
+            agentRunId: options.agentRunId,
+            category: input.category,
+            title: input.title,
+            content: input.summary,
+            whatWorks: input.whatWorks,
+            toImprove: input.toImprove,
+            actionItems: input.actionItems,
+            sourceUrl: input.sourceUrl,
+            sourceStatus: input.sourceStatus,
+          },
+        });
+        return { id: finding.id, message: `Constat enregistré (id: ${finding.id}).` };
       });
-      createdFindingIds.push(finding.id);
-      return `Constat enregistré (id: ${finding.id}).`;
-    }),
+      if (typeof result === "string") return result;
+      createdFindingIds.push(result.id);
+      return result.message;
+    },
   });
 
   const proposeAction = betaZodTool({
@@ -115,10 +121,10 @@ export async function runMarketingAgent(
         .describe("Contenu complet de la proposition, prêt à être relu et validé par l'utilisateur"),
     }),
     run: async (input) => {
-      return withRunCap(options.agentRunId, input.kind, async () => {
-        const alreadyRejected = await rejectedDuplicateNotice(company.id, { kind: input.kind, title: input.title, content: input.content });
+      const result = await withRunCapWrite(company.id, options.agentRunId, input.kind, async (tx) => {
+        const alreadyRejected = await rejectedDuplicateNotice(company.id, { kind: input.kind, title: input.title, content: input.content }, tx);
         if (alreadyRejected) return alreadyRejected;
-        const proposal = await prisma.agentProposal.create({
+        const proposal = await tx.agentProposal.create({
           data: {
             companyId: company.id,
             agentRunId: options.agentRunId,
@@ -129,9 +135,11 @@ export async function runMarketingAgent(
             planItemId: options.planItemId,
           },
         });
-        createdProposalIds.push(proposal.id);
-        return `Proposition enregistrée (id: ${proposal.id}), en attente de validation.`;
+        return { id: proposal.id, message: `Proposition enregistrée (id: ${proposal.id}), en attente de validation.` };
       });
+      if (typeof result === "string") return result;
+      createdProposalIds.push(result.id);
+      return result.message;
     },
   });
 
@@ -181,13 +189,13 @@ Règles strictes :
 
   const { finalMessage, usage } = await runToolLoop(anthropic.beta.messages.toolRunner({
     model: AGENT_MODEL,
+    max_iterations: AGENT_RUN_MAX_TURNS,
     // Plus elevé que les autres agents : Martine fait a la fois diagnostic
     // (web_fetch/web_search) ET propositions GBP en un seul passage, ce qui
     // consomme plus de tours d'outils — un run vide a ete observe a 4000.
     max_tokens: 8000,
     tools: [
-      recordFinding,
-      proposeAction,
+      ...bindAgentTools([recordFinding, proposeAction]),
       { type: "web_fetch_20260209", name: "web_fetch", max_uses: 3 },
       { type: "web_search_20260209", name: "web_search", max_uses: 5 },
     ],
@@ -208,17 +216,13 @@ Règles strictes :
         ].filter(Boolean).join("\n\n"),
       },
     ],
-  }));
-
-  await recordUsage({ companyId: company.id, agentRunId: options.agentRunId, agent: AGENT_NAME, model: AGENT_MODEL, usage });
-
-  // Plus de constat "Analyse incomplète" créé à la place d'une erreur : il
-  // faisait passer un échec pour un diagnostic, et l'action du plan pour traitée.
-  ensureAgentProduced(PERSONA.name, createdFindingIds.length + createdProposalIds.length, { stopReason: finalMessage.stop_reason, usage });
+  }, agentRunnerOptions()), { companyId: company.id, agentRunId: options.agentRunId, agent: AGENT_NAME, model: AGENT_MODEL });
 
   const [findings, proposals] = await Promise.all([
-    prisma.auditFinding.findMany({ where: { id: { in: createdFindingIds } } }),
-    prisma.agentProposal.findMany({ where: { id: { in: createdProposalIds } } }),
+    prisma.auditFinding.findMany({ where: { companyId: company.id, id: { in: createdFindingIds } } }),
+    prisma.agentProposal.findMany({ where: { companyId: company.id, id: { in: createdProposalIds } } }),
   ]);
+  // Un identifiant ne prouve une production qu'après le commit et la relecture.
+  ensureAgentProduced(PERSONA.name, findings.length + proposals.length, { stopReason: finalMessage.stop_reason, usage });
   return { findings, proposals };
 }

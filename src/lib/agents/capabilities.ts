@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { PERSONAS } from "@/lib/agents/personas";
+import { currentAgentExecution, withAgentRunWrite } from "@/lib/agent-run-execution";
 
 /**
  * Ce que l'équipe sait faire aujourd'hui, et ce qu'elle ne fait pas. Injecté
@@ -18,14 +19,14 @@ export async function recordUncoveredRequest(
   request: string,
   closestAlternative?: string,
 ) {
-  return prisma.uncoveredRequest.create({
+  return withAgentRunWrite(companyId, currentAgentExecution()?.agentRunId, (tx) => tx.uncoveredRequest.create({
     data: {
       companyId,
       source,
       request: request.trim().slice(0, REQUEST_MAX_LENGTH),
       closestAlternative: closestAlternative?.trim().slice(0, REQUEST_MAX_LENGTH) || null,
     },
-  });
+  }));
 }
 
 export async function listUncoveredRequests(limit = 50) {

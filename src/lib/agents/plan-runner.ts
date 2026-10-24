@@ -1,5 +1,5 @@
 import type { ActionPlanItem } from "@prisma/client";
-import { prisma } from "@/lib/prisma";
+import { withAgentRunWrite } from "@/lib/agent-run-execution";
 import { runMarketingAgent } from "@/lib/agents/marketing";
 import { runContenuAgent } from "@/lib/agents/contenu";
 import { runDemarchageAgent } from "@/lib/agents/demarchage";
@@ -48,9 +48,9 @@ export async function executePlanItem(
     }
   }
 
-  const updated = await prisma.actionPlanItem.update({
-    where: { id: item.id },
+  const updated = await withAgentRunWrite(item.companyId, agentRunId, (tx) => tx.actionPlanItem.update({
+    where: { id: item.id, companyId: item.companyId },
     data: { status: statusAfterRun(pendingValidation) },
-  });
+  }));
   return { item: updated, producedCount, pendingValidation };
 }

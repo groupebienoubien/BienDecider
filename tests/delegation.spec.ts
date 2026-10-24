@@ -20,6 +20,12 @@ import { WEEKLY_REVIEW_MARKER } from "../src/lib/weekly-review";
 import { RUN_CAPS, capGroup, runCapReachedMessage, withRunCap } from "../src/lib/agents/run-caps";
 import { PROFILE_TEXT_LIMITS, clearableText, profileTextIssue } from "../src/lib/company-profile";
 import { parisQuotaWindows, usageCounterFor } from "../src/lib/quota-windows";
+import { runStreamingToolLoop, runToolLoop, type ToolLoopOptions, type UsageTotal } from "../src/lib/usage";
+import { AgentRunLimitError } from "../src/lib/agent-run-limits";
+import { createAgentExecution, withAgentExecution } from "../src/lib/agent-run-execution";
+import { BetaToolRunner } from "@anthropic-ai/sdk/lib/tools/BetaToolRunner";
+
+type UsageLike = Partial<UsageTotal> | undefined;
 
 test("risk rules use registered kinds and contextual factors, then fail closed", () => {
   expect(assessActionRisk("piste_croissance").level).toBe("modere");
@@ -838,4 +844,222 @@ test("usage limit windows start at midnight in Paris, across daylight saving cha
   expect(usageCounterFor("onboarding_interpret")).toBe("chat");
   expect(usageCounterFor("site_publish")).toBe("runs");
   expect(usageCounterFor("unit-test")).toBe("runs");
+});
+
+function auditLoopAccounting(companyId = "company-a") {
+  const recorded: UsageTotal[] = [];
+  return {
+    recorded,
+    options: {
+      companyId, agentRunId: `run-${companyId}`, agent: "contenu", model: "claude-sonnet-5-5",
+      persistUsage: async (usage) => { recorded.push(usage); },
+    } satisfies ToolLoopOptions,
+  };
+}
+
+test("audit A01: a later provider failure preserves earlier measured usage once, including cache tokens", async () => {
+  const failure = new Error("provider interrupted");
+  const accounting = auditLoopAccounting();
+  async function* runner() {
+    yield { usage: { input_tokens: 10_000, output_tokens: 1000, cache_creation_input_tokens: 500, cache_read_input_tokens: 2000 }, stop_reason: "tool_use" };
+    throw failure;
+  }
+  await expect(runToolLoop(runner(), accounting.options)).rejects.toBe(failure);
+  expect(accounting.recorded).toEqual([{ input_tokens: 10_000, output_tokens: 1000, cache_creation_input_tokens: 500, cache_read_input_tokens: 2000 }]);
+});
+
+test("audit A01: successful concurrent loops account their separate totals once", async () => {
+  const first = auditLoopAccounting("company-a");
+  const second = auditLoopAccounting("company-b");
+  async function* runner(input: number) {
+    yield { usage: { input_tokens: input, output_tokens: 3 }, stop_reason: "tool_use" };
+    yield { usage: { input_tokens: input + 2, output_tokens: 4 }, stop_reason: "end_turn" };
+  }
+  const results = await Promise.all([runToolLoop(runner(10), first.options), runToolLoop(runner(20), second.options)]);
+  expect(first.recorded).toHaveLength(1);
+  expect(second.recorded).toHaveLength(1);
+  expect(first.recorded[0]).toMatchObject({ input_tokens: 22, output_tokens: 7 });
+  expect(second.recorded[0]).toMatchObject({ input_tokens: 42, output_tokens: 7 });
+  expect(results.map((result) => result.finalMessage.stop_reason)).toEqual(["end_turn", "end_turn"]);
+});
+
+type AuditStreamMessage = { usage: Exclude<UsageLike, undefined>; stop_reason?: string };
+class AuditUsageStream {
+  currentMessage?: AuditStreamMessage;
+  private result?: Promise<AuditStreamMessage>;
+  private snapshotListener?: (event: unknown, snapshot: AuditStreamMessage) => void;
+  private textListener?: (delta: string) => void;
+
+  constructor(private readonly finish: (stream: AuditUsageStream) => Promise<AuditStreamMessage>) {}
+
+  on(event: "text", listener: (delta: string) => void): void;
+  on(event: "streamEvent", listener: (event: unknown, snapshot: AuditStreamMessage) => void): void;
+  on(event: "text" | "streamEvent", listener: ((delta: string) => void) | ((event: unknown, snapshot: AuditStreamMessage) => void)) {
+    if (event === "text") this.textListener = listener as (delta: string) => void;
+    else this.snapshotListener = listener as (event: unknown, snapshot: AuditStreamMessage) => void;
+  }
+
+  snapshot(message: AuditStreamMessage) {
+    this.currentMessage = message;
+    this.snapshotListener?.({}, message);
+    this.textListener?.("texte reçu");
+  }
+
+  finalMessage() { return this.result ??= this.finish(this); }
+  abort() {}
+}
+
+test("audit A01: an interrupted stream counts the latest cumulative snapshot and earlier turns once", async () => {
+  const accounting = auditLoopAccounting();
+  const failure = new Error("stream interrupted");
+  async function* runner() {
+    yield new AuditUsageStream(async (stream) => {
+      const message = { usage: { input_tokens: 10, output_tokens: 4, cache_creation_input_tokens: 5, cache_read_input_tokens: 7 }, stop_reason: "tool_use" };
+      stream.snapshot(message);
+      return message;
+    });
+    yield new AuditUsageStream(async (stream) => {
+      stream.snapshot({ usage: { input_tokens: 20, output_tokens: 1, cache_creation_input_tokens: 8, cache_read_input_tokens: 11 } });
+      stream.snapshot({ usage: { input_tokens: 22, output_tokens: 6, cache_creation_input_tokens: 9, cache_read_input_tokens: 12 } });
+      throw failure;
+    });
+  }
+  let turns = 0;
+  const text: string[] = [];
+  await expect(runStreamingToolLoop(runner(), { onTurnStart: () => { turns++; }, onText: (delta) => text.push(delta) }, accounting.options)).rejects.toBe(failure);
+  expect(turns).toBe(2);
+  expect(text).toHaveLength(3);
+  expect(accounting.recorded).toHaveLength(1);
+  expect(accounting.recorded[0]).toEqual({ input_tokens: 32, output_tokens: 10, cache_creation_input_tokens: 14, cache_read_input_tokens: 19 });
+});
+
+test("audit A02: a repetitive loop stops before request 33", async () => {
+  const accounting = auditLoopAccounting();
+  let requested = 0;
+  async function* messages() {
+    while (true) {
+      requested++;
+      yield { usage: { input_tokens: 5, output_tokens: 2 }, stop_reason: "tool_use" };
+    }
+  }
+  const runner = messages();
+  await expect(runToolLoop(runner, accounting.options)).rejects.toMatchObject({ name: "AgentRunLimitError", limit: "turns" });
+  expect(requested).toBe(32);
+  expect(accounting.recorded).toHaveLength(1);
+  expect(accounting.recorded[0]).toMatchObject({ input_tokens: 160, output_tokens: 64 });
+});
+
+test("audit A02: the turn crossing the reserved dollar is fully counted, without another request", async () => {
+  const accounting = auditLoopAccounting();
+  let requested = 0;
+  async function* runner() {
+    while (true) {
+      requested++;
+      // Sonnet: cache write 0.50 USD + cache read 0.20 USD, so two turns cross 1 USD.
+      yield { usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 200_000, cache_read_input_tokens: 1_000_000 }, stop_reason: "tool_use" };
+    }
+  }
+  await expect(runToolLoop(runner(), accounting.options)).rejects.toMatchObject({ name: "AgentRunLimitError", limit: "cost" });
+  expect(requested).toBe(2);
+  expect(accounting.recorded).toHaveLength(1);
+  expect(accounting.recorded[0]).toEqual({ input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 400_000, cache_read_input_tokens: 2_000_000 });
+});
+
+test("audit A02: a completed final turn can consume the remaining budget without being reported as partial", async () => {
+  const accounting = auditLoopAccounting();
+  async function* runner() {
+    yield { usage: { input_tokens: 600_000, output_tokens: 100 }, stop_reason: "end_turn" };
+  }
+  const result = await runToolLoop(runner(), accounting.options);
+  expect(result.finalMessage.stop_reason).toBe("end_turn");
+  expect(accounting.recorded).toHaveLength(1);
+  expect(accounting.recorded[0]).toMatchObject({ input_tokens: 600_000, output_tokens: 100 });
+});
+
+test("audit A02: the deadline includes elapsed work and aborts an in-flight provider call", async () => {
+  const accounting = auditLoopAccounting();
+  const runner = {
+    [Symbol.asyncIterator]() { return { next: () => new Promise<IteratorResult<AuditStreamMessage>>(() => {}) }; },
+  };
+  const started = Date.now();
+  const context = createAgentExecution({ companyId: "company-a", startedAt: new Date(started - 269_950) });
+  await expect(withAgentExecution(context, () => runToolLoop(runner, accounting.options))).rejects.toMatchObject({ name: "AgentRunLimitError", limit: "deadline" });
+  expect(Date.now() - started).toBeLessThan(2000);
+  expect(context.signal.aborted).toBe(true);
+  expect(accounting.recorded).toHaveLength(1);
+});
+
+test("audit A01: failed persistence is surfaced once so finalization retains the reservation", async () => {
+  const accounting = auditLoopAccounting();
+  const persistenceFailure = new Error("database unavailable");
+  const providerFailure = new Error("later request failed");
+  let writes = 0;
+  async function* runner() {
+    yield { usage: { input_tokens: 10, output_tokens: 2 }, stop_reason: "tool_use" };
+    throw providerFailure;
+  }
+  const failure = await runToolLoop(runner(), {
+    ...accounting.options,
+    persistUsage: async () => { writes++; throw persistenceFailure; },
+  }).catch((error: unknown) => error);
+  expect(failure).toBe(providerFailure);
+  expect(writes).toBe(1);
+  expect(new AgentRunLimitError("turns").message).toContain("conservées et restent à relire");
+});
+
+for (const streaming of [false, true]) {
+  for (const limit of ["turns", "cost"] as const) {
+    test(`audit A02 SDK réel : outils du dernier tour ${limit} exécutés une fois, ${streaming ? "en flux" : "JSON"}`, async () => {
+      const accounting = auditLoopAccounting();
+      let requests = 0;
+      let toolCalls = 0;
+      const expectedTurns = limit === "turns" ? 32 : 2;
+      const next = () => {
+        requests++;
+        return {
+          id: `message-${requests}`, type: "message", role: "assistant", model: "claude-sonnet-5-5", stop_reason: "tool_use", stop_sequence: null,
+          usage: { input_tokens: limit === "cost" ? 300_000 : 5, output_tokens: 1 },
+          content: [{ type: "tool_use", id: `call-${requests}`, name: "write", input: {} }],
+        };
+      };
+      const client = { beta: { messages: {
+        create: async () => next(),
+        stream: () => new AuditUsageStream(async (stream) => { const message = next(); stream.snapshot(message); return message; }),
+      } } };
+      const runner = new BetaToolRunner(client as never, {
+        model: "claude-sonnet-5-5", max_tokens: 100, stream: streaming,
+        messages: [{ role: "user", content: "Préparer" }],
+        tools: [{ name: "write", description: "Proposer", input_schema: { type: "object", properties: {} }, parse: (input: unknown) => input, run: async () => { toolCalls++; return "Enregistré"; } }],
+      });
+      const work = streaming
+        ? runStreamingToolLoop(runner as BetaToolRunner<true>, { onTurnStart() {}, onText() {} }, accounting.options)
+        : runToolLoop(runner as BetaToolRunner<false>, accounting.options);
+      await expect(work).rejects.toMatchObject({ name: "AgentRunLimitError", limit });
+      expect(requests).toBe(expectedTurns);
+      expect(toolCalls).toBe(expectedTurns);
+      expect(accounting.recorded).toHaveLength(1);
+      expect(accounting.recorded[0].input_tokens).toBe((limit === "cost" ? 300_000 : 5) * expectedTurns);
+    });
+  }
+}
+
+test("audit A01 : le snapshot d'un flux suspendu est compté lors de l'échéance", async () => {
+  const accounting = auditLoopAccounting();
+  const context = createAgentExecution({ companyId: "company-a", deadlineAt: Date.now() + 50 });
+  const stream = new AuditUsageStream(async (current) => {
+    current.snapshot({ usage: { input_tokens: 100, output_tokens: 7, cache_creation_input_tokens: 3, cache_read_input_tokens: 5 } });
+    return new Promise<AuditStreamMessage>(() => {});
+  });
+  async function* runner() { yield stream; }
+  await expect(withAgentExecution(context, () => runStreamingToolLoop(runner(), { onTurnStart() {}, onText() {} }, accounting.options))).rejects.toMatchObject({ name: "AgentRunLimitError", limit: "deadline" });
+  await expect.poll(() => accounting.recorded).toHaveLength(1);
+  expect(accounting.recorded[0]).toEqual({ input_tokens: 100, output_tokens: 7, cache_creation_input_tokens: 3, cache_read_input_tokens: 5 });
+});
+
+test("audit A01 : un échec du finaliseur après succès reste visible", async () => {
+  const failure = new Error("Persistance indisponible");
+  async function* runner() { yield { usage: { input_tokens: 10, output_tokens: 2 }, stop_reason: "end_turn" }; }
+  let calls = 0;
+  await expect(runToolLoop(runner(), { persistUsage: async () => { calls++; throw failure; } })).rejects.toBe(failure);
+  expect(calls).toBe(1);
 });
