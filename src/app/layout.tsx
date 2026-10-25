@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { DM_Sans, Sora, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
@@ -27,6 +27,13 @@ export const metadata: Metadata = {
     locale: "fr_FR",
     type: "website",
   },
+};
+
+// Le clavier virtuel réduit la page plutôt que de la recouvrir (Android) : la conversation avec Paul reste au-dessus du clavier.
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  interactiveWidget: "resizes-content",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

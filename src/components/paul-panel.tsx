@@ -288,25 +288,47 @@ export function PaulPanel() {
   }, [panel.open]);
 
   // Sur téléphone : la page derrière ne défile plus, et le panneau suit la zone visible pour que le champ reste au-dessus du clavier.
+  // iOS fait défiler la page quand le clavier s'ouvre, même sous overflow: hidden : le <body> est figé (position: fixed) et la
+  // position de lecture rétablie à la fermeture.
   useEffect(() => {
     if (!panel.open || !isPhone) return;
     const root = document.documentElement;
-    const previousOverflow = root.style.overflow;
+    const body = document.body;
+    const scrollY = window.scrollY;
+    const previous = { rootOverflow: root.style.overflow, rootOverscroll: root.style.overscrollBehavior, body: body.getAttribute("style") };
     root.style.overflow = "hidden";
+    root.style.overscrollBehavior = "none";
+    Object.assign(body.style, { position: "fixed", top: `-${scrollY}px`, left: "0", right: "0", width: "100%", overflow: "hidden" });
     const viewport = window.visualViewport;
     const node = panelRef.current;
+    let frame = 0;
     const fit = () => {
-      if (!node || !viewport) return;
-      node.style.height = `${viewport.height}px`;
-      node.style.top = `${viewport.offsetTop}px`;
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        if (!node) return;
+        // Sans visualViewport (ancien navigateur), la hauteur CSS (100dvh) s'applique.
+        if (!viewport) return;
+        node.style.height = `${viewport.height}px`;
+        node.style.top = `${viewport.offsetTop}px`;
+        // Safari peut encore décaler la fenêtre : on la ramène, le panneau suit la zone visible.
+        if (window.scrollY !== 0) window.scrollTo(0, 0);
+      });
     };
     fit();
     viewport?.addEventListener("resize", fit);
     viewport?.addEventListener("scroll", fit);
+    window.addEventListener("resize", fit);
+    node?.addEventListener("focusin", fit);
     return () => {
-      root.style.overflow = previousOverflow;
+      cancelAnimationFrame(frame);
       viewport?.removeEventListener("resize", fit);
       viewport?.removeEventListener("scroll", fit);
+      window.removeEventListener("resize", fit);
+      node?.removeEventListener("focusin", fit);
+      root.style.overflow = previous.rootOverflow;
+      root.style.overscrollBehavior = previous.rootOverscroll;
+      if (previous.body === null) body.removeAttribute("style"); else body.setAttribute("style", previous.body);
+      window.scrollTo(0, scrollY);
       node?.style.removeProperty("height");
       node?.style.removeProperty("top");
     };
