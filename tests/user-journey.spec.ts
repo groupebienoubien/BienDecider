@@ -1453,6 +1453,8 @@ test("story 5.4: on a phone, Paul takes the whole screen, above the bottom bar, 
   await expect(panel.locator(".chat-context")).toBeHidden();
   await expect(panel.locator(".chat-disclaimer")).toBeHidden();
   await expect(panel.getByLabel("Message à Paul")).toHaveAttribute("autocomplete", "off");
+  // Pas de formulaire autour du champ : Safari y attache sa barre de remplissage au-dessus du clavier.
+  expect(await panel.evaluate((node) => node.querySelector("form") === null && node.querySelector("textarea")?.form === null)).toBe(true);
   await expect(panel.getByRole("button", { name: "Agrandir la fenêtre" })).toBeHidden();
   await expect(panel).toHaveAttribute("aria-modal", "true");
 
