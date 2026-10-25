@@ -1,12 +1,22 @@
 import type { SourceRead } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { sourceReasonLabel } from "@/lib/google-place";
+import { sourceReasonLabel } from "@/lib/source-reads";
 
 /** Couverture des sources du dernier diagnostic terminé : ce que le code a réellement lu, avec le motif quand il n'a pas pu. */
 
 export type CoverageItem = { id: string; label: string; status: "lue" | "non_lue"; detail: string };
 
-export function describeSourceRead(read: Pick<SourceRead, "id" | "target" | "subject" | "status" | "reason" | "itemCount">): CoverageItem {
+export function describeSourceRead(read: Pick<SourceRead, "id" | "source" | "target" | "subject" | "status" | "reason" | "itemCount">): CoverageItem {
+  if (read.source === "facebook_page") {
+    const posts = read.subject === "publications";
+    const label = posts ? "Publications de votre Page Facebook" : "Informations de votre Page Facebook";
+    if (read.status === "lue") {
+      const count = read.itemCount ?? 0;
+      const detail = !posts ? "Lues" : count === 0 ? "Lues, aucune publication" : `Lues, ${count} publications lues`;
+      return { id: read.id, label, status: "lue", detail };
+    }
+    return { id: read.id, label, status: "non_lue", detail: `Non lues : ${sourceReasonLabel(read.reason, read.source)}` };
+  }
   const label = read.target === "own" ? "Avis Google de votre fiche" : `Avis Google d'un concurrent${read.subject ? ` (« ${read.subject} »)` : ""}`;
   if (read.status === "lue") {
     const count = read.itemCount ?? 0;

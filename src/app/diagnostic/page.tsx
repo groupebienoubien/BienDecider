@@ -25,5 +25,5 @@ export default async function DiagnosticPage() {
   const planUpToDate = audits.latestAt
     ? await prisma.agentRun.count({ where: { companyId: company.id, agent: "co_ceo", status: "succeeded", requestKey: { startsWith: "plan-generation:" }, finishedAt: { gt: new Date(audits.latestAt) } } }) > 0
     : false;
-  return <AppShell {...await getShellProps(company)}><DiagnosticClient initialAudits={audits} feedback={feedback} leadCount={leadCount} initialPlanUpToDate={planUpToDate} coverage={coverage} hasGoogleCandidate={Boolean(company.googlePlaceCandidateId)} /></AppShell>;
+  return <AppShell {...await getShellProps(company)}><DiagnosticClient initialAudits={audits} feedback={feedback} leadCount={leadCount} initialPlanUpToDate={planUpToDate} coverage={coverage} hasGoogleCandidate={Boolean(company.googlePlaceCandidateId)} hasFacebookCandidate={Boolean(company.facebookPageCandidateUrl) && !company.googlePlaceCandidateId} /></AppShell>;
 }

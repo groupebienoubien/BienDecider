@@ -149,8 +149,19 @@ Indépendante de l'OAuth Google Business Profile : une clé d'API, pas d'autoris
 - Seul le Place ID est conservé en base. Nom, adresse, note et avis sont lus en direct. Les constats contiennent une synthèse avec la date de lecture, sans citation d'avis mot pour mot ni nom d'auteur.
 - Chaque lecture est enregistrée par le code (table `SourceRead`) et affichée dans « Sources lues pour ce diagnostic ». Le site et Facebook gardent l'état de consultation déclaré par l'analyse dans chaque constat.
 - Un concurrent est identifié par la requête de Martine, sans confirmation du dirigeant : le constat cite le nom et l'adresse lus.
-- Facebook, TikTok et Instagram ne sont pas lus par cette fonctionnalité (#253 et #254).
+- Facebook est traité par la lecture de la Page ci-dessous (#253) ; TikTok et Instagram ne sont pas lus (#254).
 - Tests : `npm run test:sources` (sans appel à Google, base jetable). Le fonctionnement réel avec une clé se vérifie par recette manuelle sur une entreprise de test, sans publication.
+
+## Lecture de la Page Facebook pour le diagnostic (US #253)
+
+S'appuie sur la connexion Facebook du dirigeant (voir la section Meta ci-dessous) : aucune nouvelle clé ni variable. Le contenu public d'une Page tierce n'est pas lisible par l'API Graph sans l'accès Meta « Page Public Content Access », que BienDecider n'a pas ; seule la Page que le dirigeant a connectée est lue.
+
+- Avant le modèle, le code lit les informations de la Page connectée (nom, catégorie, abonnés, lien) avec le jeton de la Page et la preuve `appsecret_proof`. Chaque lecture est enregistrée dans `SourceRead` (source `facebook_page`, sujets `informations` et `publications`) et affichée dans « Sources lues pour ce diagnostic ».
+- Les dix dernières publications (texte, date, nombre de réactions et de commentaires) ne sont lues que si la permission `pages_read_user_content` figure parmi les permissions accordées. Elle n'est pas dans la configuration actuelle : tant qu'elle n'est pas ajoutée (configuration Facebook Login for Business) puis revalidée en App Review, et que le dirigeant n'a pas réautorisé sa Page, les publications sont indiquées « non lues : la permission de lire les publications n'est pas accordée ». `FACEBOOK_SCOPES` n'est pas modifié : une connexion existante reste valide.
+- Le lien de la Page lue est proposé au dirigeant dans une fenêtre du Diagnostic (après celle de la fiche Google s'il y en a une) ; il n'est enregistré (`Company.facebookPageUrl`) qu'après confirmation, et se retire depuis la page Entreprise. Un lien refusé ou retiré n'est plus proposé. Seul le lien est conservé : nom, abonnés et publications sont lus en direct.
+- Sans connexion Facebook, Martine peut aussi proposer le lien d'une Page trouvée sur le site ou par recherche (outil `propose_facebook_page`, lien strictement validé : https, `facebook.com`, un seul segment, ni profil ni groupe ni partage). Ce lien est proposé à confirmation, jamais pris pour acquis, et la Page reste « non lue » : l'accès public à son contenu est limité.
+- Un jeton refusé par Meta (code 190) passe la connexion en erreur : la Page est à reconnecter depuis Connexions.
+- Tests : `npm run test:sources` (sans appel à Meta, avec une Graph API simulée). Le fonctionnement réel se vérifie par recette manuelle avec une Page de test connectée ; les champs exacts lisibles avec la permission `pages_read_engagement` ne sont pas encore vérifiés auprès de Meta.
 
 ## 2. Meta (Facebook + Instagram)
 

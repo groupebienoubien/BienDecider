@@ -7,6 +7,7 @@ import { PageHeading } from "@/components/mockup-ui";
 import { PersonaAvatar } from "@/components/persona-avatar";
 import { DirectionForm } from "@/components/direction-form";
 import { GooglePlaceLine } from "@/components/google-place";
+import { FacebookPageLine } from "@/components/facebook-page";
 import { placeMapsLink } from "@/lib/google-places";
 import { SitePhotos } from "@/components/site-photos";
 import { PERSONAS, type AgentKey } from "@/lib/agents/personas";
@@ -57,6 +58,7 @@ export default async function EntreprisePage({ searchParams }: { searchParams: P
           </label>
           <Link className="btn" href="/entreprise?tab=objectifs#modifier">Modifier l’objectif</Link>
           {company.googlePlaceId && <GooglePlaceLine link={placeMapsLink(company.googlePlaceId)} />}
+          {company.facebookPageUrl && <FacebookPageLine url={company.facebookPageUrl} />}
           <h2>Votre équipe</h2>
           {TEAM.map(({ key, role }) => (
             <div key={key} className="connection">

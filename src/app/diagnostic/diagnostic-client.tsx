@@ -10,6 +10,7 @@ import { Icon } from "@/components/icon";
 import { EmptyState, PageHeading, SectionTitle } from "@/components/mockup-ui";
 import { useAgentProfileCompletion } from "@/components/agent-profile-completion";
 import { GooglePlaceDialog } from "@/components/google-place";
+import { FacebookPageDialog } from "@/components/facebook-page";
 import { SourceCoverage } from "@/components/source-coverage";
 import type { CoverageItem } from "@/lib/source-coverage";
 import { waitForAgentRun } from "@/lib/agent-runs-client";
@@ -19,7 +20,7 @@ const ANALYSIS_DATE = new Intl.DateTimeFormat("fr-FR", { day: "numeric", month: 
 const PREVIOUS_DATE = new Intl.DateTimeFormat("fr-FR", { day: "2-digit", month: "2-digit", timeZone: "Europe/Paris" });
 const ANALYSIS_TIME = new Intl.DateTimeFormat("fr-FR", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Paris" });
 
-export function DiagnosticClient({ initialAudits, feedback, leadCount, initialPlanUpToDate, coverage, hasGoogleCandidate }: { initialAudits: AuditFindingsView<AuditFinding>; feedback: string[]; leadCount: number; initialPlanUpToDate: boolean; coverage: CoverageItem[]; hasGoogleCandidate: boolean }) {
+export function DiagnosticClient({ initialAudits, feedback, leadCount, initialPlanUpToDate, coverage, hasGoogleCandidate, hasFacebookCandidate }: { initialAudits: AuditFindingsView<AuditFinding>; feedback: string[]; leadCount: number; initialPlanUpToDate: boolean; coverage: CoverageItem[]; hasGoogleCandidate: boolean; hasFacebookCandidate: boolean }) {
   const { requestProfile, profileDialog, checking } = useAgentProfileCompletion();
   const router = useRouter();
   // Story 5.2 : plan à jour = des actions créées après la fin du dernier audit.
@@ -126,6 +127,7 @@ export function DiagnosticClient({ initialAudits, feedback, leadCount, initialPl
       />
       {profileDialog}
       <GooglePlaceDialog hasCandidate={hasGoogleCandidate} />
+      <FacebookPageDialog hasCandidate={hasFacebookCandidate} />
       {error && <p role="alert" className="warning">{error}</p>}
       {done && <p role="status" className="notice">Diagnostic actualisé. <Link href="/dashboard?view=validation">Voir les productions à valider</Link></p>}
       {findings.length === 0 && (

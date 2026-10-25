@@ -14,7 +14,7 @@ export function SourceCoverage({ items }: { items: CoverageItem[] }) {
           </li>
         ))}
       </ul>
-      <p className="legend">Source des avis : Google Maps. Pour le site et les réseaux sociaux, l’état de consultation est indiqué dans chaque constat, tel que déclaré par l’analyse.</p>
+      <p className="legend">Source des avis : Google Maps. Source des informations de la Page : Facebook, par votre connexion. Pour le site et les autres réseaux sociaux, l’état de consultation est indiqué dans chaque constat, tel que déclaré par l’analyse.</p>
     </section>
   );
 }

@@ -1722,3 +1722,83 @@ test("US #252: the diagnostic lists what was really read and why a source was no
     await prisma.$disconnect();
   }
 });
+
+const UI_FACEBOOK_PAGE = "https://www.facebook.com/atelier.parcours";
+
+test("US #253: the Facebook Page found is shown with its link and saved only after the manager confirms it, then removable", async ({ page, company }) => {
+  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }) });
+  try {
+    await prisma.company.update({ where: { id: company.id }, data: { facebookPageCandidateUrl: UI_FACEBOOK_PAGE } });
+    await page.setViewportSize({ width: 320, height: 800 });
+    await page.goto(`${baseURL}/diagnostic`);
+    const dialog = page.getByRole("dialog", { name: "Est-ce bien votre Page Facebook ?" });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole("link", { name: UI_FACEBOOK_PAGE })).toHaveAttribute("href", UI_FACEBOOK_PAGE);
+    await expect(dialog.getByRole("link", { name: UI_FACEBOOK_PAGE })).toHaveAttribute("rel", "noopener noreferrer");
+    await expect(dialog).toContainText("Rien n’est enregistré sans votre confirmation.");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    // Rien n'est enregistré tant que le dirigeant n'a pas cliqué.
+    expect(await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).toMatchObject({ facebookPageUrl: null, facebookPageCandidateUrl: UI_FACEBOOK_PAGE });
+
+    await dialog.getByRole("button", { name: "Oui, c’est ma Page" }).click();
+    const saved = page.getByRole("dialog", { name: "Page enregistrée" });
+    await expect(saved).toContainText("Actualiser le diagnostic");
+    expect(await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).toMatchObject({ facebookPageUrl: UI_FACEBOOK_PAGE, facebookPageCandidateUrl: null });
+    await saved.getByRole("button", { name: "Fermer", exact: true }).last().click();
+
+    await page.goto(`${baseURL}/entreprise`);
+    const line = page.locator(".connection").filter({ hasText: "Page Facebook" });
+    await expect(line.getByRole("link", { name: "Voir ma Page sur Facebook" })).toHaveAttribute("href", UI_FACEBOOK_PAGE);
+    await line.getByRole("button", { name: "Retirer" }).click();
+    await expect(page.locator(".connection").filter({ hasText: "Page Facebook" })).toHaveCount(0);
+    expect(await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).toMatchObject({ facebookPageUrl: null, facebookPageDeclinedUrls: [UI_FACEBOOK_PAGE] });
+  } finally {
+    await prisma.$disconnect();
+  }
+});
+
+test("US #253: declining the proposed Facebook Page saves nothing on the company and is not asked again", async ({ page, company }) => {
+  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }) });
+  try {
+    await prisma.company.update({ where: { id: company.id }, data: { facebookPageCandidateUrl: UI_FACEBOOK_PAGE } });
+    await page.goto(`${baseURL}/diagnostic`);
+    await page.getByRole("dialog", { name: "Est-ce bien votre Page Facebook ?" }).getByRole("button", { name: "Ce n’est pas ma Page" }).click();
+    await expect(page.getByRole("dialog", { name: "Page écartée" })).toBeVisible();
+    expect(await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).toMatchObject({ facebookPageUrl: null, facebookPageCandidateUrl: null, facebookPageDeclinedUrls: [UI_FACEBOOK_PAGE] });
+    // Une confirmation tardive du même lien est refusée par le serveur, un lien forgé ou une origine tierce aussi.
+    const late = await page.request.post(`${baseURL}/api/facebook-page`, { headers: { Origin: baseURL }, data: { action: "confirm", url: UI_FACEBOOK_PAGE } });
+    expect(late.status()).toBe(409);
+    const forged = await page.request.post(`${baseURL}/api/facebook-page`, { headers: { Origin: baseURL }, data: { action: "confirm", url: "https://www.facebook.com/profile.php?id=1" } });
+    expect(forged.status()).toBe(400);
+    const extra = await page.request.post(`${baseURL}/api/facebook-page`, { headers: { Origin: baseURL }, data: { action: "confirm", url: UI_FACEBOOK_PAGE, extra: true } });
+    expect(extra.status()).toBe(400);
+    expect((await page.request.post(`${baseURL}/api/facebook-page`, { headers: { Origin: "https://untrusted.example" }, data: { action: "remove" } })).status()).toBe(403);
+    expect(await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).toMatchObject({ facebookPageUrl: null });
+  } finally {
+    await prisma.$disconnect();
+  }
+});
+
+test("US #253: the Google place is confirmed first, and the diagnostic lists the Facebook reads", async ({ page, company }) => {
+  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }) });
+  try {
+    await prisma.company.update({ where: { id: company.id }, data: { googlePlaceCandidateId: UI_PLACE_ID, facebookPageCandidateUrl: UI_FACEBOOK_PAGE } });
+    await mockProposedPlace(page);
+    await page.goto(`${baseURL}/diagnostic`);
+    // Une seule fenêtre à la fois : la fiche Google d'abord, la Page Facebook ensuite.
+    await expect(page.getByRole("dialog", { name: "Est-ce bien votre fiche Google ?" })).toBeVisible();
+    await expect(page.getByRole("dialog", { name: "Est-ce bien votre Page Facebook ?" })).toHaveCount(0);
+    const run = await prisma.agentRun.create({ data: { companyId: company.id, agent: "marketing", requestKey: randomUUID(), payload: {}, status: "succeeded", attempts: 1, startedAt: new Date(Date.now() - 60_000), finishedAt: new Date() } });
+    await prisma.sourceRead.createMany({ data: [
+      { companyId: company.id, agentRunId: run.id, source: "facebook_page", target: "own", subject: "informations", status: "lue" },
+      { companyId: company.id, agentRunId: run.id, source: "facebook_page", target: "own", subject: "publications", status: "non_lue", reason: "permission" },
+    ] });
+    await page.goto(`${baseURL}/diagnostic`);
+    await page.getByRole("dialog", { name: "Est-ce bien votre fiche Google ?" }).getByRole("button", { name: "Plus tard" }).click();
+    const coverage = page.getByRole("region", { name: "Sources lues pour ce diagnostic" });
+    await expect(coverage).toContainText("Informations de votre Page Facebook");
+    await expect(coverage).toContainText("Non lues : la permission de lire les publications n'est pas accordée");
+  } finally {
+    await prisma.$disconnect();
+  }
+});
