@@ -456,9 +456,9 @@ export function PaulPanel() {
     }
   }
 
-  function send(event: React.FormEvent) {
-    event.preventDefault();
-    void submit(panel.draft.trim());
+  function sendDraft() {
+    const text = panel.draft.trim();
+    if (text && !sending) void submit(text);
   }
 
   function scrollToBottom() {
@@ -600,8 +600,9 @@ export function PaulPanel() {
             )}
           </div>
           {error && <p role="alert" className="mx-3 mb-2 rounded-2xl bg-red-50 px-3 py-2 text-sm text-red-800">{error}</p>}
-          {/* autocomplete="off" : ni mot de passe, ni carte, ni adresse ; Safari n'affiche alors pas sa barre de remplissage au-dessus du clavier. */}
-          <form onSubmit={send} autoComplete="off" onFocus={() => setTyping(true)} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setTyping(false); }}>
+          {/* Pas de <form> : Safari (iOS) affiche sa barre de remplissage (mots de passe, cartes, adresses) au-dessus du clavier
+              pour les champs de formulaire, même en autocomplete="off". L'envoi passe par le bouton et la touche Entrée. */}
+          <div className="chat-compose" role="group" aria-label={`Écrire à ${persona.name}`} onFocus={() => setTyping(true)} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setTyping(false); }}>
             <div className="chat-input">
               <textarea
                 autoComplete="off"
@@ -615,7 +616,7 @@ export function PaulPanel() {
                   // Sur téléphone, le clavier n'a pas de Maj : Entrée va à la ligne, le bouton envoie.
                   if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing && !isPhone) {
                     event.preventDefault();
-                    event.currentTarget.form?.requestSubmit();
+                    sendDraft();
                   }
                 }}
                 rows={1}
@@ -630,13 +631,13 @@ export function PaulPanel() {
                   <StopIcon className="h-4 w-4" />
                 </button>
               ) : (
-                <button type="submit" disabled={!panel.draft.trim()} aria-label="Envoyer" title="Envoyer" className="icon-button primary">
+                <button type="button" onClick={sendDraft} disabled={!panel.draft.trim()} aria-label="Envoyer" title="Envoyer" className="icon-button primary">
                   <ArrowUpIcon />
                 </button>
               )}
             </div>
             <small className="chat-disclaimer">{persona.name} peut se tromper : vérifiez avant de décider.{isPhone ? "" : " Entrée pour envoyer, Maj+Entrée pour une nouvelle ligne."}</small>
-          </form>
+          </div>
         </section>
       )}
       <button

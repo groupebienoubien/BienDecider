@@ -382,7 +382,7 @@
 .mq .paul-panel .panel-controls{margin-left:auto;display:flex;align-items:center}
 .mq .paul-panel .chat-context{margin:0;padding:8px 18px;border-bottom:1px solid var(--line);background:var(--paper);font-size:10px;color:var(--green);text-transform:uppercase}
 .mq .paul-panel .chat-messages{padding:20px;font-size:13px}
-.mq .paul-panel form{display:block;margin:0 17px}
+.mq .paul-panel .chat-compose{display:block;margin:0 17px}
 .mq .chat-input{display:flex;flex-wrap:wrap;align-items:flex-end;border:1px solid var(--line);border-radius:7px;padding:7px}
 .mq .chat-input textarea{border:0;resize:none;font-size:12px;max-height:150px;padding:11px}
 .mq .chat-input textarea:focus-visible{outline:none}
@@ -398,14 +398,14 @@
 .mq .paul-panel .chat-context{padding:5px 12px;font-size:11px;text-transform:none}
 .mq .paul-panel .chat-messages{padding:14px 12px;font-size:16px;line-height:1.5}
 .mq .paul-panel [role="log"]{overscroll-behavior:contain}
-.mq .paul-panel form{margin:0 8px}
+.mq .paul-panel .chat-compose{margin:0 8px}
 .mq .paul-panel .chat-input textarea{font-size:16px}
 .mq .paul-panel .chat-disclaimer{display:block;font-size:11px;line-height:1.3;margin:4px 0 6px}
 /* Saisie en cours : le clavier prend la moitié de l'écran ; bandeau de contexte et mention masqués, en-tête resserré. */
 .mq .paul-panel.typing>header{padding:2px 8px 2px 12px}
 .mq .paul-panel.typing>header .persona-avatar{width:24px!important;height:24px!important}
 .mq .paul-panel.typing .chat-context,.mq .paul-panel.typing .chat-disclaimer{display:none}
-.mq .paul-panel.typing form{margin-bottom:6px}
+.mq .paul-panel.typing .chat-compose{margin-bottom:6px}
 }
 
 /* Charte (docs/charte.md) : carte de décision à trois informations, sections alternées, accent chaud. */
