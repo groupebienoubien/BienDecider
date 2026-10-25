@@ -479,9 +479,12 @@ export function PaulPanel() {
                   <WaveIcon />
                 </button>
               )}
-              <button type="button" onClick={() => setWide((current) => !current)} aria-label={wide ? "Réduire la fenêtre" : "Agrandir la fenêtre"} title={wide ? "Réduire la fenêtre" : "Agrandir la fenêtre"} className={`${ICON_BUTTON} panel-expand`}>
-                {wide ? <CollapseIcon /> : <ExpandIcon />}
-              </button>
+              {/* Plein écran sur téléphone : « Agrandir » n'y a plus d'objet (story 5.4). */}
+              {!isPhone && (
+                <button type="button" onClick={() => setWide((current) => !current)} aria-label={wide ? "Réduire la fenêtre" : "Agrandir la fenêtre"} title={wide ? "Réduire la fenêtre" : "Agrandir la fenêtre"} className={ICON_BUTTON}>
+                  {wide ? <CollapseIcon /> : <ExpandIcon />}
+                </button>
+              )}
               <button type="button" onClick={() => writePanel({ open: false })} aria-label="Replier" title="Replier" className={ICON_BUTTON}>
                 <ChevronDownIcon />
               </button>

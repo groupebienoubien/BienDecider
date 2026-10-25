@@ -394,8 +394,6 @@
 .mq .paul-panel,.mq .paul-panel.wide{inset:0;z-index:110;width:100%;height:100dvh;max-height:none;border:0;border-radius:0;box-shadow:none;padding-bottom:env(safe-area-inset-bottom)}
 .mq .paul-panel>header{padding:6px 8px 6px 12px;gap:8px}
 .mq .paul-panel>header small{display:none}
-/* Plein écran : « Agrandir » n'a plus d'objet (la classe d'icône l'emportait sur « hidden »). */
-.mq .paul-panel .panel-expand{display:none}
 .mq .paul-panel .chat-context{padding:5px 12px;font-size:11px;text-transform:none}
 .mq .paul-panel .chat-messages{padding:14px 12px;font-size:16px;line-height:1.5}
 .mq .paul-panel [role="log"]{overscroll-behavior:contain}
