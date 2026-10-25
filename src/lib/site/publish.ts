@@ -7,7 +7,6 @@ import { recordUsage } from "@/lib/usage";
 import { PublishRefusedError } from "@/lib/execution-error";
 import { keepOnlyCompanyPhotos, sitePhotoPromptLines } from "@/lib/site/photos";
 import { canExecuteAction } from "@/lib/delegation-risk";
-import { getConfiguredRiskLevels } from "@/lib/delegation-policy";
 import { reserveUsageBudget } from "@/lib/agent-runs";
 import { decideProposalReview, reviewPublishedSiteHtml } from "@/lib/proposal-review";
 
@@ -119,6 +118,15 @@ ${brief}`,
   return html;
 }
 
+/**
+ * Niveaux de risque configurés, chargés à la demande : `delegation-policy` est réservé au serveur
+ * (`server-only`) et ne doit pas être importé avec ce module par les tests du moteur.
+ */
+async function configuredRiskLevels(): Promise<Record<string, string>> {
+  const { getConfiguredRiskLevels } = await import("@/lib/delegation-policy");
+  return getConfiguredRiskLevels();
+}
+
 export async function publishSiteFromProposal(proposalId: string, expectedVersion: number, acknowledgedReviewIds: string[] = []) {
   const proposal = await prisma.agentProposal.findUniqueOrThrow({
     where: { id: proposalId },
@@ -133,7 +141,7 @@ export async function publishSiteFromProposal(proposalId: string, expectedVersio
   if (humanApproved && expectedVersion !== proposal.version) {
     throw new PublishRefusedError("La version affichée n'est plus la version approuvée. Rechargez la page avant de publier.", 409);
   }
-  const riskSettings = await getConfiguredRiskLevels();
+  const riskSettings = await configuredRiskLevels();
   if (!canExecuteAction(proposal.kind, "accompagner", humanApproved, { publicExposure: true }, riskSettings[proposal.kind])) {
     throw new PublishRefusedError("Approuvez cette version du site avant de la publier.", 400);
   }
@@ -176,7 +184,7 @@ export async function publishSiteFromProposal(proposalId: string, expectedVersio
  * (version approuvée, figée une fois exécutée), avec les photos actuelles. Même revue des
  * affirmations, même réservation qu'une mise en ligne. Le brief n'est pas réécrit.
  */
-export async function republishSite(companyId: string, acknowledgedReviewIds: string[] = []) {
+export async function republishSite(companyId: string, acknowledgedReviewIds: string[] = [], riskLevels?: Record<string, string>) {
   const company = await prisma.company.findUniqueOrThrow({ where: { id: companyId } });
   if (!company.siteSlug || !company.siteHtml) {
     throw new PublishRefusedError("Aucun site n'est encore en ligne. Approuvez puis mettez en ligne un contenu de site d'abord.", 409);
@@ -191,7 +199,7 @@ export async function republishSite(companyId: string, acknowledgedReviewIds: st
     throw new PublishRefusedError("Le contenu approuvé du site est introuvable. Approuvez un nouveau contenu de site avant de republier.", 409);
   }
   // Même contrôle de risque que la mise en ligne : la version publiée a été approuvée par le dirigeant.
-  const riskSettings = await getConfiguredRiskLevels();
+  const riskSettings = riskLevels ?? await configuredRiskLevels();
   if (!canExecuteAction(proposal.kind, "accompagner", true, { publicExposure: true }, riskSettings[proposal.kind])) {
     throw new PublishRefusedError("La republication n'est pas autorisée pour ce type de contenu.", 400);
   }
