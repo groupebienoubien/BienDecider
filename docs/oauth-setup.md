@@ -133,6 +133,25 @@ Tests : `npm run test:gmail` (sans réseau) et `npm run test:ux` (refus/callback
 
 Sources : [scopes Gmail](https://developers.google.com/workspace/gmail/api/auth/scopes), [envoi Gmail](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/send), [OAuth serveur Google](https://developers.google.com/identity/protocols/oauth2/web-server).
 
+## Lecture des avis Google pour le diagnostic (Places API, US #252)
+
+Indépendante de l'OAuth Google Business Profile : une clé d'API, pas d'autorisation du dirigeant. Le diagnostic de Martine lit la note et les avis de la fiche Google de l'entreprise, et ceux de 3 concurrents au plus par passage.
+
+### Activation (démarche externe, hors du chat)
+
+1. Vérifier les [conditions Google Maps Platform](https://cloud.google.com/maps-platform/terms) et les [règles du Places API](https://developers.google.com/maps/documentation/places/web-service/policies) pour cet usage (lecture par un modèle d'IA, attribution, conservation) avant toute activation en production. Ce point reste à valider par les fondateurs.
+2. Dans la console Google Cloud, activer **Places API (New)** et la facturation, créer une clé d'API restreinte à cette seule API, et lire les [tarifs](https://mapsplatform.google.com/pricing/) : la lecture des avis relève d'une catégorie facturée plus chère que l'identification d'une fiche.
+3. Saisir `GOOGLE_PLACES_API_KEY` dans **Vercel > Settings > Environment Variables**, hors du chat, puis redéployer. Sans cette variable, la fonctionnalité reste inactive : aucun appel Google, source indiquée « non lue : non configurée ».
+
+### Fonctionnement et limites
+
+- La fiche de l'entreprise est proposée au dirigeant dans une fenêtre du Diagnostic (nom, adresse, lien Google Maps) ; son identifiant n'est enregistré qu'après confirmation. Les avis ne sont lus qu'ensuite. Une fiche refusée n'est plus proposée ; elle se retire depuis la page Entreprise.
+- Seul le Place ID est conservé en base. Nom, adresse, note et avis sont lus en direct. Les constats contiennent une synthèse avec la date de lecture, sans citation d'avis mot pour mot ni nom d'auteur.
+- Chaque lecture est enregistrée par le code (table `SourceRead`) et affichée dans « Sources lues pour ce diagnostic ». Le site et Facebook gardent l'état de consultation déclaré par l'analyse dans chaque constat.
+- Un concurrent est identifié par la requête de Martine, sans confirmation du dirigeant : le constat cite le nom et l'adresse lus.
+- Facebook, TikTok et Instagram ne sont pas lus par cette fonctionnalité (#253 et #254).
+- Tests : `npm run test:sources` (sans appel à Google, base jetable). Le fonctionnement réel avec une clé se vérifie par recette manuelle sur une entreprise de test, sans publication.
+
 ## 2. Meta (Facebook + Instagram)
 
 **Priorité externe pendant l'attente Google. Choix retenu : Facebook Login for Business** (cas d'usage « Gérer tout sur votre Page »), cohérent avec l'intégration déjà codée et le besoin Facebook + Instagram professionnel lié à une Page. Pas d'ajout d'Instagram Login en parallèle : les flux et permissions diffèrent. BienDecider sert plusieurs entreprises : scénario **Tech Provider**, **Advanced Access et App Review requis** pour les permissions concernées.

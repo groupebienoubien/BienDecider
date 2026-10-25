@@ -6,6 +6,8 @@ import { OpenPaulButton } from "@/components/open-paul-button";
 import { PageHeading } from "@/components/mockup-ui";
 import { PersonaAvatar } from "@/components/persona-avatar";
 import { DirectionForm } from "@/components/direction-form";
+import { GooglePlaceLine } from "@/components/google-place";
+import { placeMapsLink } from "@/lib/google-places";
 import { SitePhotos } from "@/components/site-photos";
 import { PERSONAS, type AgentKey } from "@/lib/agents/personas";
 import { facebookConnectionView } from "@/lib/oauth/meta";
@@ -54,6 +56,7 @@ export default async function EntreprisePage({ searchParams }: { searchParams: P
             <input value={company.objective ?? ""} placeholder="Aucun objectif renseigné" readOnly />
           </label>
           <Link className="btn" href="/entreprise?tab=objectifs#modifier">Modifier l’objectif</Link>
+          {company.googlePlaceId && <GooglePlaceLine link={placeMapsLink(company.googlePlaceId)} />}
           <h2>Votre équipe</h2>
           {TEAM.map(({ key, role }) => (
             <div key={key} className="connection">
