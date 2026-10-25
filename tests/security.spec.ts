@@ -44,6 +44,8 @@ const GUARDED_ROUTES: Guarded[] = [
   { method: "POST", path: "/api/companies/outreach", denied: 401 },
   { method: "POST", path: "/api/facebook/disconnect", denied: 401 },
   { method: "POST", path: "/api/facebook/page", denied: 401 },
+  { method: "GET", path: "/api/facebook-page", denied: 401 },
+  { method: "POST", path: "/api/facebook-page", denied: 401 },
   { method: "POST", path: "/api/gmail/disconnect", denied: 401 },
   { method: "POST", path: "/api/gmail/send", denied: 401 },
   { method: "GET", path: "/api/google-place", denied: 401 },

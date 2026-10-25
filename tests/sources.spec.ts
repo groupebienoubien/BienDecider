@@ -314,7 +314,7 @@ for (const withKey of [false, true]) {
       expect(sent[0].content).toContain("Fiche Google de l'entreprise : NON LUE");
       expect(fake.calls).toHaveLength(0);
     }
-    expect(toolNames).toEqual(expect.arrayContaining(["record_audit_finding", "propose_action", "web_fetch", "web_search"]));
+    expect(toolNames).toEqual(expect.arrayContaining(["record_audit_finding", "propose_action", "propose_facebook_page", "web_fetch", "web_search"]));
   });
 }
 
@@ -335,9 +335,9 @@ test("the coverage lists the reads of the latest finished audit with their reaso
     { label: "Avis Google d'un concurrent (« Atelier Rival Paris »)", status: "lue", detail: "Lue, aucun avis" },
     { label: "Avis Google de votre fiche", status: "non_lue", detail: "Non lue : la fiche Google n'est pas encore confirmée par le dirigeant" },
   ]);
-  expect(describeSourceRead({ id: "x", target: "own", subject: null, status: "lue", reason: null, itemCount: 7 }).detail).toBe("Lue, 7 avis lus");
+  expect(describeSourceRead({ id: "x", source: "google_reviews", target: "own", subject: null, status: "lue", reason: null, itemCount: 7 }).detail).toBe("Lue, 7 avis lus");
   for (const [reason, expected] of [["not_configured", "n'est pas activée"], ["not_found", "aucune fiche Google"], ["unavailable", "n'a pas répondu"]]) {
-    expect(describeSourceRead({ id: "x", target: "own", subject: null, status: "non_lue", reason, itemCount: null }).detail).toContain(expected);
+    expect(describeSourceRead({ id: "x", source: "google_reviews", target: "own", subject: null, status: "non_lue", reason, itemCount: null }).detail).toContain(expected);
   }
 });
 
@@ -347,4 +347,324 @@ test("deleting a company deletes its source reads", async () => {
   await prisma.sourceRead.create({ data: { companyId: company.id, source: "google_reviews", target: "own", status: "lue", itemCount: 1 } });
   await prisma.company.delete({ where: { id: company.id } });
   expect(await prisma.sourceRead.count({ where: { companyId: company.id } })).toBe(0);
+});
+
+// --- Page Facebook (US #253) : aucune requête réelle vers Meta ---
+
+const PAGE_ID = "2000001";
+const PAGE_TOKEN = "private-page-token-1";
+const PAGE_INFO = { id: PAGE_ID, name: "Atelier Test · Page principale", link: "https://www.facebook.com/atelier.test", category: "Artisan", followers_count: 321 };
+const PAGE_POSTS = {
+  data: [
+    { message: "Nouveau chantier terminé", created_time: "2026-10-20T10:00:00+0000", reactions: { summary: { total_count: 12 } }, comments: { summary: { total_count: 3 } } },
+    { created_time: "2026-10-10T10:00:00+0000" },
+  ],
+};
+
+async function withMetaEnv<T>(run: () => Promise<T>, overrides: { configured?: boolean } = {}) {
+  const names = ["META_APP_ID", "META_APP_SECRET", "META_TOKEN_ENCRYPTION_KEY"] as const;
+  const original = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+  if (overrides.configured === false) for (const name of names) delete process.env[name];
+  else { process.env.META_APP_ID = "ci-meta-app"; process.env.META_APP_SECRET = "ci-meta-secret"; process.env.META_TOKEN_ENCRYPTION_KEY = "d".repeat(64); }
+  try { return await run(); } finally {
+    for (const name of names) { if (original[name] === undefined) delete process.env[name]; else process.env[name] = original[name]; }
+  }
+}
+
+type GraphFailure = "401" | "190" | "403" | "500" | "throw" | "badjson";
+function fakeGraph(options: { info?: unknown; infoFail?: GraphFailure; posts?: unknown; postsFail?: GraphFailure } = {}) {
+  const calls: { url: string; authorization: string | null }[] = [];
+  const fail = (kind: GraphFailure) => {
+    if (kind === "throw") throw new Error("réseau SECRET_BODY");
+    if (kind === "badjson") return new Response("{SECRET_BODY", { status: 200 });
+    const status = kind === "190" ? 400 : Number(kind);
+    return new Response(JSON.stringify({ error: { code: kind === "190" || kind === "401" ? 190 : 10, message: "SECRET_BODY" } }), { status });
+  };
+  const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    calls.push({ url, authorization: new Headers(init?.headers).get("Authorization") });
+    const isPosts = new URL(url).pathname.endsWith("/posts");
+    const failure = isPosts ? options.postsFail : options.infoFail;
+    if (failure) return fail(failure);
+    return Response.json(isPosts ? options.posts ?? PAGE_POSTS : options.info ?? PAGE_INFO);
+  }) as typeof fetch;
+  return { fetchImpl, calls };
+}
+
+async function connectFacebook(companyId: string, options: { scopes?: string[]; selectedPageId?: string | null } = {}) {
+  const { encryptFacebookAccount, FACEBOOK_SCOPES, FACEBOOK_POSTS_SCOPE } = await import("../src/lib/oauth/meta");
+  const { prisma } = await import("../src/lib/prisma");
+  const accessToken = encryptFacebookAccount({
+    userToken: "private-user-token", userId: "1000001", userName: "Dirigeante de test",
+    scopes: options.scopes ?? [...FACEBOOK_SCOPES, FACEBOOK_POSTS_SCOPE],
+    selectedPageId: options.selectedPageId === undefined ? PAGE_ID : options.selectedPageId,
+    pages: [{ id: PAGE_ID, name: PAGE_INFO.name, token: PAGE_TOKEN, canPublish: true }],
+  }, companyId);
+  await prisma.channelConnection.create({ data: { companyId, channel: "facebook", status: "connecte", accessToken } });
+}
+
+test("Facebook links: only the plain https link of a Page is accepted, in canonical form", async () => {
+  const { canonicalFacebookPageUrl, declaredFacebookPageUrl } = await import("../src/lib/facebook-page-url");
+  for (const [input, expected] of [
+    ["https://www.facebook.com/atelier.test", "https://www.facebook.com/atelier.test"],
+    ["https://facebook.com/atelier.test/", "https://www.facebook.com/atelier.test"],
+    ["https://m.facebook.com/Atelier-Test", "https://www.facebook.com/Atelier-Test"],
+    ["  https://WWW.FACEBOOK.COM/100012345678901 ", "https://www.facebook.com/100012345678901"],
+  ] as const) expect(canonicalFacebookPageUrl(input)).toBe(expected);
+  for (const input of [
+    "http://www.facebook.com/atelier.test", "https://www.facebook.com/atelier.test?ref=share", "https://www.facebook.com/atelier.test#a",
+    "https://www.facebook.com/", "https://www.facebook.com/atelier/posts/1", "https://www.facebook.com/profile.php?id=1",
+    "https://www.facebook.com/groups", "https://www.facebook.com/sharer.php", "https://www.facebook.com/share", "https://www.facebook.com/login",
+    "https://www.facebook.com/abc", "https://www.facebook.com/atelier test", "https://www.facebook.com/%61telier", "https://www.facebook.com/atelier..test",
+    "https://evil.example/https://www.facebook.com/atelier.test", "https://www.facebook.com.evil.example/atelier.test",
+    "https://user:pass@www.facebook.com/atelier.test", "https://www.facebook.com:8443/atelier.test", "javascript:alert(1)", "atelier.test", "",
+    `https://www.facebook.com/${"a".repeat(300)}`,
+  ]) expect(canonicalFacebookPageUrl(input), input).toBeNull();
+  for (const bad of [null, undefined, 12, {}, ["https://www.facebook.com/atelier.test"]]) expect(canonicalFacebookPageUrl(bad)).toBeNull();
+  // Dans un texte libre déclaré, un paramètre de suivi n'empêche pas de retrouver la Page.
+  expect(declaredFacebookPageUrl("Instagram @atelier, https://www.facebook.com/atelier.test/?ref=bio, merci")).toBe("https://www.facebook.com/atelier.test");
+  expect(declaredFacebookPageUrl("https://www.facebook.com/groups/12345 puis https://facebook.com/atelier.test")).toBe("https://www.facebook.com/atelier.test");
+  expect(declaredFacebookPageUrl("@atelier_test")).toBeNull();
+  expect(declaredFacebookPageUrl(null)).toBeNull();
+});
+
+test("Graph read: explicit fields, proof and token in headers only, posts only when requested", () => withMetaEnv(async () => {
+  const { readFacebookPageOverview } = await import("../src/lib/oauth/meta");
+  const page = { id: PAGE_ID, token: PAGE_TOKEN };
+  const graph = fakeGraph();
+  const outcome = await readFacebookPageOverview(page, { withPosts: true }, graph.fetchImpl);
+  expect(outcome).toEqual({ status: "read", overview: {
+    name: PAGE_INFO.name, link: PAGE_INFO.link, category: "Artisan", followers: 321,
+    posts: [
+      { message: "Nouveau chantier terminé", createdAt: "2026-10-20T10:00:00+0000", reactions: 12, comments: 3 },
+      { message: "", createdAt: "2026-10-10T10:00:00+0000", reactions: null, comments: null },
+    ],
+  } });
+  expect(graph.calls).toHaveLength(2);
+  const [info, posts] = graph.calls.map((call) => new URL(call.url));
+  expect(info.pathname).toBe(`/v26.0/${PAGE_ID}`);
+  expect(info.searchParams.get("fields")).toBe("id,name,link,category,followers_count,fan_count");
+  expect(posts.pathname).toBe(`/v26.0/${PAGE_ID}/posts`);
+  expect(posts.searchParams.get("limit")).toBe("10");
+  for (const url of [info, posts]) expect(url.searchParams.get("appsecret_proof")).toMatch(/^[a-f0-9]{64}$/);
+  expect(graph.calls.every((call) => call.authorization === `Bearer ${PAGE_TOKEN}` && !call.url.includes(PAGE_TOKEN))).toBe(true);
+  const withoutPosts = fakeGraph();
+  const infosOnly = await readFacebookPageOverview(page, { withPosts: false }, withoutPosts.fetchImpl);
+  expect(infosOnly).toMatchObject({ status: "read", overview: { posts: null } });
+  expect(withoutPosts.calls).toHaveLength(1);
+}));
+
+for (const [fail, expected] of [
+  ["401", { status: "refused", tokenRejected: true }],
+  ["190", { status: "refused", tokenRejected: true }],
+  ["403", { status: "refused", tokenRejected: false }],
+  ["500", { status: "unavailable" }],
+  ["throw", { status: "unavailable" }],
+  ["badjson", { status: "unavailable" }],
+] as const) {
+  test(`Graph read: a ${fail} failure is ${expected.status} and never logs the body or the token`, () => withMetaEnv(async () => {
+    const { readFacebookPageOverview } = await import("../src/lib/oauth/meta");
+    const { result, lines } = await captureErrors(() => readFacebookPageOverview({ id: PAGE_ID, token: PAGE_TOKEN }, { withPosts: true }, fakeGraph({ infoFail: fail }).fetchImpl));
+    expect(result).toEqual(expected);
+    expect(lines.join("\n")).not.toMatch(/SECRET_BODY|private-page-token/);
+  }));
+}
+
+test("Graph read: a posts failure or another Page's answer does not invalidate the page information", () => withMetaEnv(async () => {
+  const { readFacebookPageOverview } = await import("../src/lib/oauth/meta");
+  const page = { id: PAGE_ID, token: PAGE_TOKEN };
+  expect(await readFacebookPageOverview(page, { withPosts: true }, fakeGraph({ postsFail: "403" }).fetchImpl)).toMatchObject({ status: "read", overview: { posts: null } });
+  expect(await readFacebookPageOverview(page, { withPosts: true }, fakeGraph({ posts: { data: "nope" } }).fetchImpl)).toMatchObject({ status: "read", overview: { posts: null } });
+  expect(await readFacebookPageOverview(page, { withPosts: true }, fakeGraph({ info: { ...PAGE_INFO, id: "9999" } }).fetchImpl)).toEqual({ status: "unavailable" });
+}));
+
+test("Facebook source: not enabled and not connected are recorded as not read, with no request", async ({ company }) => {
+  const { readOwnFacebookPage } = await import("../src/lib/facebook-page");
+  const { prisma } = await import("../src/lib/prisma");
+  const graph = fakeGraph();
+  expect(await withMetaEnv(() => readOwnFacebookPage(company, undefined, graph.fetchImpl), { configured: false })).toMatchObject({ status: "non_lue", reason: "not_configured" });
+  expect(await withMetaEnv(() => readOwnFacebookPage(company, undefined, graph.fetchImpl))).toMatchObject({ status: "non_lue", reason: "not_connected" });
+  expect(graph.calls).toHaveLength(0);
+  const reads = await prisma.sourceRead.findMany({ where: { companyId: company.id } });
+  expect(reads.map((read) => `${read.source}:${read.subject}:${read.status}:${read.reason}`).sort()).toEqual([
+    "facebook_page:informations:non_lue:not_configured", "facebook_page:informations:non_lue:not_connected",
+  ]);
+});
+
+test("Facebook source: a connection that cannot be read is to redo, and a Page not selected is not read", async ({ company }) => {
+  const { readOwnFacebookPage } = await import("../src/lib/facebook-page");
+  const { prisma } = await import("../src/lib/prisma");
+  await withMetaEnv(async () => {
+    await connectFacebook(company.id, { selectedPageId: null });
+    const graph = fakeGraph();
+    expect(await readOwnFacebookPage(company, undefined, graph.fetchImpl)).toMatchObject({ status: "non_lue", reason: "reauthorization" });
+    await prisma.channelConnection.update({ where: { companyId_channel: { companyId: company.id, channel: "facebook" } }, data: { accessToken: "jeton-en-clair" } });
+    expect(await readOwnFacebookPage(company, undefined, graph.fetchImpl)).toMatchObject({ status: "non_lue", reason: "reauthorization" });
+    expect(graph.calls).toHaveLength(0);
+  });
+});
+
+test("Facebook source: a connected Page is read, its link proposed, and the reads recorded", async ({ company }) => {
+  const { readOwnFacebookPage, describeFacebookReading } = await import("../src/lib/facebook-page");
+  const { prisma } = await import("../src/lib/prisma");
+  await withMetaEnv(async () => {
+    await connectFacebook(company.id);
+    const graph = fakeGraph();
+    const reading = await readOwnFacebookPage(company, undefined, graph.fetchImpl);
+    expect(reading).toMatchObject({ status: "lue", postsReason: null, overview: { name: PAGE_INFO.name, followers: 321 } });
+    const text = describeFacebookReading(reading, new Date("2026-10-25T10:00:00Z"));
+    expect(text).toContain("lue le 25 octobre 2026");
+    expect(text).toContain("Nouveau chantier terminé");
+    expect(text).toContain("\"abonnes\":321");
+    expect(text).not.toContain(PAGE_TOKEN);
+    // Le lien de la Page est seulement proposé : rien n'est confirmé sans le dirigeant.
+    expect(await reload(company.id)).toMatchObject({ facebookPageUrl: null, facebookPageCandidateUrl: "https://www.facebook.com/atelier.test" });
+    const reads = await prisma.sourceRead.findMany({ where: { companyId: company.id } });
+    expect(reads.map((read) => `${read.subject}:${read.status}:${read.itemCount}`).sort()).toEqual(["informations:lue:null", "publications:lue:2"]);
+  });
+});
+
+test("Facebook source: without the posts permission the information is read and the posts are not", async ({ company }) => {
+  const { readOwnFacebookPage, describeFacebookReading } = await import("../src/lib/facebook-page");
+  const { prisma } = await import("../src/lib/prisma");
+  const { FACEBOOK_SCOPES } = await import("../src/lib/oauth/meta");
+  await withMetaEnv(async () => {
+    await connectFacebook(company.id, { scopes: [...FACEBOOK_SCOPES] });
+    const graph = fakeGraph();
+    const reading = await readOwnFacebookPage(company, undefined, graph.fetchImpl);
+    expect(reading).toMatchObject({ status: "lue", postsReason: "permission" });
+    expect(graph.calls).toHaveLength(1);
+    expect(describeFacebookReading(reading)).toContain("non lues (la permission de lire les publications n'est pas accordée)");
+    const reads = await prisma.sourceRead.findMany({ where: { companyId: company.id } });
+    expect(reads.map((read) => `${read.subject}:${read.status}:${read.reason}`).sort()).toEqual(["informations:lue:null", "publications:non_lue:permission"]);
+  });
+});
+
+test("Facebook source: a rejected token puts the connection in error once, an unavailable Facebook does not", async ({ company }) => {
+  const { readOwnFacebookPage } = await import("../src/lib/facebook-page");
+  const { prisma } = await import("../src/lib/prisma");
+  await withMetaEnv(async () => {
+    await connectFacebook(company.id);
+    const status = async () => (await prisma.channelConnection.findUniqueOrThrow({ where: { companyId_channel: { companyId: company.id, channel: "facebook" } } })).status;
+    expect(await readOwnFacebookPage(company, undefined, fakeGraph({ infoFail: "500" }).fetchImpl)).toMatchObject({ status: "non_lue", reason: "unavailable" });
+    expect(await status()).toBe("connecte");
+    expect(await readOwnFacebookPage(company, undefined, fakeGraph({ infoFail: "403" }).fetchImpl)).toMatchObject({ status: "non_lue", reason: "unavailable" });
+    expect(await status()).toBe("connecte");
+    expect(await readOwnFacebookPage(company, undefined, fakeGraph({ infoFail: "190" }).fetchImpl)).toMatchObject({ status: "non_lue", reason: "reauthorization" });
+    expect(await status()).toBe("erreur");
+    // Une fois la connexion en erreur, plus aucun appel : la lecture est simplement non faite.
+    const graph = fakeGraph();
+    expect(await readOwnFacebookPage(company, undefined, graph.fetchImpl)).toMatchObject({ status: "non_lue", reason: "not_connected" });
+    expect(graph.calls).toHaveLength(0);
+  });
+});
+
+test("Facebook source: a Page whose link is already confirmed is not proposed again", async ({ company }) => {
+  const { readOwnFacebookPage } = await import("../src/lib/facebook-page");
+  const { prisma } = await import("../src/lib/prisma");
+  await withMetaEnv(async () => {
+    await connectFacebook(company.id);
+    await prisma.company.update({ where: { id: company.id }, data: { facebookPageUrl: "https://www.facebook.com/deja.confirmee" } });
+    await readOwnFacebookPage(await reload(company.id), undefined, fakeGraph().fetchImpl);
+    expect(await reload(company.id)).toMatchObject({ facebookPageUrl: "https://www.facebook.com/deja.confirmee", facebookPageCandidateUrl: null });
+  });
+});
+
+test("proposing a Page: strict link, one proposal at a time, never a declined, known or confirmed Page", async ({ company }) => {
+  const { proposeFacebookPage, confirmFacebookPage, declineFacebookPage, removeFacebookPage } = await import("../src/lib/facebook-page");
+  const GOOD = "https://www.facebook.com/atelier.test";
+  expect(await proposeFacebookPage(company.id, undefined, "https://www.facebook.com/profile.php?id=1")).toContain("Lien refusé");
+  expect(await proposeFacebookPage(company.id, undefined, "https://evil.example/atelier.test")).toContain("Lien refusé");
+  expect(await reload(company.id)).toMatchObject({ facebookPageCandidateUrl: null });
+  expect(await proposeFacebookPage(company.id, undefined, `${GOOD}/`)).toContain("doit encore la confirmer");
+  expect(await reload(company.id)).toMatchObject({ facebookPageUrl: null, facebookPageCandidateUrl: GOOD });
+  expect(await proposeFacebookPage(company.id, undefined, "https://www.facebook.com/autre.page")).toContain("déjà en attente");
+  expect(await reload(company.id)).toMatchObject({ facebookPageCandidateUrl: GOOD });
+
+  // Confirmer exige le lien exactement proposé ; un autre lien ou un lien invalide ne change rien.
+  expect(await confirmFacebookPage(company.id, "https://www.facebook.com/autre.page")).toBe(false);
+  expect(await confirmFacebookPage(company.id, "javascript:alert(1)")).toBe(false);
+  expect(await declineFacebookPage(company.id, GOOD)).toBe(true);
+  expect(await reload(company.id)).toMatchObject({ facebookPageCandidateUrl: null, facebookPageDeclinedUrls: [GOOD] });
+  expect(await declineFacebookPage(company.id, GOOD)).toBe(false);
+  expect(await proposeFacebookPage(company.id, undefined, GOOD)).toContain("déjà été refusée");
+  expect(await reload(company.id)).toMatchObject({ facebookPageCandidateUrl: null });
+
+  const OTHER = "https://www.facebook.com/autre.page";
+  expect(await proposeFacebookPage(company.id, undefined, OTHER)).toContain("doit encore la confirmer");
+  expect(await confirmFacebookPage(company.id, OTHER)).toBe(true);
+  expect(await confirmFacebookPage(company.id, OTHER)).toBe(false);
+  expect(await reload(company.id)).toMatchObject({ facebookPageUrl: OTHER, facebookPageCandidateUrl: null });
+  expect(await proposeFacebookPage(company.id, undefined, "https://www.facebook.com/encore.une")).toContain("déjà identifiée");
+  expect(await removeFacebookPage(company.id)).toBe(true);
+  expect(await removeFacebookPage(company.id)).toBe(false);
+  expect(await reload(company.id)).toMatchObject({ facebookPageUrl: null, facebookPageDeclinedUrls: [GOOD, OTHER] });
+  expect(await proposeFacebookPage(company.id, undefined, OTHER)).toContain("déjà été refusée");
+});
+
+test("a Page link already given by the owner is known and never proposed", async ({ company }) => {
+  const { proposeFacebookPage, knownFacebookPageUrl } = await import("../src/lib/facebook-page");
+  const { prisma } = await import("../src/lib/prisma");
+  const updated = await prisma.company.update({ where: { id: company.id }, data: { socialHandles: "https://www.facebook.com/atelier.test/" } });
+  expect(knownFacebookPageUrl(updated)).toBe("https://www.facebook.com/atelier.test");
+  expect(await proposeFacebookPage(company.id, undefined, "https://www.facebook.com/autre.page")).toContain("déjà identifiée");
+  expect(await reload(company.id)).toMatchObject({ facebookPageCandidateUrl: null });
+});
+
+test("a Page decision only applies to the company's own proposal", async ({ company }) => {
+  const { proposeFacebookPage, confirmFacebookPage, declineFacebookPage, removeFacebookPage } = await import("../src/lib/facebook-page");
+  const { prisma } = await import("../src/lib/prisma");
+  const other = await prisma.company.create({ data: { ownerEmail: `sources-other-${randomUUID()}@example.invalid`, name: "Autre", trade: "Artisan", servingArea: "Lyon" } });
+  try {
+    await proposeFacebookPage(company.id, undefined, "https://www.facebook.com/atelier.test");
+    expect(await confirmFacebookPage(other.id, "https://www.facebook.com/atelier.test")).toBe(false);
+    expect(await declineFacebookPage(other.id, "https://www.facebook.com/atelier.test")).toBe(false);
+    expect(await removeFacebookPage(other.id)).toBe(false);
+    expect(await reload(company.id)).toMatchObject({ facebookPageCandidateUrl: "https://www.facebook.com/atelier.test" });
+  } finally {
+    await prisma.company.delete({ where: { id: other.id } });
+  }
+});
+
+test("Martine receives the Facebook reading and the propose tool only while no Page is known", async ({ company }) => {
+  const { runMarketingAgent } = await import("../src/lib/agents/marketing");
+  const { anthropic } = await import("../src/lib/anthropic");
+  const { prisma } = await import("../src/lib/prisma");
+  const messages = anthropic.beta.messages as unknown as { toolRunner: (params: unknown) => unknown };
+  const originalRunner = messages.toolRunner;
+  const run = async (): Promise<{ tools: { name: string }[]; messages: { content: string }[]; system: { text: string }[] }> => {
+    let captured: unknown;
+    messages.toolRunner = (params: unknown) => { captured = params; throw new Error("intercepted"); };
+    try { await expect(runMarketingAgent(company.id)).rejects.toThrow("intercepted"); } finally { messages.toolRunner = originalRunner; }
+    return captured as Awaited<ReturnType<typeof run>>;
+  };
+  await withMetaEnv(async () => {
+    const first = await run();
+    expect(first.tools.map((tool) => tool.name)).toContain("propose_facebook_page");
+    expect(first.messages[0].content).toContain("Page Facebook de l'entreprise : NON LUE (la Page Facebook n'est pas connectée à BienDecider)");
+    expect(first.system.map((block) => block.text).join(" ")).toContain("ne la présente jamais comme confirmée");
+
+    await prisma.company.update({ where: { id: company.id }, data: { facebookPageUrl: "https://www.facebook.com/atelier.test" } });
+    const second = await run();
+    expect(second.tools.map((tool) => tool.name)).not.toContain("propose_facebook_page");
+    expect(second.messages[0].content).toContain("Page Facebook à consulter avec web_fetch : https://www.facebook.com/atelier.test");
+  });
+});
+
+test("the coverage describes the Facebook reads of the latest audit", async ({ company }) => {
+  const { getSourceCoverage, describeSourceRead } = await import("../src/lib/source-coverage");
+  const { prisma } = await import("../src/lib/prisma");
+  const run = await prisma.agentRun.create({ data: { companyId: company.id, agent: "marketing", requestKey: randomUUID(), payload: {}, status: "succeeded", attempts: 1, startedAt: new Date(Date.now() - 60_000), finishedAt: new Date() } });
+  await prisma.sourceRead.create({ data: { companyId: company.id, agentRunId: run.id, source: "facebook_page", target: "own", subject: "informations", status: "lue" } });
+  await prisma.sourceRead.create({ data: { companyId: company.id, agentRunId: run.id, source: "facebook_page", target: "own", subject: "publications", status: "non_lue", reason: "permission" } });
+  expect((await getSourceCoverage(company.id)).map(({ label, status, detail }) => ({ label, status, detail }))).toEqual([
+    { label: "Informations de votre Page Facebook", status: "lue", detail: "Lues" },
+    { label: "Publications de votre Page Facebook", status: "non_lue", detail: "Non lues : la permission de lire les publications n'est pas accordée" },
+  ]);
+  const posts = { id: "x", source: "facebook_page", target: "own", subject: "publications", status: "lue", reason: null };
+  expect(describeSourceRead({ ...posts, itemCount: 4 }).detail).toBe("Lues, 4 publications lues");
+  expect(describeSourceRead({ ...posts, itemCount: 0 }).detail).toBe("Lues, aucune publication");
+  for (const [reason, expected] of [["not_configured", "pas activée"], ["not_connected", "n'est pas connectée"], ["reauthorization", "à refaire"], ["unavailable", "Facebook n'a pas répondu"]]) {
+    expect(describeSourceRead({ ...posts, subject: "informations", status: "non_lue", reason, itemCount: null }).detail).toContain(expected);
+  }
 });

@@ -31,6 +31,9 @@ model Company {
   googlePlaceId          String? // fiche Google confirmée par le dirigeant : le Place ID est le seul contenu Google conservé (conditions Places API)
   googlePlaceCandidateId String? // fiche proposée, en attente de la confirmation du dirigeant
   googlePlaceDeclinedIds String[] @default([]) // fiches refusées ou retirées (les plus récentes) : jamais reproposées
+  facebookPageUrl           String? // lien de la Page Facebook confirmé par le dirigeant : seul contenu Facebook conservé
+  facebookPageCandidateUrl  String? // lien proposé, en attente de la confirmation du dirigeant
+  facebookPageDeclinedUrls  String[] @default([]) // liens refusés ou retirés (les plus récents) : jamais reproposés
   objective       String? // objectif business déclaré, ex: "10 nouveaux clients par mois" (cf. docs/backlog.md #1)
   // Profil business chiffré (cf. docs/backlog.md, "partenaire de croissance") — déclaratif,
   // jamais calculé par Pepito : CA mensuel actuel, cible et échéance, valeur moyenne

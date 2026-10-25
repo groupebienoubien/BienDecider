@@ -307,3 +307,90 @@ export async function publishFacebookPagePost(
   const graphError = graphErrorSchema.safeParse(body);
   return { status: "refused", tokenRejected: response.status === 401 || (graphError.success && graphError.data.error.code === 190) };
 }
+
+export const FACEBOOK_POSTS_SCOPE = "pages_read_user_content";
+export const FACEBOOK_POSTS_READ_CAP = 10;
+
+export type FacebookPageOverview = {
+  name: string;
+  link: string | null;
+  category: string | null;
+  followers: number | null;
+  /** null : lecture des publications non demandée ou échouée ; sinon les dernières publications. */
+  posts: { message: string; createdAt: string | null; reactions: number | null; comments: number | null }[] | null;
+};
+export type FacebookPageReadOutcome =
+  | { status: "read"; overview: FacebookPageOverview }
+  | { status: "refused"; tokenRejected: boolean }
+  | { status: "unavailable" };
+
+const count = z.object({ summary: z.object({ total_count: z.number().int().nonnegative().optional() }).optional() }).optional();
+const pageInfoSchema = z.object({
+  id: z.string().min(1).max(64),
+  name: z.string().min(1).max(300),
+  link: z.string().max(500).optional(),
+  category: z.string().max(200).optional(),
+  followers_count: z.number().int().nonnegative().optional(),
+  fan_count: z.number().int().nonnegative().optional(),
+});
+const pagePostsSchema = z.object({
+  data: z.array(z.object({
+    message: z.string().max(20000).optional(),
+    created_time: z.string().max(40).optional(),
+    reactions: count,
+    comments: count,
+  })).max(100),
+});
+
+async function readGraph(url: string, token: string, fetchImpl: Fetch): Promise<
+  { ok: true; body: unknown } | { ok: false; refused: boolean; tokenRejected: boolean }
+> {
+  let response: Response;
+  try {
+    response = await fetchImpl(url, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(10000), cache: "no-store" });
+  } catch {
+    return { ok: false, refused: false, tokenRejected: false };
+  }
+  // Ni l'URL ni le corps ne sont journalisés : ils peuvent contenir un jeton ou des contenus de tiers.
+  const body = await response.json().catch(() => null);
+  if (response.ok) return { ok: true, body };
+  const graphError = graphErrorSchema.safeParse(body);
+  const tokenRejected = response.status === 401 || (graphError.success && graphError.data.error.code === 190);
+  return { ok: false, refused: response.status < 500, tokenRejected };
+}
+
+/**
+ * Lit les informations d'une Page, et ses dernières publications si la
+ * permission a été accordée, avec le jeton de la Page. Ne lève jamais. Un échec
+ * des seules publications n'invalide pas la lecture des informations.
+ */
+export async function readFacebookPageOverview(
+  page: { id: string; token: string }, options: { withPosts: boolean }, fetchImpl: Fetch = fetch,
+): Promise<FacebookPageReadOutcome> {
+  const id = encodeURIComponent(page.id);
+  const info = await readGraph(graphUrl(id, withProof(page.token, { fields: "id,name,link,category,followers_count,fan_count" })), page.token, fetchImpl);
+  if (!info.ok) return info.refused ? { status: "refused", tokenRejected: info.tokenRejected } : { status: "unavailable" };
+  const parsed = pageInfoSchema.safeParse(info.body);
+  if (!parsed.success || parsed.data.id !== page.id) return { status: "unavailable" };
+  const overview: FacebookPageOverview = {
+    name: parsed.data.name,
+    link: parsed.data.link ?? null,
+    category: parsed.data.category ?? null,
+    followers: parsed.data.followers_count ?? parsed.data.fan_count ?? null,
+    posts: null,
+  };
+  if (options.withPosts) {
+    const fields = "message,created_time,reactions.summary(true).limit(0),comments.summary(true).limit(0)";
+    const posts = await readGraph(graphUrl(`${id}/posts`, withProof(page.token, { fields, limit: String(FACEBOOK_POSTS_READ_CAP) })), page.token, fetchImpl);
+    const parsedPosts = posts.ok ? pagePostsSchema.safeParse(posts.body) : null;
+    if (parsedPosts?.success) {
+      overview.posts = parsedPosts.data.data.slice(0, FACEBOOK_POSTS_READ_CAP).map((post) => ({
+        message: post.message ?? "",
+        createdAt: post.created_time ?? null,
+        reactions: post.reactions?.summary?.total_count ?? null,
+        comments: post.comments?.summary?.total_count ?? null,
+      }));
+    }
+  }
+  return { status: "read", overview };
+}
