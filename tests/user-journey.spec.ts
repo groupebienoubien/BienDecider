@@ -1412,9 +1412,14 @@ test("story 5.4: on a phone, Paul takes the whole screen, above the bottom bar, 
   expect(company.id).toBeTruthy(); // la fixture ouvre la session du dirigeant
   await page.setViewportSize({ width: 375, height: 812 });
   await page.goto(`${baseURL}/dashboard`);
+  // Position de lecture à retrouver à la fermeture.
+  await page.evaluate(() => window.scrollTo(0, 200));
+  const scrolledTo = await page.evaluate(() => window.scrollY);
   await page.locator('button[aria-controls="paul-panel"]:visible').first().click();
   const panel = page.getByRole("dialog", { name: "Discussion avec Paul" });
   await expect(panel).toBeVisible();
+  // iOS fait défiler la page quand le clavier s'ouvre : le <body> est figé, pas seulement <html>.
+  expect(await page.evaluate(() => getComputedStyle(document.body).position)).toBe("fixed");
   const layout = await page.evaluate(() => {
     const node = document.getElementById("paul-panel")!;
     const field = node.querySelector("textarea")!;
@@ -1441,12 +1446,17 @@ test("story 5.4: on a phone, Paul takes the whole screen, above the bottom bar, 
   expect(layout.pageOverflow).toBe("hidden");
   // Pas de clavier ouvert d'office : le dirigeant lit d'abord.
   expect(layout.focused).toBe(false);
+  // Le clavier ne s'émule pas ici : le champ reçoit le focus et le panneau reste en plein écran.
+  await panel.getByLabel("Message à Paul").focus();
+  await expect.poll(() => page.evaluate(() => document.getElementById("paul-panel")!.getBoundingClientRect().top)).toBe(0);
   await expect(panel.getByRole("button", { name: "Agrandir la fenêtre" })).toBeHidden();
   await expect(panel).toHaveAttribute("aria-modal", "true");
 
   await panel.getByRole("button", { name: "Replier" }).click();
   await expect(panel).toHaveCount(0);
   expect(await page.evaluate(() => getComputedStyle(document.documentElement).overflow)).not.toBe("hidden");
+  expect(await page.evaluate(() => getComputedStyle(document.body).position)).not.toBe("fixed");
+  expect(await page.evaluate(() => window.scrollY)).toBe(scrolledTo);
 });
 
 test("story 5.3: the plan opens on the actions to do, the running and executed ones are in their own tab", async ({ page, company }) => {
