@@ -479,7 +479,7 @@ export function PaulPanel() {
                   <WaveIcon />
                 </button>
               )}
-              <button type="button" onClick={() => setWide((current) => !current)} aria-label={wide ? "Réduire la fenêtre" : "Agrandir la fenêtre"} title={wide ? "Réduire la fenêtre" : "Agrandir la fenêtre"} className={`${ICON_BUTTON} hidden sm:inline-flex`}>
+              <button type="button" onClick={() => setWide((current) => !current)} aria-label={wide ? "Réduire la fenêtre" : "Agrandir la fenêtre"} title={wide ? "Réduire la fenêtre" : "Agrandir la fenêtre"} className={`${ICON_BUTTON} panel-expand`}>
                 {wide ? <CollapseIcon /> : <ExpandIcon />}
               </button>
               <button type="button" onClick={() => writePanel({ open: false })} aria-label="Replier" title="Replier" className={ICON_BUTTON}>
