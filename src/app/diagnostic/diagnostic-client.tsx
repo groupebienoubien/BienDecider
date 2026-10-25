@@ -9,6 +9,9 @@ import { groupFindings } from "@/lib/diagnostic-groups";
 import { Icon } from "@/components/icon";
 import { EmptyState, PageHeading, SectionTitle } from "@/components/mockup-ui";
 import { useAgentProfileCompletion } from "@/components/agent-profile-completion";
+import { GooglePlaceDialog } from "@/components/google-place";
+import { SourceCoverage } from "@/components/source-coverage";
+import type { CoverageItem } from "@/lib/source-coverage";
 import { waitForAgentRun } from "@/lib/agent-runs-client";
 import type { AuditFindingsView } from "@/lib/audit-split";
 
@@ -16,7 +19,7 @@ const ANALYSIS_DATE = new Intl.DateTimeFormat("fr-FR", { day: "numeric", month: 
 const PREVIOUS_DATE = new Intl.DateTimeFormat("fr-FR", { day: "2-digit", month: "2-digit", timeZone: "Europe/Paris" });
 const ANALYSIS_TIME = new Intl.DateTimeFormat("fr-FR", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Paris" });
 
-export function DiagnosticClient({ initialAudits, feedback, leadCount, initialPlanUpToDate }: { initialAudits: AuditFindingsView<AuditFinding>; feedback: string[]; leadCount: number; initialPlanUpToDate: boolean }) {
+export function DiagnosticClient({ initialAudits, feedback, leadCount, initialPlanUpToDate, coverage, hasGoogleCandidate }: { initialAudits: AuditFindingsView<AuditFinding>; feedback: string[]; leadCount: number; initialPlanUpToDate: boolean; coverage: CoverageItem[]; hasGoogleCandidate: boolean }) {
   const { requestProfile, profileDialog, checking } = useAgentProfileCompletion();
   const router = useRouter();
   // Story 5.2 : plan à jour = des actions créées après la fin du dernier audit.
@@ -49,6 +52,8 @@ export function DiagnosticClient({ initialAudits, feedback, leadCount, initialPl
       const refreshed = await fetch("/api/audit-findings");
       if (!refreshed.ok) throw new Error("Impossible d'actualiser le diagnostic. Rechargez la page.");
       setAudits(await refreshed.json());
+      // La couverture des sources et la fiche Google à confirmer viennent du serveur.
+      router.refresh();
       // Nouvel audit : le plan reste à préparer à partir de ses constats.
       setPlanUpToDate(false);
       setDone(true);
@@ -120,6 +125,7 @@ export function DiagnosticClient({ initialAudits, feedback, leadCount, initialPl
         </>}
       />
       {profileDialog}
+      <GooglePlaceDialog hasCandidate={hasGoogleCandidate} />
       {error && <p role="alert" className="warning">{error}</p>}
       {done && <p role="status" className="notice">Diagnostic actualisé. <Link href="/dashboard?view=validation">Voir les productions à valider</Link></p>}
       {findings.length === 0 && (
@@ -147,6 +153,7 @@ export function DiagnosticClient({ initialAudits, feedback, leadCount, initialPl
           {audits.previous.map((finding) => <FindingCard key={finding.id} finding={finding} />)}
         </details>
       )}
+      <SourceCoverage items={coverage} />
       <SectionTitle title="Ce que votre équipe retient" />
       <div className="notice">{feedback.length ? `${feedback.length} retour(s) explicite(s) pris en compte dans la prochaine préparation.` : "Aucune préférence nouvelle enregistrée. Vos corrections ne changent pas votre objectif sans votre accord."}</div>
       {feedback.length > 0 && <ul className="feedback-list">{feedback.map((item, index) => <li key={index}>{item}</li>)}</ul>}

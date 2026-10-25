@@ -1634,3 +1634,91 @@ test("story 5.5: without the Blob store, the section says sending photos is not 
   expect(upload.status()).toBe(503);
   expect((await upload.json()).error).toContain("pas encore disponible");
 });
+
+const UI_PLACE_ID = "ChIJ_ui_place_0001";
+
+/** Le serveur de test n'a pas de clé Google : la lecture en direct de la fiche proposée est simulée dans le navigateur. */
+async function mockProposedPlace(page: Page) {
+  await page.route("**/api/google-place", async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    await route.fulfill({ json: { configured: true, candidate: { placeId: UI_PLACE_ID, name: "Atelier Test Parcours", address: "1 rue du Test, 75001 Paris", link: "https://maps.google.com/?cid=1" } } });
+  });
+}
+
+test("US #252: the Google place found is shown with its link and saved only after the manager confirms it, then removable", async ({ page, company }) => {
+  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }) });
+  try {
+    await prisma.company.update({ where: { id: company.id }, data: { googlePlaceCandidateId: UI_PLACE_ID } });
+    await mockProposedPlace(page);
+    await page.setViewportSize({ width: 320, height: 800 });
+    await page.goto(`${baseURL}/diagnostic`);
+    const dialog = page.getByRole("dialog", { name: "Est-ce bien votre fiche Google ?" });
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText("Atelier Test Parcours");
+    await expect(dialog).toContainText("1 rue du Test, 75001 Paris");
+    await expect(dialog).toContainText("Rien n’est enregistré sans votre confirmation.");
+    await expect(dialog.getByRole("link", { name: "Voir la fiche sur Google Maps" })).toHaveAttribute("href", "https://maps.google.com/?cid=1");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    // Rien n'est enregistré tant que le dirigeant n'a pas cliqué.
+    expect(await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).toMatchObject({ googlePlaceId: null, googlePlaceCandidateId: UI_PLACE_ID });
+
+    await dialog.getByRole("button", { name: "Oui, c’est ma fiche" }).click();
+    const saved = page.getByRole("dialog", { name: "Fiche enregistrée" });
+    await expect(saved).toContainText("Actualiser le diagnostic");
+    expect(await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).toMatchObject({ googlePlaceId: UI_PLACE_ID, googlePlaceCandidateId: null });
+    await saved.getByRole("button", { name: "Fermer", exact: true }).last().click();
+
+    await page.goto(`${baseURL}/entreprise`);
+    const line = page.locator(".connection").filter({ hasText: "Fiche Google" });
+    await expect(line.getByRole("link", { name: "Voir ma fiche sur Google Maps" })).toHaveAttribute("href", new RegExp(`query_place_id=${UI_PLACE_ID}$`));
+    await line.getByRole("button", { name: "Retirer" }).click();
+    await expect(page.locator(".connection").filter({ hasText: "Fiche Google" })).toHaveCount(0);
+    expect(await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).toMatchObject({ googlePlaceId: null, googlePlaceDeclinedIds: [UI_PLACE_ID] });
+  } finally {
+    await prisma.$disconnect();
+  }
+});
+
+test("US #252: declining the proposed Google place saves nothing on the company and is not asked again", async ({ page, company }) => {
+  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }) });
+  try {
+    await prisma.company.update({ where: { id: company.id }, data: { googlePlaceCandidateId: UI_PLACE_ID } });
+    await mockProposedPlace(page);
+    await page.goto(`${baseURL}/diagnostic`);
+    const dialog = page.getByRole("dialog", { name: "Est-ce bien votre fiche Google ?" });
+    await dialog.getByRole("button", { name: "Ce n’est pas ma fiche" }).click();
+    await expect(page.getByRole("dialog", { name: "Fiche écartée" })).toBeVisible();
+    expect(await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).toMatchObject({ googlePlaceId: null, googlePlaceCandidateId: null, googlePlaceDeclinedIds: [UI_PLACE_ID] });
+    // Une confirmation tardive de la même fiche est refusée par le serveur.
+    const late = await page.request.post(`${baseURL}/api/google-place`, { headers: { Origin: baseURL }, data: { action: "confirm", placeId: UI_PLACE_ID } });
+    expect(late.status()).toBe(409);
+    const forged = await page.request.post(`${baseURL}/api/google-place`, { headers: { Origin: baseURL }, data: { action: "confirm", placeId: "ChIJ_forged_place1", extra: true } });
+    expect(forged.status()).toBe(400);
+    expect((await page.request.post(`${baseURL}/api/google-place`, { headers: { Origin: "https://untrusted.example" }, data: { action: "remove" } })).status()).toBe(403);
+    expect(await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).toMatchObject({ googlePlaceId: null });
+  } finally {
+    await prisma.$disconnect();
+  }
+});
+
+test("US #252: the diagnostic lists what was really read and why a source was not", async ({ page, company }) => {
+  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }) });
+  try {
+    const run = await prisma.agentRun.create({ data: { companyId: company.id, agent: "marketing", requestKey: randomUUID(), payload: {}, status: "succeeded", attempts: 1, startedAt: new Date(Date.now() - 60_000), finishedAt: new Date() } });
+    await prisma.sourceRead.createMany({ data: [
+      { companyId: company.id, agentRunId: run.id, source: "google_reviews", target: "own", status: "non_lue", reason: "to_confirm" },
+      { companyId: company.id, agentRunId: run.id, source: "google_reviews", target: "competitor", subject: "Atelier Rival Paris", status: "lue", itemCount: 4 },
+    ] });
+    await page.goto(`${baseURL}/diagnostic`);
+    const coverage = page.getByRole("region", { name: "Sources lues pour ce diagnostic" });
+    await expect(coverage).toContainText("Avis Google de votre fiche");
+    await expect(coverage).toContainText("Non lue : la fiche Google n'est pas encore confirmée par le dirigeant");
+    await expect(coverage).toContainText("Avis Google d'un concurrent (« Atelier Rival Paris »)");
+    await expect(coverage).toContainText("Lue, 4 avis lus");
+    await expect(coverage).toContainText("Source des avis : Google Maps");
+    // Sans clé Google côté serveur, aucune fenêtre n'est ouverte et aucune fiche n'est supposée.
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+  } finally {
+    await prisma.$disconnect();
+  }
+});

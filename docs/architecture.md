@@ -188,7 +188,7 @@ flowchart LR
     Deploy -.->|DATABASE_URL injecté| PG[(Prisma Postgres)]
 ```
 
-Variables d'environnement requises en production : `DATABASE_URL` (nom canonique, généralement injecté par Vercel), `ANTHROPIC_API_KEY`, `SESSION_SECRET`. Pour Prisma Postgres, `DATABASE_PRISMA_DATABASE_URL` et `DATABASE_POSTGRES_URL` sont aussi acceptées comme replis si `DATABASE_URL` est absente. Optionnelles : `GOOGLE_OAUTH_*`, `META_*`, `ADMIN_EMAILS`. Détail pas-à-pas dans le [README](../README.md).
+Variables d'environnement requises en production : `DATABASE_URL` (nom canonique, généralement injecté par Vercel), `ANTHROPIC_API_KEY`, `SESSION_SECRET`. Pour Prisma Postgres, `DATABASE_PRISMA_DATABASE_URL` et `DATABASE_POSTGRES_URL` sont aussi acceptées comme replis si `DATABASE_URL` est absente. Optionnelles : `GOOGLE_OAUTH_*`, `META_*`, `ADMIN_EMAILS`, `GOOGLE_PLACES_API_KEY` (lecture des avis Google ; inactive sans elle, cf. [oauth-setup.md](oauth-setup.md)). Détail pas-à-pas dans le [README](../README.md).
 
 ## 7. Limites connues (volontaires, pas des oublis)
 

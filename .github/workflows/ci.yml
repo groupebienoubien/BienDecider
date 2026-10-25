@@ -104,6 +104,8 @@ jobs:
         run: npm run test:facebook
       - name: Engine tests (Paul and agents around model calls, throwaway database)
         run: npm run test:engine
+      - name: Source reading tests (no call to Google, throwaway database)
+        run: npm run test:sources
       - name: Upload test results on failure
         if: failure()
         uses: actions/upload-artifact@v7

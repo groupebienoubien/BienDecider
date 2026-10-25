@@ -28,6 +28,9 @@ model Company {
   servingArea     String // zone de chalandise
   website         String? // optionnel : beaucoup de TPE n'ont pas de site
   socialHandles   String? // ex: @cabinet_kine_demo (Instagram)
+  googlePlaceId          String? // fiche Google confirmée par le dirigeant : le Place ID est le seul contenu Google conservé (conditions Places API)
+  googlePlaceCandidateId String? // fiche proposée, en attente de la confirmation du dirigeant
+  googlePlaceDeclinedIds String[] @default([]) // fiches refusées ou retirées (les plus récentes) : jamais reproposées
   objective       String? // objectif business déclaré, ex: "10 nouveaux clients par mois" (cf. docs/backlog.md #1)
   // Profil business chiffré (cf. docs/backlog.md, "partenaire de croissance") — déclaratif,
   // jamais calculé par Pepito : CA mensuel actuel, cible et échéance, valeur moyenne
@@ -70,6 +73,7 @@ model Company {
   linkedinAuthorizations LinkedInAuthorization[]
   paulPendingActions PaulPendingAction[]
   sitePhotos      SitePhoto[]
+  sourceReads     SourceRead[]
 }
 
 model LinkedInAuthorization {
@@ -204,6 +208,7 @@ model AgentRun {
   usageEvents         UsageEvent[]
   proposals           AgentProposal[]
   auditFindings       AuditFinding[]
+  sourceReads         SourceRead[]
 
   @@unique([companyId, requestKey])
   @@unique([companyId, activeDedupeKey])
@@ -292,6 +297,25 @@ model AuditFinding {
   createdAt   DateTime @default(now())
 
   // Plafonds par exécution (story 3.2) : comptés par agentRunId.
+  @@index([agentRunId])
+}
+
+// Une lecture de source faite par le code (pas déclarée par le modèle) : ce que l'analyse a réellement pu lire. Jamais de contenu Google ici.
+model SourceRead {
+  id         String    @id @default(cuid())
+  companyId  String
+  company    Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  agentRunId String?
+  agentRun   AgentRun? @relation(fields: [agentRunId], references: [id], onDelete: SetNull)
+  source     String // google_reviews
+  target     String // own, competitor
+  subject    String? // concurrent demandé par l'agent (sa requête, pas un contenu Google)
+  status     String // lue, non_lue
+  reason     String? // not_configured, to_confirm, not_found, unavailable
+  itemCount  Int? // nombre d'avis lus
+  createdAt  DateTime @default(now())
+
+  @@index([companyId, createdAt])
   @@index([agentRunId])
 }
 
