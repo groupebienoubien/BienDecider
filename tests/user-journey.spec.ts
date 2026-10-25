@@ -1449,6 +1449,10 @@ test("story 5.4: on a phone, Paul takes the whole screen, above the bottom bar, 
   // Le clavier ne s'émule pas ici : le champ reçoit le focus et le panneau reste en plein écran.
   await panel.getByLabel("Message à Paul").focus();
   await expect.poll(() => page.evaluate(() => document.getElementById("paul-panel")!.getBoundingClientRect().top)).toBe(0);
+  // Saisie en cours : place laissée au clavier, sans barre de remplissage automatique.
+  await expect(panel.locator(".chat-context")).toBeHidden();
+  await expect(panel.locator(".chat-disclaimer")).toBeHidden();
+  await expect(panel.getByLabel("Message à Paul")).toHaveAttribute("autocomplete", "off");
   await expect(panel.getByRole("button", { name: "Agrandir la fenêtre" })).toBeHidden();
   await expect(panel).toHaveAttribute("aria-modal", "true");
 
