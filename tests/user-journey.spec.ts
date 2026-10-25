@@ -449,7 +449,8 @@ test("single validation queue, persistent decisions, publishing and error recove
       { companyId: company.id, agent: "contenu", kind: "site_web_content", title: "Site approuvé à publier", content: "Contenu du site", status: "validee", approvedVersion: 1 },
     ] });
     await page.setViewportSize({ width: 1440, height: 1000 });
-    await page.goto(`${baseURL}/dashboard?view=plan`);
+    await page.goto(`${baseURL}/dashboard?view=plan&onglet=menees`);
+    await expect(page.getByRole("button", { name: "En cours et menées (1)" })).toHaveAttribute("aria-pressed", "true");
     await expect(page.getByRole("heading", { name: "Préparer la communication" })).toBeVisible();
     // Story 1.4 : une action lancée avec une production en attente renvoie vers Décisions.
     await expect(page.locator(`#plan-item-${item.id}`).getByRole("link", { name: "1 à examiner" })).toHaveAttribute("href", "/dashboard?view=validation");
@@ -775,6 +776,68 @@ test("the diagnostic is grouped by topic with a one-line summary, and a link to 
     await expect(site.getByText("Aucun formulaire.")).toBeHidden();
     await page.goto(`${baseURL}/diagnostic#finding-${competitor.id}`);
     await expect(page.locator(`#finding-${competitor.id}`)).toBeVisible();
+  } finally { await prisma.$disconnect(); }
+});
+
+test("story 5.1: after a refresh, the diagnostic shows the latest audit and folds the previous one", async ({ page, company }) => {
+  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }) });
+  try {
+    const hour = 60 * 60 * 1000;
+    const run = (finishedAt: Date) => prisma.agentRun.create({ data: { companyId: company.id, agent: "marketing", requestKey: `audit-${randomUUID()}`, payload: {}, status: "succeeded", finishedAt } });
+    const [first, second] = [await run(new Date(Date.now() - 2 * hour)), await run(new Date(Date.now() - hour))];
+    await prisma.auditFinding.create({ data: { companyId: company.id, agentRunId: first.id, category: "site_web", title: "Point réglé depuis", content: "Ancien." } });
+    await prisma.auditFinding.create({ data: { companyId: company.id, agentRunId: second.id, category: "site_web", title: "Point actuel", content: "Actuel." } });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`${baseURL}/diagnostic`);
+    await expect(page.getByText("DIAGNOSTIC · 1 CONSTAT", { exact: true })).toBeVisible();
+    const current = page.locator("details.diagnostic-group");
+    await expect(current).toHaveCount(1);
+    await expect(current.getByRole("heading", { name: "Point actuel" })).toBeVisible();
+    const previous = page.locator("details.diagnostic-previous");
+    await expect(previous.locator("summary")).toContainText("Diagnostic précédent du");
+    await expect(previous.getByRole("heading", { name: "Point réglé depuis" })).toBeHidden();
+    await previous.locator("summary").click();
+    await expect(previous.getByRole("heading", { name: "Point réglé depuis" })).toBeVisible();
+  } finally { await prisma.$disconnect(); }
+});
+
+test("story 5.2: the diagnostic prepares the plan on a click, then links to it once the plan is up to date", async ({ page, company }) => {
+  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }) });
+  try {
+    const audit = await prisma.agentRun.create({ data: { companyId: company.id, agent: "marketing", requestKey: `audit-${randomUUID()}`, payload: {}, status: "succeeded", finishedAt: new Date(Date.now() - 60_000) } });
+    await prisma.auditFinding.create({ data: { companyId: company.id, agentRunId: audit.id, category: "site_web", title: "Horaires absents", content: "Résumé." } });
+    // Action d'avant l'audit : le plan reste à préparer.
+    await prisma.actionPlanItem.create({ data: { companyId: company.id, agent: "marketing", title: "Répondre aux avis", rationale: "Test", timing: "Aujourd'hui", createdAt: new Date(Date.now() - 2 * 60_000) } });
+    await page.setViewportSize({ width: 1440, height: 900 });
+
+    // Quota atteint : le message de limite, et rien n'est préparé.
+    await page.route("**/api/co-ceo/plan", (route) => route.fulfill({ status: 429, json: { error: "Les agents ont atteint leur limite de lancements pour aujourd'hui. Ils reprendront demain matin.", reason: "quota_runs" } }));
+    await page.goto(`${baseURL}/diagnostic`);
+    const prepare = page.getByRole("button", { name: "Préparer le plan à partir du diagnostic" });
+    await expect(prepare).toHaveClass(/primary/);
+    await expect(page.getByRole("button", { name: /Actualiser le diagnostic/ })).not.toHaveClass(/primary/);
+    await prepare.click();
+    await expect(page.getByRole("alert").filter({ hasText: "limite de lancements" })).toBeVisible();
+    await page.unroute("**/api/co-ceo/plan");
+
+    // Préparation : le bouton dit qu'elle est en cours, puis mène au plan.
+    let finished = false;
+    await page.route("**/api/co-ceo/plan", (route) => route.fulfill({ status: 202, json: { run: { id: "plan-run", status: "queued" } } }));
+    await page.route("**/api/agent-runs/plan-run", (route) => route.fulfill({ json: { run: { id: "plan-run", agent: "co_ceo", status: finished ? "succeeded" : "running" } } }));
+    await prepare.click();
+    await expect(page.getByRole("button", { name: "Paul prépare le plan…" })).toBeDisabled();
+    finished = true;
+    await page.waitForURL(/\/dashboard\?view=plan/);
+
+    // Une action ajoutée après l'audit ne suffit pas : le plan reste à préparer.
+    await prisma.actionPlanItem.create({ data: { companyId: company.id, agent: "contenu", title: "Afficher les horaires sur le site", rationale: "Test", timing: "Cette semaine" } });
+    await page.goto(`${baseURL}/diagnostic`);
+    await expect(page.getByRole("button", { name: "Préparer le plan à partir du diagnostic" })).toBeVisible();
+    // Plan à jour : une préparation de Paul réussie après la fin du dernier audit, même sans action créée (doublons).
+    await prisma.agentRun.create({ data: { companyId: company.id, agent: "co_ceo", requestKey: `plan-generation:${randomUUID()}`, payload: { kind: "plan_generation" }, status: "succeeded", finishedAt: new Date() } });
+    await page.goto(`${baseURL}/diagnostic`);
+    await expect(page.getByRole("link", { name: "Voir le plan d’action", exact: true })).toHaveAttribute("href", "/dashboard?view=plan");
+    await expect(page.getByRole("button", { name: "Préparer le plan à partir du diagnostic" })).toHaveCount(0);
   } finally { await prisma.$disconnect(); }
 });
 
@@ -1345,6 +1408,84 @@ test("agents request only missing profile details and wait for successful partia
     await prisma.$disconnect();
   }
 });
+test("story 5.4: on a phone, Paul takes the whole screen, above the bottom bar, without zoom or page scroll", async ({ page, company }) => {
+  expect(company.id).toBeTruthy(); // la fixture ouvre la session du dirigeant
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.goto(`${baseURL}/dashboard`);
+  await page.locator('button[aria-controls="paul-panel"]:visible').first().click();
+  const panel = page.getByRole("dialog", { name: "Discussion avec Paul" });
+  await expect(panel).toBeVisible();
+  const layout = await page.evaluate(() => {
+    const node = document.getElementById("paul-panel")!;
+    const field = node.querySelector("textarea")!;
+    const bar = document.querySelector("nav.journey-tabbar");
+    const panelBox = node.getBoundingClientRect();
+    const atBottom = document.elementFromPoint(187, panelBox.bottom - 20);
+    return {
+      panel: { top: panelBox.top, bottom: panelBox.bottom, width: panelBox.width },
+      header: node.querySelector("header")!.getBoundingClientRect().height,
+      log: node.querySelector('[role="log"]')!.getBoundingClientRect().height,
+      fieldFont: parseFloat(getComputedStyle(field).fontSize),
+      messagesFont: parseFloat(getComputedStyle(node.querySelector(".chat-messages")!).fontSize),
+      barCoversPanel: Boolean(bar && atBottom && bar.contains(atBottom)),
+      pageOverflow: getComputedStyle(document.documentElement).overflow,
+      focused: document.activeElement === field,
+    };
+  });
+  expect(layout.panel).toEqual({ top: 0, bottom: 812, width: 375 });
+  expect(layout.header).toBeLessThanOrEqual(60);
+  expect(layout.log / 812).toBeGreaterThanOrEqual(0.7);
+  expect(layout.fieldFont).toBeGreaterThanOrEqual(16);
+  expect(layout.messagesFont).toBeGreaterThanOrEqual(16);
+  expect(layout.barCoversPanel).toBe(false);
+  expect(layout.pageOverflow).toBe("hidden");
+  // Pas de clavier ouvert d'office : le dirigeant lit d'abord.
+  expect(layout.focused).toBe(false);
+  await expect(panel.getByRole("button", { name: "Agrandir la fenêtre" })).toBeHidden();
+  await expect(panel).toHaveAttribute("aria-modal", "true");
+
+  await panel.getByRole("button", { name: "Replier" }).click();
+  await expect(panel).toHaveCount(0);
+  expect(await page.evaluate(() => getComputedStyle(document.documentElement).overflow)).not.toBe("hidden");
+});
+
+test("story 5.3: the plan opens on the actions to do, the running and executed ones are in their own tab", async ({ page, company }) => {
+  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }) });
+  try {
+    const base = { companyId: company.id, rationale: "Test", timing: "Cette semaine", theme: "Visibilité" };
+    await prisma.actionPlanItem.createMany({ data: [
+      { ...base, agent: "contenu", title: "Action à lancer", status: "propose" },
+      { ...base, agent: "marketing", title: "Action en cours", status: "en_cours" },
+      { ...base, agent: "demarchage", title: "Action menée", status: "lance" },
+    ] });
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.goto(`${baseURL}/dashboard?view=plan`);
+    const plan = page.getByRole("region", { name: "Plan d'action", exact: true });
+    await expect(plan.getByRole("button", { name: "À faire (1)" })).toHaveAttribute("aria-pressed", "true");
+    await expect(plan.getByRole("heading", { name: "Action à lancer" })).toBeVisible();
+    await expect(plan.getByRole("heading", { name: "Action en cours" })).toHaveCount(0);
+    await expect(plan.getByRole("heading", { name: "Action menée" })).toHaveCount(0);
+
+    await plan.getByRole("button", { name: "En cours et menées (2)" }).click();
+    await expect(page).toHaveURL(/onglet=menees/);
+    await expect(plan.getByRole("heading", { name: "Action en cours" })).toBeVisible();
+    await expect(plan.getByRole("heading", { name: "Action menée" })).toBeVisible();
+    await expect(plan.getByRole("heading", { name: "Action à lancer" })).toHaveCount(0);
+
+    await page.reload();
+    await expect(plan.getByRole("button", { name: "En cours et menées (2)" })).toHaveAttribute("aria-pressed", "true");
+    await plan.getByRole("button", { name: "À faire (1)" }).click();
+    await expect(page).not.toHaveURL(/onglet=/);
+    // Le retour arrière revient à l'onglet précédent, et le lien « Plan d'action » rouvre « À faire ».
+    await page.goBack();
+    await expect(plan.getByRole("button", { name: "En cours et menées (2)" })).toHaveAttribute("aria-pressed", "true");
+    await page.getByRole("link", { name: "Plan d’action" }).first().click();
+    await expect(plan.getByRole("button", { name: "À faire (1)" })).toHaveAttribute("aria-pressed", "true");
+  } finally {
+    await prisma.$disconnect();
+  }
+});
+
 test("Paul's objective card is confirmed in one click and stays confirmed in the history", async ({ page, company }) => {
   const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }) });
   try {
@@ -1442,4 +1583,38 @@ test("Paul's panel is titled Partenaire de croissance and a launch card offers L
   } finally {
     await prisma.$disconnect();
   }
+});
+
+test("story 5.5: the Entreprise page shows the site photos section, reached from the site content card", async ({ page, company }) => {
+  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }) });
+  try {
+    await prisma.agentProposal.create({ data: {
+      companyId: company.id, agent: "contenu", kind: "site_web_content", title: "Page d'accueil de l'atelier", content: "Brief du site", status: "en_attente",
+    } });
+    await page.goto(`${baseURL}/dashboard?view=validation`);
+    const card = await openProduction(page, "Page d'accueil de l'atelier");
+    await expect(card.getByRole("link", { name: "Ajouter des photos" })).toHaveAttribute("href", "/entreprise#photos-site");
+    await card.getByRole("link", { name: "Ajouter des photos" }).click();
+    await expect(page).toHaveURL(`${baseURL}/entreprise#photos-site`);
+    const section = page.locator("#photos-site");
+    await expect(section.getByRole("heading", { name: "Photos du site" })).toBeVisible();
+    await expect(section).toContainText("8 photos au plus, JPG, PNG ou WebP, 5 Mo au plus");
+    // Aucun site en ligne : rien à republier.
+    await expect(section.getByRole("button", { name: "Republier avec les photos" })).toHaveCount(0);
+  } finally {
+    await prisma.$disconnect();
+  }
+});
+
+test("story 5.5: without the Blob store, the section says sending photos is not available yet, without a technical error", async ({ page, company }) => {
+  test.skip(Boolean(process.env.BLOB_READ_WRITE_TOKEN), "Le serveur de test a un magasin Blob : l'état sans stockage ne s'observe pas.");
+  expect(company.id).toBeTruthy(); // la fixture ouvre la session du dirigeant
+  await page.goto(`${baseURL}/entreprise`);
+  const section = page.locator("#photos-site");
+  await expect(section.getByRole("status")).toHaveText("L’envoi de photos n’est pas encore disponible. Nous vous préviendrons dès qu’il le sera.");
+  await expect(section.getByRole("button", { name: "Ajouter la photo" })).toHaveCount(0);
+  await expect(section).not.toContainText("BLOB_READ_WRITE_TOKEN");
+  const upload = await page.request.post(`${baseURL}/api/site/photos`, { headers: { Origin: baseURL }, multipart: { file: { name: "photo.jpg", mimeType: "image/jpeg", buffer: Buffer.from([0xff, 0xd8, 0xff]) } } });
+  expect(upload.status()).toBe(503);
+  expect((await upload.json()).error).toContain("pas encore disponible");
 });

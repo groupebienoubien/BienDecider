@@ -61,6 +61,11 @@ const GUARDED_ROUTES: Guarded[] = [
   { method: "POST", path: "/api/proposals/[id]/execute", denied: 401 },
   { method: "GET", path: "/api/proposals/[id]/revisions", denied: 401 },
   { method: "POST", path: "/api/onboarding/interpret", denied: 401 },
+  { method: "GET", path: "/api/site/photos", denied: 401 },
+  { method: "POST", path: "/api/site/photos", denied: 401 },
+  { method: "DELETE", path: "/api/site/photos/[id]", denied: 401 },
+  { method: "PATCH", path: "/api/site/photos/[id]", denied: 401 },
+  { method: "POST", path: "/api/site/republish", denied: 401 },
 ];
 
 // Routes volontairement accessibles sans session, avec la raison.
@@ -523,6 +528,25 @@ test("a signed-in company cannot read or change another company's data", async (
     }
   } finally {
     await prisma.company.deleteMany({ where: { id: { in: [intruder.id, target.id] } } });
+    await prisma.$disconnect();
+  }
+});
+
+test("story 5.5: site photo and republish routes refuse another origin, even with a valid session", async ({ request }) => {
+  const prisma = openDatabase();
+  const email = `security-photos-${randomUUID()}@example.invalid`;
+  const company = await prisma.company.create({ data: { ownerEmail: email, name: "Photos Test", trade: "Artisan", servingArea: "Paris" } });
+  const headers = { Cookie: sessionCookie(email, company.sessionVersion), Origin: "https://attacker.invalid" };
+  try {
+    expect((await request.post(`${baseURL}/api/site/photos`, { headers, multipart: { alt: "Photo" } })).status()).toBe(403);
+    expect((await request.delete(`${baseURL}/api/site/photos/identifiant-inexistant`, { headers })).status()).toBe(403);
+    expect((await request.patch(`${baseURL}/api/site/photos/identifiant-inexistant`, { headers, data: { alt: "Photo" } })).status()).toBe(403);
+    expect((await request.post(`${baseURL}/api/site/republish`, { headers, data: {} })).status()).toBe(403);
+    // Même origine : une photo inconnue ou d'une autre entreprise est introuvable.
+    const sameOrigin = { ...headers, Origin: baseURL };
+    expect((await request.patch(`${baseURL}/api/site/photos/identifiant-inexistant`, { headers: sameOrigin, data: { alt: "Photo" } })).status()).toBe(404);
+  } finally {
+    await prisma.company.deleteMany({ where: { id: company.id } });
     await prisma.$disconnect();
   }
 });

@@ -11,6 +11,7 @@ import { isPlanAgent, resolvePlanLaunchExtras, type PlanAgent } from "@/lib/agen
 import { createAgentExecution, withAgentExecution, withAgentRunWrite } from "@/lib/agent-run-execution";
 import { AGENT_RUN_MAX_DURATION_SECONDS, AGENT_RUN_COST_RESERVATION_USD, AgentRunLimitError } from "@/lib/agent-run-limits";
 export { AGENT_RUN_MAX_DURATION_SECONDS, AGENT_RUN_COST_RESERVATION_USD } from "@/lib/agent-run-limits";
+import { isAuditPlanItemTitle } from "@/lib/agents/plan-item-shared";
 import { AgentRunConflictError, AgentRunQuotaError, RevisionConflictError, classifyRunError, failureMessage } from "@/lib/agents/agent-errors";
 import { PERSONAS } from "@/lib/agents/personas";
 import { isSerializationConflict } from "@/lib/serialization-conflict";
@@ -334,6 +335,37 @@ async function executeRun(run: AgentRun) {
   }
 }
 
+/**
+ * Un audit de Martine : lancement direct ou issu d'une action du plan, pas une
+ * révision, et qui a enregistré au moins un constat (« Répondre aux avis »
+ * sans constat n'est pas un audit).
+ */
+async function isAuditRun(run: AgentRun) {
+  const kind = (run.payload as unknown as AgentRunPayload | null)?.kind;
+  if (run.agent !== "marketing" || (kind !== "direct" && kind !== "plan_item")) return false;
+  return (await prisma.auditFinding.count({ where: { companyId: run.companyId, agentRunId: run.id } })) > 0;
+}
+
+/**
+ * Story 5.2 : à la fin d'un audit de Martine réussi, ses actions encore
+ * « à lancer » dont la tâche est de faire l'audit ou le diagnostic passent dans les
+ * actions menées. Les autres actions de Martine restent à lancer ; aucune
+ * action n'est supprimée et aucun agent n'est lancé.
+ */
+export async function closeAuditPlanItems(companyId: string) {
+  const candidates = await prisma.actionPlanItem.findMany({
+    where: { companyId, agent: "marketing", status: "propose" },
+    select: { id: true, title: true },
+  });
+  const ids = candidates.filter((item) => isAuditPlanItemTitle(item.title)).map((item) => item.id);
+  if (!ids.length) return 0;
+  const closed = await prisma.actionPlanItem.updateMany({
+    where: { id: { in: ids }, companyId, status: "propose" },
+    data: { status: "lance" },
+  });
+  return closed.count;
+}
+
 export async function processAgentRun(runId: string) {
   // Capture the run and attempt under the claim's lock, never reread a later
   // attempt after another worker has expired/retried this one.
@@ -354,6 +386,7 @@ export async function processAgentRun(runId: string) {
   const { run, attemptId } = claimed;
   const context = createAgentExecution({ companyId: run.companyId, agentRunId: run.id, attempt: run.attempts, startedAt: run.startedAt! });
   try {
+    let succeeded = false;
     await withAgentExecution(context, async () => {
       const resultCount = await executeRun(run);
       await withAgentRunWrite(run.companyId, run.id, async (tx) => {
@@ -361,9 +394,17 @@ export async function processAgentRun(runId: string) {
         where: { id: run.id, companyId: run.companyId, status: "running", attempts: run.attempts },
         data: { status: "succeeded", ...(context.usageFinalized ? { reservedCostUsd: 0 } : {}), resultCount, finishedAt: new Date() },
       });
-      if (completed.count === 1) await tx.agentRunAttempt.updateMany({ where: { id: attemptId, status: "running" }, data: { status: "succeeded", finishedAt: new Date() } });
+      if (completed.count === 1) {
+        await tx.agentRunAttempt.updateMany({ where: { id: attemptId, status: "running" }, data: { status: "succeeded", finishedAt: new Date() } });
+        succeeded = true;
+      }
       });
     });
+    // L'audit est fait : le garder « à lancer » renverrait le plan au diagnostic (story 5.2).
+    if (succeeded) {
+      await (async () => { if (await isAuditRun(run)) await closeAuditPlanItems(run.companyId); })()
+        .catch((closeError) => console.error("Clôture des actions d'audit :", closeError));
+    }
   } catch (error) {
     console.error("Echec du run agent:", error);
     const failureReason = classifyRunError(error) ?? "outage";

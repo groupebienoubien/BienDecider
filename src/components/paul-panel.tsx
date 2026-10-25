@@ -31,6 +31,14 @@ const VOICE_STATUS: Record<Exclude<VoicePhase, "off">, string> = {
 };
 
 const STORAGE_KEY = "paul-panel";
+// Même seuil que la barre de navigation mobile (maquette.css) : en dessous, Paul occupe tout l'écran (story 5.4).
+const PHONE_QUERY = "(max-width: 760px)";
+
+function subscribePhone(onChange: () => void) {
+  const query = window.matchMedia(PHONE_QUERY);
+  query.addEventListener("change", onChange);
+  return () => query.removeEventListener("change", onChange);
+}
 const CLOSED: PanelState = { open: false, draft: "" };
 const listeners = new Set<() => void>();
 let stored: PanelState | null = null;
@@ -240,6 +248,9 @@ export function PaulPanel() {
   const toggleRef = useRef<HTMLButtonElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const logRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLElement>(null);
+  // Suivi en continu : une rotation fait passer d'un mode à l'autre, panneau ouvert.
+  const isPhone = useSyncExternalStore(subscribePhone, () => window.matchMedia(PHONE_QUERY).matches, () => false);
   const abortRef = useRef<AbortController | null>(null);
   const followRef = useRef(true);
   const sendingRef = useRef(false);
@@ -270,10 +281,36 @@ export function PaulPanel() {
   }, [panel.open, pathname]);
 
   useEffect(() => {
-    if (panel.open) inputRef.current?.focus();
+    // Sur téléphone, le focus ouvrirait le clavier sur la moitié de l'écran avant toute lecture.
+    if (panel.open) { if (!window.matchMedia(PHONE_QUERY).matches) inputRef.current?.focus(); }
     else if (wasOpen.current) toggleRef.current?.focus();
     wasOpen.current = panel.open;
   }, [panel.open]);
+
+  // Sur téléphone : la page derrière ne défile plus, et le panneau suit la zone visible pour que le champ reste au-dessus du clavier.
+  useEffect(() => {
+    if (!panel.open || !isPhone) return;
+    const root = document.documentElement;
+    const previousOverflow = root.style.overflow;
+    root.style.overflow = "hidden";
+    const viewport = window.visualViewport;
+    const node = panelRef.current;
+    const fit = () => {
+      if (!node || !viewport) return;
+      node.style.height = `${viewport.height}px`;
+      node.style.top = `${viewport.offsetTop}px`;
+    };
+    fit();
+    viewport?.addEventListener("resize", fit);
+    viewport?.addEventListener("scroll", fit);
+    return () => {
+      root.style.overflow = previousOverflow;
+      viewport?.removeEventListener("resize", fit);
+      viewport?.removeEventListener("scroll", fit);
+      node?.style.removeProperty("height");
+      node?.style.removeProperty("top");
+    };
+  }, [panel.open, isPhone]);
 
   // Le journal suit les nouveaux messages tant que l'utilisateur n'est pas remonté lire plus haut.
   useEffect(() => {
@@ -416,9 +453,10 @@ export function PaulPanel() {
     <>
       {panel.open && (
         <section
+          ref={panelRef}
           id={panelId}
           role="dialog"
-          aria-modal="false"
+          aria-modal={isPhone}
           aria-label={`Discussion avec ${persona.name}`}
           onKeyDown={(event) => { if (event.key === "Escape") writePanel({ open: false }); }}
           className={`paul-panel ${wide ? "wide" : ""}`}
@@ -441,9 +479,12 @@ export function PaulPanel() {
                   <WaveIcon />
                 </button>
               )}
-              <button type="button" onClick={() => setWide((current) => !current)} aria-label={wide ? "Réduire la fenêtre" : "Agrandir la fenêtre"} title={wide ? "Réduire la fenêtre" : "Agrandir la fenêtre"} className={`${ICON_BUTTON} hidden sm:inline-flex`}>
-                {wide ? <CollapseIcon /> : <ExpandIcon />}
-              </button>
+              {/* Plein écran sur téléphone : « Agrandir » n'y a plus d'objet (story 5.4). */}
+              {!isPhone && (
+                <button type="button" onClick={() => setWide((current) => !current)} aria-label={wide ? "Réduire la fenêtre" : "Agrandir la fenêtre"} title={wide ? "Réduire la fenêtre" : "Agrandir la fenêtre"} className={ICON_BUTTON}>
+                  {wide ? <CollapseIcon /> : <ExpandIcon />}
+                </button>
+              )}
               <button type="button" onClick={() => writePanel({ open: false })} aria-label="Replier" title="Replier" className={ICON_BUTTON}>
                 <ChevronDownIcon />
               </button>
@@ -544,7 +585,8 @@ export function PaulPanel() {
                 value={panel.draft}
                 onChange={(event) => writePanel({ draft: event.target.value })}
                 onKeyDown={(event) => {
-                  if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                  // Sur téléphone, le clavier n'a pas de Maj : Entrée va à la ligne, le bouton envoie.
+                  if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing && !isPhone) {
                     event.preventDefault();
                     event.currentTarget.form?.requestSubmit();
                   }
@@ -566,7 +608,7 @@ export function PaulPanel() {
                 </button>
               )}
             </div>
-            <small className="chat-disclaimer">{persona.name} peut se tromper : vérifiez avant de décider. Entrée pour envoyer, Maj+Entrée pour une nouvelle ligne.</small>
+            <small className="chat-disclaimer">{persona.name} peut se tromper : vérifiez avant de décider.{isPhone ? "" : " Entrée pour envoyer, Maj+Entrée pour une nouvelle ligne."}</small>
           </form>
         </section>
       )}

@@ -1,4 +1,4 @@
-import { prisma } from "@/lib/prisma";
+import { getLatestAuditFindings } from "@/lib/audit-findings";
 import { PERSONAS } from "@/lib/agents/personas";
 
 const FINDINGS_FOR_CONTENT = 5;
@@ -16,11 +16,8 @@ function suggestedActions(value: unknown): SuggestedAction[] {
  * Camille produisait du contenu sans savoir quel défaut corriger.
  */
 export async function getFindingsContextForContent(companyId: string): Promise<string> {
-  const findings = await prisma.auditFinding.findMany({
-    where: { companyId },
-    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-    take: FINDINGS_FOR_CONTENT,
-  });
+  // Story 5.1 : seuls les constats du dernier audit terminé.
+  const findings = await getLatestAuditFindings(companyId, { take: FINDINGS_FOR_CONTENT });
   if (findings.length === 0) return `Diagnostic de ${PERSONAS.marketing.name} : aucun constat pour l'instant.`;
   const detail = findings.map((finding) => ({
     categorie: finding.category,
@@ -43,11 +40,7 @@ export async function getFindingsContextForContent(companyId: string): Promise<s
  * argumenter la prospection.
  */
 export async function getCompetitionContextForProspecting(companyId: string): Promise<string> {
-  const findings = await prisma.auditFinding.findMany({
-    where: { companyId, category: "concurrence" },
-    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-    take: COMPETITION_FINDINGS_FOR_PROSPECTING,
-  });
+  const findings = await getLatestAuditFindings(companyId, { category: "concurrence", take: COMPETITION_FINDINGS_FOR_PROSPECTING });
   if (findings.length === 0) return `Constats de concurrence de ${PERSONAS.marketing.name} : aucun pour l'instant.`;
   const detail = findings.map((finding) => ({
     titre: finding.title,

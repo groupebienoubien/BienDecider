@@ -5,6 +5,7 @@ import { verifyPassword } from "@/lib/password";
 import { MAX_ATTEMPTS, recordFailedAttempt } from "@/lib/auth-throttle";
 import { revokeCompanyAuthorizations } from "@/lib/account-deletion";
 import { readJsonObject } from "@/lib/request-body";
+import { deleteCompanySitePhotoFiles } from "@/lib/site/photo-store";
 
 /**
  * Droit à l'effacement : supprime l'entreprise, ce qui efface en cascade toutes ses données
@@ -37,6 +38,7 @@ export async function POST(request: NextRequest) {
   }
 
   const revocations = await revokeCompanyAuthorizations(company.id);
+  await deleteCompanySitePhotoFiles(company.id);
   await prisma.company.delete({ where: { id: company.id } });
   await clearSession();
   return NextResponse.json({ deleted: true, revocations });

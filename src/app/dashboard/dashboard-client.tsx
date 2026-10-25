@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import type { AgentProposal, ActionPlanItem } from "@prisma/client";
 import type { AgentRunView } from "@/lib/agent-run-types";
@@ -28,7 +28,7 @@ import { getProposalGuidance } from "@/lib/channel-capabilities";
 import { proposalStatusView, STATUS_TAG_COLORS } from "@/lib/proposal-status";
 import { proposalChannel } from "@/lib/proposal-channel";
 import { openPaul } from "@/lib/paul-context";
-import { groupPlanItems, planItemStatusView } from "@/lib/action-plan-view";
+import { groupPlanItems, planItemStatusView, planTabFromParam, splitPlanItems } from "@/lib/action-plan-view";
 import { weekStart } from "@/lib/results-timeline";
 
 type PlanItemWithProposals = ActionPlanItem & { proposals: AgentProposal[]; agentRuns: AgentRunView[] };
@@ -84,6 +84,8 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
   const [inspectedId, setInspectedId] = useState<string | null>(initialView === "historique" && focusProposalId ? focusProposalId : null);
   const [decidedIds, setDecidedIds] = useState<string[]>([]);
   const [queueFilter, setQueueFilter] = useState<QueueFilter>("all");
+  // Story 5.3 : l'onglet du plan se lit dans l'URL, qui suit aussi les navigations (lien « Plan d'action », retour arrière).
+  const planTab = planTabFromParam(useSearchParams().get("onglet"));
   const [agentFilter, setAgentFilter] = useState<string>("all");
   const [celebration, setCelebration] = useState<{ agent: string; kind: string } | null>(null);
   const closeCelebration = useCallback(() => setCelebration(null), []);
@@ -160,7 +162,7 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
       const { run } = await request(`/api/action-plan/${item.id}/launch`, "POST", retryRunId ? { retryRunId } : {});
       setPlanModalId(null);
       await refresh();
-      setNotice("Action confiée. L'agent travaille en arrière-plan.");
+      setNotice("Action confiée. L'agent travaille en arrière-plan ; l'action est passée dans l'onglet « En cours et menées ».");
       void monitorRun(run.id);
     } catch (error) { reportError(error); }
     finally { setBusyId(null); }
@@ -261,7 +263,9 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
 
 
   const activeItems = planItems.filter((item) => item.status !== "ecarte" && item.status !== "termine");
-  const planGroups = groupPlanItems(activeItems);
+  // Story 5.3 : l'onglet « À faire » d'abord, les actions en cours ou menées à part.
+  const planTabs = splitPlanItems(planItems);
+  const planGroups = groupPlanItems(planTabs[planTab]);
   // Charte : une seule action principale par écran, la première action à lancer dans l'ordre affiché.
   const firstProposedId = planGroups.flatMap(({ items }) => items).find((item) => item.status === "propose")?.id;
   const closedItems = planItems.filter((item) => item.status === "ecarte" || item.status === "termine");
@@ -302,7 +306,7 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
       if (week) week.items.push(proposal); else weeks.push({ start, items: [proposal] });
       return weeks;
     }, []);
-  const proposedItems = activeItems.filter((item) => item.status === "propose");
+  const proposedItems = planTabs.a_faire;
   const runningItem = activeItems.find((item) => item.status === "en_cours");
   const needsFirstDiagnostic = initialDiagnosticCount === 0 && planItems.length === 0;
   const emptyNextHref = needsFirstDiagnostic ? "/diagnostic" : "/dashboard?view=plan";
@@ -413,7 +417,21 @@ export function DashboardClient({ company, initialPlanItems, initialAgentRuns, i
         {notices}
         <AgentRunTracker runs={agentRuns} onCheck={(runId) => void checkRun(runId)} onRetry={() => void handleGeneratePlan(true)} retryDisabled={planLoading} />
         <section id="plan-actions" aria-label="Plan d'action">
-          {activeItems.length === 0 && <EmptyState agent="co_ceo" label="Plan à préparer" title="Choisir les prochaines activités à confier" says={needsFirstDiagnostic ? "Je proposerai des priorités dès que Martine aura fait le diagnostic." : "Je peux proposer de nouvelles priorités ; vous choisirez celles à confier à l’équipe."}>
+          <div className="tabs" role="group" aria-label="Actions du plan">
+            {([["a_faire", "À faire"], ["menees", "En cours et menées"]] as const).map(([tab, label]) => (
+              <button key={tab} type="button" aria-pressed={planTab === tab} className={planTab === tab ? "selected" : undefined} onClick={() => {
+                // pushState s'intègre au routeur (useSearchParams) sans recharger la page ; le retour arrière revient à l'onglet précédent.
+                const url = new URL(window.location.href);
+                if (tab === "menees") url.searchParams.set("onglet", "menees"); else url.searchParams.delete("onglet");
+                url.hash = "";
+                window.history.pushState(null, "", url);
+              }}>
+                {label} ({planTabs[tab].length})
+              </button>
+            ))}
+          </div>
+          {planTab === "menees" && planTabs.menees.length === 0 && <p className="legend">Aucune action n’est encore lancée. Les actions lancées depuis l’onglet « À faire » apparaîtront ici.</p>}
+          {planTab === "a_faire" && planTabs.a_faire.length === 0 && <EmptyState agent="co_ceo" label="Plan à préparer" title="Choisir les prochaines activités à confier" says={needsFirstDiagnostic ? "Je proposerai des priorités dès que Martine aura fait le diagnostic." : "Je peux proposer de nouvelles priorités ; vous choisirez celles à confier à l’équipe."}>
             {needsFirstDiagnostic ? <Link className="btn primary" href="/diagnostic">Commencer par le diagnostic</Link> : <p>Aucune action externe ne sera exécutée à cette étape.</p>}
           </EmptyState>}
           {planGroups.map(({ theme, items }) => <section key={theme} aria-label={`Thème ${theme}`}>

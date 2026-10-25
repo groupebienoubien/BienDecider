@@ -38,6 +38,11 @@ Ce document découpe le PRD « Paul fiable » et son spine d'architecture en ép
 - FR16 : Paul situe chaque état dans le temps : un changement depuis son dernier message est une mise à jour, pas une erreur (ajouté le 2026-10-23 après le second test en production).
 - FR17 : parler à Paul ne consomme pas les lancements des agents ; une séance normale ne bloque ni Paul ni les agents ; le jour se compte en heure de Paris (ajouté le 2026-10-24 après le troisième test en production).
 - FR18 : Paul ne présente jamais comme une erreur un état qui a changé après l'un de ses messages, même si ce n'est pas le dernier (ajouté le 2026-10-24).
+- FR19 : la page Diagnostic montre les constats du dernier audit terminé ; ceux de l'audit précédent restent consultables dans un lien repliable (ajouté le 2026-10-24, retours d'usage).
+- FR20 : le plan découle du diagnostic : un audit déjà fait n'est plus « à lancer », et un bouton du diagnostic fait proposer à Paul 3 à 5 actions tirées des constats.
+- FR21 : le plan sépare les actions à faire des actions en cours ou menées.
+- FR22 : la conversation avec Paul est utilisable sur smartphone.
+- FR23 : le dirigeant ajoute des photos à son site, à la création ou après la publication.
 
 ### Exigences non fonctionnelles
 
@@ -81,6 +86,11 @@ Ce document découpe le PRD « Paul fiable » et son spine d'architecture en ép
 - FR16 : Épopée 3 — Paul et le temps
 - FR17 : Épopée 4 — quota des messages à Paul
 - FR18 : Épopée 4 — aucune fausse rectification
+- FR19 : Épopée 5 — diagnostic à jour
+- FR20 : Épopée 5 — du diagnostic au plan
+- FR21 : Épopée 5 — plan en onglets
+- FR22 : Épopée 5 — Paul sur smartphone
+- FR23 : Épopée 5 — photos du site
 
 ## Liste des épopées
 
@@ -103,6 +113,11 @@ Le dirigeant fait corriger une production en une phrase, reçoit des productions
 
 Le dirigeant peut échanger avec Paul toute une séance sans bloquer ses agents, et Paul ne se « corrige » jamais à tort. Ajoutée le 2026-10-24 après le troisième test en production ([proposition de changement](sprint-change-proposal-2026-10-24.md)).
 **FR couvertes :** FR17, FR18
+
+### Épopée 5 : Un parcours qui avance
+
+Le dirigeant passe du diagnostic au plan sans boucle, voit ce qu'il lui reste à faire, parle à Paul depuis son téléphone et montre ses réalisations sur son site. Ajoutée le 2026-10-24 après des retours d'usage ([proposition de changement](sprint-change-proposal-2026-10-24-parcours.md)).
+**FR couvertes :** FR19, FR20, FR21, FR22, FR23
 
 Ordre : 1 → 2 → 3. L'épopée 1 donne la lecture d'état dont l'épopée 2 a besoin pour éviter les doublons. L'épopée 3 réutilise les cartes de l'épopée 2. Chaque épopée apporte de la valeur seule.
 
@@ -565,9 +580,122 @@ afin de pouvoir le croire.
 - Règle du prompt de Paul ajoutée à celle de la story 3.5 ; `depuisMonMessagePrecedent` reste.
 - Tests : `buildCurrentStatus` dans `tests/engine.spec.ts` (deux messages de Paul, fin entre les deux) ; présence de la règle dans le prompt.
 
+## Epic 5: Un parcours qui avance
+
+Le dirigeant passe du diagnostic au plan sans boucle, voit ce qu'il lui reste à faire, parle à Paul depuis son téléphone et montre ses réalisations sur son site. Ordre de réalisation : 5.4, 5.3, 5.1, 5.2, 5.5.
+
+### Story 5.1: Un diagnostic à jour
+
+En tant que dirigeant,
+je veux que le diagnostic ne montre que les constats du dernier audit,
+afin de ne pas agir sur des points déjà réglés.
+
+**Critères d'acceptation :**
+
+**Étant donné** deux audits terminés de Martine
+**Quand** le dirigeant ouvre Diagnostic
+**Alors** seuls les constats du dernier audit sont listés et comptés ; un lien repliable « Diagnostic précédent du JJ/MM » montre ceux de l'audit d'avant (FR19)
+
+**Étant donné** un audit en cours après un premier audit terminé
+**Quand** le dirigeant ouvre Diagnostic
+**Alors** les constats du dernier audit terminé restent affichés jusqu'à la fin du nouveau
+
+**Notes techniques :**
+- Regrouper les `AuditFinding` par `agentRunId` (constats sans `agentRunId` : un groupe « ancien »), dans `src/app/diagnostic/page.tsx` et `/api/audit-findings` (rafraîchissement du client).
+- Paul (`derniersConstatsAudit` de `buildCurrentStatus`) lit aussi les seuls constats du dernier audit.
+
+### Story 5.2: Du diagnostic au plan, sans boucle
+
+En tant que dirigeant,
+je veux passer du diagnostic à un plan qui en découle,
+afin de ne pas tourner en rond entre Martine et le plan.
+
+**Critères d'acceptation :**
+
+**Étant donné** une action d'audit de Martine encore « à lancer » au plan
+**Quand** un audit de Martine se termine
+**Alors** cette action n'est plus « à lancer » : elle passe dans les actions menées (FR20)
+
+**Étant donné** la page Diagnostic avec des constats
+**Quand** le dirigeant clique « Préparer le plan à partir du diagnostic »
+**Alors** Paul propose 3 à 5 actions tirées des constats, au statut « à lancer » ; rien n'est lancé ; cela compte comme un lancement ; une action déjà au plan n'est pas recréée
+
+**Notes techniques :**
+- Clôture de l'action d'audit : à la fin d'une exécution de Martine (`processAgentRun`), action d'audit au statut `propose` de la même entreprise.
+- Génération : `enqueuePlanGeneration` existant, avec les constats du dernier audit (story 5.1) et leurs `actionItems` comme matière ; dédoublonnage par agent et thème (story 2.4).
+- Le lien « Voir le plan d'action qui en découle » devient le bouton ; il redevient un lien quand le plan contient déjà des actions issues du dernier audit.
+
+### Story 5.3: Le plan montre d'abord ce qu'il reste à faire
+
+En tant que dirigeant,
+je veux voir en premier les actions à faire,
+afin de ne pas les chercher sous les actions déjà menées.
+
+**Critères d'acceptation :**
+
+**Étant donné** un plan avec des actions à lancer, en cours et exécutées
+**Quand** le dirigeant ouvre Plan
+**Alors** deux onglets : « À faire (N) », ouvert par défaut, avec les actions `propose` ; « En cours et menées (N) » avec les actions `en_cours` et `lance` (FR21)
+
+**Étant donné** aucune action à faire
+**Quand** le dirigeant ouvre Plan
+**Alors** l'onglet « À faire (0) » propose de compléter le plan, et l'autre onglet reste accessible
+
+**Notes techniques :**
+- `src/app/dashboard/dashboard-client.tsx` (`activeItems`, `planGroups`) ; reprendre le motif d'onglets de la page Décisions (`.tabs`, `aria-pressed`). Onglet repris dans l'URL (`?view=plan&onglet=menees`) pour les liens.
+
+### Story 5.4: Paul utilisable sur smartphone
+
+En tant que dirigeant,
+je veux parler à Paul depuis mon téléphone sans gêne,
+afin de l'utiliser entre deux chantiers.
+
+**Critères d'acceptation :**
+
+**Étant donné** un écran de moins de 768 px
+**Quand** le dirigeant ouvre Paul
+**Alors** la conversation occupe tout l'écran, au-dessus de la barre de navigation du bas ; l'en-tête tient sur une ligne ; le fil de messages occupe au moins 70 % de la hauteur (FR22)
+
+**Étant donné** le champ de saisie sur iPhone
+**Quand** le dirigeant le touche
+**Alors** la page ne zoome pas (police d'au moins 16 px) et le champ reste visible au-dessus du clavier
+
+**Étant donné** la conversation ouverte
+**Quand** le dirigeant fait défiler les messages
+**Alors** la page derrière ne défile pas ; « Replier » ramène à la page
+
+**Notes techniques :**
+- `src/components/paul-panel.tsx` et ses styles (`#paul-panel`) : hauteur `100dvh`, `env(safe-area-inset-bottom)`, `visualViewport` pour le clavier ; texte des messages à 15-16 px.
+- Test de parcours à 375 × 812 dans `tests/user-journey.spec.ts` (tailles et positions mesurées).
+
+### Story 5.5: Des photos sur le site
+
+En tant que dirigeant,
+je veux ajouter des photos de mes réalisations à mon site,
+afin que mes prospects voient mon travail.
+
+**Critères d'acceptation :**
+
+**Étant donné** la page du site (avant ou après publication)
+**Quand** le dirigeant ajoute des photos
+**Alors** au plus 8, de 5 Mo chacune au plus, en JPG, PNG ou WebP ; elles sont redimensionnées et stockées ; il peut en retirer (FR23)
+
+**Étant donné** des photos ajoutées
+**Quand** le site est généré ou régénéré
+**Alors** la page publiée les affiche, avec un texte alternatif, et aucune autre image distante n'est admise
+
+**Étant donné** un site déjà publié
+**Quand** le dirigeant ajoute ou retire une photo
+**Alors** il peut republier sans réécrire le brief
+
+**Notes techniques :**
+- Stockage Vercel Blob (décision des PF) ; prérequis : magasin Blob créé par un PF, `BLOB_READ_WRITE_TOKEN`.
+- Modèle `SitePhoto` (`companyId`, `url`, `alt`, `width`, `height`, `position`), migration additive ; route d'envoi authentifiée, contrôle du type réel et de la taille.
+- `src/lib/site/publish.ts` : URL des photos transmises au modèle, nettoyage qui n'admet que ces URL ; `src/app/site/[slug]/page.tsx` (iframe `sandbox`) inchangé.
+
 ## Validation finale
 
-- Couverture : FR1 à FR18 couvertes (carte ci-dessus) ; UX-DR1 (2.1), UX-DR2 (1.2), UX-DR3 (3.3).
+- Couverture : FR1 à FR23 couvertes (carte ci-dessus) ; UX-DR1 (2.1), UX-DR2 (1.2), UX-DR3 (3.3).
 - Entités créées à la première story qui en a besoin : `failureReason` (1.2), `PaulPendingAction` (2.1), `ownerName` (3.1), `ProposalRevision` (3.3).
 - Dépendances : chaque story ne s'appuie que sur les précédentes. 1.3 utilise le motif de 1.2 ; 2.3 et 2.4 utilisent 1.1 et 1.2 ; 3.1 étend `update_profile` de 2.2 ; 3.3 utilise les intentions de 2.1.
 - Fichiers communs : `co-ceo.ts` est modifié par 1.1, 1.2, 2.1, 2.3 et 3.3. Le découpage en trois épopées est gardé quand même : chaque épopée est livrable seule et apporte un retour terrain avant la suivante.

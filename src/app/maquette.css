@@ -388,7 +388,18 @@
 .mq .chat-input textarea:focus-visible{outline:none}
 .mq .chat-input:focus-within{border-color:var(--green);box-shadow:0 0 0 2px var(--bd-focus)}
 @media(max-width:760px){
-.mq .paul-panel{inset:auto 8px 8px auto;width:calc(100% - 16px);height:620px;max-height:90dvh}
+/* Story 5.4 : plein écran par-dessus la barre du bas et les annonces (toast, célébration) ; la hauteur suit la zone visible (paul-panel.tsx, visualViewport). */
+/* La barre du haut (sticky, z-index 25) crée un contexte d'empilement : elle passe devant la barre du bas tant que Paul est ouvert. */
+.mq .topbar:has(.paul-panel){z-index:110}
+.mq .paul-panel,.mq .paul-panel.wide{inset:0;z-index:110;width:100%;height:100dvh;max-height:none;border:0;border-radius:0;box-shadow:none;padding-bottom:env(safe-area-inset-bottom)}
+.mq .paul-panel>header{padding:6px 8px 6px 12px;gap:8px}
+.mq .paul-panel>header small{display:none}
+.mq .paul-panel .chat-context{padding:5px 12px;font-size:11px;text-transform:none}
+.mq .paul-panel .chat-messages{padding:14px 12px;font-size:16px;line-height:1.5}
+.mq .paul-panel [role="log"]{overscroll-behavior:contain}
+.mq .paul-panel form{margin:0 8px}
+.mq .paul-panel .chat-input textarea{font-size:16px}
+.mq .paul-panel .chat-disclaimer{display:block;font-size:11px;line-height:1.3;margin:4px 0 6px}
 }
 
 /* Charte (docs/charte.md) : carte de décision à trois informations, sections alternées, accent chaud. */
@@ -578,3 +589,11 @@
 .mq .history-item>div{flex:1;min-width:0}
 .mq .history-item strong{overflow-wrap:anywhere}
 }
+/* Story 5.1 : l'audit d'avant, replié sous le dernier diagnostic. */
+.mq .diagnostic-previous{margin:16px 0;padding:12px 16px;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
+.mq .diagnostic-previous>summary{cursor:pointer;font-weight:600;min-height:44px;display:flex;align-items:center}
+/* Photos du site (story 5.5) */
+.mq .site-photos{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:14px;list-style:none;padding:0;margin:14px 0}
+.mq .site-photos li{display:flex;flex-direction:column;gap:6px}
+.mq .site-photos img{width:100%;height:auto;aspect-ratio:4/3;object-fit:cover;border-radius:6px;border:1px solid var(--line)}
+.mq .site-photos input{font-size:16px}
