@@ -401,6 +401,11 @@
 .mq .paul-panel form{margin:0 8px}
 .mq .paul-panel .chat-input textarea{font-size:16px}
 .mq .paul-panel .chat-disclaimer{display:block;font-size:11px;line-height:1.3;margin:4px 0 6px}
+/* Saisie en cours : le clavier prend la moitié de l'écran ; bandeau de contexte et mention masqués, en-tête resserré. */
+.mq .paul-panel.typing>header{padding:2px 8px 2px 12px}
+.mq .paul-panel.typing>header .persona-avatar{width:24px!important;height:24px!important}
+.mq .paul-panel.typing .chat-context,.mq .paul-panel.typing .chat-disclaimer{display:none}
+.mq .paul-panel.typing form{margin-bottom:6px}
 }
 
 /* Charte (docs/charte.md) : carte de décision à trois informations, sections alternées, accent chaud. */

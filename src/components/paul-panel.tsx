@@ -249,6 +249,8 @@ export function PaulPanel() {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const logRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLElement>(null);
+  // Saisie en cours sur téléphone : le panneau se compacte pour laisser la place au clavier.
+  const [typing, setTyping] = useState(false);
   // Suivi en continu : une rotation fait passer d'un mode à l'autre, panneau ouvert.
   const isPhone = useSyncExternalStore(subscribePhone, () => window.matchMedia(PHONE_QUERY).matches, () => false);
   const abortRef = useRef<AbortController | null>(null);
@@ -481,7 +483,7 @@ export function PaulPanel() {
           aria-modal={isPhone}
           aria-label={`Discussion avec ${persona.name}`}
           onKeyDown={(event) => { if (event.key === "Escape") writePanel({ open: false }); }}
-          className={`paul-panel ${wide ? "wide" : ""}`}
+          className={`paul-panel ${wide ? "wide" : ""} ${isPhone && typing ? "typing" : ""}`}
         >
           <header>
             <PersonaAvatar agentKey="co_ceo" size={32} />
@@ -598,9 +600,12 @@ export function PaulPanel() {
             )}
           </div>
           {error && <p role="alert" className="mx-3 mb-2 rounded-2xl bg-red-50 px-3 py-2 text-sm text-red-800">{error}</p>}
-          <form onSubmit={send}>
+          {/* autocomplete="off" : ni mot de passe, ni carte, ni adresse ; Safari n'affiche alors pas sa barre de remplissage au-dessus du clavier. */}
+          <form onSubmit={send} autoComplete="off" onFocus={() => setTyping(true)} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setTyping(false); }}>
             <div className="chat-input">
               <textarea
+                autoComplete="off"
+                enterKeyHint={isPhone ? "enter" : "send"}
                 ref={inputRef}
                 aria-label={`Message à ${persona.name}`}
                 placeholder={`Écrire à ${persona.name}…`}
