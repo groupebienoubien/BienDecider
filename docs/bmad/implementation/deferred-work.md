@@ -76,6 +76,15 @@
 - source_spec: `docs/bmad/implementation/spec-5-2-du-diagnostic-au-plan-sans-boucle.md`
   summary: Tester le retour au bouton « Préparer le plan » après « Actualiser le diagnostic », et un plan entièrement écarté.
   evidence: `setPlanUpToDate(false)` et le filtre `ecarte` ne sont couverts par aucun test.
+- source_spec: `docs/bmad/implementation/spec-gh-7-chiffrer-jetons-google-meta.md`
+  summary: Ajouter un timeout explicite et un diagnostic sûr au fetch d'échange OAuth Google.
+  evidence: `exchangeGoogleCode` utilise fetch sans AbortSignal.timeout; ce comportement préexistait à l'US #7 et le timeout de plateforme borne déjà la durée de la route.
+- source_spec: `docs/bmad/implementation/spec-gh-7-chiffrer-jetons-google-meta.md`
+  summary: Afficher au dirigeant le résultat par fournisseur de la révocation lors de la suppression de compte.
+  evidence: `/api/companies/delete` renvoie `revocations`, mais `DeleteAccountSection` redirige vers la connexion dès la réussite sans lire ce rapport; le comportement d'interface préexistait à l'US #7 et relève du parcours de suppression.
+- source_spec: `docs/bmad/implementation/spec-gh-7-chiffrer-jetons-google-meta.md`
+  summary: Ajouter une recette déterministe du timeout et de l'annulation du fetch OAuth Google.
+  evidence: Le timeout réseau de l'échange est déjà différé séparément; la revue confirme qu'aucun test simulé ne vérifie encore la réponse quand le fournisseur ne répond pas.
 
 - source_spec: `docs/bmad/implementation/spec-corrections-audit-agents-ia.md`
   summary: Réconcilier la consommation et la réservation d'une tentative dont le processus a été tué avant la finalisation d'usage.
@@ -86,3 +95,6 @@
 - source_spec: `docs/bmad/implementation/spec-corrections-audit-agents-ia.md`
   summary: Montrer le nombre et un lien vers les productions conservées dans le suivi d'un run échoué partiellement.
   evidence: Revue B9, medium : les productions restent dans les décisions et le diagnostic, mais le suivi d'échec préexistant propose surtout la relance ; l'arrêt explicite et la conservation restent couverts par le lot actuel.
+- source_spec: `docs/bmad/implementation/spec-gh-8-renouveler-jetons-google-meta.md`
+  summary: Ne pas afficher « Connexion expirée · reliez de nouveau le compte » quand un refresh token GBP permet le renouvellement à la demande.
+  evidence: `src/app/connexions/page.tsx` déduit l'expiration de `expiresAt` seul; l'accès dure environ une heure, donc une connexion renouvelable est présentée comme à relier. Le libellé préexistait à l'US #8 et la spec choisit un renouvellement à la demande sans tâche planifiée.

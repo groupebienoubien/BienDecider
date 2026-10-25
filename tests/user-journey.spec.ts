@@ -250,6 +250,15 @@ test("OAuth authorization is not advertised as a verified business connection", 
     await page.reload();
     await expect(page.locator("main").getByText("Compte non relié", { exact: true })).toHaveCount(1);
     await expect(page.getByRole("region", { name: "Facebook · Page" }).getByText("Non autorisé", { exact: true })).toBeVisible();
+
+    // Google révoqué ou expiré (invalid_grant) : jetons effacés, la page demande de relier le compte.
+    await prisma.channelConnection.create({ data: { companyId: company.id, channel: "google_business_profile", status: "erreur" } });
+    await page.goto(`${baseURL}/connexions`);
+    await expect(page.getByText("Connexion à renouveler", { exact: true })).toBeVisible();
+    await page.goto(`${baseURL}/connexions?error=google_denied`);
+    await expect(page.getByText("L'autorisation Google a été refusée ou annulée.", { exact: false })).toBeVisible();
+    await page.goto(`${baseURL}/connexions?error=oauth_exchange`);
+    await expect(page.getByText("Google n'a pas pu confirmer l'autorisation.", { exact: false })).toBeVisible();
   } finally { await prisma.$disconnect(); }
 });
 
@@ -1513,12 +1522,7 @@ test("Paul's objective card is confirmed in one click and stays confirmed in the
     await attachPendingActions(company.id, [card.id], message.id);
     await page.unroute("**/api/co-ceo/message");
     await page.reload();
-    // « Reprendre la conversation » ne fait qu'ouvrir (le bouton du haut bascule) : sans risque de refermer le panneau
-    // rouvert par la page ; répété tant que la page n'a pas fini de s'hydrater.
-    await expect(async () => {
-      if (!(await panel.isVisible())) await page.getByRole("button", { name: "Reprendre la conversation" }).click();
-      await expect(panel).toBeVisible({ timeout: 1000 });
-    }).toPass();
+    await expect(panel).toBeVisible();
     await expect(panel.getByRole("group", { name: "Proposition de Paul à confirmer" }).getByText("C’est enregistré.")).toBeVisible();
     await expect(panel.getByRole("button", { name: "Confirmer" })).toHaveCount(0);
   } finally {

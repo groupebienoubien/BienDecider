@@ -72,6 +72,9 @@ export default async function ConnexionsPage({
     linkedin_state: "Cette demande LinkedIn a expiré ou n'est pas valide. Recommencez depuis Connexions.",
     linkedin_denied: "L'autorisation LinkedIn a été annulée. Votre connexion précédente, si elle existe, est conservée.",
     linkedin_exchange: "Impossible de vérifier l'identité et les permissions LinkedIn. Recommencez l'autorisation.",
+    google_denied: "L'autorisation Google a été refusée ou annulée. Votre connexion précédente, si elle existe, est conservée.",
+    oauth_state: "Cette demande Google a expiré ou n'est pas valide. Recommencez depuis Connexions.",
+    oauth_exchange: "Google n'a pas pu confirmer l'autorisation. Recommencez ; votre connexion précédente, si elle existe, est conservée.",
     ...META_ERROR_MESSAGES,
   };
   const facebookView = facebookConnectionView(byChannel.get("facebook"), company.id, checkedAt);
