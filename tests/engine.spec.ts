@@ -3476,6 +3476,8 @@ test.describe("Recette Atelier Lumen", () => {
   });
 
   test.afterAll(async () => {
+    // Les tours de Paul capturés par cette recette finissent avant la suppression : sinon le test suivant les termine sans entreprise.
+    for (const finish of capturedTurns.splice(0)) await finish();
     if (company) await deleteCompany(company.id);
   });
 
