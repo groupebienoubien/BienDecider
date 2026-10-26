@@ -270,6 +270,7 @@ export function ProposalCard({
       <div className="production-actions">
         <div>
           {canEdit && <button type="button" onClick={() => { setEditedContent(proposal.content); setModal("edit"); }} disabled={busy}><Icon name="pencil" /> Modifier</button>}
+          {proposal.status === "en_attente" && proposal.kind !== "prospect" && <Link className="btn" href={`/studio/${encodeURIComponent(proposal.id)}`}><Icon name="message-circle" /> Retravailler avec {persona?.name ?? "l’agent"}</Link>}
           {proposal.status === "en_attente" && <button type="button" className="quiet" onClick={() => setModal("reject")} disabled={busy}>Rejeter</button>}
           {proposal.status === "rejetee" && <button type="button" onClick={() => decide({ status: "a_relire" })} disabled={busy}>Rouvrir pour relecture</button>}
           {guidance.canCopy && <button type="button" onClick={() => void copyContent()} disabled={busy}>Copier le contenu</button>}

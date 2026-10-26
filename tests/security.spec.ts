@@ -64,6 +64,9 @@ const GUARDED_ROUTES: Guarded[] = [
   { method: "PATCH", path: "/api/proposals/[id]", denied: 401 },
   { method: "POST", path: "/api/proposals/[id]/execute", denied: 401 },
   { method: "GET", path: "/api/proposals/[id]/revisions", denied: 401 },
+  { method: "POST", path: "/api/proposals/[id]/restore", denied: 401 },
+  { method: "POST", path: "/api/proposals/[id]/revise", denied: 401 },
+  { method: "GET", path: "/api/proposals/[id]/versions", denied: 401 },
   { method: "POST", path: "/api/onboarding/interpret", denied: 401 },
   { method: "GET", path: "/api/site/photos", denied: 401 },
   { method: "POST", path: "/api/site/photos", denied: 401 },
@@ -81,7 +84,7 @@ const PUBLIC_ROUTES: Record<string, string> = {
   "/api/health": "sonde publique sans donnée métier",
 };
 
-const GUARDED_PAGES = ["/admin", "/admin/risques", "/compte", "/connexions", "/dashboard", "/diagnostic", "/equipe", "/entreprise", "/prospection", "/rapport"];
+const GUARDED_PAGES = ["/admin", "/admin/risques", "/compte", "/connexions", "/dashboard", "/diagnostic", "/equipe", "/entreprise", "/prospection", "/rapport", "/studio/identifiant-inexistant"];
 
 function requireSecret(): string {
   if (!process.env.SESSION_SECRET) throw new Error("SESSION_SECRET is required for security tests.");

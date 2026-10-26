@@ -3476,6 +3476,8 @@ test.describe("Recette Atelier Lumen", () => {
   });
 
   test.afterAll(async () => {
+    // Les tours de Paul capturés par cette recette finissent avant la suppression : sinon le test suivant les termine sans entreprise.
+    for (const finish of capturedTurns.splice(0)) await finish();
     if (company) await deleteCompany(company.id);
   });
 
@@ -3722,4 +3724,123 @@ test.describe("Recette Atelier Lumen", () => {
     const paul = (await buildCurrentStatus(company.id)).decisionsEnAttente;
     expect({ badge, dashboard, paul }).toEqual({ badge: 11, dashboard: 11, paul: 11 });
   });
+});
+
+/** Appel d'une route du Studio avec la session du dirigeant ; les exécutions restent en file. */
+async function studioCall(company: Company, handler: (request: import("next/server.js").NextRequest, context: { params: Promise<{ id: string }> }) => Promise<Response>, id: string, body?: unknown, origin = "http://localhost:3000") {
+  const { NextRequest } = await import("next/server.js");
+  const request = new NextRequest(`http://localhost:3000/api/proposals/${id}/studio`, {
+    method: body === undefined ? "GET" : "POST",
+    headers: { Origin: origin, "Content-Type": "application/json" },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  const response = await inSessionScope(company, () => handler(request, { params: Promise.resolve({ id }) }));
+  return { status: response.status, body: await response.json() as Record<string, unknown> };
+}
+
+test("US #258: the Studio lists every version with the request and the note of the agent that wrote it", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { loadStudioState } = await import("../src/lib/proposal-studio");
+  const email = await createJeanClaudeEmail(company.id);
+  const { result } = await confirmRevision(company.id, email.id, "Moins commercial");
+  const runId = result.ok ? result.launch?.runId : undefined;
+  await processWithScenario(runId!, async (tool) => { await tool("revise_proposal").run({ content: REVISED_EMAIL, summary: "  J'ai retiré l'avertissement.  " }); });
+
+  const state = await loadStudioState(company.id, email.id);
+  expect(state).toMatchObject({ proposal: { id: email.id, version: 2, status: "en_attente", agent: "demarchage" }, locked: null, activeRunId: null, rationale: null });
+  expect(state!.versions.map(({ version, source, instruction, note, content }) => ({ version, source, instruction, note, content }))).toEqual([
+    { version: 1, source: "initial", instruction: null, note: null, content: WARNING_EMAIL },
+    { version: 2, source: "agent", instruction: "Moins commercial", note: "J'ai retiré l'avertissement.", content: REVISED_EMAIL },
+  ]);
+
+  // Une modification du dirigeant et une ancienne version sans historique restent lisibles sans casser la liste.
+  await prisma.proposalRevision.deleteMany({ where: { proposalId: email.id, fromVersion: 1 } });
+  expect((await loadStudioState(company.id, email.id))!.versions.map((version) => version.version)).toEqual([2]);
+
+  // Une révision en cours est rendue avec son identifiant, pour que le Studio la reprenne au rechargement.
+  const second = await confirmRevision(company.id, email.id, "Plus court");
+  expect((await loadStudioState(company.id, email.id))!.activeRunId).toBe(second.result.ok ? second.result.launch?.runId : null);
+
+  const other = await prisma.company.create({ data: { ownerEmail: `studio-other-${randomUUID()}@example.invalid`, name: "Autre", trade: "Artisan", servingArea: "Lyon" } });
+  try {
+    expect(await loadStudioState(other.id, email.id)).toBeNull();
+  } finally {
+    await deleteCompany(other.id);
+  }
+});
+
+test("US #258: going back to a version creates a new one, deletes nothing and refuses stale or decided productions", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { loadStudioState, restoreProposalVersion } = await import("../src/lib/proposal-studio");
+  const email = await createJeanClaudeEmail(company.id);
+  const { result } = await confirmRevision(company.id, email.id, "Moins commercial");
+  await processWithScenario((result.ok ? result.launch?.runId : undefined)!, async (tool) => { await tool("revise_proposal").run({ content: REVISED_EMAIL }); });
+
+  expect(await restoreProposalVersion(company.id, email.id, 1, 1)).toMatchObject({ ok: false, status: 409 });
+  expect(await restoreProposalVersion(company.id, email.id, 2, 2)).toMatchObject({ ok: false, status: 409 });
+  expect(await restoreProposalVersion(company.id, email.id, 1, 2)).toEqual({ ok: true, version: 3 });
+  expect(await prisma.agentProposal.findUniqueOrThrow({ where: { id: email.id } })).toMatchObject({ version: 3, content: WARNING_EMAIL, status: "en_attente", approvedVersion: null });
+  expect(await prisma.proposalRevision.findMany({ where: { proposalId: email.id }, orderBy: { fromVersion: "asc" }, select: { fromVersion: true, source: true, instruction: true, previousContent: true } })).toEqual([
+    { fromVersion: 1, source: "agent", instruction: "Moins commercial", previousContent: WARNING_EMAIL },
+    { fromVersion: 2, source: "restore", instruction: "Retour à la version 1", previousContent: REVISED_EMAIL },
+  ]);
+  expect((await loadStudioState(company.id, email.id))!.versions.map(({ version, source, content }) => ({ version, source, content }))).toEqual([
+    { version: 1, source: "initial", content: WARNING_EMAIL },
+    { version: 2, source: "agent", content: REVISED_EMAIL },
+    { version: 3, source: "restore", content: WARNING_EMAIL },
+  ]);
+
+  // La version actuelle ne peut pas être reprise, et la version 2 le peut (V4 = V2).
+  expect(await restoreProposalVersion(company.id, email.id, 3, 3)).toMatchObject({ ok: false, status: 409 });
+  expect(await restoreProposalVersion(company.id, email.id, 2, 3)).toEqual({ ok: true, version: 4 });
+  expect((await prisma.agentProposal.findUniqueOrThrow({ where: { id: email.id } })).content).toBe(REVISED_EMAIL);
+
+  // Une production validée n'est jamais écrasée par le Studio.
+  await prisma.agentProposal.update({ where: { id: email.id }, data: { status: "validee", approvedVersion: 4 } });
+  expect(await restoreProposalVersion(company.id, email.id, 1, 4)).toMatchObject({ ok: false, status: 409 });
+  expect(await prisma.agentProposal.findUniqueOrThrow({ where: { id: email.id } })).toMatchObject({ version: 4, content: REVISED_EMAIL, status: "validee" });
+  expect(await restoreProposalVersion("autre-entreprise", email.id, 1, 4)).toMatchObject({ ok: false, status: 404 });
+});
+
+test("US #258: the Studio routes enforce origin, session, company, version and status before any revision starts", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { POST: revise } = await import("../src/app/api/proposals/[id]/revise/route");
+  const { POST: restore } = await import("../src/app/api/proposals/[id]/restore/route");
+  const { GET: versions } = await import("../src/app/api/proposals/[id]/versions/route");
+  const email = await createJeanClaudeEmail(company.id);
+
+  expect((await studioCall(company, revise, email.id, { instruction: "Plus court", expectedVersion: 1 }, "https://autre.example")).status).toBe(403);
+  expect((await studioCall(company, revise, email.id, { instruction: "   ", expectedVersion: 1 })).status).toBe(400);
+  expect((await studioCall(company, revise, email.id, { instruction: "x".repeat(1001), expectedVersion: 1 })).status).toBe(400);
+  expect((await studioCall(company, revise, email.id, { instruction: "Plus court" })).status).toBe(400);
+  expect((await studioCall(company, revise, email.id, { instruction: "Plus court", expectedVersion: 7 })).status).toBe(409);
+  expect((await studioCall(company, revise, "inconnue", { instruction: "Plus court", expectedVersion: 1 })).status).toBe(404);
+  expect(await prisma.agentRun.count({ where: { companyId: company.id } })).toBe(0);
+
+  const other = await prisma.company.create({ data: { ownerEmail: `studio-other-${randomUUID()}@example.invalid`, name: "Autre", trade: "Artisan", servingArea: "Lyon" } });
+  try {
+    expect((await studioCall(other, revise, email.id, { instruction: "Plus court", expectedVersion: 1 })).status).toBe(404);
+    expect((await studioCall(other, versions, email.id)).status).toBe(404);
+    expect((await studioCall(other, restore, email.id, { version: 1, expectedVersion: 2 })).status).toBe(404);
+  } finally {
+    await deleteCompany(other.id);
+  }
+  expect((await studioCall(company, restore, email.id, { version: "1", expectedVersion: 1 })).status).toBe(400);
+
+  const accepted = await studioCall(company, revise, email.id, { instruction: "  Plus court  ", expectedVersion: 1 });
+  expect(accepted.status).toBe(202);
+  const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: accepted.body.runId as string } });
+  expect(run).toMatchObject({ agent: "demarchage", status: "queued", activeDedupeKey: `revision:${email.id}` });
+  expect(run.payload).toEqual({ kind: "revision", proposalId: email.id, fromVersion: 1, instruction: "Plus court", title: email.title });
+  // Une seconde demande pendant la révision est refusée avec l'exécution en cours.
+  const second = await studioCall(company, revise, email.id, { instruction: "Plus humain", expectedVersion: 1 });
+  expect(second).toMatchObject({ status: 409, body: { runId: run.id } });
+  expect((await studioCall(company, versions, email.id)).body).toMatchObject({ activeRunId: run.id, locked: null });
+
+  await prisma.agentProposal.update({ where: { id: email.id }, data: { status: "validee", approvedVersion: 1 } });
+  expect((await studioCall(company, revise, email.id, { instruction: "Plus court", expectedVersion: 1 })).status).toBe(409);
+  expect((await studioCall(company, versions, email.id)).body).toMatchObject({ locked: "validated" });
+  const prospect = await createJeanClaudeEmail(company.id, { kind: "prospect" });
+  expect((await studioCall(company, revise, prospect.id, { instruction: "Corrige", expectedVersion: 1 })).status).toBe(409);
+  expect(await prisma.agentRun.count({ where: { companyId: company.id } })).toBe(1);
 });

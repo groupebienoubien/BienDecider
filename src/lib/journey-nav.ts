@@ -40,6 +40,11 @@ function matches(page: JourneyPage, pathname: string, view: string) {
 
 /** Temps et page du parcours correspondant à l'URL, ou null hors parcours (réglages, pages légales). */
 export function locateJourney(pathname: string, view: string): { stage: JourneyStage; page: JourneyPage } | null {
+  // Le Studio d'une production (US #258) se range avec les productions à décider.
+  if (pathname.startsWith("/studio/")) {
+    const stage = JOURNEY.find((candidate) => candidate.key === "decisions")!;
+    return { stage, page: { href: "/dashboard?view=validation", label: "Studio" } };
+  }
   for (const stage of JOURNEY) {
     const page = stage.pages.find((candidate) => matches(candidate, pathname, view));
     if (page) return { stage, page };

@@ -1802,3 +1802,84 @@ test("US #253: the Google place is confirmed first, and the diagnostic lists the
     await prisma.$disconnect();
   }
 });
+
+test("US #258: the Studio turns a plain request into a new version, lets the owner go back to an older one, then validates without publishing", async ({ page, company }) => {
+  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }) });
+  const firstText = "Notre offre exceptionnelle : réservez vite votre isolation à prix cassé !";
+  const secondText = "Chez M. Martin, l'isolation des combles a fait baisser la facture de chauffage.";
+  try {
+    const item = await prisma.actionPlanItem.create({ data: { companyId: company.id, agent: "contenu", title: "Parler de la réalisation Martin", rationale: "Montrer une réalisation récente rassure les prospects.", timing: "Cette semaine", status: "lance" } });
+    const proposal = await prisma.agentProposal.create({ data: {
+      companyId: company.id, planItemId: item.id, agent: "contenu", kind: "social_post", title: "Publication réalisation Martin", content: firstText,
+    } });
+
+    // L'agent est simulé : la demande écrit la version suivante en base, comme le ferait une révision réussie.
+    const requests: { instruction: string; expectedVersion: number }[] = [];
+    await page.route(`**/api/proposals/${proposal.id}/revise`, async (route) => {
+      const body = route.request().postDataJSON() as { instruction: string; expectedVersion: number };
+      requests.push(body);
+      const current = await prisma.agentProposal.findUniqueOrThrow({ where: { id: proposal.id } });
+      await prisma.$transaction([
+        prisma.proposalRevision.create({ data: { proposalId: proposal.id, fromVersion: current.version, previousContent: current.content, source: "agent", instruction: body.instruction, note: "J'ai retiré le ton promotionnel." } }),
+        prisma.agentProposal.update({ where: { id: proposal.id }, data: { content: secondText, version: current.version + 1 } }),
+      ]);
+      await route.fulfill({ status: 202, json: { runId: "run-studio-test", message: "Camille prépare la version 2." } });
+    });
+    const now = new Date().toISOString();
+    await page.route("**/api/agent-runs/run-studio-test", (route) => route.fulfill({ json: { run: {
+      id: "run-studio-test", agent: "contenu", planItemId: null, status: "succeeded", attempts: 1, maxDurationSeconds: 300,
+      queuedAt: now, startedAt: now, finishedAt: now, resultCount: 1, errorMessage: null, failureReason: null,
+    } } }));
+
+    // Le lien de la carte ouvre le Studio de cette production.
+    await page.goto(`${baseURL}/dashboard?view=validation`);
+    await page.locator("article").filter({ hasText: proposal.title }).getByRole("link", { name: "Retravailler avec Camille" }).click();
+    await expect(page).toHaveURL(`${baseURL}/studio/${proposal.id}`);
+    await expect(page.getByRole("heading", { name: proposal.title, level: 1 })).toBeVisible();
+    const preview = page.locator(".studio-preview .preview");
+    const thread = page.getByRole("log", { name: "Conversation" });
+    await expect(preview).toContainText(firstText);
+    await expect(thread).toContainText("Voici ma proposition. Montrer une réalisation récente rassure les prospects.");
+
+    // Une demande rapide devient une nouvelle version ; la précédente reste consultable.
+    await page.getByRole("group", { name: "Demandes rapides" }).getByRole("button", { name: "Moins commercial" }).click();
+    await expect(preview).toContainText(secondText);
+    await expect(thread).toContainText("moins commercial");
+    await expect(thread).toContainText("J'ai retiré le ton promotionnel.");
+    expect(requests).toEqual([{ instruction: expect.stringContaining("moins commercial"), expectedVersion: 1 }]);
+    const versions = page.getByRole("navigation", { name: "Versions" });
+    await expect(versions.getByRole("button", { name: /^V2/ })).toHaveAttribute("aria-current", "true");
+
+    // Consulter, comparer, puis reprendre la version 1 : la version 3 reprend son texte, rien n'est supprimé.
+    await versions.getByRole("button", { name: /^V1/ }).click();
+    await expect(preview).toContainText(firstText);
+    await expect(page.getByText("Vous consultez la version 1, qui n’est plus la version actuelle.")).toBeVisible();
+    await page.getByRole("button", { name: /Comparer avec l.actuelle/ }).click();
+    await expect(page.locator(".studio-compare")).toContainText(firstText);
+    await expect(page.locator(".studio-compare")).toContainText(secondText);
+    await page.getByRole("button", { name: /Reprendre cette version/ }).click();
+    await expect(page.getByText(/La version 3 reprend le contenu de la version 1/)).toBeVisible();
+    await expect(preview).toContainText(firstText);
+    let saved = await prisma.agentProposal.findUniqueOrThrow({ where: { id: proposal.id } });
+    expect(saved).toMatchObject({ version: 3, content: firstText, status: "en_attente", approvedVersion: null });
+    expect(await prisma.proposalRevision.findMany({ where: { proposalId: proposal.id }, orderBy: { fromVersion: "asc" }, select: { fromVersion: true, source: true, previousContent: true } })).toEqual([
+      { fromVersion: 1, source: "agent", previousContent: firstText },
+      { fromVersion: 2, source: "restore", previousContent: secondText },
+    ]);
+
+    // Valider la version courante ne publie rien et verrouille le Studio.
+    await page.getByRole("button", { name: "Valider cette version" }).click();
+    await expect(page.getByRole("link", { name: "Préparer la publication" })).toBeVisible();
+    await expect(page.getByRole("textbox", { name: /Votre demande à Camille/ })).toHaveCount(0);
+    saved = await prisma.agentProposal.findUniqueOrThrow({ where: { id: proposal.id } });
+    expect(saved).toMatchObject({ version: 3, status: "validee", approvedVersion: 3 });
+    expect(await prisma.executionLog.count({ where: { proposalId: proposal.id } })).toBe(0);
+
+    // Une version validée n'accepte plus de demande ; une production inconnue n'existe pas.
+    const revise = await page.request.post(`${baseURL}/api/proposals/${proposal.id}/revise`, { headers: { Origin: baseURL }, data: { instruction: "Plus court", expectedVersion: 3 } });
+    expect(revise.status()).toBe(409);
+    expect((await page.request.get(`${baseURL}/api/proposals/inconnue/versions`)).status()).toBe(404);
+  } finally {
+    await prisma.$disconnect();
+  }
+});
