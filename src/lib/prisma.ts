@@ -9,7 +9,7 @@ const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
 // distante au choix en dev.
 // Pool volontairement petit : en serverless chaque instance ouvre son propre
 // pool, et la valeur par défaut de pg (10) sature vite la limite du rôle.
-const poolMax = Number(process.env.DATABASE_POOL_MAX) || 1;
+const poolMax = Number(process.env.DATABASE_POOL_MAX) || 5;
 const adapter = new PrismaPg({
   connectionString: getDatabaseUrl(),
   max: poolMax,
