@@ -151,6 +151,29 @@
 .mq .site-preview .site-nav span{font:10px var(--font-dm-sans),'DM Sans',sans-serif;color:var(--muted)}
 .mq .site-preview h3{font:500 23px/1.3 Georgia,serif;margin:18px}
 .mq .site-preview p{margin:0 18px 20px;font-size:12px;white-space:pre-wrap}
+.mq .studio-layout{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(280px,1fr);gap:24px;align-items:start}
+.mq .studio-preview,.mq .studio-chat{min-width:0}
+.mq .studio-chat{display:flex;flex-direction:column;gap:12px;border:1px solid var(--line);border-radius:8px;background:var(--surface);padding:16px}
+.mq .studio-thread{display:flex;flex-direction:column;gap:12px;max-height:46dvh;overflow:auto;font-size:13px}
+.mq .studio-turn{display:flex;flex-direction:column;gap:8px}
+.mq .studio-bubble{margin:0;padding:10px 12px;border-radius:8px;white-space:pre-wrap;overflow-wrap:anywhere}
+.mq .studio-bubble.user{align-self:flex-end;max-width:90%;background:var(--paper)}
+.mq .studio-bubble.agent{align-self:flex-start;max-width:95%;border:1px solid var(--line);border-left:3px solid var(--agent,var(--green))}
+.mq .studio-bubble.agent p{margin:0 0 6px}
+.mq .studio-bubble.system{align-self:center;color:var(--muted);font-size:12px;text-align:center}
+.mq .studio-quick{display:flex;flex-wrap:wrap;gap:8px}
+.mq .studio-compose{display:flex;flex-direction:column;gap:8px}
+.mq .studio-compose textarea{width:100%;resize:vertical}
+.mq .studio-actions{display:flex;flex-wrap:wrap;gap:8px}
+.mq .studio-locked{display:flex;flex-direction:column;gap:10px;align-items:flex-start}
+.mq .studio-old{margin-top:12px;display:flex;flex-direction:column;gap:8px}
+.mq .studio-compare{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.mq .studio-versions{margin:14px 0 8px}
+.mq .studio-versions ul{display:flex;flex-wrap:wrap;gap:8px;list-style:none;margin:0;padding:0}
+.mq .studio-versions button{display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;min-height:44px}
+.mq .studio-versions button[aria-pressed=true]{border-color:var(--green);box-shadow:inset 3px 0 var(--green);background:white}
+.mq .studio-versions small{font-weight:400;font-size:11px}
+@media (max-width:900px){.mq .studio-layout{grid-template-columns:1fr}.mq .studio-compare{grid-template-columns:1fr}.mq .studio-thread{max-height:none}}
 .mq .site-preview .artwork{height:210px}
 .mq .email-meta{padding:15px;border-bottom:1px solid var(--line);font-size:11px;line-height:1.8}
 .mq .email-meta span{color:var(--muted);display:inline-block;min-width:42px}

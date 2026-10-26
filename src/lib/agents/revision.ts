@@ -15,6 +15,9 @@ import { AGENT_RUN_MAX_TURNS } from "@/lib/agent-run-limits";
 
 export { activeRevisionRun } from "@/lib/agents/revision-state";
 
+/** Longueur maximale de la note de l'agent sur ce qu'il a changé. */
+const REVISION_NOTE_MAX = 400;
+
 /**
  * Révision d'une production par son agent auteur (story 3.3) : au second test
  * en production, « retire l'avertissement et signe avec mon nom » conduisait à
@@ -112,6 +115,7 @@ export async function runRevision(companyId: string, payload: RevisionRunPayload
       "Enregistre la nouvelle version complète de la production, qui remplace la version actuelle (conservée pour le dirigeant). Un seul appel : il n'y a qu'une production à réviser, aucune autre n'est créée.",
     inputSchema: z.object({
       content: z.string().describe("Contenu complet de la nouvelle version, sous la même forme que la version actuelle, avec la consigne appliquée"),
+      summary: z.string().max(REVISION_NOTE_MAX).optional().describe(`Une ou deux phrases, à la première personne, pour dire au dirigeant ce que tu as changé et pourquoi (${REVISION_NOTE_MAX} caractères au plus)`),
     }),
     run: async (input) => {
       if (written) return "La nouvelle version est déjà enregistrée : n'en propose pas d'autre.";
@@ -139,7 +143,7 @@ export async function runRevision(companyId: string, payload: RevisionRunPayload
         assertAgentExecutionActive();
         if (updated.count !== 1) return false;
         await tx.proposalRevision.create({
-          data: { proposalId: proposal.id, fromVersion: payload.fromVersion, previousContent: current.content, source: "agent", instruction: payload.instruction, agentRunId },
+          data: { proposalId: proposal.id, fromVersion: payload.fromVersion, previousContent: current.content, source: "agent", instruction: payload.instruction, note: input.summary?.trim().slice(0, REVISION_NOTE_MAX) || null, agentRunId },
         });
         return true;
       });
@@ -161,7 +165,7 @@ ${directionLine(company.direction)}
 Ton rôle ici : réviser une de tes productions selon la consigne du dirigeant, puis enregistrer la nouvelle version via revise_proposal (un seul appel).
 Règles strictes :
 - Applique la consigne, et seulement elle : garde tout le reste (structure, ton, informations, forme du contenu) tel quel.
-- Renvoie le contenu complet de la nouvelle version, jamais un extrait ni un commentaire sur les changements.
+- Renvoie le contenu complet de la nouvelle version, jamais un extrait : ce que tu as changé va dans summary, pas dans le contenu.
 - Tu ne crées aucune autre production, tu ne publies ni n'envoies rien : le dirigeant relira la nouvelle version.
 - N'invente aucun fait, chiffre ou événement absent de la version actuelle ou de la consigne.`;
 

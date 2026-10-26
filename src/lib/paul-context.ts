@@ -26,7 +26,7 @@ export function describePage(path: string, view?: string | null): string {
     if (view === "historique") return "Historique des productions";
     return view === "plan" ? "Plan d'action" : "Mon objectif (accueil)";
   }
-  return PAGE_LABELS[path] ?? "une page de BienDecider";
+  return PAGE_LABELS[path] ?? (path.startsWith("/studio/") ? "Studio d'une production" : "une page de BienDecider");
 }
 
 /** Ouvre la discussion avec Paul, éventuellement centrée sur l'élément consulté. */

@@ -377,8 +377,9 @@ model ProposalRevision {
   proposal        AgentProposal @relation(fields: [proposalId], references: [id], onDelete: Cascade)
   fromVersion     Int
   previousContent String
-  source          String        @default("agent") // agent (révision demandée via Paul) ou owner (modification du dirigeant)
-  instruction     String? // consigne d'une révision ; null pour une modification du dirigeant
+  source          String        @default("agent") // agent (révision demandée via Paul ou le Studio), owner (modification du dirigeant) ou restore (retour à une version précédente)
+  instruction     String? // consigne d'une révision ; null pour une modification du dirigeant ; « Retour à la version N » pour un retour
+  note            String? // ce que l'agent a changé, en une ou deux phrases (Studio) ; null avant le Studio
   agentRunId      String? // exécution de révision qui a écrit la version fromVersion + 1
   createdAt       DateTime      @default(now())
 
