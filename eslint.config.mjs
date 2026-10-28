@@ -20,6 +20,7 @@ const eslintConfig = defineConfig([
     "next-env.d.ts",
     // Maquette statique, hors application.
     "maquette_v2/**",
+    "maquette_v3/**",
   ]),
 ]);
 
