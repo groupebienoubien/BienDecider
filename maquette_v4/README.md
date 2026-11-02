@@ -1,6 +1,6 @@
 # Maquette V4 · BienDecider
 
-Maquette interactive du parcours dirigeant, issue de la v3 et de la table ronde du 2 novembre 2026. Elle sert de référence aux user stories de l'épopée 6 : tout ce qui y figure a été jugé utile au produit.
+Maquette interactive du parcours dirigeant, issue de la v3 et de la table ronde du 2 novembre 2026. Le pavé « décision de la semaine » essayé dans un premier temps a été abandonné au profit des constats. Elle sert de référence aux user stories de l'épopée 6 : tout ce qui y figure a été jugé utile au produit.
 
 Données et exécutions simulées, aucun envoi réel. L'état est enregistré dans le navigateur (`biendecider-maquette-v4`).
 
@@ -8,8 +8,8 @@ Données et exécutions simulées, aucun envoi réel. L'état est enregistré da
 
 | Sujet | V3 | V4 | Pourquoi |
 | --- | --- | --- | --- |
-| Décision de direction | Une recommandation et deux « autres chemins » en texte | « Votre décision de la semaine » : les pistes ouvertes comparées sur les mêmes critères (résultat attendu, votre temps, dépense, fiabilité du constat, point de vigilance), la recommandation de Paul signalée, choix par le dirigeant | Au plus une décision de direction par semaine, jamais fabriquée ; revoir son choix dans la semaine ne compte pas comme une nouvelle décision ; sans piste ouverte, Paul le dit |
-| Décision et validation | Mélangées sous « À décider avec vous » | Séparées : la décision de la semaine d'un côté, « À valider par vous » (productions, programmations, marque, canaux) de l'autre | Valider une production n'est pas une décision de direction |
+| Accueil | Une recommandation et deux « autres chemins » en texte | « Des constats aux décisions » : le tableau du diagnostic (constat, niveau de certitude, ce que Paul en déduit, suite proposée) remonte sur l'accueil, à côté du prochain pas | Le dirigeant voit d'où vient chaque proposition, sources à l'appui, sans aller dans Entreprise |
+| Décision et validation | Mélangées sous « À décider avec vous » | « À valider par vous » regroupe les productions, les programmations, la marque et les canaux | Valider une production n'est pas une décision de direction |
 | Versions du Studio | Onglet Versions, comparaison, restauration | Socle minimal : numéro de version, et toute retouche annule la validation (le Studio le dit) | Arbitrage de Samir |
 | Coût d'une mission | « Crédits de préparation » | Le temps du dirigeant (« 45 min sur 7 jours ») | Le dirigeant compte ses heures, pas des crédits |
 | Fin de mission | Étape 5 sans action | « Décider la suite » après une première diffusion : poursuivre, adapter avec Paul ou arrêter ; une mission arrêtée est close | La règle d'arrêt du contrat de mission devient une décision |

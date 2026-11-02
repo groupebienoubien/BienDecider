@@ -2,7 +2,6 @@
 
 const STORAGE_KEY = "biendecider-maquette-v4";
 const SEED_VERSION = 1;
-const WEEK = 7 * 86400000;
 const missionDefinitions = {
   agencies: {
     title: "Ouvrir la porte des agences locales",
@@ -84,7 +83,6 @@ function initialState() {
     channels: { facebook: false, gmail: false, site: false },
     delegation: "review",
     priority: "agencies",
-    decision: null,
     missions: { agencies: "proposed", proof: "proposed", leads: "proposed" },
     contactsConfirmed: false,
     documents: {
@@ -243,24 +241,13 @@ function transition(current, event) {
         `${channelLabel(event.channel)} ${event.connected ? "connecté dans la simulation" : "déconnecté ; programmations annulées"}.`,
       );
       break;
-    case "strategy": {
-      if (!["proposed", "paused"].includes(next.missions[event.priority]))
-        throw new Error("Cette piste n'est plus à décider.");
-      const date = event.date || new Date().toISOString();
-      const revised =
-        current.decision &&
-        Date.parse(date) - Date.parse(current.decision.date) < WEEK;
+    case "strategy":
       next.priority = event.priority;
       next.preference = event.preference || next.preference;
-      next.decision = {
-        priority: event.priority,
-        date: revised ? current.decision.date : date,
-      };
       log(
-        `${revised ? "Décision de la semaine revue" : "Décision de la semaine"} : ${missionDefinitions[event.priority].short}. Aucune mission lancée automatiquement.`,
+        `Priorité confirmée avec Paul : ${missionDefinitions[event.priority].short}. Aucune mission lancée automatiquement.`,
       );
       break;
-    }
     case "outcome":
       if (next.missions[event.mission] !== "active")
         throw new Error("Seule une mission en cours peut être soldée.");
@@ -471,7 +458,6 @@ const ui = {
   filter: "all",
   scan: "idle",
   selectedVersion: null,
-  revisitDecision: false,
   preview: "social",
   context: "Votre stratégie",
   proposal: null,
@@ -601,37 +587,8 @@ function missionCard(id) {
   return `<article class="mission-card"><img src="${mission.image}" alt="${escapeHTML(mission.short)}, illustration" loading="lazy"><div class="mission-card-body"><div class="spread">${badge(statusText(state.missions[id]), state.missions[id] === "active" ? "green" : "amber")}${state.priority === id ? badge("Priorité de Paul", "blue") : ""}</div><h2>${mission.title}</h2><p>${mission.evidence}</p><div class="target">${icon("target")} ${mission.target}</div><div class="inline"><span class="avatar ${id === "proof" ? "camille" : "jean"}">${mission.owner[0]}</span><span class="small muted">Paul coordonne ${mission.owner}</span></div><div class="actions">${navButton(`missions/${id}`, "Voir la mission", state.priority === id ? "primary" : "", "arrow-up-right")}</div></div></article>`;
 }
 
-function weeklyDecision() {
-  return state.decision && Date.now() - Date.parse(state.decision.date) < WEEK
-    ? state.decision
-    : null;
-}
-
-function decisionSection() {
-  const options = Object.keys(missionDefinitions).filter((id) =>
-    ["proposed", "paused"].includes(state.missions[id]),
-  );
-  const decided = weeklyDecision();
-  if (decided && !ui.revisitDecision) {
-    const mission = missionDefinitions[decided.priority];
-    const next = new Date(Date.parse(decided.date) + WEEK).toLocaleDateString(
-      "fr-FR",
-      { weekday: "long", day: "numeric", month: "long" },
-    );
-    return `<section class="decision-week decided"><div class="section-heading"><div><span class="eyebrow">VOTRE DÉCISION DE LA SEMAINE</span><h2>${mission.title}</h2><p>Décidée le ${formatDate(decided.date)}. Prochaine décision de direction à partir du ${next}.</p></div>${badge("Décidé par vous", "green", "circle-check")}</div><div class="actions">${navButton(`missions/${decided.priority}`, state.missions[decided.priority] === "active" ? "Ouvrir la mission" : "Examiner cette mission", "primary", "arrow-right")}${options.length > 1 ? button("revisit-decision", "Revenir sur ce choix", "text", "undo-2") : ""}</div></section>`;
-  }
-  if (!options.length)
-    return `<section class="decision-week"><span class="eyebrow">VOTRE DÉCISION DE LA SEMAINE</span><h2>Rien à trancher cette semaine.</h2><p class="muted">Toutes les pistes sont lancées ou arrêtées. Paul ne fabrique pas de choix : la prochaine décision viendra du bilan de vos missions.</p></section>`;
-  const recommended = options.includes(state.priority)
-    ? state.priority
-    : options[0];
-  const rows = options
-    .map((id) => {
-      const mission = missionDefinitions[id];
-      return `<tr class="${id === recommended ? "recommended" : ""}"><td><strong>${mission.title}</strong>${id === recommended ? `<p>${badge("Recommandation de Paul", "blue", "sparkles")}</p>` : ""}<p>${escapeHTML(mission.evidence)}</p></td><td>${mission.target}</td><td>${mission.time}</td><td>0 €</td><td>${badge(...mission.certainty)}</td><td>${mission.caveat}</td><td>${button("choose-option", "Choisir", id === recommended ? "primary small" : "small", "check", `data-mission="${id}"`)}</td></tr>`;
-    })
-    .join("");
-  return `<section class="decision-week"><div class="section-heading"><div><span class="eyebrow">VOTRE DÉCISION DE LA SEMAINE</span><h2>${options.length > 1 ? "Quel test mener en premier ?" : "Lancer la dernière piste ouverte ?"}</h2><p>${options.length > 1 ? `${options.length} pistes, comparées sur les mêmes critères.` : "Une seule piste reste ouverte : la lancer, ou attendre le bilan des missions en cours."} Choisir ne lance rien : la mission se confirme ensuite.</p></div>${paulButton("Challenger la priorité", "Challenger avec Paul", "small")}</div><div class="table-scroll"><table class="source-table option-table"><thead><tr><th>Piste</th><th>Résultat attendu</th><th>Votre temps</th><th>Dépense</th><th>Fiabilité du constat</th><th>Point de vigilance</th><th>Décision</th></tr></thead><tbody>${rows}</tbody></table></div>${ui.revisitDecision ? `<p class="muted small">Revoir ce choix ne compte pas comme une nouvelle décision. ${button("cancel-revisit", "Garder mon choix", "text")}</p>` : ""}</section>`;
+function findingsSection(extra = "") {
+  return `<section${extra ? ` class="${extra}"` : ""}><div class="section-heading"><h2>Des constats aux décisions</h2><span class="small muted">Les sources, pas un score opaque</span></div><div class="table-scroll"><table class="source-table"><thead><tr><th>Constat</th><th>Niveau de certitude</th><th>Ce que Paul en déduit</th><th>Suite proposée</th></tr></thead><tbody><tr><td><strong>4 réalisations visibles</strong><p>Pages publiques du site · relevé d'exemple</p>${button("source", "Voir la source", "text", "external-link", 'data-source="site"')}</td><td>${badge(state.profile.url ? "Observation" : "Non vérifié", state.profile.url ? "green" : "amber")}<p>18 réalisations au total : déclaration du dirigeant</p></td><td>Documenter une réalisation avant de multiplier les contenus.</td><td>${navButton("missions/proof", "Preuves & réalisations", "text", "arrow-right")}</td></tr><tr><td><strong>6 agences dans la zone</strong><p>Annuaire local · échantillon de démonstration</p>${button("source", "Voir la source", "text", "external-link", 'data-source="agencies"')}</td><td>${badge("Piste à qualifier", "amber")}<p>Aucun besoin confirmé à ce stade</p></td><td>Tester 2 agences, puis juger les retours.</td><td>${navButton("missions/agencies", "Partenariats agences", "text", "arrow-right")}</td></tr><tr><td><strong>27 anciens prospects</strong><p>Déclaré à Paul · fichier non importé</p></td><td>${badge(state.contactsConfirmed ? "Échantillon confirmé" : "À vérifier", state.contactsConfirmed ? "green" : "amber")}<p>Adéquation, ancienneté, droit de recontact</p></td><td>Vérifier 8 contacts avant le moindre envoi.</td><td>${navButton("missions/leads", "Réactivation prospects", "text", "arrow-right")}</td></tr></tbody></table></div></section>`;
 }
 
 function paulPage() {
@@ -644,7 +601,6 @@ function paulPage() {
   const scheduled = Object.values(state.documents).filter(
     (item) => item.scheduled,
   );
-  const chosen = weeklyDecision();
   const validations = [
     ...Object.entries(state.documents)
       .filter(
@@ -670,7 +626,7 @@ function paulPage() {
       : "",
     `<div class="decision">${icon("plug")}<div><strong class="small">${Object.values(state.channels).filter(Boolean).length} canal connecté</strong><p>Les autorisations sont distinctes des validations de contenu.</p>${navButton("entreprise/canaux", "Gérer les connexions", "text", "arrow-up-right")}</div></div>`,
   ].join("");
-  return `${pageHead("Bonjour Rémi.", "Votre cap reste le même. Choisissons le prochain pas qui compte.", "VOTRE POINT AVEC PAUL", navButton("entreprise/audit", "Voir mon diagnostic", "", "scan-eye"))}<div class="brief"><span class="avatar paul large">P</span><p>${chosen ? "Votre choix de la semaine est fait. Je m'occupe de la préparation ; vous gardez les validations." : "J'ai croisé votre ambition avec les premiers constats."} Avec <strong>${state.goal.capacity} chantiers possibles</strong> et <strong>${state.goal.time} h par semaine</strong>, je recommande un test ciblé avant d'élargir. ${state.preference === "time" ? "Vous avez choisi de privilégier le temps gagné." : "Les résultats nous diront ce qu'il faut poursuivre."}</p></div><div class="metrics"><div class="metric"><span>Votre ambition</span><strong>+${state.goal.growth} %</strong><span>de CA sur ${state.goal.months} mois</span></div><div class="metric"><span>Missions en cours</span><strong>${Object.values(state.missions).filter((value) => value === "active").length}<span> / 3 proposées</span></strong><span>un périmètre, un résultat attendu</span></div><div class="metric"><span>Votre attention</span><strong>${pending.length}</strong><span>production${pending.length > 1 ? "s" : ""} à examiner</span></div></div>${decisionSection()}<div class="two-col section-space"><section><div class="section-heading"><h2>Le prochain pas</h2>${badge(chosen ? "Votre choix" : "Recommandation", chosen ? "green" : "blue", chosen ? "circle-check" : "sparkles")}</div><article class="focus-mission"><div class="focus-content"><span class="eyebrow">${escapeHTML(priority.evidence)}</span><h2>${priority.title}</h2><p>${priority.rationale}</p><div class="evidence-list">${badge("Sans achat média", "green")}${badge(`Test de ${priority.delay}`)}${badge(`Votre temps : ${priority.time}`)}</div><div class="actions">${navButton(`missions/${state.priority}`, state.missions[state.priority] === "active" ? "Ouvrir la mission" : "Examiner cette mission", "primary", "arrow-right")}</div></div><img src="${priority.image}" alt="${escapeHTML(priority.short)}, illustration"></article></section><aside><div class="section-heading"><div><h2>À valider par vous</h2><p class="small muted">Valider une production n'est pas une décision de direction.</p></div></div>${validations}</aside></div><section class="section-space"><div class="section-heading"><h2>En coulisses, une équipe. Avec vous, Paul.</h2>${navButton("entreprise/equipe", "Voir les contributions", "text", "arrow-right")}</div><div class="three-col"><div class="inline"><span class="avatar martine">M</span><div><strong class="small">Martine · Diagnostic</strong><p class="muted small">Constats, sources et points à vérifier</p></div></div><div class="inline"><span class="avatar camille">C</span><div><strong class="small">Camille · Création</strong><p class="muted small">Marque, contenus et réalisations</p></div></div><div class="inline"><span class="avatar jean">J</span><div><strong class="small">Jean-Claude · Acquisition</strong><p class="muted small">Ciblage, partenariats et suivi</p></div></div></div></section>`;
+  return `${pageHead("Bonjour Rémi.", "Votre cap reste le même. Choisissons le prochain pas qui compte.", "VOTRE POINT AVEC PAUL", navButton("entreprise/audit", "Voir mon diagnostic", "", "scan-eye"))}<div class="brief"><span class="avatar paul large">P</span><p>${state.journal.length > 1 ? "Nous avançons avec un cadre clair." : "J'ai croisé votre ambition avec les premiers constats."} Avec <strong>${state.goal.capacity} chantiers possibles</strong> et <strong>${state.goal.time} h par semaine</strong>, je recommande un test ciblé avant d'élargir. ${state.preference === "time" ? "Vous avez choisi de privilégier le temps gagné." : "Les résultats nous diront ce qu'il faut poursuivre."}</p></div><div class="metrics"><div class="metric"><span>Votre ambition</span><strong>+${state.goal.growth} %</strong><span>de CA sur ${state.goal.months} mois</span></div><div class="metric"><span>Missions en cours</span><strong>${Object.values(state.missions).filter((value) => value === "active").length}<span> / 3 proposées</span></strong><span>un périmètre, un résultat attendu</span></div><div class="metric"><span>Votre attention</span><strong>${pending.length}</strong><span>production${pending.length > 1 ? "s" : ""} à examiner</span></div></div>${findingsSection("section-space")}<div class="two-col section-space"><section><div class="section-heading"><h2>Le prochain pas</h2>${badge("Recommandation", "blue", "sparkles")}</div><article class="focus-mission"><div class="focus-content"><span class="eyebrow">${escapeHTML(priority.evidence)}</span><h2>${priority.title}</h2><p>${priority.rationale}</p><div class="evidence-list">${badge("Sans achat média", "green")}${badge(`Test de ${priority.delay}`)}${badge(`Votre temps : ${priority.time}`)}</div><div class="actions">${navButton(`missions/${state.priority}`, state.missions[state.priority] === "active" ? "Ouvrir la mission" : "Examiner cette mission", "primary", "arrow-right")}${paulButton("Challenger la priorité", "Challenger avec Paul", "text")}</div></div><img src="${priority.image}" alt="${escapeHTML(priority.short)}, illustration"></article></section><aside><div class="section-heading"><div><h2>À valider par vous</h2><p class="small muted">Valider une production n'est pas une décision de direction.</p></div></div>${validations}</aside></div><section class="section-space"><div class="section-heading"><h2>En coulisses, une équipe. Avec vous, Paul.</h2>${navButton("entreprise/equipe", "Voir les contributions", "text", "arrow-right")}</div><div class="three-col"><div class="inline"><span class="avatar martine">M</span><div><strong class="small">Martine · Diagnostic</strong><p class="muted small">Constats, sources et points à vérifier</p></div></div><div class="inline"><span class="avatar camille">C</span><div><strong class="small">Camille · Création</strong><p class="muted small">Marque, contenus et réalisations</p></div></div><div class="inline"><span class="avatar jean">J</span><div><strong class="small">Jean-Claude · Acquisition</strong><p class="muted small">Ciblage, partenariats et suivi</p></div></div></div></section>`;
 }
 
 function missionsPage() {
@@ -723,7 +679,7 @@ function enterprisePage() {
   ];
   let content = "";
   if (ui.tab === "audit")
-    content = `<div class="spread wrap" style="margin-bottom:20px"><div class="actions">${badge("Relevé du 28 oct. 2026")}${badge("Données d'exemple", "amber")}</div>${button("profile", "Corriger mon profil", "small", "pencil")}</div><div class="two-col"><section><h2>Un savoir-faire solide.<br>Une preuve encore trop discrète.</h2><p class="muted" style="margin-top:13px">La première lecture suggère de rendre votre expertise plus tangible et de tester les prescripteurs locaux, avant d'investir dans l'acquisition payante.</p><div class="positioning"><span class="eyebrow">POSITIONNEMENT PROPOSÉ · À CHALLENGER</span><blockquote>« ${escapeHTML(state.profile.name)}, le partenaire de proximité pour rénover avec des choix clairs et un accompagnement concret. »</blockquote><p>Pas de promesse d'économie chiffrée, de certification ou de délai sans preuve.</p>${paulButton("Votre positionnement", "Affiner ce positionnement", "text")}</div></section><aside><h3>Votre boussole</h3><div class="row"><div><span class="muted small">Ambition</span><p style="color:var(--ink)">${goalText()}</p></div>${button("goal", "Modifier", "small", "pencil")}</div><div class="row"><div><span class="muted small">Territoire</span><p style="color:var(--ink)">${escapeHTML(state.profile.area)}</p></div>${badge("Confirmé", "green")}</div><div class="row"><div><span class="muted small">Clients</span><p style="color:var(--ink)">${escapeHTML(state.profile.clients)}</p></div>${badge("Confirmé", "green")}</div><div class="row"><div><span class="muted small">Capacité disponible</span><p style="color:var(--ink)">${state.goal.capacity} chantiers · à reconfirmer dans 30 jours</p></div></div></aside></div><section><div class="section-heading"><h2>Des constats aux décisions</h2><span class="small muted">Les sources, pas un score opaque</span></div><div class="table-scroll"><table class="source-table"><thead><tr><th>Constat</th><th>Niveau de certitude</th><th>Ce que Paul en déduit</th><th>Suite proposée</th></tr></thead><tbody><tr><td><strong>4 réalisations visibles</strong><p>Pages publiques du site · relevé d'exemple</p>${button("source", "Voir la source", "text", "external-link", 'data-source="site"')}</td><td>${badge(state.profile.url ? "Observation" : "Non vérifié", state.profile.url ? "green" : "amber")}<p>18 réalisations au total : déclaration du dirigeant</p></td><td>Documenter une réalisation avant de multiplier les contenus.</td><td>${navButton("missions/proof", "Preuves & réalisations", "text", "arrow-right")}</td></tr><tr><td><strong>6 agences dans la zone</strong><p>Annuaire local · échantillon de démonstration</p>${button("source", "Voir la source", "text", "external-link", 'data-source="agencies"')}</td><td>${badge("Piste à qualifier", "amber")}<p>Aucun besoin confirmé à ce stade</p></td><td>Tester 2 agences, puis juger les retours.</td><td>${navButton("missions/agencies", "Partenariats agences", "text", "arrow-right")}</td></tr><tr><td><strong>27 anciens prospects</strong><p>Déclaré à Paul · fichier non importé</p></td><td>${badge(state.contactsConfirmed ? "Échantillon confirmé" : "À vérifier", state.contactsConfirmed ? "green" : "amber")}<p>Adéquation, ancienneté, droit de recontact</p></td><td>Vérifier 8 contacts avant le moindre envoi.</td><td>${navButton("missions/leads", "Réactivation prospects", "text", "arrow-right")}</td></tr></tbody></table></div></section><section class="section-space"><div class="section-heading"><h2>Votre environnement</h2>${paulButton("La concurrence locale", "Que faut-il en retenir ?", "small")}</div><div class="equal-col"><div><h3>Concurrence : un échantillon, pas tout le marché</h3><p class="muted small" style="margin:10px 0">5 acteurs potentiels, 3 mettent les aides en avant dans l'exemple. Cela ne démontre ni leur performance ni la demande du marché.</p><div class="actions">${badge("ÉcoHabitat Provence · exemple")}${badge("Maison Thermique · exemple")}${button("competitors", "Voir les 5 acteurs", "text", "arrow-right")}</div></div><div><h3>Ce qu'il nous manque encore</h3><ul class="list-clean small muted"><li>${icon("circle-help")}Marge par offre et CA de départ</li><li>${icon("circle-help")}Trafic, conversion et provenance des demandes</li><li>${icon("circle-help")}Performance réelle des concurrents : non accessible</li></ul></div></div></section>`;
+    content = `<div class="spread wrap" style="margin-bottom:20px"><div class="actions">${badge("Relevé du 28 oct. 2026")}${badge("Données d'exemple", "amber")}</div>${button("profile", "Corriger mon profil", "small", "pencil")}</div><div class="two-col"><section><h2>Un savoir-faire solide.<br>Une preuve encore trop discrète.</h2><p class="muted" style="margin-top:13px">La première lecture suggère de rendre votre expertise plus tangible et de tester les prescripteurs locaux, avant d'investir dans l'acquisition payante.</p><div class="positioning"><span class="eyebrow">POSITIONNEMENT PROPOSÉ · À CHALLENGER</span><blockquote>« ${escapeHTML(state.profile.name)}, le partenaire de proximité pour rénover avec des choix clairs et un accompagnement concret. »</blockquote><p>Pas de promesse d'économie chiffrée, de certification ou de délai sans preuve.</p>${paulButton("Votre positionnement", "Affiner ce positionnement", "text")}</div></section><aside><h3>Votre boussole</h3><div class="row"><div><span class="muted small">Ambition</span><p style="color:var(--ink)">${goalText()}</p></div>${button("goal", "Modifier", "small", "pencil")}</div><div class="row"><div><span class="muted small">Territoire</span><p style="color:var(--ink)">${escapeHTML(state.profile.area)}</p></div>${badge("Confirmé", "green")}</div><div class="row"><div><span class="muted small">Clients</span><p style="color:var(--ink)">${escapeHTML(state.profile.clients)}</p></div>${badge("Confirmé", "green")}</div><div class="row"><div><span class="muted small">Capacité disponible</span><p style="color:var(--ink)">${state.goal.capacity} chantiers · à reconfirmer dans 30 jours</p></div></div></aside></div>${findingsSection()}<section class="section-space"><div class="section-heading"><h2>Votre environnement</h2>${paulButton("La concurrence locale", "Que faut-il en retenir ?", "small")}</div><div class="equal-col"><div><h3>Concurrence : un échantillon, pas tout le marché</h3><p class="muted small" style="margin:10px 0">5 acteurs potentiels, 3 mettent les aides en avant dans l'exemple. Cela ne démontre ni leur performance ni la demande du marché.</p><div class="actions">${badge("ÉcoHabitat Provence · exemple")}${badge("Maison Thermique · exemple")}${button("competitors", "Voir les 5 acteurs", "text", "arrow-right")}</div></div><div><h3>Ce qu'il nous manque encore</h3><ul class="list-clean small muted"><li>${icon("circle-help")}Marge par offre et CA de départ</li><li>${icon("circle-help")}Trafic, conversion et provenance des demandes</li><li>${icon("circle-help")}Performance réelle des concurrents : non accessible</li></ul></div></div></section>`;
   if (ui.tab === "marque")
     content = `<div class="two-col">
       <section class="stack">
@@ -1346,9 +1302,10 @@ async function handleAction(element) {
       state = initialState();
       state.onboarded = true;
       state.brand.confirmed = true;
+      state.missions.agencies = "active";
       state.missions.proof = "active";
       state.journal.unshift({
-        text: "Espace de démonstration ouvert : 1 mission préparée, aucune diffusion.",
+        text: "Espace de démonstration ouvert : 2 missions préparées, aucune diffusion.",
         date: new Date().toISOString(),
       });
       save();
@@ -1410,17 +1367,6 @@ async function handleAction(element) {
       renderPaul();
       break;
     }
-    case "choose-option":
-      commit({ type: "strategy", priority: element.dataset.mission });
-      ui.revisitDecision = false;
-      render();
-      toast("Décision enregistrée. Aucune mission lancée.");
-      break;
-    case "revisit-decision":
-    case "cancel-revisit":
-      ui.revisitDecision = action === "revisit-decision";
-      render();
-      break;
     case "decide-next": {
       const id = element.dataset.mission;
       const report = state.report;
