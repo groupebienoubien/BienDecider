@@ -247,9 +247,9 @@ function readRoute() {
 function openModal(title, content, footer = "") {
   const dialog = document.querySelector("#modal");
   ui.dialogDone = false;
-  ui.dialogTitle = title.replace(/<[^>]+>/g, "");
+  ui.dialogTitle = title;
   track("dialog", ui.dialogTitle);
-  document.querySelector("#modal-body").innerHTML = `<div class="modal-head"><h2 id="modal-title">${title}</h2><button class="icon-btn" data-action="close-modal" aria-label="Fermer la fenêtre">${icon("x")}</button></div><div class="modal-content">${content}</div>${footer ? `<div class="modal-foot">${footer}</div>` : ""}`;
+  document.querySelector("#modal-body").innerHTML = `<div class="modal-head"><h2 id="modal-title">${escapeHTML(title)}</h2><button class="icon-btn" data-action="close-modal" aria-label="Fermer la fenêtre">${icon("x")}</button></div><div class="modal-content">${content}</div>${footer ? `<div class="modal-foot">${footer}</div>` : ""}`;
   if (!dialog.open) dialog.showModal();
   dialog.querySelectorAll('form[data-form="approve"],form[data-form="publish"]').forEach((form) => {
     form.dataset.document = ui.document;
