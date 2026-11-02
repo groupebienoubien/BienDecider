@@ -27,6 +27,7 @@ import { SITE_PHOTO_BAD_TYPE, SITE_PHOTO_MAX_BYTES, SITE_PHOTO_TOO_LARGE, SITE_P
 import { runStreamingToolLoop, runToolLoop, type ToolLoopOptions, type UsageTotal } from "../src/lib/usage";
 import { AgentRunLimitError } from "../src/lib/agent-run-limits";
 import { createAgentExecution, withAgentExecution } from "../src/lib/agent-run-execution";
+import Anthropic from "@anthropic-ai/sdk";
 import { BetaToolRunner } from "@anthropic-ai/sdk/lib/tools/BetaToolRunner";
 
 type UsageLike = Partial<UsageTotal> | undefined;
@@ -1238,11 +1239,24 @@ for (const streaming of [false, true]) {
           content: [{ type: "tool_use", id: `call-${requests}`, name: "write", input: {} }],
         };
       };
-      const client = { beta: { messages: {
-        create: async () => next(),
-        stream: () => new AuditUsageStream(async (stream) => { const message = next(); stream.snapshot(message); return message; }),
-      } } };
-      const runner = new BetaToolRunner(client as never, {
+      const client = new Anthropic({
+        apiKey: "test-only-no-network",
+        fetch: async () => {
+          const message = next();
+          if (!streaming) return Response.json(message);
+          const events = [
+            { type: "message_start", message: { ...message, content: [], stop_reason: null, usage: { ...message.usage, output_tokens: 0 } } },
+            { type: "content_block_start", index: 0, content_block: message.content[0] },
+            { type: "content_block_stop", index: 0 },
+            { type: "message_delta", delta: { stop_reason: message.stop_reason, stop_sequence: null }, usage: { output_tokens: message.usage.output_tokens } },
+            { type: "message_stop" },
+          ];
+          return new Response(events.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(""), {
+            headers: { "content-type": "text/event-stream" },
+          });
+        },
+      });
+      const runner = new BetaToolRunner(client, {
         model: "claude-sonnet-5-5", max_tokens: 100, stream: streaming,
         messages: [{ role: "user", content: "Préparer" }],
         tools: [{ name: "write", description: "Proposer", input_schema: { type: "object", properties: {} }, parse: (input: unknown) => input, run: async () => { toolCalls++; return "Enregistré"; } }],
