@@ -28,11 +28,11 @@
     "@prisma/adapter-pg": "^7.10.1",
     "@prisma/client": "^7.10.1",
     "@vercel/blob": "2.8.2",
-    "dotenv": "^18.0.8",
+    "dotenv": "^18.0.9",
     "google-auth-library": "^11.3.1",
     "jose": "^6.2.13",
-    "next": "16.4.2",
-    "nodemailer": "^10.2.0",
+    "next": "16.4.3",
+    "nodemailer": "^10.2.1",
     "pg": "^8.23.1",
     "prisma": "^7.10.1",
     "react": "19.3.1",
@@ -47,7 +47,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^10",
-    "eslint-config-next": "16.4.2",
+    "eslint-config-next": "16.4.3",
     "tailwindcss": "^4",
     "typescript": "^5"
   }
