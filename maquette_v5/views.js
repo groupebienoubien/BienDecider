@@ -336,14 +336,44 @@ function findingsPlan() {
   }).join("")}${state.ideas.map((idea) => `<article class="finding idea"><div class="finding-obs"><span class="finding-num">${icon("lightbulb")}</span><div><strong>Idée à cadrer</strong><p>${escapeHTML(idea.text)}</p><p>Notée le ${formatDate(idea.date)}</p></div></div><div class="finding-arrow" aria-hidden="true">${icon("arrow-right")}</div><div class="finding-deduction"><p>Pas encore une mission : il faut un constat, un périmètre et un résultat attendu.</p></div><div class="finding-arrow" aria-hidden="true">${icon("arrow-right")}</div><div class="finding-mission"><div>${badge("Mission à créer", "amber")}</div><p class="small muted">Confirmez le constat, le type d'action et le résultat avant de créer la mission.</p><div class="actions">${button("new-mission", "Cadrer avec Paul", "small", "plus", `data-idea="${idea.id}"`)}${button("drop-idea", "Retirer l'idée", "small", "trash-2", `data-id="${idea.id}"`)}</div></div></article>`).join("")}</div></section>`;
 }
 
+function strategyDecisionHero(step, focus) {
+  const def = definitionsFor(state)[focus];
+  const finding = findings().find((item) => item.mission === focus);
+  const decision = state.decisions[focus];
+  const cta = step.route
+    ? navButton(step.route, step.label, "primary", "arrow-right")
+    : step.action === "report"
+      ? button("report", step.label, "primary", "pencil", `data-mission="${focus}"`)
+      : step.action === "decide-next"
+        ? button("decide-next", step.label, "primary", "git-fork", `data-mission="${focus}"`)
+        : navButton(`missions/${focus}`, "Examiner cette mission", "primary", "arrow-right");
+  return `<section class="strategy-decision" aria-labelledby="decision-title">
+    <div class="strategy-decision-main"><span class="eyebrow">${decision ? "DÉCISION ENREGISTRÉE" : "VOTRE PROCHAINE DÉCISION"}</span>
+      <h2 id="decision-title">${escapeHTML(step.title)}</h2><p>${escapeHTML(step.detail)}</p>
+      <div class="decision-reasons">
+        <div><strong>Pourquoi maintenant</strong><span>${escapeHTML(finding?.deduction || def.rationale)}</span></div>
+        <div><strong>Preuve utilisée</strong><span>${escapeHTML(def.evidence)}</span></div>
+        <div><strong>Ce qui reste à vérifier</strong><span>${escapeHTML(def.caveat)}</span></div>
+      </div>
+    </div>
+    <aside class="strategy-decision-action">${badge(def.short, "blue")}<strong>${escapeHTML(missionTarget(state, focus))}</strong>${cta}${paulButton(`mission:${focus}`, "Challenger avec Paul", "text")}<small>Rien ne sera lancé ou diffusé sans votre accord.</small></aside>
+  </section>`;
+}
+function strategyLearningCard(id) {
+  const report = state.reports[id];
+  if (!report) return "";
+  const def = definitionsFor(state)[id];
+  const enough = report.meetings > 0 || report.leads >= 2;
+  return `<section class="strategy-learning" aria-labelledby="learning-title"><div class="section-heading"><div><span class="eyebrow">CE QUE PAUL APPREND DU DERNIER TEST</span><h2 id="learning-title">${escapeHTML(def.short)}</h2></div>${navButton("resultats", "Voir le bilan", "small", "arrow-right")}</div>
+    <div class="learning-grid"><div><strong>Observé</strong><p>${report.leads} demande${report.leads > 1 ? "s" : ""}, ${report.meetings} rendez-vous.</p></div><div><strong>Ce que cela suggère</strong><p>${enough ? "La piste mérite un second test limité." : "Le signal reste trop faible pour élargir."}</p></div><div><strong>Ce que cela ne prouve pas</strong><p>Ce petit échantillon ne permet pas de prévoir un volume régulier.</p></div><div><strong>Impact sur le plan</strong><p>${enough ? "Conserver la priorité et les mêmes limites." : "Adapter la mission avant une nouvelle diffusion."}</p></div></div></section>`;
+}
 function paulPage() {
   const step = nextStep(state);
   const focus = step.mission || state.priority;
-  return `${pageHead(`Bonjour ${escapeHTML(state.profile.firstName)}.`, "Votre stratégie : ce que nous avons observé, ce que Paul en déduit, et les missions qui en découlent.", "VOTRE STRATÉGIE AVEC PAUL", navButton("entreprise/audit", "Voir l'analyse complète", "", "scan-eye"))}
-  <div class="brief"><span class="avatar paul large">P</span><p>${paulBrief()}</p></div>
-  <div class="two-col section-space"><section class="stack">${nextStepCard(step)}${step.stage !== "idle" ? `<div><div class="section-heading"><h2>Où en est la mission</h2>${badge(definitionsFor(state)[focus].short, "blue")}</div>${journeyTracker(focus)}</div>` : ""}</section>
-  <aside><div class="section-heading"><div><h2>À valider par vous</h2><p class="small muted">Valider un contenu n'est pas une décision de direction.</p></div></div>${validationList()}</aside></div>
-  ${findingsPlan()}`;
+  return `${pageHead(`Bonjour ${escapeHTML(state.profile.firstName)}.`, "Votre stratégie relie votre ambition, les constats, les missions et les apprentissages.", "VOTRE STRATÉGIE AVEC PAUL", navButton("entreprise/audit", "Voir l'analyse complète", "", "scan-eye"))}
+  ${strategyDecisionHero(step, focus)}${strategyLearningCard(focus)}
+  <div class="two-col section-space"><section class="stack">${step.stage !== "idle" ? `<div><div class="section-heading"><div><h2>Où en est la mission</h2><p>La progression opérationnelle reste distincte du résultat obtenu.</p></div>${badge(definitionsFor(state)[focus].short, "blue")}</div>${journeyTracker(focus)}</div>` : ""}</section>
+  <aside><div class="section-heading"><div><h2>À valider par vous</h2><p class="small muted">Une validation de contenu n'est jamais une autorisation de diffusion.</p></div></div>${validationList()}</aside></div>${findingsPlan()}`;
 }
 
 /* ---------- Missions ---------- */
@@ -557,6 +587,7 @@ function resultsPage() {
   }).join("");
   return `${pageHead("L'activité n'est pas le résultat.", "Ce qui a été fait, ce qui a été observé, et ce que nous décidons ensuite.", "APPRENDRE · AJUSTER", button("report", "Renseigner mon bilan", "", "pencil"))}
   <div class="metrics"><div class="metric"><span>Diffusions simulées</span><strong>${state.publications.length}</strong><span>${plural(scheduled.length, "programmation", "programmations")} en attente</span></div><div class="metric"><span>Demandes qualifiées</span><strong>${reports.length ? total("leads") : "—"}</strong><span>${reports.length ? `Saisies dirigeant · ${plural(reports.length, "mission", "missions")}` : "À renseigner, pas à inventer"}</span></div><div class="metric"><span>Chiffre d'affaires signé</span><strong>${revenueKnown ? total("revenue").toLocaleString("fr-FR") + " €" : "—"}</strong><span>${revenueKnown ? "Saisie dirigeant · attribuée par mission" : "Aucune donnée connectée"}</span></div></div>
+  ${reports.length ? `<section class="strategy-learning section-space"><div class="section-heading"><div><span class="eyebrow">APPRENTISSAGE DE PAUL</span><h2>Ce que les tests changent dans votre plan</h2><p>Le bilan nourrit la stratégie, pas seulement le statut d'une mission.</p></div>${paulButton("results", "Challenger l'analyse", "small")}</div><div class="learning-grid"><div><strong>Observé</strong><p>${total("leads")} demande${total("leads") > 1 ? "s" : ""} et ${total("meetings")} rendez-vous déclarés.</p></div><div><strong>Ce que cela suggère</strong><p>${total("meetings") ? "Au moins une piste mérite un test supplémentaire." : "Les signaux restent insuffisants pour élargir."}</p></div><div><strong>Ce que cela ne prouve pas</strong><p>L'attribution et la répétabilité ne sont pas encore établies.</p></div><div><strong>Impact sur le plan</strong><p>Réviser la priorité après chaque bilan, sans augmenter automatiquement le périmètre.</p></div></div></section>` : ""}
   <section><div class="section-heading"><h2>Résultats par mission</h2></div>${missionRows ? `<table class="source-table"><thead><tr><th>Mission</th><th>Diffusions</th><th>Bilan déclaré</th><th>Résultat recherché</th><th>Suite</th></tr></thead><tbody>${missionRows}</tbody></table>` : `<div class="empty">${icon("chart-no-axes-combined")}<h3>Aucune mission lancée.</h3><p>Lancez une mission : ses résultats apparaîtront ici, rattachés à elle.</p>${navButton("missions", "Voir les missions", "", "arrow-right")}</div>`}</section>
   <div class="two-col section-space"><section><div class="section-heading"><h2>La diffusion et son suivi</h2></div>${scheduled.map(([id, doc]) => `<div class="row"><div><strong>${escapeHTML(currentVersion(doc).title)}</strong><p>${channelLabel(doc.channel)} · V${doc.approved} · ${formatDate(doc.scheduled)}</p>${badge("Programmé · simulation", "blue")}</div>${navButton(`atelier/${id}`, "Gérer", "small", "calendar-clock")}</div>`).join("")}${state.publications.length ? state.publications.map((item) => `<div class="row"><div><strong>${escapeHTML(item.title)}</strong><p>${channelLabel(item.channel)} · V${item.version} · ${formatDate(item.date)}${item.recipients ? ` · ${plural(item.recipients, "destinataire", "destinataires")}` : ""}</p>${badge(item.channel === "gmail" ? "Envoi simulé" : "Publication simulée", "green")}</div>${navButton(`atelier/${item.document}`, "Voir", "small", "eye")}</div>`).join("") : !scheduled.length ? `<div class="empty">${icon("chart-no-axes-combined")}<h3>Rien n'a encore été diffusé.</h3><p>Validez un contenu, puis confirmez sa diffusion.</p>${navButton("atelier", "Ouvrir l'atelier", "", "arrow-right")}</div>` : ""}<div class="notice section-space">${icon("info")}<p>Un envoi n'est ni une lecture, ni une vente. Les chiffres renseignés sont déclaratifs et ne prouvent pas, à eux seuls, l'effet d'une mission.</p></div></section>
   <aside><h2>Le point de Paul</h2><div class="brief" style="margin-top:18px"><span class="avatar paul">P</span><p>${reports.length ? reports.map(([id, report]) => `${definitionsFor(state)[id].short} : ${report.leads} demande${report.leads > 1 ? "s" : ""}, ${report.meetings} rendez-vous.`).join(" ") + " Avant d'élargir, vérifions leur origine." : reportable.length ? "Les diffusions ont eu lieu. Notez maintenant les réponses reçues et leur qualité, mission par mission : sans bilan, nous ne pouvons pas décider de la suite." : "Il est trop tôt pour conclure. Après la première diffusion, notons les réponses reçues et leur qualité. Nous déciderons ensuite de poursuivre ou d'ajuster."}</p></div>${reports.map(([, report]) => report.note ? `<div class="quote" style="margin-top:15px">${escapeHTML(report.note)}</div>` : "").join("")}<div class="actions" style="margin-top:20px">${paulButton("results", "Préparer le bilan", "primary")}${navButton("missions", "Revoir les missions", "text")}</div><div class="row section-space"><div><span class="eyebrow">PROCHAIN POINT</span><h3>7 jours après la première diffusion</h3><p>Qualifier les retours, vérifier les limites, décider du prochain test.</p></div></div></aside></div><section class="section-space"><div class="section-heading"><h2>Décisions & traçabilité</h2></div>${journalHTML()}</section>`;
