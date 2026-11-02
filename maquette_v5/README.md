@@ -1,32 +1,64 @@
 # Maquette V5 · BienDecider
 
-Maquette interactive du parcours dirigeant, issue de la v4 et de la synthèse de test du parcours complet. La v5 ajoute peu d'écrans : elle rend la boucle **canal → mission → atelier → validation → diffusion → bilan → décision** cohérente, contrainte et mesurable.
+Référence fonctionnelle du parcours dirigeant, de la découverte à la boucle **mission → atelier → validation → diffusion → bilan → décision**. Elle sert de spécification pour la production : les règles et les écrans sont à reproduire, les services (comptes, IA, envois) sont simulés.
 
-Données et envois simulés, aucun envoi réel. L'état est enregistré dans le navigateur (`biendecider-maquette-v5`). Ouvrir `index.html` directement.
+Ouvrir `index.html` directement, sans serveur. L'état est enregistré dans le navigateur (clé `biendecider-maquette-v5`, schéma 3 ; les états des schémas 1 et 2 sont migrés sans perte de documents).
 
-## Une page de découverte, puis « C'est parti »
+## Parcours nouveau dirigeant
 
-L'adresse `#/decouvrir` reprend le récit de l'accueil public de l'application (`src/app/page.tsx`) : promesse, équipe, exemple concret, « vous gardez la main », ce qui est réel et ce qui est simulé, puis le bouton **C'est parti** qui ouvre la première connexion. « Revoir le concept » reste accessible depuis la première connexion et « Mon espace ».
+| # | Écran | URL | Règle |
+| --- | --- | --- | --- |
+| 0 | Découverte | `#/decouvrir` | Bouton principal **C'est parti**. « Retrouver mon compte » est un accès secondaire pour un compte déjà créé. |
+| 1 | Découverte de l'entreprise | `#/bienvenue` | Prénom, entreprise, localisation (ville/commune), site (ou « pas de site »). La localisation est distincte de la zone d'intervention. Pas d'e-mail. |
+| 2 | Compréhension | `#/bienvenue` | Profil compris par Paul, à confirmer ou corriger. |
+| 3 | Ambition | `#/bienvenue` | Texte libre conservé tel quel, interprété par Paul puis confirmé. Modifier le texte après interprétation invalide la confirmation. |
+| 4 | Diagnostic | `#/diagnostic` | Succède directement à l'ambition. Synthèse du diagnostic et des trois premières missions identifiées (preuve, cible, périmètre, réserve). Bouton **Ça m'intéresse**. Aucun compte ni mission créés. |
+| 5 | Création de compte | `#/inscription` | E-mail seul. Crée le compte et ouvre la Stratégie. |
+| 6 | Stratégie | `#/paul` | Espace connecté. Missions à l'état « proposée ». |
 
-## Corrections et ajouts par rapport à la v4
+Garde-fous de navigation (`resolveView`, `state.js`) :
 
-| Axe | Ce que fait la v5 |
+- Un parcours incomplet ramène à son étape (`bienvenue`, `diagnostic` ou `inscription`), y compris après rechargement ou saisie manuelle d'une URL.
+- Une page de l'espace connecté est inaccessible sans compte créé ni session ouverte : retour à `#/decouvrir`.
+- On ne saute pas d'étape : `diagnose`, `interest` et `onboard` refusent un état qui n'a pas passé l'étape précédente.
+- Revenir avant l'étape 4 annule le diagnostic ; les saisies sont conservées.
+- Le niveau de délégation n'est pas demandé pendant l'inscription ; il se règle et se modifie dans Entreprise > Canaux & délégation.
+- Un nouveau parcours sur un navigateur qui contient déjà un compte demande une confirmation explicite avant d'effacer les données.
+- La reconnexion se fait par e-mail seul et exige un compte existant dans ce navigateur.
+
+## Missions, crédits et périmètre
+
+- **Crédits** : 20 crédits fictifs à la création du compte. Création d'une mission : 0. Lancement : 3. Une révision demandée à Paul : 1. Reprise après pause ou après remise au plan : 0 (pas de double facturation). Plus de limite de temps ni de capacité.
+- **Trois modèles d'action** : agences (`agencies`), prospects (`leads`), réalisation (`proof`). Une mission créée par l'utilisateur (page `#/missions/nouvelle`, 10 maximum) reprend l'un des trois modèles avec son propre titre, objectif, périmètre, document et versions. Titre de 5 à 80 caractères, objectif de 5 à 120, raison de 10 à 300, sans `<` ni `>`.
+- **Cycle de vie** : proposée → active → bilan → décision. Une mission écartée se remet au plan ; elle retrouve son état « en pause » si elle l'était. Une mission close ou écartée ne se relance pas.
+- **Périmètre** : 1 ou 2 agences sur 6, jusqu'à 8 contacts sur 27, une réalisation sur 4. Figé après lancement.
+- **Contacts** : import CSV simulé, ancienneté de 24 mois et droit de recontact contrôlés, adresses `.example` uniquement. Le changement de contacts réinitialise la confirmation globale (`contactsConfirmed`).
+- **Versions** : toute version validée puis diffusée est en lecture seule. Une modification crée une nouvelle version à valider ; les anciennes sont conservées.
+- **Marque et logo** : un changement ajoute une version à chaque visuel Facebook (y compris des missions créées) et retire la validation. Refusé si un visuel est programmé. Logo en PNG, JPEG ou WebP, taille limitée.
+- **Diffusion** : jamais sans validation explicite et confirmation. Un canal doit être connecté (retour à la confirmation après connexion). La déconnexion d'un canal annule les programmations et les liste.
+- **Bilan** : rattaché à une mission, rendez-vous supérieurs aux demandes qualifiées refusés, champs vides différents de zéro. Changer de mission dans le formulaire recharge les chiffres de celle-ci.
+- **Paul** : assistant par intentions (règles, pas d'IA). Ses propositions ne modifient l'état qu'après acceptation.
+
+## Simulé ou à produire
+
+| Simulé dans la maquette | À réaliser en production |
 | --- | --- |
-| 1. Incohérences | Après « Connecter Gmail » depuis la fenêtre d'envoi, retour à la confirmation de diffusion. Le journal distingue « retouchée par vous » et « préparée avec Paul », avec l'acteur de chaque ligne. Un seul agent par mission (Paul → Jean-Claude pour les agences et les prospects, Paul → Camille pour les réalisations). Une règle d'arrêt propre à chaque mission. Le prénom est demandé à l'étape 1. La zone `aria-live` (toast, Paul) est vidée après lecture. |
-| 2. Garde-fous | Blocage du lancement quand le temps réservé dépasse les heures disponibles ; avertissement avec accord explicite quand les projets possibles dépassent la capacité. Temps réservé, temps consommé et projets affichés à l'accueil, dans Missions et à chaque lancement. Bilan rattaché à une mission, refusé si rendez-vous > demandes qualifiées, champs vides plutôt que 0. Une version diffusée est en lecture seule : toute modification crée une nouvelle version à valider. Le périmètre est figé après diffusion. |
-| 3. Choix réels | 1 ou 2 agences parmi 6, jusqu'à 8 contacts parmi 27, réalisation parmi 4. Import CSV simulé avec contrôle d'ancienneté (24 mois) et de droit de recontact. Seules les adresses `.example` sont acceptées : pas de vraies données personnelles. Si de vraies données devaient être manipulées en test, le Data Privacy Officer doit valider le dispositif. Le parcours Facebook suit les mêmes règles que l'e-mail. La déconnexion d'un canal liste les programmations annulées. |
-| 4. Paul | Réponses par intention (budget, temps, capacité, risque, résultats, canaux, délégation, prochain pas, comparaison, périmètre, pause, équipe), une conversation par contexte, « Explorer une idée » ouvre une conversation neuve. Hors cadre, Paul le dit et propose la suite. Ses propositions modifient l'état une fois confirmées (« réduis à 1 agence », « mets le budget à 100 », « mets la mission en pause »). |
-| 5. Accueil et première connexion | L'accueil commence par le prochain pas (calculé depuis l'état) et le parcours de la mission. Les trois compteurs à zéro disparaissent ; le tableau des constats n'existe plus qu'une fois, dans Entreprise. Étape 2 : trois champs, le reste « à affiner », valeurs affichées en entier. Étape 3 : valeurs usuelles et plafonds. Réel et simulé distingués dès l'étape 1. Vocabulaire : Studio devient **Atelier**, « production » devient « contenu », « exécution » devient « envoi » ou « diffusion », « boussole » devient « repères », la capacité se compte en **projets clients**. |
-| 6. Fluidité et accessibilité | Fondu de page de 0,12 s, rejoué seulement lors d'un changement de page (plus de zone blanche après une action). Progression de lecture à l'étape 1 sans attente obligatoire. Cibles d'au moins 44 px. Indice de défilement sur les onglets mobiles. Constats et résultats en cartes sous 640 px. Cartes de mission informatives (périmètre, temps, étape) à la place d'illustrations. Texte secondaire assombri (voir ci-dessous). |
-| 7. Instrumentation | Question de retour à la fin des étapes clés, identifiant de session de test, export JSON du journal (décisions, temps par page, fenêtres abandonnées, retours). L'export ne contient ni contacts ni coordonnées. |
+| Compte par e-mail seul, sans mot de passe ni vérification | Authentification réelle, vérification de l'e-mail, sessions serveur |
+| Diagnostic, concurrents (échantillon fictif), agences, contacts | Analyse réelle du site et du marché, provenance et date de chaque source |
+| Paul (règles et mots-clés) | Modèle d'IA, limites de contexte, traçabilité des décisions |
+| Crédits fictifs | Facturation, grille de crédits, remboursement |
+| Connexion Gmail et Facebook, envoi, programmation | OAuth, stockage chiffré des jetons, ordonnanceur, reprise sur erreur |
+| Enregistrement dans le navigateur | Base de données, droits, audit |
+| Export JSON du journal | Export soumis à consentement. Il contient les champs libres (ambition, bilans, journal) : ne pas le présenter comme anonymisé |
 
-## Mesures d'accessibilité
+Limites connues :
 
-Contraste (rapport WCAG, seuil 4,5 pour le texte courant) : le gris secondaire de la v4 (`#65716a`) tombait à 4,41 sur le fond des badges et 4,48 sur le vert pâle. Il passe à `#58635c` : 5,4 à 6,3 sur crème, blanc, badge, vert pâle et ambre pâle. Les autres associations de la charte (vert de marque, corail foncé, erreur) restent au-dessus de 5,2.
-
-Cibles tactiles : mesurées à 390 px de large sur l'accueil, les missions, l'atelier, les résultats, le diagnostic et la page de découverte, aucun contrôle sous 44 px. Aucun débordement horizontal à cette largeur.
-
-Reste à faire avant les sessions de test : navigation clavier complète avec un lecteur d'écran réel (les fenêtres natives `dialog`, le saut au contenu et les cibles de focus sont en place, mais non éprouvés avec NVDA ou VoiceOver).
+- Trois modèles d'action seulement ; une idée d'un autre type reste une note.
+- Le détail de l'onglet Entreprise > Diagnostic est un exemple figé, présenté comme tel.
+- En « préparation seule », le prochain pas peut encore proposer de connecter ou de diffuser ; la diffusion manuelle et son bilan ne sont pas modélisés.
+- Quelques réponses de Paul sont approximatives : la remise au plan annonce « à décider » même pour une mission reprise en pause, et le périmètre d'une mission d'agences créée peut être nommé « contacts ».
+- Le lancement affiche encore un bouton sur une mission close ou écartée ; l'action est refusée par la logique.
+- Accessibilité : fenêtres natives `dialog`, saut au contenu, cibles de 44 px, contrastes 4,5 et plus. Non éprouvé avec NVDA ou VoiceOver.
 
 ## Vérifier
 
@@ -34,4 +66,6 @@ Reste à faire avant les sessions de test : navigation clavier complète avec un
 node --test maquette_v5/state.test.cjs
 ```
 
-Les tests couvrent la logique (`state.js`) et les réponses de Paul (`paul.js`). L'interface (`views.js`, `app.js`) a été parcourue de bout en bout dans un navigateur : première connexion, lancement de deux missions, blocage de la troisième, validation, connexion de Gmail depuis l'envoi, diffusion, bilan incohérent refusé, bilan accepté, décision, import CSV, périmètre, programmation Facebook puis déconnexion.
+42 tests couvrent la logique (`state.js`) et Paul (`paul.js`) : ordre diagnostic, intérêt, inscription ; routage et migration ; crédits et pause ; cycle complet d'une mission créée pour chaque modèle ; versions et marque ; contacts ; bilans ; rendu des vues.
+
+Parcours vérifié dans Chromium à 1440 px et 390 px (sans erreur de console, sans débordement horizontal à 320 px sur les pages clés) : C'est parti, diagnostic, rechargement, retour arrière, accès direct refusé, inscription, création et ajustement d'une mission, lancement, validation, connexion Gmail et diffusion, version lue seule, bilan refusé puis accepté, décision, logo, programmation Facebook puis déconnexion, export, déconnexion, accès refusé et reconnexion.

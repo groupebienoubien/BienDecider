@@ -92,7 +92,7 @@ function exportSession() {
       goal: state.goal,
       delegation: state.delegation,
       missions: state.missions,
-      scope: { agencies: state.scope.agencies.ids.length, leads: state.scope.leads.ids.length, proof: state.scope.proof.project },
+      scope: Object.fromEntries(Object.entries(state.scope).map(([id, scope]) => [id, scope.ids?.length ?? scope.project])),
       diffusions: state.publications.length,
       reports: state.reports,
     },
@@ -103,26 +103,26 @@ function exportSession() {
   link.click();
   link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
-  toast("Journal de session exporté. Il ne contient ni contacts ni coordonnées.");
+  toast("Journal exporté. Vérifiez les champs libres avant de le partager.");
 }
 
 /* ---------- Rendu ---------- */
 
-const PAGE_RENDERERS = { paul: paulPage, missions: missionsPage, atelier: atelierPage, entreprise: enterprisePage, resultats: resultsPage };
+const PAGE_RENDERERS = { paul: paulPage, missions: missionsPage, atelier: atelierPage, entreprise: enterprisePage, resultats: resultsPage, compte: comptePage };
 
 function render(options = {}) {
   ui.animate = Boolean(options.animate);
   captureEditorDraft();
   const scrollY = window.scrollY;
   let html;
-  if (ui.view === "decouvrir") html = landing();
+  if (ui.view === "decouvrir" || (state.onboarded && !state.signedIn)) html = landing();
   else if (!state.onboarded) html = state.started ? onboarding() : landing();
   else html = shell((PAGE_RENDERERS[ui.view] || paulPage)());
   document.querySelector("#app").innerHTML = html;
-  const titles = { paul: "Avec Paul", missions: "Missions", atelier: "Atelier", entreprise: "Entreprise", resultats: "Résultats" };
+  const titles = { paul: "Stratégie", missions: "Missions", atelier: "Atelier", entreprise: "Entreprise", resultats: "Résultats", compte: "Mon compte" };
   document.title = ui.view === "decouvrir" || (!state.onboarded && !state.started)
     ? "BienDecider · Vous décidez, votre activité avance"
-    : `BienDecider · ${state.onboarded ? titles[ui.view] || "Votre espace" : "Faisons connaissance"}`;
+    : `BienDecider · ${state.onboarded ? titles[ui.view] || "Votre espace" : state.step === 4 ? "Votre diagnostic" : state.step === 5 ? "Création de compte" : "Faisons connaissance"}`;
   const editor = document.querySelector('form[data-form="edit-document"]');
   if (editor) {
     editor.dataset.document = ui.document;
@@ -147,13 +147,14 @@ function captureEditorDraft() {
   const form = document.querySelector('form[data-form="edit-document"]');
   if (!form?.dataset.document || form.elements.title.disabled) return;
   const documentId = form.dataset.document;
+  if (!state.documents[documentId]) return;
   const latest = currentVersion(state.documents[documentId]);
   if (Number(form.dataset.version) !== latest.number) return;
   const values = Object.fromEntries(new FormData(form));
   const changed =
-    values.title !== (documentId === "post" ? latest.headline.replace(/\n/g, " ") : latest.title) ||
+    values.title !== (state.documents[documentId].channel === "facebook" ? latest.headline.replace(/\n/g, " ") : latest.title) ||
     values.body !== latest.body ||
-    (documentId === "post" && values.layout !== (latest.layout || "photo"));
+    (state.documents[documentId].channel === "facebook" && values.layout !== (latest.layout || "photo"));
   if (changed) ui.editorDrafts[documentId] = { values, version: latest.number };
   else delete ui.editorDrafts[documentId];
 }
@@ -166,7 +167,7 @@ function refreshDraftPreview() {
     form.insertAdjacentHTML("afterbegin", '<div class="notice amber draft-note">Retouches non enregistrées. La validation porte sur la dernière version enregistrée.</div>');
   if (!draft) form.querySelector(".draft-note")?.remove();
   const version = currentVersion(state.documents[form.dataset.document]);
-  const values = draft?.values || { title: form.dataset.document === "post" ? version.headline : version.title, body: version.body, layout: version.layout };
+  const values = draft?.values || { title: state.documents[form.dataset.document].channel === "facebook" ? version.headline : version.title, body: version.body, layout: version.layout };
   const stage = document.querySelector(".preview-stage");
   const body = stage.querySelector(".social-text, .email-body");
   if (body) body.textContent = values.body;
@@ -222,28 +223,14 @@ function readRoute() {
   closeDialog("paul-dialog");
   const [, rawView, detail] = location.hash.split("/");
   const view = rawView === "studio" ? "atelier" : rawView;
-  if (view === "bienvenue") {
-    if (!state.onboarded) {
-      if (!state.started) {
-        state = transition(state, { type: "begin" });
-        save();
-      }
-      history.replaceState(null, "", "#/paul");
-      ui.view = "paul";
-    } else {
-      ui.view = "paul";
-      render();
-      handleAction({ dataset: { action: "reset" } });
-      return;
-    }
-  } else if (view === "decouvrir") ui.view = "decouvrir";
-  else ui.view = ["paul", "missions", "atelier", "entreprise", "resultats"].includes(view) ? view : "paul";
+  ui.view = resolveView(state, view);
+  if (ui.view !== rawView) history.replaceState(null, "", `#/${ui.view}`);
   if (ui.view === "entreprise") ui.tab = ["audit", "marque", "canaux", "equipe"].includes(detail) ? detail : "audit";
   if (ui.view === "atelier") {
     ui.document = Object.hasOwn(state.documents, detail || "") ? detail : ui.document;
     ui.selectedVersion = null;
   }
-  if (ui.view === "missions") ui.mission = Object.hasOwn(missionDefinitions, detail || "") ? detail : "agencies";
+  if (ui.view === "missions") ui.mission = Object.hasOwn(definitionsFor(state), detail || "") ? detail : "agencies";
   const marker = `${ui.view}${detail ? "/" + detail : ""}`;
   if (ui.lastView !== marker) {
     track("view", marker);
@@ -278,25 +265,48 @@ function closeDialog(id) {
 }
 
 function startMissionDialog(id) {
-  const def = missionDefinitions[id];
-  const load = capacityLoad(state, id);
-  const before = capacityLoad(state);
-  const blocked = load.overTime;
+  const def = definitionsFor(state)[id];
+  const cost = state.missions[id] === "proposed" ? CREDIT_COST.start : 0;
+  const short = state.account.credits < cost;
   openModal(
     "Confirmer le cadre de la mission",
     `<form data-form="start-mission" data-mission="${id}" class="stack"><h3>${def.title}</h3>
-    <div class="row"><span class="muted small">Résultat recherché</span><strong class="small">${def.target}</strong></div>
+    <div class="row"><span class="muted small">Résultat recherché</span><strong class="small">${escapeHTML(missionTarget(state, id))}</strong></div>
     <div class="row"><span class="muted small">Périmètre</span><strong class="small">${escapeHTML(scopeSummary(state, id))}</strong></div>
-    <div class="row"><span class="muted small">Votre temps</span><strong class="small">${def.time}</strong></div>
+    <div class="row"><span class="muted small">Coût en crédits</span><strong class="small">${cost ? `${cost} crédits · solde ${state.account.credits}` : "Reprise sans frais"}</strong></div>
     <div class="row"><span class="muted small">Dépenses externes</span><strong class="small">0 € engagé</strong></div>
     <div class="row"><span class="muted small">Règle d'arrêt</span><strong class="small">${def.stopRule}</strong></div>
-    ${gauge("Temps réservé par semaine, avec cette mission", load.hours, load.hoursMax, `${formatHours(before.hours)} → ${formatHours(load.hours)} sur ${formatHours(load.hoursMax)}`, load.overTime)}
-    ${gauge("Projets clients possibles, avec cette mission", load.projects, load.projectsMax, `${before.projects} → ${load.projects} sur ${load.projectsMax}`, load.overProjects)}
-    ${blocked ? `<div class="notice amber">${icon("triangle-alert")}<p><strong>Lancement impossible.</strong> Cette mission porterait votre temps à ${formatHours(load.hours)} par semaine, pour ${formatHours(load.hoursMax)} disponibles. Mettez une mission en pause, ou ajustez votre temps disponible.</p></div><div class="actions">${navButton("missions", "Voir mes missions en cours", "small", "flag")}${button("goal", "Ajuster mon temps", "small", "pencil")}</div>` : ""}
-    ${!blocked && load.overProjects ? `<div class="notice amber">${icon("triangle-alert")}<p>Si tout se passe bien, vos missions peuvent amener jusqu'à ${load.projects} projets pour ${load.projectsMax} que vous pouvez prendre. À vous de juger si c'est acceptable.</p></div><label class="check"><input type="checkbox" name="capacity" required>J'accepte ce risque de dépasser ma capacité.</label>` : ""}
+    ${short ? `<div class="notice amber">${icon("triangle-alert")}<p><strong>Crédits insuffisants.</strong> Il en faut ${cost}, il vous en reste ${state.account.credits}.</p></div>${navButton("compte", "Recharger mes crédits", "small", "plus")}` : ""}
     <div class="notice">${icon("shield-check")}<p>Paul coordonne la préparation. Chaque envoi ou publication reste soumis à confirmation.</p></div>
-    ${id === "leads" ? `<label class="check"><input type="checkbox" name="contacts" required ${state.contactsConfirmed ? "checked" : ""}>Je confirme, dans ce scénario, la pertinence des ${state.scope.leads.ids.length} contacts choisis, leur droit de recontact et la possibilité de s'opposer.</label>` : ""}
-    <div class="form-error" role="alert"></div><button class="btn primary" type="submit" ${blocked ? "disabled" : ""}>${icon("play")}Confirmer le lancement</button></form>`,
+    ${templateOf(state, id) === "leads" ? `<label class="check"><input type="checkbox" name="contacts" required ${state.contactsConfirmed ? "checked" : ""}>Je confirme, dans ce scénario, la pertinence des ${state.scope[id].ids.length} contacts choisis, leur droit de recontact et la possibilité de s'opposer.</label>` : ""}
+    <div class="form-error" role="alert"></div><button class="btn primary" type="submit" ${short ? "disabled" : ""}>${icon("play")}Confirmer le lancement</button></form>`,
+  );
+}
+
+function loginDialog() {
+  openModal(
+    "Retrouver mon compte",
+    `<form data-form="login" class="stack"><p class="muted small">Reconnexion simulée au compte enregistré dans ce navigateur. Aucune authentification réelle, aucun mot de passe demandé.</p><label class="field"><span>E-mail</span><input name="email" type="email" required maxlength="120" autocomplete="email" value="${escapeHTML(state.account.email)}"></label><div class="form-error" role="alert"></div><button class="btn primary" type="submit">${icon("log-in")}Retrouver ma stratégie</button><p class="small muted">Pas encore de compte ? ${button("begin", "C'est parti", "text small")}</p></form>`,
+  );
+}
+
+function goalDialog() {
+  openModal("Modifier mon ambition", `<div class="stack">${ambitionForm("goal")}${understoodCard()}</div>`);
+}
+
+function editMissionDialog(id) {
+  const def = definitionsFor(state)[id];
+  openModal(
+    "Modifier l'objectif de la mission",
+    `<form data-form="mission-edit" data-mission="${id}" class="stack"><h3>${def.title}</h3><label class="field"><span>Résultat recherché</span><textarea name="target" rows="3" maxlength="120" required>${escapeHTML(missionTarget(state, id))}</textarea><small>5 à 120 caractères. Paul s'appuiera sur cette phrase pour juger votre bilan.</small></label>${state.missionEdits[id] ? `<p class="small muted">Objectif proposé à l'origine : ${escapeHTML(def.target)} ${button("reset-target", "Y revenir", "text small", "undo-2", `data-mission="${id}"`)}</p>` : ""}<div class="form-error" role="alert"></div><button class="btn primary" type="submit">${icon("save")}Enregistrer l'objectif</button></form>`,
+  );
+}
+
+function dismissDialog(id) {
+  openModal(
+    "Écarter cette mission du plan ?",
+    `<p><strong>${definitionsFor(state)[id].title}</strong></p><p class="muted small" style="margin-top:8px">La mission quitte les recommandations de Paul. Rien n'est effacé : elle reste sous « Écartées » et vous pouvez la remettre au plan.</p>`,
+    `${button("close-modal", "Garder au plan")}${button("confirm-dismiss", "Écarter", "danger", "trash-2", `data-mission="${id}"`)}`,
   );
 }
 
@@ -306,7 +316,7 @@ function approvalDialog() {
   const recipients = recipientsOf(state, ui.document);
   openModal(
     `Valider la version V${version.number}`,
-    `<form data-form="approve" class="stack"><p><strong>${escapeHTML(version.title)}</strong></p><p class="muted small">Cette validation concerne le contenu de V${version.number}. Elle ne publie ni n'envoie rien.</p>${ui.document === "post" ? `<label class="check"><input type="checkbox" name="rights" required>Je confirme le visuel et les droits d'utilisation dans ce scénario de démonstration.</label>${!state.brand.confirmed ? `<div class="notice amber">${icon("palette")}<p>La marque doit être confirmée avant de valider ce visuel.</p></div>${navButton("entreprise/marque", "Confirmer ma marque", "", "arrow-right")}` : ""}` : `<div class="notice">${icon("mail")}<p>${plural(recipients.length, "destinataire", "destinataires")} d'exemple : ${recipients.map((item) => escapeHTML(item.name)).join(", ")}. Aucun prix ni relance automatique.</p></div>`}<label class="check"><input type="checkbox" name="reviewed" required>J'ai relu le contenu et vérifié les informations qui engagent mon entreprise.</label><div class="form-error" role="alert"></div><button class="btn primary" type="submit" ${ui.document === "post" && !state.brand.confirmed ? "disabled" : ""}>${icon("check")}Valider sans diffuser</button></form>`,
+    `<form data-form="approve" class="stack"><p><strong>${escapeHTML(version.title)}</strong></p><p class="muted small">Cette validation concerne le contenu de V${version.number}. Elle ne publie ni n'envoie rien.</p>${state.documents[ui.document].channel === "facebook" ? `<label class="check"><input type="checkbox" name="rights" required>Je confirme le visuel et les droits d'utilisation dans ce scénario de démonstration.</label>${!state.brand.confirmed ? `<div class="notice amber">${icon("palette")}<p>La marque doit être confirmée avant de valider ce visuel.</p></div>${navButton("entreprise/marque", "Confirmer ma marque", "", "arrow-right")}` : ""}` : `<div class="notice">${icon("mail")}<p>${plural(recipients.length, "destinataire", "destinataires")} d'exemple : ${recipients.map((item) => escapeHTML(item.name)).join(", ")}. Aucun prix ni relance automatique.</p></div>`}<label class="check"><input type="checkbox" name="reviewed" required>J'ai relu le contenu et vérifié les informations qui engagent mon entreprise.</label><div class="form-error" role="alert"></div><button class="btn primary" type="submit" ${state.documents[ui.document].channel === "facebook" && !state.brand.confirmed ? "disabled" : ""}>${icon("check")}Valider sans diffuser</button></form>`,
   );
 }
 
@@ -355,7 +365,7 @@ function sourceDialog(source) {
 }
 
 function reportDialog(preselected) {
-  const reportable = Object.keys(missionDefinitions).filter((id) => state.publications.some((item) => missionOfDocument(state, item.document) === id));
+  const reportable = Object.keys(definitionsFor(state)).filter((id) => state.publications.some((item) => missionOfDocument(state, item.document) === id));
   if (!reportable.length) {
     openModal("Votre bilan commercial", `<div class="stack"><div class="notice amber">${icon("info")}<p>Rien n'a encore été diffusé : il n'y a pas de résultat à rattacher. Faites d'abord une première diffusion dans l'atelier.</p></div>${navButton("atelier", "Ouvrir l'atelier", "primary", "arrow-right")}</div>`);
     return;
@@ -364,18 +374,18 @@ function reportDialog(preselected) {
   const report = state.reports[chosen];
   openModal(
     "Votre bilan commercial",
-    `<form data-form="report" class="stack"><p class="muted small">Déclaration du dirigeant, rattachée à une mission. Période : depuis la première diffusion.</p><label class="field"><span>Mission concernée</span><select name="mission">${reportable.map((id) => `<option value="${id}" ${id === chosen ? "selected" : ""}>${missionDefinitions[id].short}</option>`).join("")}</select></label><div class="form-grid"><label class="field"><span>Demandes qualifiées</span><input name="leads" type="number" inputmode="numeric" min="0" max="100000" required placeholder="—" value="${report?.leads ?? ""}"></label><label class="field"><span>Rendez-vous obtenus</span><input name="meetings" type="number" inputmode="numeric" min="0" max="100000" required placeholder="—" value="${report?.meetings ?? ""}"></label><label class="field full"><span>CA signé (€) <span class="muted">· facultatif</span></span><input name="revenue" type="number" inputmode="numeric" min="0" max="100000000" placeholder="—" value="${report?.revenue ?? ""}"><small>Laissez vide si vous ne savez pas : « — » n'est pas « 0 ».</small></label></div><div class="live-warn notice amber" role="status" hidden>${icon("triangle-alert")}<p>Vous ne pouvez pas avoir plus de rendez-vous que de demandes qualifiées.</p></div><label class="field"><span>Origine des demandes et contexte</span><textarea name="note" maxlength="600" placeholder="Ex. Deux demandes via une recommandation…">${escapeHTML(report?.note || "")}</textarea></label><div class="form-error" role="alert"></div><button class="btn primary" type="submit">${icon("save")}Enregistrer le bilan</button></form>`,
+    `<form data-form="report" class="stack"><p class="muted small">Déclaration du dirigeant, rattachée à une mission. Période : depuis la première diffusion.</p><label class="field"><span>Mission concernée</span><select name="mission">${reportable.map((id) => `<option value="${id}" ${id === chosen ? "selected" : ""}>${definitionsFor(state)[id].short}</option>`).join("")}</select></label><div class="form-grid"><label class="field"><span>Demandes qualifiées</span><input name="leads" type="number" inputmode="numeric" min="0" max="100000" required placeholder="—" value="${report?.leads ?? ""}"></label><label class="field"><span>Rendez-vous obtenus</span><input name="meetings" type="number" inputmode="numeric" min="0" max="100000" required placeholder="—" value="${report?.meetings ?? ""}"></label><label class="field full"><span>CA signé (€) <span class="muted">· facultatif</span></span><input name="revenue" type="number" inputmode="numeric" min="0" max="100000000" placeholder="—" value="${report?.revenue ?? ""}"><small>Laissez vide si vous ne savez pas : « — » n'est pas « 0 ».</small></label></div><div class="live-warn notice amber" role="status" hidden>${icon("triangle-alert")}<p>Vous ne pouvez pas avoir plus de rendez-vous que de demandes qualifiées.</p></div><label class="field"><span>Origine des demandes et contexte</span><textarea name="note" maxlength="600" placeholder="Ex. Deux demandes via une recommandation…">${escapeHTML(report?.note || "")}</textarea></label><div class="form-error" role="alert"></div><button class="btn primary" type="submit">${icon("save")}Enregistrer le bilan</button></form>`,
   );
 }
 
 function decideDialog(id) {
-  const def = missionDefinitions[id];
+  const def = definitionsFor(state)[id];
   const report = state.reports[id];
   const count = state.publications.filter((item) => missionOfDocument(state, item.document) === id).length;
   const fresh = report?.atPublications === count;
   openModal(
     "Décider la suite de la mission",
-    `<div class="stack"><h3>${def.title}</h3><div class="row"><span class="muted small">Résultat recherché</span><strong class="small">${def.target}</strong></div><div class="row"><span class="muted small">Ce que vous avez déclaré</span><strong class="small">${fresh ? `${report.leads} demande${report.leads > 1 ? "s" : ""} · ${report.meetings} rendez-vous` : "Aucun bilan pour cette diffusion"}</strong></div><div class="row"><span class="muted small">Règle d'arrêt</span><strong class="small">${def.stopRule}</strong></div>${fresh ? "" : `<div class="notice amber">${icon("circle-help")}<p>Sans bilan, Paul ne peut pas comparer au résultat recherché : « Poursuivre » reste indisponible. ${button("report", "Renseigner mon bilan", "text", "", `data-mission="${id}"`)}</p></div>`}<p class="muted small">Poursuivre garde le même cadre et ouvre une nouvelle version dans l'atelier. Adapter passe par Paul. Arrêter clôt la mission et annule ses programmations.</p></div>`,
+    `<div class="stack"><h3>${def.title}</h3><div class="row"><span class="muted small">Résultat recherché</span><strong class="small">${escapeHTML(missionTarget(state, id))}</strong></div><div class="row"><span class="muted small">Ce que vous avez déclaré</span><strong class="small">${fresh ? `${report.leads} demande${report.leads > 1 ? "s" : ""} · ${report.meetings} rendez-vous` : "Aucun bilan pour cette diffusion"}</strong></div><div class="row"><span class="muted small">Règle d'arrêt</span><strong class="small">${def.stopRule}</strong></div>${fresh ? "" : `<div class="notice amber">${icon("circle-help")}<p>Sans bilan, Paul ne peut pas comparer au résultat recherché : « Poursuivre » reste indisponible. ${button("report", "Renseigner mon bilan", "text", "", `data-mission="${id}"`)}</p></div>`}<p class="muted small">Poursuivre garde le même cadre et ouvre une nouvelle version dans l'atelier. Adapter passe par Paul. Arrêter clôt la mission et annule ses programmations.</p></div>`,
     `${button("confirm-outcome", "Poursuivre", "", "play", `data-mission="${id}" data-outcome="continue" ${fresh ? "" : "disabled"}`)}${paulButton(`mission:${id}`, "Adapter avec Paul")}${button("confirm-outcome", "Arrêter la mission", "danger", "square", `data-mission="${id}" data-outcome="stop"`)}`,
   );
 }
@@ -396,13 +406,6 @@ function importPreviewDialog(result) {
     "Contrôle du fichier",
     `<div class="stack"><div class="row"><span>Contacts lus</span><strong>${result.contacts.length}</strong></div><div class="row"><span>Recontactables</span><strong class="green">${ok}</strong></div><div class="row"><span>Opposition au recontact</span><strong>${count((c) => c.consent === "non")}</strong></div><div class="row"><span>Accord inconnu</span><strong>${count((c) => c.consent === "inconnu")}</strong></div><div class="row"><span>Dernier échange de plus de ${CONTACT_MAX_AGE_MONTHS} mois</span><strong>${count((c) => c.consent === "oui" && c.monthsAgo > CONTACT_MAX_AGE_MONTHS)}</strong></div>${result.skipped.length ? `<div class="notice amber">${icon("info")}<p>${result.skipped.slice(0, 3).map(escapeHTML).join(" ")}${result.skipped.length > 3 ? ` (+${result.skipped.length - 3})` : ""}</p></div>` : ""}${ok ? "" : `<div class="notice amber">${icon("triangle-alert")}<p>Aucun contact recontactable : la mission ne pourra pas être lancée avec ce fichier.</p></div>`}<p class="muted small">L'import remplace la liste actuelle et vous demandera de choisir à nouveau jusqu'à ${LEADS_MAX} contacts.</p></div>`,
     `${button("close-modal", "Annuler")}${button("confirm-import", "Importer", "primary", "upload")}`,
-  );
-}
-
-function settingsDialog() {
-  openModal(
-    "Mon espace",
-    `<div class="stack"><div class="inline"><span class="avatar large">${firstInitial()}</span><div><h3>${escapeHTML(state.profile.firstName)} · Dirigeant</h3><p class="muted small">${escapeHTML(state.profile.name)} · espace de démonstration</p></div></div><div class="row"><span>Mon profil</span>${button("profile", "Corriger", "small", "pencil")}</div><div class="row"><span>Règles de collaboration</span>${navButton("entreprise/canaux", "Gérer", "small", "settings-2")}</div><div class="row"><span>Votre ambition</span>${button("goal", "Modifier", "small", "pencil")}</div><div class="row"><span>Le concept BienDecider</span>${navButton("decouvrir", "Revoir", "small", "arrow-up-right")}</div><form data-form="session" class="stack-sm"><h3>Session de test</h3><label class="field"><span>Identifiant de session</span><input name="sessionId" maxlength="30" placeholder="Ex. T-014" value="${escapeHTML(state.session.id)}"><small>Relie vos retours à cette session. Ni nom ni coordonnées.</small></label><div class="actions"><button class="btn small" type="submit">${icon("save")}Enregistrer</button>${button("export-session", "Exporter le journal de session", "small", "download")}</div></form><div class="notice">${icon("hard-drive")}<p>Vos choix et échanges sont enregistrés uniquement dans ce navigateur. Aucune donnée n'est envoyée à une IA.</p></div>${button("reset", "Recommencer la première connexion", "danger", "rotate-ccw")}</div>`,
   );
 }
 
@@ -449,7 +452,7 @@ function renderPaul() {
   const proposal = ui.proposals[key];
   const others = Object.keys(state.conversations).filter((item) => state.conversations[item].length);
   const symbol = ctx.kind === "atelier" ? "panels-top-left" : ctx.kind === "mission" ? "flag" : "compass";
-  document.querySelector("#paul-body").innerHTML = `<div class="modal-head"><div class="inline"><span class="avatar paul">P</span><div><h2 id="paul-title">Avec Paul</h2><span class="muted small">Votre interlocuteur, du cap à l'action</span></div></div><button class="icon-btn" data-action="close-paul" aria-label="Fermer la conversation">${icon("x")}</button></div><div class="paul-context">${icon(symbol)} ${escapeHTML(contextLabel(key))} · ${escapeHTML(state.profile.name)}${others.length > 1 ? `<label class="thread-switch"><span class="sr-only">Changer de conversation</span><select id="thread-switch">${others.map((item) => `<option value="${escapeHTML(item)}" ${item === key ? "selected" : ""}>${escapeHTML(contextLabel(item))}</option>`).join("")}</select></label>` : ""}</div><div class="chat-thread">${thread.slice(-40).map((message) => `<div class="chat-message ${message.role === "user" ? "user" : ""}">${message.role === "paul" ? '<span class="name">Paul</span>' : ""}${escapeHTML(message.text)}${message.links?.length ? `<div class="chat-links">${message.links.map((item) => button("paul-link", escapeHTML(item.label), "small", "arrow-up-right", `data-route="${item.route}"`)).join("")}</div>` : ""}${message.role === "paul" ? '<span class="chat-meta">Échange de démonstration</span>' : ""}</div>`).join("")}${proposal ? `<div class="chat-message"><span class="name">Paul · proposition à confirmer</span><div class="chat-proposal"><strong>${escapeHTML(proposal.title)}</strong><p>${escapeHTML(proposal.description)}</p><div class="actions">${button("accept-proposal", proposal.accept || PROPOSAL_LABEL[proposal.event.type], "primary small", "check")}${button("dismiss-proposal", "Garder le cap actuel", "small")}</div></div></div>` : ""}</div><div class="chat-suggestions">${suggestionsFor(state, ctx).map((label) => `<button data-action="chat-suggestion">${escapeHTML(label)}</button>`).join("")}</div><div class="chat-compose"><form data-form="chat"><textarea id="paul-input" name="message" placeholder="Votre question, votre idée…" aria-label="Votre message à Paul" required maxlength="1200" rows="2"></textarea><button type="submit" class="icon-btn" aria-label="Envoyer le message">${icon("arrow-up")}</button></form><small>Simulation locale · pas d'IA connectée · aucune action implicite</small></div><div class="sr-only" id="paul-live" aria-live="polite"></div>`;
+  document.querySelector("#paul-body").innerHTML = `<div class="modal-head"><div class="inline"><span class="avatar paul">P</span><div><h2 id="paul-title">Avec Paul</h2><span class="muted small">Votre interlocuteur, du cap à l'action</span></div></div><button class="icon-btn" data-action="close-paul" aria-label="Fermer la conversation">${icon("x")}</button></div><div class="paul-context">${icon(symbol)} ${escapeHTML(contextLabel(key, state))} · ${escapeHTML(state.profile.name)}${others.length > 1 ? `<label class="thread-switch"><span class="sr-only">Changer de conversation</span><select id="thread-switch">${others.map((item) => `<option value="${escapeHTML(item)}" ${item === key ? "selected" : ""}>${escapeHTML(contextLabel(item))}</option>`).join("")}</select></label>` : ""}</div><div class="chat-thread">${thread.slice(-40).map((message) => `<div class="chat-message ${message.role === "user" ? "user" : ""}">${message.role === "paul" ? '<span class="name">Paul</span>' : ""}${escapeHTML(message.text)}${message.links?.length ? `<div class="chat-links">${message.links.map((item) => button("paul-link", escapeHTML(item.label), "small", "arrow-up-right", `data-route="${item.route}"`)).join("")}</div>` : ""}${message.role === "paul" ? '<span class="chat-meta">Échange de démonstration</span>' : ""}</div>`).join("")}${proposal ? `<div class="chat-message"><span class="name">Paul · proposition à confirmer</span><div class="chat-proposal"><strong>${escapeHTML(proposal.title)}</strong><p>${escapeHTML(proposal.description)}</p><div class="actions">${button("accept-proposal", proposal.accept || PROPOSAL_LABEL[proposal.event.type], "primary small", "check")}${button("dismiss-proposal", "Garder le cap actuel", "small")}</div></div></div>` : ""}</div><div class="chat-suggestions">${suggestionsFor(state, ctx).map((label) => `<button data-action="chat-suggestion">${escapeHTML(label)}</button>`).join("")}</div><div class="chat-compose"><form data-form="chat"><textarea id="paul-input" name="message" placeholder="Votre question, votre idée…" aria-label="Votre message à Paul" required maxlength="1200" rows="2"></textarea><button type="submit" class="icon-btn" aria-label="Envoyer le message">${icon("arrow-up")}</button></form><small>Simulation locale · pas d'IA connectée · aucune action implicite</small></div><div class="sr-only" id="paul-live" aria-live="polite"></div>`;
   hydrateIcons();
   const list = document.querySelector(".chat-thread");
   list.scrollTop = list.scrollHeight;
@@ -492,14 +495,26 @@ async function handleAction(element) {
       toggleMenu(false);
       break;
     case "begin":
-      navigate("bienvenue");
+      if (state.onboarded) {
+        openModal("Démarrer un nouveau parcours ?", "<p>Un compte existe déjà dans ce navigateur. Un nouveau parcours remplacera ses données locales. Vous pouvez d'abord exporter votre journal depuis Mon compte.</p>", `${button("login", "Retrouver mon compte")}${button("confirm-new-journey", "Remplacer et commencer", "danger", "arrow-right")}`);
+        break;
+      }
+      state = transition(state, { type: "begin" });
+      save();
+      navigate(onboardingRoute(state));
       break;
     case "step":
+      if (state.onboarded || Number(element.dataset.step) > state.step + 1) return;
       state.step = Number(element.dataset.step);
+      if (state.step < 4) state.diagnosticReady = false;
       track("step", String(state.step));
       save();
-      render({ animate: true });
-      window.scrollTo(0, 0);
+      navigate(onboardingRoute(state));
+      break;
+    case "interested":
+      state = transition(state, { type: "interest" });
+      save();
+      navigate("inscription");
       break;
     case "no-site":
       document.querySelector('input[name="url"]').value = "";
@@ -512,6 +527,9 @@ async function handleAction(element) {
       state.started = true;
       state.onboarded = true;
       state.profile.firstName = "Alex";
+      state.account.email = "alex@dupont-renovation.example";
+      state.signedIn = true;
+      state.goal = { statement: "Augmenter mon chiffre d'affaires de 20 % cette année, sans embaucher.", growth: 20, months: 12, budget: 0, hiring: false };
       state.documents = buildDocuments(state.profile, state.scope, state.brand);
       state.brand.confirmed = true;
       state.missions.agencies = "active";
@@ -526,6 +544,10 @@ async function handleAction(element) {
       break;
     case "paul-idea":
       openPaul("idea:new");
+      break;
+    case "new-mission":
+      ui.missionIdea = element.dataset.idea || null;
+      navigate("missions/nouvelle");
       break;
     case "paul-link":
       closeDialog("paul-dialog");
@@ -552,6 +574,7 @@ async function handleAction(element) {
       if (proposal.event.type === "revision" && ui.editorDrafts[proposal.event.document])
         throw new Error("Enregistrez d'abord vos retouches dans l'atelier, puis demandez une nouvelle proposition.");
       commit(proposal.event);
+      if (proposal.event.type === "idea") ui.missionIdea = state.ideas.at(-1)?.id;
       threadFor(ui.thread).push({ role: "paul", text: proposal.done });
       ui.proposals[ui.thread] = null;
       ui.selectedVersion = null;
@@ -622,7 +645,8 @@ async function handleAction(element) {
       openModal("Corriger mon entreprise", `<form data-form="profile" class="stack"><div class="stack">${profileFields("full")}</div><div class="notice">${icon("info")}<p>Changer le nom ou une information crée de nouvelles versions à valider et annule les programmations existantes.</p></div><div class="form-error" role="alert"></div><button class="btn primary" type="submit">${icon("save")}Enregistrer les corrections</button></form>`);
       break;
     case "goal":
-      openModal("Ajuster mon ambition", `<form data-form="goal" class="stack">${goalFields()}<p class="muted small">Les missions en cours ne changent pas automatiquement. Paul vous aide à réexaminer leur pertinence.</p><div class="form-error" role="alert"></div><button class="btn primary" type="submit">${icon("check")}Confirmer ce cap</button></form>`);
+      ui.ambition = null;
+      goalDialog();
       break;
     case "source":
       sourceDialog(element.dataset.source);
@@ -685,7 +709,61 @@ async function handleAction(element) {
       reportDialog(element.dataset.mission);
       break;
     case "settings":
-      settingsDialog();
+      navigate("compte");
+      break;
+    case "login":
+      loginDialog();
+      break;
+    case "signout":
+      state = transition(state, { type: "signout" });
+      ui.feedback = null;
+      save();
+      renderFeedback();
+      closeDialog("paul-dialog");
+      navigate("decouvrir");
+      toast("Vous êtes déconnecté. Votre espace reste enregistré dans ce navigateur.");
+      break;
+    case "recharge":
+      commit({ type: "recharge", amount: Number(element.dataset.amount) });
+      toast(`${element.dataset.amount} crédits ajoutés (simulation, aucun paiement).`);
+      break;
+    case "confirm-ambition": {
+      if (!ui.ambition) return;
+      const { result } = ui.ambition;
+      state = transition(state, { type: "goal", value: { statement: result.statement, growth: result.growth, months: result.months, budget: result.budget, hiring: result.hiring } });
+      ui.ambition = null;
+      const first = !state.onboarded;
+      if (first) state = transition(state, { type: "diagnose" });
+      save();
+      render({ animate: first });
+      finishDialog();
+      if (first) window.scrollTo(0, 0);
+      else toast("Cap mis à jour. Les missions en cours restent inchangées.");
+      break;
+    }
+    case "edit-mission":
+      editMissionDialog(element.dataset.mission);
+      break;
+    case "reset-target":
+      commit({ type: "mission-edit", mission: element.dataset.mission, target: definitionsFor(state)[element.dataset.mission].target });
+      closeDialog("modal");
+      toast("Objectif proposé à l'origine rétabli.");
+      break;
+    case "dismiss-mission":
+      dismissDialog(element.dataset.mission);
+      break;
+    case "confirm-dismiss":
+      commit({ type: "dismiss", mission: element.dataset.mission });
+      closeDialog("modal");
+      toast("Mission écartée du plan. Vous pouvez la remettre au plan à tout moment.");
+      break;
+    case "restore-mission":
+      commit({ type: "restore", mission: element.dataset.mission });
+      toast("Mission remise au plan.");
+      break;
+    case "remove-logo":
+      commit({ type: "logo", logo: null });
+      toast("Logo retiré. Le visuel doit être validé à nouveau.");
       break;
     case "export-session":
       exportSession();
@@ -694,14 +772,16 @@ async function handleAction(element) {
       openModal("Recommencer la démonstration ?", "<p>Le profil, les échanges, les versions et les décisions de cette maquette seront effacés de ce navigateur. Aucun compte réel n'est concerné.</p>", `${button("close-modal", "Conserver mes choix")}${button("confirm-reset", "Recommencer", "danger", "rotate-ccw")}`);
       break;
     case "confirm-reset":
+    case "confirm-new-journey":
       clearInterval(ui.scanTimer);
       state = initialState();
-      Object.assign(ui, { scan: "idle", scanStep: 0, proposals: {}, selectedVersion: null, editorDrafts: {}, feedback: null, lastView: null });
+      Object.assign(ui, { scan: "idle", scanStep: 0, proposals: {}, selectedVersion: null, editorDrafts: {}, feedback: null, lastView: null, ambition: null });
+      if (element.dataset.action === "confirm-new-journey") state = transition(state, { type: "begin" });
       save();
       renderFeedback();
       closeDialog("modal");
       closeDialog("paul-dialog");
-      navigate("decouvrir");
+      navigate(state.started ? "bienvenue" : "decouvrir");
       break;
     case "feedback": {
       const note = document.querySelector("#feedback-note")?.value.trim() || "";
@@ -720,18 +800,6 @@ async function handleAction(element) {
   }
 }
 
-function goalFromForm(data) {
-  return {
-    growth: Number(data.get("growth")),
-    months: Number(data.get("months")),
-    budget: Number(data.get("budget")),
-    time: Number(data.get("time")),
-    capacity: Number(data.get("capacity")),
-    hiring: !data.has("noHiring"),
-    ...(data.has("statement") ? { statement: data.get("statement").trim() } : {}),
-  };
-}
-
 const clean = (value) => String(value || "").replace(/\s+/g, " ").trim();
 
 function finishDialog() {
@@ -746,12 +814,13 @@ async function handleForm(form) {
     case "discover": {
       const firstName = clean(data.get("firstName"));
       const name = clean(data.get("name"));
+      const location = clean(data.get("location"));
       const url = clean(data.get("url"));
       if (!firstName) throw new Error("Indiquez votre prénom.");
       if (!name) throw new Error("Renseignez le nom de votre entreprise.");
+      if (!location) throw new Error("Indiquez la localisation de votre entreprise.");
       if (url && !/^https?:\/\//i.test(url)) throw new Error("Utilisez une adresse commençant par https:// ou http://.");
-      state = transition(state, { type: "profile", value: { firstName, name, url } });
-      state.session.id = clean(data.get("sessionId")).slice(0, 30);
+      state = transition(state, { type: "profile", value: { firstName, name, location, url } });
       ui.scan = "running";
       ui.scanStep = 0;
       clearInterval(ui.scanTimer);
@@ -769,7 +838,7 @@ async function handleForm(form) {
     }
     case "understand":
     case "profile": {
-      const keys = kind === "understand" ? ["activity", "area", "clients", "offers"] : ["firstName", "name", "activity", "area", "clients", "offers"];
+      const keys = kind === "understand" ? ["activity", "area", "clients", "offers"] : ["firstName", "name", "location", "activity", "area", "clients", "offers"];
       const profile = Object.fromEntries(keys.map((key) => [key, clean(data.get(key))]));
       if (Object.values(profile).some((value) => !value)) throw new Error("Complétez chaque information avant de confirmer.");
       state = transition(state, { type: "profile", value: profile });
@@ -785,22 +854,40 @@ async function handleForm(form) {
       break;
     }
     case "ambition":
-    case "goal":
-      state = transition(state, { type: "goal", value: goalFromForm(data) });
-      if (kind === "ambition") state.step = 4;
+    case "goal": {
+      const text = clean(data.get("statement"));
+      if (text.length < 10) throw new Error("Décrivez votre ambition en une ou deux phrases (10 caractères au moins).");
+      ui.ambition = { text, result: interpretAmbition(text) };
+      if (kind === "goal") goalDialog();
+      else render();
+      return;
+    }
+    case "login":
+      state = transition(state, { type: "signin", email: data.get("email") });
       save();
-      render({ animate: kind === "ambition" });
       finishDialog();
-      window.scrollTo(0, 0);
-      if (kind === "goal") toast("Cap mis à jour. Les missions en cours restent inchangées.");
+      navigate("paul");
       break;
-    case "finish":
-      state.delegation = data.get("delegation");
-      state = transition(state, { type: "onboard" });
+    case "mission-edit":
+      commit({ type: "mission-edit", mission: form.dataset.mission, target: clean(data.get("target")) });
+      finishDialog();
+      toast("Objectif modifié. Paul s'appuiera sur cette phrase pour juger votre bilan.");
+      break;
+    case "create-mission":
+      state = transition(state, { type: "create-mission", title: clean(data.get("title")), rationale: clean(data.get("rationale")), target: clean(data.get("target")), template: data.get("template"), ideaId: form.dataset.idea });
+      save();
+      ui.missionIdea = null;
+      navigate(`missions/${Object.keys(state.customMissions).at(-1)}`);
+      toast("Mission créée. Vérifiez le périmètre et le brouillon avant son lancement.");
+      break;
+    case "signup": {
+      const withAccount = transition(state, { type: "account", email: data.get("email") });
+      state = transition(withAccount, { type: "onboard" });
       save();
       navigate("paul");
       askFeedback("onboarding");
       break;
+    }
     case "brand":
       commit({ type: "brand", value: { color: data.get("color"), accent: data.get("accent"), tone: data.get("tone"), confirmed: data.has("confirmed") } });
       toast("Marque enregistrée. Nouvelle version du visuel à valider.");
@@ -825,12 +912,12 @@ async function handleForm(form) {
       break;
     case "scope": {
       const id = form.dataset.mission;
-      commit({ type: "scope", mission: id, value: id === "proof" ? { project: data.get("project") } : { ids: data.getAll(id === "agencies" ? "agency" : "contact") } });
+      commit({ type: "scope", mission: id, value: templateOf(state, id) === "proof" ? { project: data.get("project") } : { ids: data.getAll(templateOf(state, id) === "agencies" ? "agency" : "contact") } });
       toast(`Périmètre enregistré : ${scopeSummary(state, id)}.`);
       break;
     }
     case "start-mission":
-      commit({ type: "start", mission: form.dataset.mission, acceptCapacity: data.has("capacity"), confirmContacts: data.has("contacts") });
+      commit({ type: "start", mission: form.dataset.mission, confirmContacts: data.has("contacts") });
       finishDialog();
       toast("Mission lancée. La préparation est autorisée, pas la diffusion.");
       askFeedback("launch");
@@ -857,7 +944,7 @@ async function handleForm(form) {
         document: documentId,
         expectedVersion: Number(form.dataset.version),
         by: "vous",
-        value: { title, body, ...(documentId === "post" ? { headline: title, layout: data.get("layout"), color: state.brand.color } : {}) },
+        value: { title, body, ...(state.documents[documentId].channel === "facebook" ? { headline: title, layout: data.get("layout"), color: state.brand.color } : {}) },
       });
       delete ui.editorDrafts[documentId];
       save();
@@ -897,21 +984,21 @@ async function handleForm(form) {
 
 function updatePickCount(form) {
   const id = form.dataset.mission;
-  const max = id === "agencies" ? AGENCIES_MAX : LEADS_MAX;
+  const max = templateOf(state, id) === "agencies" ? AGENCIES_MAX : LEADS_MAX;
   const inputs = [...form.querySelectorAll('input[type="checkbox"]')];
   const checked = inputs.filter((input) => input.checked).length;
   inputs.forEach((input) => {
-    const eligible = id !== "leads" || contactStatus(state.contacts.find((contact) => contact.id === input.value) || {}).ok;
+    const eligible = templateOf(state, id) !== "leads" || contactStatus(state.contacts.find((contact) => contact.id === input.value) || {}).ok;
     input.disabled = !eligible || (!input.checked && checked >= max) || Boolean(scopeLock(state, id));
   });
   const counter = form.querySelector(".pick-count");
-  if (counter) counter.textContent = `${checked} sur ${max} ${id === "agencies" ? "choisies" : "choisis"}`;
+  if (counter) counter.textContent = `${checked} sur ${max} ${templateOf(state, id) === "agencies" ? "choisies" : "choisis"}`;
 }
 
 function initialize() {
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
-    state = saved?.schema === SEED_VERSION && saved.documents && saved.profile && saved.scope ? saved : initialState();
+    state = restoreState(saved);
   } catch {
     state = initialState();
   }
@@ -939,6 +1026,7 @@ function initialize() {
   });
   document.addEventListener("change", (event) => {
     const element = event.target;
+    if (element.name === "mission" && element.closest('form[data-form="report"]')) reportDialog(element.value);
     if (element.id === "document-select") navigate(`atelier/${element.value}`);
     if (element.id === "thread-switch") {
       ui.thread = element.value;
@@ -967,6 +1055,26 @@ function initialize() {
           element.value = "";
         }
       });
+      return;
+    }
+    if (element.id === "logo-file" && element.files[0]) {
+      const file = element.files[0];
+      if (file.size > 500 * 1024 || !["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+        toast("Choisissez un PNG, un JPG ou un WebP de moins de 500 Ko.");
+        element.value = "";
+        return;
+      }
+      const logoReader = new FileReader();
+      logoReader.onload = () => {
+        try {
+          commit({ type: "logo", logo: logoReader.result });
+          toast("Logo ajouté. Le visuel doit être validé à nouveau.");
+        } catch (error) {
+          toast(error.message);
+        }
+      };
+      logoReader.onerror = () => toast("Impossible de lire ce fichier.");
+      logoReader.readAsDataURL(file);
       return;
     }
     if (element.type === "file" && element.files[0] && element.accept?.includes("image")) {
@@ -1000,13 +1108,13 @@ function initialize() {
     }
   });
   document.addEventListener("input", (event) => {
+    if (event.target.name === "statement" && ui.ambition) {
+      ui.ambition = null;
+      event.target.closest("form").parentElement.querySelector(".understood")?.remove();
+    }
     if (event.target.closest('form[data-form="edit-document"]')) {
       captureEditorDraft();
       refreshDraftPreview();
-    }
-    if (event.target.closest('form[data-form="ambition"]')) {
-      const form = event.target.closest("form");
-      document.querySelector("#goal-live").textContent = `+${form.elements.growth.value || "—"} % de chiffre d'affaires en ${form.elements.months.value || "—"} mois`;
     }
     const report = event.target.closest('form[data-form="report"]');
     if (report && ["leads", "meetings"].includes(event.target.name)) {

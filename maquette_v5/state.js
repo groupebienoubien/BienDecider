@@ -3,11 +3,12 @@
 // Logique métier de la maquette V5 : aucune dépendance au DOM, testable seule (state.test.cjs).
 
 const STORAGE_KEY = "biendecider-maquette-v5";
-const SEED_VERSION = 1;
+const SEED_VERSION = 3;
 const CONTACT_MAX_AGE_MONTHS = 24;
 const LEADS_MAX = 8;
 const AGENCIES_MAX = 2;
-const EPS = 1e-6;
+const CREDIT_COST = { start: 3, paulRevision: 1 };
+const CREDIT_PACKS = [10, 25, 50];
 
 const JOURNEY = ["Cadrer", "Préparer", "Valider", "Diffuser", "Faire le bilan", "Décider"];
 
@@ -21,12 +22,8 @@ const missionDefinitions = {
     document: "email",
     evidence: "6 agences repérées dans votre zone",
     rationale:
-      "Deux créneaux disponibles, un réseau de prescripteurs à construire. Un test limité à 2 agences, sans budget média.",
+      "Un réseau de prescripteurs à construire. Un test limité à 2 agences, sans budget média.",
     risk: "Premier contact commercial : votre accord reste obligatoire.",
-    time: "1 h 30 sur 30 jours",
-    minutes: 90,
-    peakHours: 1.25,
-    demand: 1,
     delay: "30 jours",
     certainty: ["Piste à qualifier", "amber"],
     caveat: "Premier contact commercial",
@@ -44,10 +41,6 @@ const missionDefinitions = {
     rationale:
       "Votre savoir-faire est peu visible. Une réalisation documentée peut rassurer les prospects et soutenir les partenariats.",
     risk: "Photo et témoignage : droits à confirmer avant publication.",
-    time: "45 min sur 7 jours",
-    minutes: 45,
-    peakHours: 0.75,
-    demand: 1,
     delay: "7 jours",
     certainty: ["Observation", "green"],
     caveat: "Droits photo à confirmer",
@@ -65,10 +58,6 @@ const missionDefinitions = {
     rationale:
       "Repartir de relations existantes avant d'acheter du trafic. La pertinence et le droit de recontact sont à vérifier.",
     risk: "Aucun envoi avant vérification de la liste et du droit de recontact.",
-    time: "1 h sur 30 jours",
-    minutes: 60,
-    peakHours: 1,
-    demand: 2,
     delay: "30 jours",
     certainty: ["À vérifier", "amber"],
     caveat: "Droit de recontact à vérifier",
@@ -105,8 +94,6 @@ const GOAL_LIMITS = {
   growth: { min: 1, max: 50, label: "La croissance visée", unit: "%", usual: "5 à 20 %" },
   months: { min: 3, max: 36, label: "L'horizon", unit: "mois", usual: "6 à 12 mois" },
   budget: { min: 0, max: 2000, label: "Le budget média", unit: "€/mois", usual: "0 € pour un premier test" },
-  time: { min: 1, max: 10, label: "Votre temps disponible", unit: "h/semaine", usual: "1 à 3 h" },
-  capacity: { min: 1, max: 10, label: "Les projets clients possibles", unit: "projets", usual: "1 à 3 projets" },
 };
 
 const slug = (value) =>
@@ -199,16 +186,15 @@ function channelLabel(channel) {
   return { facebook: "Facebook", gmail: "Gmail", site: "Site web" }[channel] || channel;
 }
 
-function formatMinutes(minutes) {
-  const hours = Math.floor(minutes / 60);
-  const rest = Math.round(minutes % 60);
-  if (!hours) return `${rest} min`;
-  return rest ? `${hours} h ${String(rest).padStart(2, "0")}` : `${hours} h`;
+function goalLabel(goal) {
+  if (goal.statement) return goal.statement;
+  if (goal.growth) return `+${goal.growth} % de chiffre d'affaires${goal.months ? ` en ${goal.months} mois` : ""}`;
+  return "Cap à définir avec Paul";
 }
 
-function formatHours(hours) {
-  return `${String(Math.round(hours * 100) / 100).replace(".", ",")} h`;
-}
+const definitionsFor = (state) => ({ ...missionDefinitions, ...state.customMissions });
+const templateOf = (state, id) => state.customMissions?.[id]?.template || id;
+const missionTarget = (state, id) => state.missionEdits?.[id]?.target || definitionsFor(state)[id].target;
 
 const signature = (profile) => (profile.firstName ? `${profile.firstName} · ${profile.name}` : profile.name);
 
@@ -222,6 +208,7 @@ function buildDocuments(profile, scope, brand) {
     color: brand.color,
     accent: brand.accent,
     tone: brand.tone,
+    logo: brand.logo || null,
   });
   const document = (mission, channel, version) => ({
     mission,
@@ -262,10 +249,12 @@ function initialState() {
     schema: SEED_VERSION,
     started: false,
     onboarded: false,
+    diagnosticReady: false,
     step: 1,
     profile: {
       firstName: "",
       name: "Dupont Rénovation",
+      location: "Aix-en-Provence",
       url: "https://dupont-renovation.example",
       activity: "Rénovation énergétique",
       area: "Aix-en-Provence · 30 km",
@@ -273,8 +262,12 @@ function initialState() {
       offers: "Isolation et pompes à chaleur",
       offersRefined: false,
     },
-    goal: { growth: 20, months: 12, budget: 200, time: 2, capacity: 2, hiring: false },
-    brand: { color: "#24564b", accent: "#e4bc61", tone: "Clair, concret, rassurant", confirmed: false },
+    goal: { statement: "", growth: null, months: null, budget: 0, hiring: false },
+    brand: { color: "#24564b", accent: "#e4bc61", tone: "Clair, concret, rassurant", confirmed: false, logo: null },
+    account: { email: "", credits: 20, ledger: [] },
+    signedIn: false,
+    missionEdits: {},
+    customMissions: {},
     channels: { facebook: false, gmail: false, site: false },
     delegation: "review",
     priority: "agencies",
@@ -303,6 +296,42 @@ function initialState() {
   return seed;
 }
 
+function restoreState(saved) {
+  const seed = initialState();
+  if (![1, 2, SEED_VERSION].includes(saved?.schema) || !saved.documents || !saved.profile || !saved.scope) return seed;
+  const restored = { ...seed, ...saved, schema: SEED_VERSION };
+  for (const key of ["profile", "goal", "brand", "account", "session", "missionEdits"])
+    restored[key] = { ...seed[key], ...saved[key] };
+  if (saved.schema < SEED_VERSION) {
+    if (restored.step === 6) restored.step = 5;
+    else if (restored.step === 5) restored.step = 4;
+    else if (restored.step === 4 && !restored.diagnosticReady) restored.step = 3;
+  }
+  if (!restored.goal.statement && restored.goal.growth)
+    restored.goal.statement = goalLabel(restored.goal);
+  delete restored.goal.time;
+  delete restored.goal.capacity;
+  if (restored.onboarded && !restored.account.email) {
+    restored.onboarded = false;
+    restored.started = true;
+    restored.diagnosticReady = true;
+    restored.step = 4;
+  }
+  restored.signedIn = restored.onboarded && Boolean(saved.signedIn ?? true);
+  return restored;
+}
+
+function onboardingRoute(current) {
+  return current.step === 5 ? "inscription" : current.step === 4 ? "diagnostic" : "bienvenue";
+}
+
+function resolveView(current, requested) {
+  if (requested === "decouvrir") return requested;
+  if (!current.onboarded) return current.started ? onboardingRoute(current) : "decouvrir";
+  if (!current.signedIn) return "decouvrir";
+  return ["paul", "missions", "atelier", "entreprise", "resultats", "compte"].includes(requested) ? requested : "paul";
+}
+
 function currentVersion(documentState) {
   return documentState.versions[documentState.versions.length - 1];
 }
@@ -314,24 +343,26 @@ const missionOfDocument = (state, documentId) => state.documents[documentId].mis
 
 function recipientsOf(state, documentId) {
   const mission = missionOfDocument(state, documentId);
-  if (mission === "agencies") return AGENCIES.filter((agency) => state.scope.agencies.ids.includes(agency.id));
-  if (mission === "leads") return state.contacts.filter((contact) => state.scope.leads.ids.includes(contact.id));
+  if (templateOf(state, mission) === "agencies") return AGENCIES.filter((agency) => state.scope[mission].ids.includes(agency.id));
+  if (templateOf(state, mission) === "leads") return state.contacts.filter((contact) => state.scope[mission].ids.includes(contact.id));
   return [];
 }
 
 function scopeSummary(state, id) {
-  if (id === "agencies") {
-    const names = recipientsOf(state, "email").map((agency) => agency.name);
+  if (templateOf(state, id) === "agencies") {
+    const names = recipientsOf(state, definitionsFor(state)[id].document).map((agency) => agency.name);
     return names.length ? names.join(" et ") : "Aucune agence choisie";
   }
-  if (id === "leads") {
+  if (templateOf(state, id) === "leads") {
     const total = state.contacts.length;
-    return `${state.scope.leads.ids.length} contact${state.scope.leads.ids.length > 1 ? "s" : ""} sur ${total} ${state.contactsSource === "import" ? "importés" : "déclarés"} (${eligibleContacts(state).length} recontactables)`;
+    return `${state.scope[id].ids.length} contact${state.scope[id].ids.length > 1 ? "s" : ""} sur ${total} ${state.contactsSource === "import" ? "importés" : "déclarés"} (${eligibleContacts(state).length} recontactables)`;
   }
-  return (PROJECTS.find((item) => item.id === state.scope.proof.project) || PROJECTS[0]).title;
+  return (PROJECTS.find((item) => item.id === state.scope[id].project) || PROJECTS[0]).title;
 }
 
 function scopeLock(state, id) {
+  const missionDefinitions = definitionsFor(state);
+  if (state.missions[id] === "dismissed") return "Mission écartée du plan : remettez-la d'abord au plan.";
   if (state.missions[id] === "stopped") return "Mission arrêtée : le périmètre est figé.";
   const documentId = missionDefinitions[id].document;
   const doc = state.documents[documentId];
@@ -341,36 +372,17 @@ function scopeLock(state, id) {
   return "";
 }
 
-function timeUsed(state, id) {
-  const doc = state.documents[missionDefinitions[id].document];
-  let minutes = ["active", "paused", "stopped"].includes(state.missions[id]) ? 10 : 0;
-  minutes += doc.counters.approvals * 15 + doc.counters.userEdits * 10;
-  minutes += state.publications.filter((item) => missionOfDocument(state, item.document) === id).length * 10;
-  if (state.reports[id]) minutes += 15;
-  return Math.min(minutes, missionDefinitions[id].minutes);
-}
-
-function capacityLoad(state, extraMission) {
-  const ids = new Set(Object.keys(state.missions).filter((id) => state.missions[id] === "active"));
-  if (extraMission) ids.add(extraMission);
-  const load = { hours: 0, projects: 0, plannedMinutes: 0, usedMinutes: 0 };
-  ids.forEach((id) => {
-    load.hours += missionDefinitions[id].peakHours;
-    load.projects += missionDefinitions[id].demand;
-    load.plannedMinutes += missionDefinitions[id].minutes;
-    load.usedMinutes += timeUsed(state, id);
-  });
-  return {
-    ...load,
-    hoursMax: state.goal.time,
-    projectsMax: state.goal.capacity,
-    overTime: load.hours > state.goal.time + EPS,
-    overProjects: load.projects > state.goal.capacity,
-  };
+function spendCredits(next, amount, label) {
+  if (next.account.credits < amount)
+    throw new Error(`Crédits insuffisants : il en faut ${amount}, il vous en reste ${next.account.credits}. Rechargez dans Mon compte.`);
+  next.account.credits -= amount;
+  next.account.ledger.unshift({ date: new Date().toISOString(), label, delta: -amount });
 }
 
 function journeyStage(state, id) {
+  const missionDefinitions = definitionsFor(state);
   const status = state.missions[id];
+  if (status === "dismissed") return "dismissed";
   if (status === "stopped") return "closed";
   if (status !== "active") return "launch";
   const documentId = missionDefinitions[id].document;
@@ -397,12 +409,13 @@ function journeyProgress(state, id) {
 }
 
 function nextStep(state) {
+  const missionDefinitions = definitionsFor(state);
   const order = [state.priority, ...Object.keys(missionDefinitions).filter((id) => id !== state.priority)];
   const actionable = ["approve", "connect", "publish", "report", "decide"];
   const found = order.find((id) => actionable.includes(journeyStage(state, id)));
-  const id = found || order.find((candidate) => journeyStage(state, candidate) === "launch") || order.find((candidate) => journeyStage(state, candidate) !== "closed");
+  const id = found || order.find((candidate) => journeyStage(state, candidate) === "launch") || order.find((candidate) => !["closed", "dismissed"].includes(journeyStage(state, candidate)));
   if (!id) {
-    return { stage: "idle", title: "Toutes vos missions sont closes", detail: "Explorez une nouvelle idée avec Paul pour lancer un prochain test.", label: "Explorer une idée", action: "paul-idea" };
+    return { stage: "idle", title: "Aucune mission en cours", detail: "Toutes vos missions sont closes ou écartées. Explorez une nouvelle idée avec Paul pour lancer un prochain test.", label: "Explorer une idée", action: "paul-idea" };
   }
   const stage = journeyStage(state, id);
   const def = missionDefinitions[id];
@@ -410,10 +423,8 @@ function nextStep(state) {
   const doc = state.documents[documentId];
   const common = { stage, mission: id, document: documentId };
   switch (stage) {
-    case "launch": {
-      const load = capacityLoad(state, id);
-      return { ...common, title: `Examiner « ${def.short} »`, detail: load.overTime ? "Votre temps disponible ne permet pas de la lancer en plus des missions en cours." : `${def.target}. ${def.time}.`, label: "Examiner cette mission", route: `missions/${id}` };
-    }
+    case "launch":
+      return { ...common, title: `Examiner « ${def.short} »`, detail: `${missionTarget(state, id)}.`, label: "Examiner cette mission", route: `missions/${id}` };
     case "approve":
       return { ...common, title: "Relire et valider le contenu", detail: `${def.short} · V${currentVersion(doc).number} attend votre accord. Valider n'envoie rien.`, label: "Ouvrir l'atelier", route: `atelier/${documentId}` };
     case "connect":
@@ -434,7 +445,7 @@ function nextStep(state) {
 function validateGoal(value) {
   Object.entries(value).forEach(([key, number]) => {
     const limit = GOAL_LIMITS[key];
-    if (!limit) return;
+    if (!limit || number === null) return;
     if (!Number.isFinite(number) || number < limit.min || number > limit.max)
       throw new Error(`${limit.label} doit être compris entre ${limit.min} et ${limit.max} ${limit.unit}.`);
   });
@@ -455,9 +466,10 @@ function proposedRevision(state, documentId, variant) {
   const name = state.profile.name;
   const sign = signature(state.profile);
   const place = state.profile.area.split(" · ")[0];
-  const visual = documentId === "post";
-  const lead = documentId === "followup";
-  const project = PROJECTS.find((item) => item.id === state.scope.proof.project) || PROJECTS[0];
+  const mission = state.documents[documentId].mission;
+  const visual = templateOf(state, mission) === "proof";
+  const lead = templateOf(state, mission) === "leads";
+  const project = PROJECTS.find((item) => item.id === state.scope[mission].project) || PROJECTS[0];
   const bodies = visual
     ? {
         shorter: `Votre projet de rénovation à ${place}. Des choix clairs, un accompagnement de proximité.\n\nChantier à l'honneur : ${project.title}\n\n${name}`,
@@ -492,6 +504,7 @@ function proposedRevision(state, documentId, variant) {
 
 function transition(current, event) {
   const next = structuredClone(current);
+  const missionDefinitions = definitionsFor(current);
   const documentState = event.document ? next.documents[event.document] : null;
   if (event.document && !documentState) throw new Error("Contenu inconnu.");
   if (
@@ -507,9 +520,30 @@ function transition(current, event) {
     next.publications.filter((item) => missionOfDocument(next, item.document) === mission).length;
 
   switch (event.type) {
+    case "create-mission": {
+      const base = missionDefinitions[event.template];
+      if (!["agencies", "proof", "leads"].includes(event.template)) throw new Error("Choisissez un type de mission proposé.");
+      const title = String(event.title || "").replace(/\s+/g, " ").trim();
+      const target = String(event.target || "").replace(/\s+/g, " ").trim();
+      const rationale = String(event.rationale || "").replace(/\s+/g, " ").trim();
+      if (title.length < 5 || title.length > 80 || target.length < 5 || target.length > 120 || rationale.length < 10 || rationale.length > 300 || /[<>]/.test(title + target + rationale))
+        throw new Error("Précisez le titre (5 à 80 caractères), le résultat (5 à 120) et le constat (10 à 300), sans balise HTML.");
+      if (Object.keys(next.customMissions).length >= 10) throw new Error("La maquette accepte jusqu'à 10 missions personnalisées.");
+      const id = `custom-${Object.keys(next.customMissions).length + 1}`;
+      const documentId = `document-${id}`;
+      next.customMissions[id] = { ...base, title, short: title, target, rationale, evidence: rationale, template: event.template, document: documentId, certainty: ["Proposée par vous", "amber"] };
+      next.missions[id] = "proposed";
+      next.scope[id] = structuredClone(next.scope[event.template]);
+      const document = buildDocuments(next.profile, next.scope, next.brand)[base.document];
+      document.mission = id;
+      document.versions[0].note = "Premier brouillon à adapter à votre mission";
+      next.documents[documentId] = document;
+      if (event.ideaId) next.ideas = next.ideas.filter((idea) => idea.id !== event.ideaId);
+      log(`Mission créée avec Paul : ${title}. Périmètre et brouillon à vérifier avant lancement.`);
+      break;
+    }
     case "begin":
       next.started = true;
-      next.step = 1;
       break;
     case "profile": {
       const before = current.profile;
@@ -544,35 +578,96 @@ function transition(current, event) {
     case "goal": {
       validateGoal(event.value);
       next.goal = { ...next.goal, ...event.value };
-      if (current.onboarded) {
-        const load = capacityLoad(next);
-        if (load.overTime)
-          log(`Temps disponible : ${formatHours(next.goal.time)} par semaine. Vos missions en cours en demandent ${formatHours(load.hours)} : mettez-en une en pause ou ajustez ce temps.`);
-      }
+      if (current.onboarded) log(`Cap mis à jour avec Paul : ${goalLabel(next.goal)}.`);
       break;
     }
+    case "account": {
+      const email = String(event.email || "").trim().toLowerCase();
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new Error("Indiquez une adresse e-mail valide.");
+      next.account.email = email;
+      break;
+    }
+    case "signin": {
+      const email = String(event.email || "").trim().toLowerCase();
+      if (!current.onboarded || current.account.email !== email)
+        throw new Error("Aucun compte avec cet e-mail dans ce navigateur. Créez-le avec « C'est parti ».");
+      next.signedIn = true;
+      break;
+    }
+    case "signout":
+      next.signedIn = false;
+      break;
+    case "recharge": {
+      if (!CREDIT_PACKS.includes(event.amount)) throw new Error("Pack de crédits inconnu.");
+      next.account.credits += event.amount;
+      next.account.ledger.unshift({ date: new Date().toISOString(), label: `Recharge de ${event.amount} crédits (simulation, aucun paiement)`, delta: event.amount });
+      break;
+    }
+    case "diagnose":
+      if (!next.started || next.step < 3 || !next.goal.statement.trim())
+        throw new Error("Confirmez votre profil et votre ambition avant le diagnostic.");
+      if (event.delegation !== undefined) {
+        if (!["prepare", "review", "bounded"].includes(event.delegation))
+          throw new Error("Choisissez un cadre de collaboration.");
+        next.delegation = event.delegation;
+      }
+      next.diagnosticReady = true;
+      next.step = 4;
+      break;
+    case "interest":
+      if (!next.diagnosticReady || next.step !== 4)
+        throw new Error("Consultez d'abord le résumé du diagnostic.");
+      next.step = 5;
+      break;
     case "onboard":
       if (!next.profile.firstName.trim()) throw new Error("Indiquez votre prénom pour que Paul puisse vous parler.");
       if (!next.profile.name.trim()) throw new Error("Indiquez le nom de votre entreprise.");
+      if (!next.diagnosticReady || next.step !== 5)
+        throw new Error("Consultez le diagnostic, puis confirmez « Ça m'intéresse » avant de créer votre compte.");
+      if (!next.account.email) throw new Error("Indiquez votre e-mail : c'est votre identifiant de connexion.");
+      if (next.onboarded) throw new Error("Votre compte existe déjà. Retrouvez-le avec la connexion.");
       next.onboarded = true;
-      log("Profil, ambition et règles de collaboration confirmés. Aucune mission lancée.");
+      next.signedIn = true;
+      log("Profil et ambition confirmés. Aucune mission lancée.");
       break;
-    case "brand":
-      if (next.documents.post.scheduled)
+    case "brand": {
+      const visuals = Object.values(next.documents).filter((doc) => doc.channel === "facebook");
+      if (visuals.some((doc) => doc.scheduled))
         throw new Error("Annulez la programmation avant de modifier la marque.");
       next.brand = { ...next.brand, ...event.value };
-      next.documents.post.versions.push({
-        ...currentVersion(next.documents.post),
-        number: currentVersion(next.documents.post).number + 1,
-        color: next.brand.color,
-        accent: next.brand.accent,
-        tone: next.brand.tone,
-        by: "système",
-        note: "Kit de marque actualisé",
+      visuals.forEach((doc) => {
+        doc.versions.push({
+          ...currentVersion(doc),
+          number: currentVersion(doc).number + 1,
+          color: next.brand.color,
+          accent: next.brand.accent,
+          tone: next.brand.tone,
+          by: "système",
+          note: "Kit de marque actualisé",
+        });
+        doc.approved = null;
       });
-      next.documents.post.approved = null;
       log("Identité de marque confirmée. Le visuel doit être validé à nouveau.");
       break;
+    }
+    case "logo": {
+      const visuals = Object.values(next.documents).filter((doc) => doc.channel === "facebook");
+      if (visuals.some((doc) => doc.scheduled)) throw new Error("Annulez la programmation avant de modifier le logo.");
+      if (event.logo && !/^data:image\/(png|jpeg|webp);base64,/.test(event.logo)) throw new Error("Le logo doit être un PNG, un JPG ou un WebP.");
+      next.brand.logo = event.logo || null;
+      visuals.forEach((doc) => {
+        doc.versions.push({
+          ...currentVersion(doc),
+          number: currentVersion(doc).number + 1,
+          logo: next.brand.logo,
+          by: "vous",
+          note: event.logo ? "Logo ajouté par vous" : "Logo retiré par vous",
+        });
+        doc.approved = null;
+      });
+      log(event.logo ? "Logo ajouté à votre marque. Le visuel doit être validé à nouveau." : "Logo retiré de votre marque. Le visuel doit être validé à nouveau.");
+      break;
+    }
     case "channel": {
       next.channels[event.channel] = event.connected;
       let cancelled = 0;
@@ -589,42 +684,69 @@ function transition(current, event) {
       break;
     }
     case "strategy":
+      if (next.missions[event.priority] === "dismissed") throw new Error("Cette mission est écartée : remettez-la d'abord au plan.");
       next.priority = event.priority;
       next.preference = event.preference || next.preference;
       log(`Priorité confirmée avec Paul : ${missionDefinitions[event.priority].short}. Aucune mission lancée automatiquement.`);
       break;
+    case "dismiss": {
+      const id = event.mission;
+      if (next.missions[id] === "active") throw new Error("Cette mission est en cours : mettez-la en pause ou arrêtez-la avant de l'écarter.");
+      if (next.missions[id] === "stopped") throw new Error("Cette mission est arrêtée : elle reste dans l'historique.");
+      if (next.missions[id] === "dismissed") break;
+      next.missionEdits[id] = { ...next.missionEdits[id], previousStatus: next.missions[id] };
+      next.missions[id] = "dismissed";
+      next.documents[missionDefinitions[id].document].scheduled = null;
+      if (next.priority === id) next.priority = Object.keys(next.missions).find((other) => next.missions[other] !== "dismissed") || id;
+      log(`Mission écartée du plan : ${missionDefinitions[id].short}.`);
+      break;
+    }
+    case "restore":
+      if (next.missions[event.mission] !== "dismissed") throw new Error("Cette mission n'est pas écartée.");
+      next.missions[event.mission] = next.missionEdits[event.mission]?.previousStatus === "paused" ? "paused" : "proposed";
+      log(`Mission remise au plan : ${missionDefinitions[event.mission].short}.`);
+      break;
+    case "mission-edit": {
+      const target = String(event.target || "").replace(/\s+/g, " ").trim();
+      if (target.length < 5 || target.length > 120) throw new Error("Décrivez le résultat recherché en 5 à 120 caractères.");
+      if (next.missions[event.mission] === "stopped") throw new Error("Cette mission est arrêtée : son objectif est figé.");
+      next.missionEdits[event.mission] = { ...next.missionEdits[event.mission], target };
+      log(`Objectif modifié · ${missionDefinitions[event.mission].short} : « ${target} ».`);
+      break;
+    }
     case "scope": {
       const id = event.mission;
+      const template = templateOf(next, id);
       const lock = scopeLock(current, id);
       if (lock) throw new Error(lock);
       const unique = (list) => [...new Set(list)];
-      if (id === "agencies") {
+      if (template === "agencies") {
         const ids = unique(event.value.ids).filter((value) => AGENCIES.some((agency) => agency.id === value));
         if (ids.length < 1 || ids.length > AGENCIES_MAX) throw new Error(`Choisissez 1 ou ${AGENCIES_MAX} agences.`);
-        next.scope.agencies.ids = ids;
-      } else if (id === "leads") {
+        next.scope[id].ids = ids;
+      } else if (template === "leads") {
         const ids = unique(event.value.ids);
         const allowed = eligibleContacts(next).map((contact) => contact.id);
         if (ids.length < 1 || ids.length > LEADS_MAX || ids.some((value) => !allowed.includes(value)))
           throw new Error(`Choisissez de 1 à ${LEADS_MAX} contacts recontactables.`);
-        next.scope.leads.ids = ids;
+        next.scope[id].ids = ids;
         next.contactsConfirmed = false;
       } else {
         const project = PROJECTS.find((item) => item.id === event.value.project);
         if (!project) throw new Error("Réalisation inconnue.");
-        const previous = PROJECTS.find((item) => item.id === current.scope.proof.project);
-        next.scope.proof.project = project.id;
-        const post = next.documents.post;
+        const previous = PROJECTS.find((item) => item.id === current.scope[id].project);
+        next.scope[id].project = project.id;
+        const post = next.documents[missionDefinitions[id].document];
         const latest = currentVersion(post);
         const body = latest.body.replaceAll(previous.title, project.title);
-        if (post.approved !== null || next.missions.proof === "active") {
+        if (post.approved !== null || next.missions[id] === "active") {
           post.versions.push({ ...latest, body, number: latest.number + 1, by: "vous", note: `Réalisation changée : ${project.title}` });
           post.approved = null;
           post.rights = false;
         } else latest.body = body;
       }
       const documentState = next.documents[missionDefinitions[id].document];
-      if (id !== "proof" && (next.missions[id] === "active" || documentState.approved !== null)) {
+      if (template !== "proof" && (next.missions[id] === "active" || documentState.approved !== null)) {
         const latest = currentVersion(documentState);
         documentState.versions.push({ ...latest, number: latest.number + 1, by: "vous", note: "Destinataires modifiés" });
         documentState.approved = null;
@@ -634,13 +756,17 @@ function transition(current, event) {
       break;
     }
     case "contacts": {
-      const lock = scopeLock(current, "leads");
+      const leadMissions = Object.keys(next.missions).filter((id) => templateOf(next, id) === "leads");
+      const lock = leadMissions.map((id) => scopeLock(current, id)).find(Boolean);
       if (lock) throw new Error(lock);
       if (!Array.isArray(event.contacts) || !event.contacts.length) throw new Error("Aucun contact à importer.");
       next.contacts = event.contacts;
       next.contactsSource = "import";
       next.contactsConfirmed = false;
-      next.scope.leads.ids = eligibleContacts(next).slice(0, LEADS_MAX).map((contact) => contact.id);
+      leadMissions.forEach((id) => {
+        next.scope[id].ids = eligibleContacts(next).slice(0, LEADS_MAX).map((contact) => contact.id);
+        next.documents[missionDefinitions[id].document].approved = null;
+      });
       log(`Fichier prospects importé (simulation) : ${next.contacts.length} contacts, ${eligibleContacts(next).length} recontactables après contrôle de l'ancienneté et du droit de recontact.`);
       break;
     }
@@ -696,27 +822,21 @@ function transition(current, event) {
     case "start": {
       const id = event.mission;
       if (next.missions[id] === "stopped") throw new Error("Cette mission est arrêtée. Proposez un nouveau test à Paul.");
+      if (next.missions[id] === "dismissed") throw new Error("Cette mission est écartée du plan : remettez-la d'abord au plan.");
       if (next.missions[id] === "active") return next;
-      if (id === "leads") {
+      if (templateOf(next, id) === "leads") {
         if (event.confirmContacts) next.contactsConfirmed = true;
-        if (!next.scope.leads.ids.length) throw new Error("Choisissez d'abord au moins un contact recontactable.");
+        if (!next.scope[id].ids.length) throw new Error("Choisissez d'abord au moins un contact recontactable.");
         if (!next.contactsConfirmed)
           throw new Error("Confirmez la pertinence et le droit de recontact des destinataires.");
       }
-      const load = capacityLoad(next, id);
-      if (load.overTime)
-        throw new Error(
-          `Cette mission porterait votre temps à ${formatHours(load.hours)} par semaine, pour ${formatHours(load.hoursMax)} disponibles. Mettez une mission en pause ou ajustez votre temps disponible.`,
-        );
-      if (load.overProjects && !event.acceptCapacity)
-        throw new Error(
-          `Si tout se passe bien, ces missions peuvent vous amener jusqu'à ${load.projects} projets pour ${load.projectsMax} que vous pouvez prendre. Confirmez que vous l'acceptez, ou ajustez vos limites.`,
-        );
+      if (next.missions[id] === "proposed") spendCredits(next, CREDIT_COST.start, `Lancement de la mission « ${missionDefinitions[id].short} »`);
       next.missions[id] = "active";
       log(`Mission lancée : ${missionDefinitions[id].short}. Paul confie la préparation à ${missionDefinitions[id].owner}.`);
       break;
     }
     case "pause":
+      if (next.missions[event.mission] !== "active") throw new Error("Seule une mission en cours peut être mise en pause.");
       next.missions[event.mission] = "paused";
       Object.values(next.documents)
         .filter((item) => item.mission === event.mission)
@@ -726,12 +846,14 @@ function transition(current, event) {
       log(`Mission suspendue : ${missionDefinitions[event.mission].short}. Programmations annulées.`);
       break;
     case "revision": {
+      if (["stopped", "dismissed"].includes(next.missions[documentState.mission])) throw new Error("La mission est arrêtée ou écartée. Son contenu reste en lecture seule.");
       if (documentState.scheduled)
         throw new Error("Annulez la programmation avant de retravailler cette version.");
       const latest = currentVersion(documentState);
       if (isDiffused(next, event.document, latest.number) && !event.reopen)
         throw new Error(`V${latest.number} a été diffusée : elle est en lecture seule. Créez une nouvelle version pour la modifier.`);
       const by = event.by === "paul" ? "paul" : "vous";
+      if (by === "paul") spendCredits(next, CREDIT_COST.paulRevision, `Version préparée par ${missionDefinitions[documentState.mission].owner} avec Paul`);
       const number = latest.number + 1;
       const defaultNote = event.reopen
         ? `Nouvelle version créée à partir de V${latest.number}, déjà diffusée`
@@ -759,11 +881,11 @@ function transition(current, event) {
         throw new Error("Lancez ou reprenez la mission avant de valider son contenu.");
       if (documentState.profileNeedsReview)
         throw new Error("Le profil a changé. Relisez le texte et enregistrez une nouvelle version avant validation.");
-      if (documentState.mission !== "proof" && !recipientsOf(next, event.document).length)
+      if (documentState.channel !== "facebook" && !recipientsOf(next, event.document).length)
         throw new Error("Aucun destinataire dans le périmètre de cette mission.");
-      if (documentState.mission === "leads" && !next.contactsConfirmed)
+      if (templateOf(next, documentState.mission) === "leads" && !next.contactsConfirmed)
         throw new Error("Confirmez d'abord la pertinence et le droit de recontact des contacts.");
-      if (event.document === "post" && (!next.brand.confirmed || !event.rights))
+      if (documentState.channel === "facebook" && (!next.brand.confirmed || !event.rights))
         throw new Error("Confirmez la marque et les droits du visuel avant validation.");
       if (documentState.scheduled) throw new Error("Cette version est déjà programmée.");
       if (isDiffused(next, event.document, latest.number)) throw new Error("Cette version est déjà diffusée.");
@@ -784,7 +906,7 @@ function transition(current, event) {
       if (isDiffused(next, event.document, documentState.approved))
         throw new Error("Cette version a déjà été diffusée dans la simulation.");
       const recipients = recipientsOf(next, event.document);
-      if (documentState.mission !== "proof" && !recipients.length) throw new Error("Aucun destinataire dans le périmètre.");
+      if (documentState.channel !== "facebook" && !recipients.length) throw new Error("Aucun destinataire dans le périmètre.");
       if (event.date) {
         if (!Number.isFinite(Date.parse(event.date)) || Date.parse(event.date) <= Date.now())
           throw new Error("Choisissez une date et une heure futures.");
