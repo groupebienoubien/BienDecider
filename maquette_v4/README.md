@@ -14,6 +14,8 @@ Données et exécutions simulées, aucun envoi réel. L'état est enregistré da
 | Coût d'une mission | « Crédits de préparation » | Le temps du dirigeant (« 45 min sur 7 jours ») | Le dirigeant compte ses heures, pas des crédits |
 | Fin de mission | Étape 5 sans action | « Décider la suite » après une première diffusion : poursuivre, adapter avec Paul ou arrêter ; une mission arrêtée est close | La règle d'arrêt du contrat de mission devient une décision |
 | Programmation | Conservée | Conservée, et visible dans « À valider par vous » | Arbitrage de Samir |
+| Charte graphique | Bleu, gris froid, Manrope | Charte de la prod (`docs/charte.md`) : fond crème, vert de marque, corail pour ce qui attend le dirigeant, couleur propre à chaque agent, Sora pour les titres et DM Sans pour le texte, logo « b. » | Même rendu que l'application |
+| Première connexion | Accessible seulement depuis « Mon espace » | Lien « Revoir la première connexion » dans le menu, et adresse directe `#/bienvenue` | Un navigateur qui a déjà un espace ne revoyait plus l'onboarding |
 
 Tout le reste de la v3 est conservé : premier contact en quatre étapes, contrat de mission, garde-fous de diffusion, diagnostic sourcé, kit de marque, canaux et délégation, bilan déclaratif, journal des décisions, Paul contextuel.
 

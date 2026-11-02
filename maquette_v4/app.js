@@ -428,7 +428,7 @@ const paulButton = (context, text = "En discuter avec Paul", tone = "") =>
 const brandLogo = () =>
   `<div class="company-logo">${icon("house")}<span>${escapeHTML(state.profile.name)}</span></div>`;
 const wordmark = () =>
-  `<a href="#/paul" class="wordmark" aria-label="BienDecider, accueil"><span class="mark">${icon("compass")}</span><span>Bien<em>Decider</em></span></a>`;
+  `<a href="#/paul" class="wordmark" aria-label="BienDecider, accueil"><span class="mark" aria-hidden="true">b.</span><span>Bien<em>Decider</em></span></a>`;
 const formatDate = (date) =>
   new Date(date).toLocaleString("fr-FR", {
     day: "numeric",
@@ -575,7 +575,7 @@ function shell(content) {
     ["resultats", "Résultats", "chart-no-axes-combined"],
   ];
   const active = pages.find(([key]) => key === ui.view) || pages[0];
-  return `<div class="mobile-nav-overlay" data-action="menu-close"></div><aside class="sidebar" aria-label="Navigation principale">${wordmark()}<div class="workspace-switch"><span class="avatar company">DR</span><div><strong>${escapeHTML(state.profile.name)}</strong><small>Espace dirigeant</small></div></div><nav>${pages.map(([key, title, symbol]) => `<button class="nav-item ${key === ui.view ? "active" : ""}" data-action="navigate" data-route="${key}" ${key === ui.view ? 'aria-current="page"' : ""}>${icon(symbol)}${title}${key === "missions" ? `<span class="count">${Object.values(state.missions).filter((value) => value === "active").length}</span>` : ""}</button>`).join("")}</nav><div class="sidebar-bottom"><div class="goal-mini"><span class="eyebrow">VOTRE CAP</span><strong>+${state.goal.growth} % de CA</strong><small class="muted">${state.goal.months} mois · ${state.goal.hiring ? "Recrutement possible" : "Sans recruter"}</small><div class="goal-line"><span></span></div><small class="muted">Mesure à établir avec vous</small></div><button class="nav-item" data-action="settings">${icon("settings-2")}Mon espace</button><div class="inline" style="margin-top:15px"><span class="avatar">R</span><div><strong class="small">Rémi</strong><div class="muted small">Dirigeant</div></div></div><p class="demo-label">Maquette V4 · Données d'exemple</p></div></aside><div class="app-main"><header class="topbar"><button class="icon-btn mobile-menu" data-action="menu" aria-label="Ouvrir le menu">${icon("menu")}</button><div class="breadcrumb"><span>Votre espace</span>${icon("chevron-right")}<strong>${active[1]}</strong></div><div class="actions"><span class="small muted date">Lundi 2 novembre 2026</span><span class="badge demo-top">Démonstration</span>${paulButton(pageContext(), "Parler à Paul", "primary")}</div></header><main id="main" class="page" tabindex="-1">${content}<footer class="page-footer"><span>Maquette interactive · Données et exécutions simulées · Aucun envoi réel</span><span>Vos choix sont enregistrés sur cet appareil.</span></footer></main></div>`;
+  return `<div class="mobile-nav-overlay" data-action="menu-close"></div><aside class="sidebar" aria-label="Navigation principale">${wordmark()}<div class="workspace-switch"><span class="avatar company">DR</span><div><strong>${escapeHTML(state.profile.name)}</strong><small>Espace dirigeant</small></div></div><nav>${pages.map(([key, title, symbol]) => `<button class="nav-item ${key === ui.view ? "active" : ""}" data-action="navigate" data-route="${key}" ${key === ui.view ? 'aria-current="page"' : ""}>${icon(symbol)}${title}${key === "missions" ? `<span class="count">${Object.values(state.missions).filter((value) => value === "active").length}</span>` : ""}</button>`).join("")}</nav><div class="sidebar-bottom"><div class="goal-mini"><span class="eyebrow">VOTRE CAP</span><strong>+${state.goal.growth} % de CA</strong><small class="muted">${state.goal.months} mois · ${state.goal.hiring ? "Recrutement possible" : "Sans recruter"}</small><div class="goal-line"><span></span></div><small class="muted">Mesure à établir avec vous</small></div><button class="nav-item" data-action="settings">${icon("settings-2")}Mon espace</button><button class="nav-item" data-action="reset">${icon("rotate-ccw")}Revoir la première connexion</button><div class="inline" style="margin-top:15px"><span class="avatar">R</span><div><strong class="small">Rémi</strong><div class="muted small">Dirigeant</div></div></div><p class="demo-label">Maquette V4 · Données d'exemple</p></div></aside><div class="app-main"><header class="topbar"><button class="icon-btn mobile-menu" data-action="menu" aria-label="Ouvrir le menu">${icon("menu")}</button><div class="breadcrumb"><span>Votre espace</span>${icon("chevron-right")}<strong>${active[1]}</strong></div><div class="actions"><span class="small muted date">Lundi 2 novembre 2026</span><span class="badge demo-top">Démonstration</span>${paulButton(pageContext(), "Parler à Paul", "primary")}</div></header><main id="main" class="page" tabindex="-1">${content}<footer class="page-footer"><span>Maquette interactive · Données et exécutions simulées · Aucun envoi réel</span><span>Vos choix sont enregistrés sur cet appareil.</span></footer></main></div>`;
 }
 
 function pageHead(title, description, eyebrow = "", action = "") {
@@ -962,6 +962,15 @@ function readRoute() {
   closeDialog("modal");
   closeDialog("paul-dialog");
   const [, view, detail] = location.hash.split("/");
+  if (view === "bienvenue") {
+    if (!state.onboarded) {
+      history.replaceState(null, "", "#/paul");
+    } else {
+      render();
+      handleAction({ dataset: { action: "reset" } });
+      return;
+    }
+  }
   ui.view = ["paul", "missions", "studio", "entreprise", "resultats"].includes(
     view,
   )
