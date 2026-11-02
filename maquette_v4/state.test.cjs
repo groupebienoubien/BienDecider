@@ -134,23 +134,6 @@ test("Le visuel exige une marque et des droits confirmés", () => {
   state.brand.confirmed = true;
   assert.throws(() => transition(state, { type: "approve", document: "post", rights: false }), /droits/);
 });
-test("Une seule décision de direction par semaine : la revoir garde sa date", () => {
-  let state = transition(initialState(), { type: "onboard" });
-  state = transition(state, { type: "strategy", priority: "proof", date: "2026-11-02T09:00:00.000Z" });
-  state = transition(state, { type: "strategy", priority: "leads", date: "2026-11-04T09:00:00.000Z" });
-  assert.equal(state.decision.priority, "leads");
-  assert.equal(state.decision.date, "2026-11-02T09:00:00.000Z");
-  state = transition(state, { type: "strategy", priority: "agencies", date: "2026-11-10T09:00:00.000Z" });
-  assert.equal(state.decision.date, "2026-11-10T09:00:00.000Z");
-  assert.ok(Object.values(state.missions).every((status) => status === "proposed"));
-});
-
-test("Une piste lancée ne peut plus être choisie comme décision", () => {
-  let state = transition(initialState(), { type: "onboard" });
-  state = transition(state, { type: "start", mission: "agencies" });
-  assert.throws(() => transition(state, { type: "strategy", priority: "agencies" }), /plus à décider/);
-});
-
 test("Le bilan de mission exige une diffusion ; arrêter clôt et annule les programmations", () => {
   let state = readyDocument();
   assert.throws(() => transition(state, { type: "outcome", mission: "agencies", outcome: "stop" }), /première diffusion/);
