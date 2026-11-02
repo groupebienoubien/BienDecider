@@ -23,6 +23,7 @@ const eslintConfig = defineConfig([
     "maquette_v3/**",
     "maquette_v4/**",
     "maquette_v5/**",
+    "maquette_v5.2/**",
   ]),
 ]);
 
