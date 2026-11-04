@@ -1,3 +1,5 @@
+> **Archivé le 2026-11-04** : ce document ne décrit plus la cible du produit. Voir la [cible produit](../cible-produit.md) et l'[index des archives](README.md).
+
 # Spec fonctionnelle — Parcours de contextualisation
 
 ## Objectif

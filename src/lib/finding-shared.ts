@@ -1,5 +1,5 @@
 /**
- * Plan d'action suggéré par un constat d'audit (cf. docs/backlog.md,
+ * Plan d'action suggéré par un constat d'audit (cf. docs/archives/backlog.md,
  * "lisibilité des constats") — même forme que `ActionPlanItem` (agent,
  * title, rationale) pour pouvoir être ajouté au plan de Paul en un clic,
  * sans appel modèle supplémentaire (cf. src/app/api/action-plan/route.ts).

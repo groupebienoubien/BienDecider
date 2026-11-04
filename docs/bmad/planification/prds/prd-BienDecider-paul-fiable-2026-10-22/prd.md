@@ -11,7 +11,7 @@ updated: 2026-10-22
 
 ## 0. Objet du document
 
-Ce PRD s'adresse aux pères fondateurs (PF) et aux étapes BMAD suivantes : spine d'architecture de l'épopée, puis épopées et stories. Il part du test en production du 22 octobre 2026 ([BienDecider-test-entrepreneur-2026-10-22.md](../../../../../BienDecider-test-entrepreneur-2026-10-22.md)). Le vocabulaire suit le glossaire (§3). Les hypothèses sont balisées `[ASSUMPTION]` et reprises au §9. Il complète la [charte](../../../../charte.md) et le [spine du socle existant](../../architecture/architecture-BienDecider-2026-10-22/ARCHITECTURE-SPINE.md), sans les répéter.
+Ce PRD s'adresse aux pères fondateurs (PF) et aux étapes BMAD suivantes : spine d'architecture de l'épopée, puis épopées et stories. Il part du test en production du 22 octobre 2026 ([docs/archives/tests-entrepreneur/BienDecider-test-entrepreneur-2026-10-22.md](../../../../archives/tests-entrepreneur/BienDecider-test-entrepreneur-2026-10-22.md)). Le vocabulaire suit le glossaire (§3). Les hypothèses sont balisées `[ASSUMPTION]` et reprises au §9. Il complète la [charte](../../../../charte.md) et le [spine du socle existant](../../architecture/architecture-BienDecider-2026-10-22/ARCHITECTURE-SPINE.md), sans les répéter.
 
 ## 1. Vision
 

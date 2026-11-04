@@ -1,6 +1,8 @@
+> **Archivé le 2026-11-04** : ce document ne décrit plus la cible du produit. Voir la [cible produit](../../cible-produit.md) et l'[index des archives](../README.md).
+
 # BienDecider : troisième test en production, recette « Paul fiable »
 
-24 octobre 2026, 08:00-08:10, nouveau compte en production, version complète de l'épopée « Paul fiable » (commit `4274785`, épopées 1 à 3). Recette manuelle déroulée pas à pas : [docs/bmad/implementation/recette-paul-fiable.md](docs/bmad/implementation/recette-paul-fiable.md). Même persona que les tests du [22](BienDecider-test-entrepreneur-2026-10-22.md) et du [23 octobre](BienDecider-test-entrepreneur-2026-10-23.md) : Samuel Morel, Atelier Lumen, ébéniste à Nantes. Aucune connexion (Gmail, Facebook), rien d'envoyé.
+24 octobre 2026, 08:00-08:10, nouveau compte en production, version complète de l'épopée « Paul fiable » (commit `4274785`, épopées 1 à 3). Recette manuelle déroulée pas à pas : [docs/bmad/implementation/recette-paul-fiable.md](../../bmad/implementation/recette-paul-fiable.md). Même persona que les tests du [22](BienDecider-test-entrepreneur-2026-10-22.md) et du [23 octobre](BienDecider-test-entrepreneur-2026-10-23.md) : Samuel Morel, Atelier Lumen, ébéniste à Nantes. Aucune connexion (Gmail, Facebook), rien d'envoyé.
 
 ## En une phrase
 

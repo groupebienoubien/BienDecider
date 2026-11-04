@@ -1,4 +1,4 @@
-// PostgreSQL (Vercel Postgres en prod) — cf. docs/architecture-technique.md.
+// PostgreSQL (Vercel Postgres en prod) — cf. docs/archives/architecture-technique.md.
 // L'URL de connexion est définie dans prisma.config.ts / DATABASE_URL, pas ici.
 datasource db {
   provider = "postgresql"
@@ -10,7 +10,7 @@ generator client {
 
 model Company {
   id              String    @id @default(cuid())
-  ownerEmail      String    @unique // identifiant de session (login minimal, cf. docs/architecture-technique.md)
+  ownerEmail      String    @unique // identifiant de session (login minimal, cf. docs/archives/architecture-technique.md)
   passwordHash    String? // hash+sel (scrypt), jamais en clair — cf. src/lib/password.ts. Null = compte créé avant ce champ (accepte un premier mot de passe au prochain login).
   sessionVersion  Int       @default(0)
   dailyAgentRunLimit       Int       @default(10)
@@ -20,7 +20,7 @@ model Company {
   dailySpendLimitUsd       Float     @default(5)
   monthlySpendLimitUsd     Float     @default(25)
   quotaEpoch               Int       @default(0)
-  failedLoginAttempts Int @default(0) // anti-force-brute, cf. docs/backlog.md
+  failedLoginAttempts Int @default(0) // anti-force-brute, cf. docs/archives/backlog.md
   lockedUntil     DateTime? // compte verrouillé jusqu'à cette date après trop d'échecs
   name            String
   ownerName       String? // prénom et nom du dirigeant, facultatif : signature des emails rédigés par les agents (story 3.1)
@@ -34,8 +34,8 @@ model Company {
   facebookPageUrl           String? // lien de la Page Facebook confirmé par le dirigeant : seul contenu Facebook conservé
   facebookPageCandidateUrl  String? // lien proposé, en attente de la confirmation du dirigeant
   facebookPageDeclinedUrls  String[] @default([]) // liens refusés ou retirés (les plus récents) : jamais reproposés
-  objective       String? // objectif business déclaré, ex: "10 nouveaux clients par mois" (cf. docs/backlog.md #1)
-  // Profil business chiffré (cf. docs/backlog.md, "partenaire de croissance") — déclaratif,
+  objective       String? // objectif business déclaré, ex: "10 nouveaux clients par mois" (cf. docs/archives/backlog.md #1)
+  // Profil business chiffré (cf. docs/archives/backlog.md, "partenaire de croissance") — déclaratif,
   // jamais calculé par Pepito : CA mensuel actuel, cible et échéance, valeur moyenne
   // d'un client (pas "panier" : pour une activité récurrente c'est la valeur sur la
   // durée qui compte). Sert au calcul déterministe de l'écart et du nombre de clients
@@ -50,7 +50,7 @@ model Company {
   certifications  String? // labels/certifications (ex: RGE, Qualibat) — utile pour la crédibilité locale et le contenu généré
   openingHours    String? // horaires d'ouverture, libre — utile pour la fiche Google et le site
   direction       String? // consigne libre du dirigeant pour réorienter Paul et les agents ("Réorienter")
-  // Décision CEO du 2026-10-07 (cf. docs/backlog.md "partenaire de croissance") :
+  // Décision CEO du 2026-10-07 (cf. docs/archives/backlog.md "partenaire de croissance") :
   // le dirigeant peut choisir de laisser Pepito prendre contact lui-même avec les
   // prospects validés, par défaut non. Capture la décision dès maintenant ; l'envoi
   // réel reste bloqué tant qu'aucun fournisseur d'envoi n'est configuré (même
@@ -92,7 +92,7 @@ model LinkedInAuthorization {
 }
 
 /**
- * Funnel de prospection (cf. docs/backlog.md "partenaire de croissance",
+ * Funnel de prospection (cf. docs/archives/backlog.md "partenaire de croissance",
  * phase 3). Un lead = une organisation (entreprise, association,
  * collectivité) identifiée par Jean-Claude via des informations publiques
  * et professionnelles — jamais un particulier. Créé en même temps que la
@@ -125,7 +125,7 @@ model Lead {
 /**
  * Trace chaque appel au modèle Claude : companyId, agent à l'origine, modèle
  * utilisé, tokens, coût estimé au tarif du modèle au moment de l'appel.
- * Base de la vue admin (coût par entreprise/agent/modèle) — cf. docs/backlog.md.
+ * Base de la vue admin (coût par entreprise/agent/modèle) — cf. docs/archives/backlog.md.
  */
 model UsageEvent {
   id           String   @id @default(cuid())
@@ -160,7 +160,7 @@ model UsageReservation {
 /**
  * Plan d'action proposé par Paul (Co-CEO) : "meneur" qui recommande quoi
  * faire, par qui et quand, avant que l'utilisateur ne lance/valide quoi que
- * ce soit (cf. docs/backlog.md — demande CEO "le Co-CEO doit être force de
+ * ce soit (cf. docs/archives/backlog.md — demande CEO "le Co-CEO doit être force de
  * proposition"). Jamais exécuté automatiquement : un item "lancé" ne fait
  * que déclencher l'agent correspondant, qui reste soumis au même garde-fou
  * de validation que partout ailleurs.
@@ -287,7 +287,7 @@ model AuditFinding {
   company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   category    String // site_web, reseaux_sociaux, concurrence
   title       String
-  content     String // résumé court (1-2 phrases) affiché sur la carte compacte — cf. docs/backlog.md "lisibilité des constats"
+  content     String // résumé court (1-2 phrases) affiché sur la carte compacte — cf. docs/archives/backlog.md "lisibilité des constats"
   // Détail structuré affiché dans la pop-up (nullable : constats créés avant
   // cette structuration n'ont que `content`, affiché tel quel en repli).
   whatWorks   String? // "Ce qui est bien"
@@ -328,9 +328,9 @@ model ChannelConnection {
   company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   channel       String // google_business_profile, instagram, facebook
   status        String   @default("non_connecte") // non_connecte, connecte, erreur
-  // Jetons OAuth (jamais de mot de passe utilisateur — cf. docs/backlog.md).
+  // Jetons OAuth (jamais de mot de passe utilisateur — cf. docs/archives/backlog.md).
   // TODO prod : chiffrer au repos avant d'aller au-delà du pilote (cf.
-  // docs/architecture-technique.md § risques techniques).
+  // docs/archives/architecture-technique.md § risques techniques).
   accessToken   String?
   refreshToken  String?
   expiresAt     DateTime?

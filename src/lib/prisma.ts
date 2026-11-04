@@ -4,7 +4,7 @@ import { getDatabaseUrl } from "@/lib/database-url";
 
 const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
 
-// PostgreSQL en dev comme en prod (cf. docs/architecture-technique.md) —
+// PostgreSQL en dev comme en prod (cf. docs/archives/architecture-technique.md) —
 // DATABASE_URL pointe vers Vercel Postgres en prod, vers une base locale/
 // distante au choix en dev.
 // Pool volontairement petit : en serverless chaque instance ouvre son propre

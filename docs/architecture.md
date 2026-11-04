@@ -1,6 +1,6 @@
 # Architecture Pepito
 
-Document de référence à jour (2026-10-18) — remplace [architecture-technique.md](architecture-technique.md) qui garde la trace de la décision initiale (CTO, avant Postgres/Vercel/réorg agents) à titre historique.
+Document de référence à jour (2026-10-18) — remplace [architecture-technique.md](archives/architecture-technique.md) qui garde la trace de la décision initiale (CTO, avant Postgres/Vercel/réorg agents) à titre historique. Il décrit le prototype en ligne ; l'architecture cible de la V5.2 (modèle Mission, diffusions, crédits, activation des canaux) est dans l'[addendum technique](bmad/planification/prds/prd-BienDecider-cible-v5.2-2026-11-04/addendum.md), voir [cible-produit.md](cible-produit.md).
 
 ## 1. Vue d'ensemble
 
@@ -23,7 +23,7 @@ flowchart LR
 | Base de données | **PostgreSQL** (Prisma Postgres, hébergé par Vercel) | Seul choix viable pour un hébergement serverless (SQLite ne survit pas à un filesystem éphémère) |
 | ORM | **Prisma 7** avec `@prisma/adapter-pg` | Driver adapter explicite (obligatoire depuis Prisma 7 — plus d'URL magique dans le schéma) |
 | IA | **Claude Sonnet 5.5** (`claude-sonnet-5-5`) via `@anthropic-ai/sdk`, pattern **Tool Runner** | Un seul modèle partout pour l'instant ; chaque agent définit ses propres outils (function calling), la bibliothèque gère la boucle d'appel |
-| Auth | Cookie de session **signé HMAC-SHA256** (`SESSION_SECRET`), expiration à 30 jours, `HttpOnly`/`SameSite=Lax`, `Secure` en production ; version de session révocable en base. Mot de passe haché **scrypt** (natif Node, aucune dépendance). | Cookie forgé corrigé le 2026-10-05 ; expiration et révocation étendues par l'US #65 — voir [backlog.md](backlog.md) |
+| Auth | Cookie de session **signé HMAC-SHA256** (`SESSION_SECRET`), expiration à 30 jours, `HttpOnly`/`SameSite=Lax`, `Secure` en production ; version de session révocable en base. Mot de passe haché **scrypt** (natif Node, aucune dépendance). | Cookie forgé corrigé le 2026-10-05 ; expiration et révocation étendues par l'US #65 — voir [backlog.md](archives/backlog.md) |
 | Hébergement | **Vercel**, déploiement auto sur push GitHub | Zéro configuration CI/CD, intégration GitHub native (aucune clé API partagée) |
 | OAuth (optionnel) | Google OAuth2 (Gmail), Meta Graph API (Page Facebook), LinkedIn (connexion du profil) | Gmail et Facebook recettés en production (2026-10-13 et 2026-10-15) ; LinkedIn : connexion seulement, pas de publication ; fiche Google et Instagram non connectés (cf. [oauth-setup.md](oauth-setup.md)) |
 
@@ -161,7 +161,7 @@ erDiagram
     }
 ```
 
-**Isolation entre entreprises** : toute route API dérive l'entreprise de la session (`getSessionCompany()`), jamais d'un `companyId` fourni par le client — corrigé après audit le 2026-10-05 (cf. [backlog.md](backlog.md)).
+**Isolation entre entreprises** : toute route API dérive l'entreprise de la session (`getSessionCompany()`), jamais d'un `companyId` fourni par le client — corrigé après audit le 2026-10-05 (cf. [backlog.md](archives/backlog.md)).
 
 ## 5. Sécurité — état actuel
 
@@ -192,10 +192,10 @@ Variables d'environnement requises en production : `DATABASE_URL` (nom canonique
 
 ## 7. Limites connues (volontaires, pas des oublis)
 
-- **Un seul modèle** (`claude-sonnet-5-5`) partout — choix de coût assumé, à réévaluer par cas si la qualité ne suffit pas (cf. [architecture-technique.md](architecture-technique.md)).
+- **Un seul modèle** (`claude-sonnet-5-5`) partout — choix de coût assumé, à réévaluer par cas si la qualité ne suffit pas (cf. [architecture-technique.md](archives/architecture-technique.md)).
 - **Tests** : la CI GitHub lance lint, des tests unitaires sans réseau, le build, puis Playwright sur une base jetée (parcours, sécurité, moteur, connecteurs). Les tests qui écrivent en base ne tournent qu'en CI ou sur une base locale ; aucun test n'appelle les API réelles d'Anthropic, Google ou Meta, donc le flux réel avec le modèle et les consentements fournisseurs se vérifient par recette manuelle.
 - **Pas de monitoring d'erreurs** dédié (Sentry ou équivalent, US #83) — seuls les logs serveur Vercel existent aujourd'hui.
 - **Connecteurs** : Gmail et la Page Facebook sont recettés en production ; la fiche Google, Instagram et la publication LinkedIn ne sont pas disponibles (démarches externes, cf. [oauth-setup.md](oauth-setup.md)).
 
-Pour le détail complet des décisions prises et de ce qui reste à faire, voir [backlog.md](backlog.md).
+Ce qui reste à faire est suivi dans les Issues ; les décisions produit en vigueur sont dans [cible-produit.md](cible-produit.md), et l'historique des décisions jusqu'au 18 octobre 2026 dans [archives/backlog.md](archives/backlog.md).
 

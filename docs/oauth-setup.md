@@ -13,7 +13,7 @@ Ce document décrit une démarche **à faire une seule fois par le CEO**, pas pa
 
 Autrement dit : vous ne créez l'app qu'une fois ; ensuite, chaque entreprise (vous compris, pour vos tests) se connecte individuellement avec son propre compte Google/Meta via l'écran de consentement standard — c'est ce qui permet à BienDecider d'agir sur sa fiche/page spécifique sans jamais voir son mot de passe.
 
-Le code du flux "Connecter" est déjà prêt ([backlog.md #2quater](backlog.md)) pour les entrepreneurs. Ce qui manque est uniquement l'étape CEO ci-dessous — entièrement externe, à faire dans les consoles Google et Meta. Aucune de ces étapes ne peut être automatisée depuis le code.
+Le code du flux "Connecter" est déjà prêt ([backlog.md #2quater](archives/backlog.md)) pour les entrepreneurs. Ce qui manque est uniquement l'étape CEO ci-dessous — entièrement externe, à faire dans les consoles Google et Meta. Aucune de ces étapes ne peut être automatisée depuis le code.
 
 ## 1. Google (fiche Google Business Profile)
 

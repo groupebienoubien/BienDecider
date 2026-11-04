@@ -26,7 +26,7 @@ const AGENT_NAME = "demarchage";
 const PERSONA = PERSONAS.demarchage;
 
 /**
- * Agent "Démarchage / prospection" (cf. docs/agents-roster.md) — le plus
+ * Agent "Démarchage / prospection" (cf. docs/archives/agents-roster.md) — le plus
  * sensible du roster (RGPD, image de marque). En V1 :
  * - Jamais de vraie liste de destinataires : l'agent produit un TEMPLATE
  *   générique à adapter manuellement par l'utilisateur, jamais un envoi

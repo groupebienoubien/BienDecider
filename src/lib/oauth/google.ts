@@ -1,8 +1,8 @@
 /**
  * OAuth Google (Google Business Profile). Jamais de mot de passe utilisateur
- * — cf. docs/backlog.md. Nécessite un projet Google Cloud avec l'API
+ * — cf. docs/archives/backlog.md. Nécessite un projet Google Cloud avec l'API
  * "Business Profile API" activée et un écran de consentement OAuth
- * configuré (démarche externe à faire par le CEO, cf. docs/backlog.md).
+ * configuré (démarche externe à faire par le CEO, cf. docs/archives/backlog.md).
  */
 export const GOOGLE_SCOPE = "https://www.googleapis.com/auth/business.manage";
 // openid donne l'identifiant stable du compte (sub), seule preuve qu'un refresh token conservé reste au même compte.

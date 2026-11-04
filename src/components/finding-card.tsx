@@ -26,7 +26,7 @@ export const CATEGORY_ICONS: Record<string, IconName> = {
 
 /**
  * Ligne de diagnostic de la maquette + fenêtre de détail structuré (ce qui est bien / ce qu'il
- * faut améliorer / plan d'action) — cf. docs/backlog.md "lisibilité des constats". Les constats
+ * faut améliorer / plan d'action) — cf. docs/archives/backlog.md "lisibilité des constats". Les constats
  * créés avant cette structuration n'ont que `content` : affiché tel quel dans la fenêtre, en repli.
  */
 export function FindingCard({ finding }: { finding: AuditFinding }) {

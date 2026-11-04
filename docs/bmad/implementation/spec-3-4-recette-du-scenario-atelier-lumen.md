@@ -8,7 +8,7 @@ route: 'dispatch'
 review_loop_iteration: 0
 context:
   - '{project-root}/docs/bmad/implementation/epic-3-context.md'
-  - '{project-root}/BienDecider-test-entrepreneur-2026-10-23.md'
+  - '{project-root}/docs/archives/tests-entrepreneur/BienDecider-test-entrepreneur-2026-10-23.md'
 ---
 
 <frozen-after-approval reason="human-owned intent — do not modify unless human renegotiates">

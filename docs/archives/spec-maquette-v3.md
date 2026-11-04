@@ -7,6 +7,8 @@ route: 'oneshot'
 review_loop_iteration: 0
 context: []
 ---
+> **Archivé le 2026-11-04** : ce document ne décrit plus la cible du produit. Voir la [cible produit](../cible-produit.md) et l'[index des archives](README.md).
+
 
 <frozen-after-approval reason="human-owned intent">
 

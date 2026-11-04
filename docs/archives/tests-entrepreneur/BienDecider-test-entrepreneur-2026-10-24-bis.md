@@ -1,6 +1,8 @@
+> **Archivé le 2026-11-04** : ce document ne décrit plus la cible du produit. Voir la [cible produit](../../cible-produit.md) et l'[index des archives](../README.md).
+
 # BienDecider : quatrième test en production, recette « Paul fiable » avec l'épopée 4
 
-24 octobre 2026, 09:35-09:44, nouveau compte en production, commit `8059149` (épopées 1 à 4). Recette manuelle complète, étapes 1 bis à 1 quater comprises : [docs/bmad/implementation/recette-paul-fiable.md](docs/bmad/implementation/recette-paul-fiable.md). Même persona que les tests précédents : Samuel Morel, Atelier Lumen, ébéniste à Nantes. Aucune connexion, rien d'envoyé.
+24 octobre 2026, 09:35-09:44, nouveau compte en production, commit `8059149` (épopées 1 à 4). Recette manuelle complète, étapes 1 bis à 1 quater comprises : [docs/bmad/implementation/recette-paul-fiable.md](../../bmad/implementation/recette-paul-fiable.md). Même persona que les tests précédents : Samuel Morel, Atelier Lumen, ébéniste à Nantes. Aucune connexion, rien d'envoyé.
 
 ## En une phrase
 

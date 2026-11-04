@@ -1,10 +1,12 @@
+> **Archivé le 2026-11-04** : ce document ne décrit plus la cible du produit. Voir la [cible produit](../cible-produit.md) et l'[index des archives](README.md).
+
 # Domaines BienDecider
 
-Le backlog est réparti en douze domaines fonctionnels. Chaque US porte un label `domaine:*`, en plus de ses labels de type, de priorité, de statut et de zone décrits dans [github-tracking.md](github-tracking.md). Les Issues GitHub restent la source de vérité du suivi ; ce document donne la carte d'ensemble et la trajectoire qui la justifie.
+Le backlog est réparti en douze domaines fonctionnels. Chaque US porte un label `domaine:*`, en plus de ses labels de type, de priorité, de statut et de zone décrits dans [github-tracking.md](../github-tracking.md). Les Issues GitHub restent la source de vérité du suivi ; ce document donne la carte d'ensemble et la trajectoire qui la justifie.
 
 ## Carte des domaines
 
-État des Issues `type:us` au 2026-10-18 : 143 US, dont 119 ouvertes et 24 fermées. Les colonnes P0 à P3 comptent les US ouvertes ; le catalogue initial [github-backlog.json](github-backlog.json) comptait 121 US au 2026-10-10, auxquelles se sont ajoutées celles de l'audit UX du 14 octobre et d'autres Issues libres.
+État des Issues `type:us` au 2026-10-18 : 143 US, dont 119 ouvertes et 24 fermées. Les colonnes P0 à P3 comptent les US ouvertes ; le catalogue initial [github-backlog.json](../github-backlog.json) comptait 121 US au 2026-10-10, auxquelles se sont ajoutées celles de l'audit UX du 14 octobre et d'autres Issues libres.
 
 | Domaine | Label | Périmètre | Ouvertes | P0 | P1 | P2 | P3 | Fermées |
 |---|---|---|---|---|---|---|---|---|
@@ -28,7 +30,7 @@ Vue par domaine : `https://github.com/groupebienoubien/BienDecider/issues?q=is%3
 
 État vérifié dans les Issues ouvertes le **2026-10-18** : [8 US `domaine:delegation` en P1](https://github.com/groupebienoubien/BienDecider/issues?q=is%3Aissue%20is%3Aopen%20label%3Adomaine%3Adelegation%20label%3Apriority%3Ap1) (les sept du 2026-10-10 et #179, issue de l'audit UX), 3 US en P2. Aucune n'est fermée ; #39 et #179 sont `status:in-progress`, les autres `status:backlog`. Les priorités sont déjà correctement étiquetées ; ne pas promouvoir automatiquement les P2.
 
-**Attention au vocabulaire :** ce domaine concerne l'autonomie de BienDecider dans les actions des entreprises. Ce n'est pas la délégation de revue des PR aux développeurs après 4 secondes, documentée dans [ci-cd.md](ci-cd.md).
+**Attention au vocabulaire :** ce domaine concerne l'autonomie de BienDecider dans les actions des entreprises. Ce n'est pas la délégation de revue des PR aux développeurs après 4 secondes, documentée dans [ci-cd.md](../ci-cd.md).
 
 Ordre fondé sur les dépendances des US :
 
@@ -55,7 +57,7 @@ La validation humaine demeure le défaut tant que #35 n'est pas approuvée par l
 - [ ] Compléter les règles métier (réversibilité, exposition publique, dépense, données de tiers) par action, avec validation des deux fondateurs dans #35.
 - [ ] Persister les modes autorisés par entreprise et type d'action après #35 ; appliquer au serveur le seuil aux autres connecteurs/actions et aux contextes réels de dépense/réversibilité. Au-dessus du seuil, forcer la validation même si l'interface est contournée.
 
-Implémentation : [src/lib/delegation-risk.ts](../src/lib/delegation-risk.ts), page admin `/admin/risques`, affichage : [ProposalCard](../src/components/proposal-card.tsx), gardeurs serveur : publication du site et Gmail, tests : [delegation.spec.ts](../tests/delegation.spec.ts). La politique est globale et n'abaisse pas le plancher déterministe. Aucun mode autonome n'est activé dans le prototype ; ce n'est pas encore le moteur complet d'autorisation de #39. Procédure DB/admin : [delegation-risk-admin.md](delegation-risk-admin.md).
+Implémentation : [src/lib/delegation-risk.ts](../../src/lib/delegation-risk.ts), page admin `/admin/risques`, affichage : [ProposalCard](../../src/components/proposal-card.tsx), gardeurs serveur : publication du site et Gmail, tests : [delegation.spec.ts](../../tests/delegation.spec.ts). La politique est globale et n'abaisse pas le plancher déterministe. Aucun mode autonome n'est activé dans le prototype ; ce n'est pas encore le moteur complet d'autorisation de #39. Procédure DB/admin : [delegation-risk-admin.md](../delegation-risk-admin.md).
 
 ## Trajectoire cible
 

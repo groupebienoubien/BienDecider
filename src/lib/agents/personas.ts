@@ -1,12 +1,12 @@
 /**
- * Personnification des agents (cf. docs/backlog.md). Équipe rationalisée le
+ * Personnification des agents (cf. docs/archives/backlog.md). Équipe rationalisée le
  * 2026-10-05 (demande CEO) : Nadia (audit) fusionnée dans Martine, qui
  * devient Marketing Officer (diagnostic + pilotage de la fiche Google) ;
  * Camille se recentre sur la production de contenu (posts, site), en
  * s'appuyant sur les constats de Martine.
  *
  * Paul (ex-"Co-CEO") renommé "Partenaire de croissance" le 2026-10-07 —
- * cf. docs/backlog.md "partenaire de croissance" : "Co-CEO" évoquait un
+ * cf. docs/archives/backlog.md "partenaire de croissance" : "Co-CEO" évoquait un
  * statut hiérarchique factice, alors que son rôle réel (et celui qui doit
  * se lire dans son prompt, pas seulement dans son étiquette) est de
  * comprendre le métier et le marché du dirigeant, l'aider à fixer un

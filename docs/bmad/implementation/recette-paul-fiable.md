@@ -1,6 +1,6 @@
 # Recette manuelle : Paul fiable (scénario Atelier Lumen)
 
-Le parcours des tests en production du 22, du 23 et du 24 octobre 2026 ([rapport du 23 octobre](../../../BienDecider-test-entrepreneur-2026-10-23.md), [rapport du 24 octobre](../../../BienDecider-test-entrepreneur-2026-10-24.md)), à rejouer avec le vrai modèle avant chaque mise en production touchant Paul ou les agents. Durée : 20 minutes environ.
+Le parcours des tests en production du 22, du 23 et du 24 octobre 2026 ([rapport du 23 octobre](../../archives/tests-entrepreneur/BienDecider-test-entrepreneur-2026-10-23.md), [rapport du 24 octobre](../../archives/tests-entrepreneur/BienDecider-test-entrepreneur-2026-10-24.md)), à rejouer avec le vrai modèle avant chaque mise en production touchant Paul ou les agents. Durée : 20 minutes environ.
 
 **Persona.** Samuel Morel, Atelier Lumen, ébéniste à Nantes. 140 000 € de chiffre d'affaires par an, il vise 200 000 € par an ; un client rapporte 18 000 € ; 6 cuisines par an. Les chiffres ne se recoupent pas (6 × 18 000 € = 108 000 €, pas 140 000 €) : c'est voulu, ce sont ceux des deux tests ; le reste du chiffre d'affaires vient d'autres travaux, et Paul ne doit pas « corriger » le dirigeant. Un Instagram (`@atelierlumen.nantes`), pas de site.
 

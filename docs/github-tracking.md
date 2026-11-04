@@ -2,7 +2,7 @@
 
 ## Une source de verite
 
-Le suivi courant est dans [les Issues BienDecider](https://github.com/groupebienoubien/BienDecider/issues), pas dans deux listes de cases a maintenir en parallele. [backlog.md](backlog.md) conserve le contexte, les decisions et l'historique des livraisons. Les anciens elements livres ne sont pas recrees comme des US ouvertes.
+Le suivi courant est dans [les Issues BienDecider](https://github.com/groupebienoubien/BienDecider/issues), pas dans deux listes de cases a maintenir en parallele. La cible du produit et les decisions en vigueur sont dans [cible-produit.md](cible-produit.md) ; l'ancien backlog, fige au 18 octobre 2026, est archive ([archives/backlog.md](archives/backlog.md)). Les anciens elements livres ne sont pas recrees comme des US ouvertes.
 
 Chaque US contient le besoin utilisateur, des criteres d'acceptation, les dependances, la verification et le perimetre. Une US = un resultat livrable ; si elle est trop grosse, la decouper avant de la prendre.
 
@@ -14,7 +14,8 @@ Chaque US contient le besoin utilisateur, des criteres d'acceptation, les depend
 - [A relire](https://github.com/groupebienoubien/BienDecider/issues?q=is%3Aissue%20is%3Aopen%20label%3Astatus%3Areview).
 - [Bloquees](https://github.com/groupebienoubien/BienDecider/issues?q=is%3Aissue%20is%3Aopen%20label%3Astatus%3Ablocked).
 - [P0](https://github.com/groupebienoubien/BienDecider/issues?q=is%3Aissue%20is%3Aopen%20label%3Apriority%3Ap0).
-- [Délégation P1](https://github.com/groupebienoubien/BienDecider/issues?q=is%3Aissue%20is%3Aopen%20label%3Adomaine%3Adelegation%20label%3Apriority%3Ap1).
+- [Cible V5.2](https://github.com/groupebienoubien/BienDecider/issues?q=is%3Aissue%20is%3Aopen%20label%3Acible-v5.2).
+- [Suivi du PoC (#272)](https://github.com/groupebienoubien/BienDecider/issues/272) : perimetre, ordre de realisation, definition de fini.
 - [Relectures differees, PR ouvertes ou fermees](https://github.com/groupebienoubien/BienDecider/pulls?q=is%3Apr%20label%3Areview-deferred).
 
 Pas de GitHub Project obligatoire : les Issues et les filtres suffisent a deux. Un tableau Project pourra etre ajoute plus tard sans dupliquer les US.
@@ -34,11 +35,29 @@ Pas de GitHub Project obligatoire : les Issues et les filtres suffisent a deux. 
 | `priority:p2` | Plus tard, ne pas prendre avant les priorites convenues |
 | `priority:p3` | Non planifie, garde pour memoire |
 | `area:dev` / `area:external` | Code ou demarche console/fournisseur/CEO |
-| `domaine:*` | Un des douze domaines fonctionnels, decrits dans [domaines.md](domaines.md) |
+| `domaine:*` | Un des douze domaines fonctionnels (tableau ci-dessous) |
+| `cible-v5.2` | US alignee sur la cible V5.2 ([cible-produit.md](cible-produit.md)) ; ses criteres renvoient aux FR du cahier des charges |
+| `maquette-v3` | Ancienne cible, remplacee par `cible-v5.2` le 2026-11-04 ; ne plus l'utiliser |
+| `type:suivi` | Issue de suivi (ordre, jalons, definition de fini), sans livrable propre |
 
-Focus produit du 2026-10-10 : **délégation P1**, avec décision fondatrice #35 en premier ; voir l'ordre et les dépendances dans [domaines.md](domaines.md#focus-actuel--délégation-p1). Les trois P2 de ce domaine restent hors focus.
+Jalons : **PoC 1 - Prérequis d'ouverture**, **PoC 2 - Parcours cible V5.2**, **PoC 3 - Canaux réels**, **Après le PoC**. L'ordre de réalisation et la definition de fini du PoC sont tenus dans #272.
 
-La première tranche de l'US #39 est livrée : classification statique et affichage du risque ; l'Issue passe en cours jusqu'à validation des règles complètes et de leur application serveur au futur mode Déléguer. Voir la tranche et ses limites dans [domaines.md](domaines.md#tranche-del-5-livrée-le-2026-10-10).
+| Domaine | Perimetre |
+|---|---|
+| `domaine:dirigeant` | Compte, objectif, tableau de bord, validation |
+| `domaine:moteur` | Paul et les agents, de comprendre a arbitrer |
+| `domaine:delegation` | Niveaux, budget, autorisations, risque, transparence |
+| `domaine:connecteurs` | Gmail, Google, Meta, LinkedIn, site : ce qui execute |
+| `domaine:mesure` | Resultats, bilan, apprentissage |
+| `domaine:monetisation` | Prix, credits, paiement, facturation |
+| `domaine:securite` | Acces, sessions, donnees personnelles, legal |
+| `domaine:admin` | Back-office, quotas, support, pilote |
+| `domaine:plateforme` | Fiabilite, base de donnees, tests, documentation |
+| `domaine:marque` | Landing, domaine, logo, tarifs |
+| `domaine:ux` | Clarte du parcours, attente, mobile, accessibilite |
+| `domaine:entreprise` | Demarches des PF : societe, banque, contrats |
+
+La carte des domaines d'octobre, avec le focus delegation P1 et la premiere tranche de #39, est archivee dans [archives/domaines.md](archives/domaines.md).
 
 Réglages admin dynamiques (P1) : procédure de rôle explicite, table et déploiement du schéma dans [delegation-risk-admin.md](delegation-risk-admin.md). Ce réglage global ne lève pas la validation humaine et ne remplace pas la décision fondatrice #35.
 
@@ -57,7 +76,7 @@ Petit point de 10 minutes une fois par semaine : trier P0/P1, revoir les blocage
 
 ## Import initial et nouvelles US
 
-Le workflow [Backlog Issues](../.github/workflows/backlog.yml) lit [github-backlog.json](github-backlog.json). Le catalogue initial contenait 18 US de travail restant ; 103 US classees par domaine ont ete ajoutees le 2026-10-10 (voir [domaines.md](domaines.md)) ; l'absence d'approbation fournisseur n'est pas marquee comme une fonctionnalite livree.
+Le workflow [Backlog Issues](../.github/workflows/backlog.yml) lit [github-backlog.json](github-backlog.json). Le catalogue initial contenait 18 US de travail restant ; 103 US classees par domaine ont ete ajoutees le 2026-10-10 (voir [domaines.md](archives/domaines.md)) ; l'absence d'approbation fournisseur n'est pas marquee comme une fonctionnalite livree.
 
 L'import s'execute sur `main` quand le catalogue, le script ou son workflow change ; il peut aussi etre relance via **Actions > Backlog Issues > Run workflow**. Il utilise le token natif GitHub Actions avec `issues: write`, aucun PAT ni secret externe. Les PR de branches ne creent pas d'Issues par ce workflow.
 

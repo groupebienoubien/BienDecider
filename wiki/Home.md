@@ -1,6 +1,6 @@
 # BienDecider : le wiki des pères fondateurs
 
-BienDecider est un copilote pour indépendants et TPE : des agents préparent des actions de visibilité, de communication et de démarchage, et le dirigeant décide avant toute exécution. Le prototype est en ligne sur https://www.biendecider.com.
+BienDecider est un copilote pour indépendants et TPE : Paul prépare des missions de visibilité, de communication et de démarchage, et le dirigeant décide avant toute diffusion. Le prototype est en ligne sur https://www.biendecider.com ; la cible du produit est la V5.2 ([Cible produit](../docs/cible-produit.md)).
 
 Ce wiki sert à s'y retrouver sans demander à personne. Il est **généré depuis le dépôt** à chaque fusion sur `main` : ce que tu lis correspond au code en ligne.
 
@@ -10,9 +10,10 @@ Ce wiki sert à s'y retrouver sans demander à personne. Il est **généré depu
 |---|---|
 | Faire une modification et la mettre en ligne | [Aide-mémoire](Aide-memoire.md), puis [CI/CD](../docs/ci-cd.md) pour le détail |
 | Savoir ce qui existe aujourd'hui dans le code : pages, routes, tables, commandes, variables | [État du dépôt](Etat-du-depot.md) |
-| Comprendre comment les agents travaillent ensemble | [Architecture](../docs/architecture.md) et [Agents](../docs/agents-roster.md) |
-| Choisir quoi faire ensuite, ou voir qui fait quoi | [Suivi des US](../docs/github-tracking.md) et les [Issues](https://github.com/groupebienoubien/BienDecider/issues) |
-| Voir la trajectoire produit par domaine | [Domaines](../docs/domaines.md) et [Backlog](../docs/backlog.md) |
+| Comprendre comment les agents travaillent ensemble | [Architecture](../docs/architecture.md) |
+| Choisir quoi faire ensuite, ou voir qui fait quoi | [Suivi des US](../docs/github-tracking.md), le [suivi du PoC](https://github.com/groupebienoubien/BienDecider/issues/272) et les [Issues](https://github.com/groupebienoubien/BienDecider/issues) |
+| Savoir ce que le produit doit devenir et ce que les PF ont décidé | [Cible produit](../docs/cible-produit.md) |
+| Retrouver un document remplacé (ancien backlog, domaines, spécifications V1 et V3) | [Archives](../docs/archives/README.md) |
 | Réagir à un incident en production | [Aide-mémoire, section incident](Aide-memoire.md#un-problème-en-production) |
 | Régler les niveaux de risque des actions | [Risques de délégation](../docs/delegation-risk-admin.md) |
 | Brancher Google, Meta ou Gmail | [Configuration OAuth](../docs/oauth-setup.md) |

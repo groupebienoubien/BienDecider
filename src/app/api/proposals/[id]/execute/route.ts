@@ -16,7 +16,7 @@ export const maxDuration = 60;
 /**
  * Exécution réelle d'une proposition VALIDÉE : publier le site d'une page,
  * ou une publication sur la Page Facebook connectée. Les autres types
- * (fiche Google, Instagram, LinkedIn) attendent leurs connecteurs — cf. docs/backlog.md.
+ * (fiche Google, Instagram, LinkedIn) attendent leurs connecteurs — cf. docs/archives/backlog.md.
  */
 export async function POST(
   _request: NextRequest,

@@ -7,7 +7,7 @@ baseline_commit: '805914999cb67d74720e232a6b15bb0be7d6480f'
 route: 'dispatch'
 review_loop_iteration: 1
 context:
-  - '{project-root}/docs/audit-agents-ia-2026-10-24.md'
+  - '{project-root}/docs/archives/audit-agents-ia-2026-10-24.md'
 ---
 
 <frozen-after-approval reason="human-owned intent — do not modify unless human renegotiates">

@@ -1,3 +1,5 @@
+> **Archivé le 2026-11-04** : ce document ne décrit plus la cible du produit. Voir la [cible produit](../cible-produit.md) et l'[index des archives](README.md).
+
 # Roster des agents produit (V1)
 
 Principe commun à tous les agents : **proposer, jamais exécuter sans validation humaine explicite.** Chaque agent produit des propositions d'action visibles dans le cockpit ; l'utilisateur valide, modifie ou rejette avant toute exécution réelle (envoi d'email, publication, mise à jour de fiche).

@@ -28,7 +28,7 @@ body:
     id: domain
     attributes:
       label: Domaine
-      description: Ajouter ensuite le label domaine:* correspondant (voir docs/domaines.md).
+      description: Ajouter ensuite le label domaine:* correspondant (voir docs/github-tracking.md).
       options: [dirigeant, moteur, delegation, connecteurs, mesure, monetisation, securite, admin, plateforme, marque, ux, entreprise]
     validations:
       required: true
