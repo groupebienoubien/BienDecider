@@ -11,7 +11,7 @@ import { readJsonObject } from "@/lib/request-body";
  * Un compte antérieur sans passwordHash accepte encore son premier mot de
  * passe, pour préserver la migration en douceur des comptes existants.
  *
- * Anti-force-brute (cf. docs/backlog.md, point P0) : 5 échecs consécutifs
+ * Anti-force-brute (cf. docs/archives/backlog.md, point P0) : 5 échecs consécutifs
  * verrouillent le compte 15 minutes. Stocké en base (pas en mémoire) pour
  * rester valable entre plusieurs instances serverless. Une limite par adresse IP
  * (src/lib/auth-throttle.ts) empêche en plus un tiers de verrouiller des comptes

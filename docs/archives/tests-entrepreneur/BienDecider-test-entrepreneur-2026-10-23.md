@@ -1,3 +1,5 @@
+> **Archivé le 2026-11-04** : ce document ne décrit plus la cible du produit. Voir la [cible produit](../../cible-produit.md) et l'[index des archives](../README.md).
+
 # BienDecider : second test en production comme entrepreneur
 
 23 octobre 2026, nouveau compte en production, version avec les épopées 1 et 2 (commit `2fe9a56`). Même persona que le premier test du 22 octobre ([BienDecider-test-entrepreneur-2026-10-22.md](BienDecider-test-entrepreneur-2026-10-22.md)) : Samuel Morel, Atelier Lumen, ébéniste à Nantes, 140 000 € visant 200 000 € par an, 18 000 € par client, 6 cuisines par an, un Instagram et pas de site.

@@ -14,7 +14,7 @@ import { decideProposalReview, reviewPublishedSiteHtml } from "@/lib/proposal-re
  * Première exécution réelle de bout en bout du produit : un brief de site
  * (proposition `site_web_content` de Camille) VALIDÉ par le dirigeant devient
  * une page publiée sur /site/[slug], hébergée par Pepito. Aucune dépendance
- * externe (pas de WordPress, pas d'hébergeur) — cf. docs/backlog.md.
+ * externe (pas de WordPress, pas d'hébergeur) — cf. docs/archives/backlog.md.
  * Garde-fou inchangé : n'est jamais appelé sur une proposition non validée.
  */
 

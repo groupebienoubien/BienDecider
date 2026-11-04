@@ -1,3 +1,5 @@
+> **Archivé le 2026-11-04** : ce document ne décrit plus la cible du produit. Voir la [cible produit](../cible-produit.md) et l'[index des archives](README.md).
+
 # BienDecider : challenge de l'audit UX et backlog proposé
 
 > Document de travail du 14 octobre 2026. Source : audit UX/UI version 0 du 13 octobre 2026, 30 pages, fourni par Rémi. Les 25 fiches ci-dessous sont des propositions à arbitrer, pas 25 nouveaux tickets à créer ni un engagement de livraison.
@@ -58,8 +60,8 @@ La confrontation au dépôt est ciblée : documentation de délégation, traitem
 
 ### Ce que le code et le suivi changent dans la lecture
 
-- Le [traitement des décisions](../src/app/api/proposals/[id]/route.ts) n'envoie ni ne publie automatiquement. Il accepte `validee`, `modifiee`, `rejetee`, inscrit une date de décision et fait évoluer les prospects concernés. Quand aucune proposition liée n'est `en_attente`, il termine l'action parent. **L'absence de sauvegarde neutre et la confusion « terminé » / « réalisé » ne sont donc pas seulement rédactionnelles.**
-- La [publication du site](../src/lib/site/publish.ts) exige un statut approuvé, puis appelle le modèle pour fabriquer le HTML et le publie. Son prompt demande des emplacements visibles pour les informations manquantes. **Approuver le brief ne revient pas à approuver le rendu final.** Ne pas extrapoler cette observation au parcours Gmail, qui est distinct.
+- Le [traitement des décisions](../../src/app/api/proposals/[id]/route.ts) n'envoie ni ne publie automatiquement. Il accepte `validee`, `modifiee`, `rejetee`, inscrit une date de décision et fait évoluer les prospects concernés. Quand aucune proposition liée n'est `en_attente`, il termine l'action parent. **L'absence de sauvegarde neutre et la confusion « terminé » / « réalisé » ne sont donc pas seulement rédactionnelles.**
+- La [publication du site](../../src/lib/site/publish.ts) exige un statut approuvé, puis appelle le modèle pour fabriquer le HTML et le publie. Son prompt demande des emplacements visibles pour les informations manquantes. **Approuver le brief ne revient pas à approuver le rendu final.** Ne pas extrapoler cette observation au parcours Gmail, qui est distinct.
 - Les états vides ont fait l'objet de la [PR #161](https://github.com/groupebienoubien/BienDecider/pull/161), fusionnée ; [#98](https://github.com/groupebienoubien/BienDecider/issues/98) reste ouverte au relevé. Réutiliser la guidance et terminer la recette, pas reconstruire tous les états vides.
 - [#99](https://github.com/groupebienoubien/BienDecider/issues/99) est fermée et la [PR #165](https://github.com/groupebienoubien/BienDecider/pull/165) est fusionnée depuis le 14 octobre à 09:10 UTC. Les changements documentés couvrent l'accès mobile « À valider » et des cibles agrandies. Cela ne démontre pas toute la hiérarchie mobile ni une décision réussie en trois touches dans chaque cas.
 - La [PR #162](https://github.com/groupebienoubien/BienDecider/pull/162) a ajouté la connexion d'une Page Facebook vérifiée avec jetons chiffrés. Le constat « autorisation sans ressource vérifiée » ne doit plus être appliqué globalement à Facebook. Publication et recette fournisseur restent à distinguer.

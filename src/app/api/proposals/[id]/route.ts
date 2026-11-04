@@ -111,7 +111,7 @@ export async function PATCH(
   }
 
   // Décision humaine actée ici — aucune exécution réelle déclenchée
-  // automatiquement (cf. docs/architecture-technique.md § Flux de validation).
+  // automatiquement (cf. docs/archives/architecture-technique.md § Flux de validation).
   const data =
     status === "a_relire"
       ? { status: "en_attente", rejectionReason: null, decidedAt: null }

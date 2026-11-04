@@ -1,7 +1,7 @@
 ---
 status: 'approuvé le 2026-10-24 (option A)'
 created: '2026-10-24'
-trigger: 'BienDecider-test-entrepreneur-2026-10-24.md (constats Q1 et E1)'
+trigger: 'docs/archives/tests-entrepreneur/BienDecider-test-entrepreneur-2026-10-24.md (constats Q1 et E1)'
 ---
 
 # Proposition de changement : épopée 4 « Paul reste disponible et cohérent »

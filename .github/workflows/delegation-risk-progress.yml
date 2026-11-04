@@ -11,8 +11,6 @@ on:
       - src/components/proposal-card.tsx
       - tests/delegation.spec.ts
       - tests/user-journey.spec.ts
-      - docs/domaines.md
-      - docs/backlog.md
       - .github/workflows/delegation-risk-progress.yml
       - src/lib/delegation-policy.ts
       - src/app/admin/risques/**

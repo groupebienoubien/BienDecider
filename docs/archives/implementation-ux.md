@@ -1,6 +1,8 @@
+> **Archivé le 2026-11-04** : ce document ne décrit plus la cible du produit. Voir la [cible produit](../cible-produit.md) et l'[index des archives](README.md).
+
 # Intégration UX et identité BienDecider
 
-18 octobre 2026. Direction visuelle issue de la [maquette validée](maquette/README.md).
+18 octobre 2026. Direction visuelle issue de la [maquette validée](../maquette/README.md).
 
 ## Identité
 
@@ -54,4 +56,4 @@ Cette livraison intègre l'interface dans les parcours réels, pas les fonctionn
 - Build de production dans l'installation temporaire de validation, avec URL PostgreSQL fictive et sans accès à une base distante.
 - Scénarios DB de navigation, budget et sécurité ajoutés/adaptés pour la CI. Non exécutés contre la base distante du prototype.
 
-La capture d'accueil est une image de présentation, pas une interface interactive. Le harness et les scripts de recette restent hors du dépôt. La mise en production demandée le 18 octobre suit le circuit PR, contrôles CI, puis déploiement de `main` décrit dans [le guide CI/CD](ci-cd.md).
+La capture d'accueil est une image de présentation, pas une interface interactive. Le harness et les scripts de recette restent hors du dépôt. La mise en production demandée le 18 octobre suit le circuit PR, contrôles CI, puis déploiement de `main` décrit dans [le guide CI/CD](../ci-cd.md).

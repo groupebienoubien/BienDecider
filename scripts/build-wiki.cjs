@@ -18,16 +18,12 @@ const PAGE_NAMES = {
   "README.md": "Presentation",
   "docs/ci-cd.md": "CI-CD",
   "docs/github-tracking.md": "Suivi-des-US",
-  "docs/backlog.md": "Backlog",
-  "docs/domaines.md": "Domaines",
+  "docs/cible-produit.md": "Cible-produit",
   "docs/architecture.md": "Architecture",
-  "docs/architecture-technique.md": "Architecture-technique",
-  "docs/agents-roster.md": "Agents",
   "docs/delegation-risk-admin.md": "Risques-de-delegation",
   "docs/oauth-setup.md": "Configuration-OAuth",
   "docs/domain-email-setup.md": "Domaine-et-email",
   "docs/process-build-agentique.md": "Processus-de-build-agentique",
-  "docs/spec-contextualisation.md": "Spec-contextualisation",
 };
 
 const read = (file) => fs.readFileSync(path.join(root, file), "utf8").replace(/\r\n/g, "\n");

@@ -275,7 +275,7 @@ export async function launchPlanItemFromCard(companyId: string, agent: PlanAgent
 }
 
 /**
- * Agent "Partenaire de croissance" (Paul, ex-"Co-CEO" — cf. docs/backlog.md) :
+ * Agent "Partenaire de croissance" (Paul, ex-"Co-CEO" — cf. docs/archives/backlog.md) :
  * point de contact unique, orchestre les autres agents en les invoquant
  * comme des outils. Équipe rationalisée le 2026-10-05 : 4 agents
  * (Marketing/Contenu/Démarchage + lui-même), Nadia fusionnée dans Martine.

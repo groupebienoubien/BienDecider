@@ -5,7 +5,7 @@ import type { AgentKey } from "@/lib/agents/personas";
  * simple pastille générique). Toujours pas de photo réaliste de personne —
  * aucune génération d'image disponible dans cet environnement, et une
  * fausse photo de personne pour une IA serait trompeuse si elle sort un
- * jour du dashboard (cf. docs/backlog.md, décision actée avec le CEO).
+ * jour du dashboard (cf. docs/archives/backlog.md, décision actée avec le CEO).
  */
 // Couleurs : jetons --bd-agent-* de globals.css (charte, section 3).
 const STYLE: Record<AgentKey, { color: string; icon: React.ReactNode }> = {

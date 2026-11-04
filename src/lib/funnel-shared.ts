@@ -56,7 +56,7 @@ export function countLeads(leads: { stage: string }[]): FunnelCounts {
 /**
  * En dessous de ce nombre de contacts par segment, Paul doit dire "trop tôt
  * pour conclure" — jamais "A fonctionne 5x mieux que B" sur 5 réponses
- * (cf. docs/backlog.md, boucle d'apprentissage).
+ * (cf. docs/archives/backlog.md, boucle d'apprentissage).
  */
 export const MIN_CONTACTS_TO_CONCLUDE = 20;
 

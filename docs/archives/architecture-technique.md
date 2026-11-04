@@ -1,8 +1,10 @@
+> **Archivé le 2026-11-04** : ce document ne décrit plus la cible du produit. Voir la [cible produit](../cible-produit.md) et l'[index des archives](README.md).
+
 # Architecture technique (V1) — rôle CTO
 
-> **Document historique.** Décrit la décision CTO initiale (avant Postgres/Vercel, avant la réorganisation en 4 agents). Pour l'architecture actuelle, voir **[architecture.md](architecture.md)**.
+> **Document historique.** Décrit la décision CTO initiale (avant Postgres/Vercel, avant la réorganisation en 4 agents). Pour l'architecture actuelle, voir **[architecture.md](../architecture.md)**.
 
-Référence : [spec-contextualisation.md](spec-contextualisation.md), [agents-roster.md](agents-roster.md), [process-build-agentique.md](process-build-agentique.md).
+Référence : [spec-contextualisation.md](spec-contextualisation.md), [agents-roster.md](agents-roster.md), [process-build-agentique.md](../process-build-agentique.md).
 
 ## 1. Choix de la surface agentique
 

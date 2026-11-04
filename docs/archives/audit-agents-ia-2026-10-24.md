@@ -1,3 +1,5 @@
+> **Archivé le 2026-11-04** : ce document ne décrit plus la cible du produit. Voir la [cible produit](../cible-produit.md) et l'[index des archives](README.md).
+
 # Audit du code : agents et délégations IA
 
 Date : 24 octobre 2026. Périmètre : agents du produit BienDecider, coordinateur Paul, outils, exécutions, relances, quotas, comptabilité et confirmations. L'installation BMAD sert au développement ; ses workflows ne constituent pas le moteur IA du produit examiné ici.
@@ -35,7 +37,7 @@ Les exécutions sont persistées, mais leur traitement repose sur `after()` dans
 
 ## A01 — P1 — La consommation déjà engagée disparaît lorsqu'un tour ultérieur échoue
 
-**Sources :** [usage.ts:75](../src/lib/usage.ts#L75), [boucle en flux:113](../src/lib/usage.ts#L113), [comptabilisation de Martine:213](../src/lib/agents/marketing.ts#L213), [comptabilisation de Paul:677](../src/lib/agents/co-ceo.ts#L677).
+**Sources :** [usage.ts:75](../../src/lib/usage.ts#L75), [boucle en flux:113](../../src/lib/usage.ts#L113), [comptabilisation de Martine:213](../../src/lib/agents/marketing.ts#L213), [comptabilisation de Paul:677](../../src/lib/agents/co-ceo.ts#L677).
 
 Les boucles additionnent l'usage dans des variables locales et ne rendent le total qu'après leur fin normale. Les appels à `recordUsage` interviennent ensuite. Une erreur au deuxième tour, après réception et traitement d'un premier message du modèle, empêche donc l'enregistrement de l'usage du premier tour. Le chemin d'échec du run libère ensuite sa réservation ; pour le chat, la réservation expire sans coût enregistré.
 
@@ -47,7 +49,7 @@ Les boucles additionnent l'usage dans des variables locales et ne rendent le tot
 
 ## A02 — P1 — Les boucles d'outils n'ont pas de borne globale effective
 
-**Sources :** [construction du runner de Martine:182](../src/lib/agents/marketing.ts#L182), [Camille:109](../src/lib/agents/contenu.ts#L109), [Jean-Claude:216](../src/lib/agents/demarchage.ts#L216), [révision:166](../src/lib/agents/revision.ts#L166), [client Anthropic:3](../src/lib/anthropic.ts#L3).
+**Sources :** [construction du runner de Martine:182](../../src/lib/agents/marketing.ts#L182), [Camille:109](../../src/lib/agents/contenu.ts#L109), [Jean-Claude:216](../../src/lib/agents/demarchage.ts#L216), [révision:166](../../src/lib/agents/revision.ts#L166), [client Anthropic:3](../../src/lib/anthropic.ts#L3).
 
 Les runners fixent `max_tokens` pour chaque réponse, mais aucun `max_iterations`, plafond cumulé ou signal d'annulation lié à la durée de l'exécution. Le SDK installé utilise une boucle `while (true)` et n'applique le plafond d'itérations que lorsqu'il est renseigné : `BetaToolRunner.ts:139` (`node_modules/@anthropic-ai/sdk/src/lib/tools/BetaToolRunner.ts:139`).
 
@@ -57,7 +59,7 @@ Les runners fixent `max_tokens` pour chaque réponse, mais aucun `max_iterations
 
 ## A03 — P2 — Une ancienne tentative peut encore écrire pendant sa relance
 
-**Sources :** [transition de l'action:51](../src/lib/agents/plan-runner.ts#L51), [protection limitée à la finalisation du run:348](../src/lib/agent-runs.ts#L348), [écriture de Camille:58](../src/lib/agents/contenu.ts#L58).
+**Sources :** [transition de l'action:51](../../src/lib/agents/plan-runner.ts#L51), [protection limitée à la finalisation du run:348](../../src/lib/agent-runs.ts#L348), [écriture de Camille:58](../../src/lib/agents/contenu.ts#L58).
 
 La finalisation du run vérifie le numéro `attempts`, mais les écritures de productions et la transition finale de l'action ne vérifient pas l'identité de la tentative. Marquer le run périmé n'annule pas le callback ni ses appels d'outils.
 
@@ -69,7 +71,7 @@ La finalisation du run vérifie le numéro `attempts`, mais les écritures de pr
 
 ## A04 — P2 — Une relance peut être déclarée périmée avant de démarrer
 
-**Sources :** [réinitialisation du retry:93](../src/lib/agent-runs.ts#L93), [calcul de péremption:249](../src/lib/agent-runs.ts#L249).
+**Sources :** [réinitialisation du retry:93](../../src/lib/agent-runs.ts#L93), [calcul de péremption:249](../../src/lib/agent-runs.ts#L249).
 
 Le retry réinitialise `startedAt` et remet le run en file, mais conserve son `queuedAt` initial. Le suivi utilise `startedAt ?? queuedAt` pour déterminer la péremption.
 
@@ -79,7 +81,7 @@ Le retry réinitialise `startedAt` et remet le run en file, mais conserve son `q
 
 ## A05 — P2 — Le lancement différé depuis le plan perd une partie de la consigne
 
-**Sources :** [stockage des paramètres dans la carte:408](../src/lib/agents/co-ceo.ts#L408), [lancement depuis le plan:48](../src/app/api/action-plan/[id]/launch/route.ts#L48), [valeur de repli des paramètres:174](../src/lib/agent-runs.ts#L174).
+**Sources :** [stockage des paramètres dans la carte:408](../../src/lib/agents/co-ceo.ts#L408), [lancement depuis le plan:48](../../src/app/api/action-plan/[id]/launch/route.ts#L48), [valeur de repli des paramètres:174](../../src/lib/agent-runs.ts#L174).
 
 `newsContext` et `prospectDescription` sont conservés dans le payload de la carte, mais pas sur l'action du plan. Après « Plus tard », expiration ou refus de lancement, le bouton du plan lance l'action sans ces paramètres ; le payload de run reçoit `extras: {}`.
 
@@ -89,7 +91,7 @@ Le retry réinitialise `startedAt` et remet le run en file, mais conserve son `q
 
 ## A06 — P2 — La reprise via le suivi dispose de 60 secondes pour un run de 300 secondes
 
-**Sources :** [durée de la route de suivi:5](../src/app/api/agent-runs/[id]/route.ts#L5), [reprogrammation depuis le suivi:284](../src/lib/agent-runs.ts#L284), `documentation Next installée` (`node_modules/next/dist/docs/01-app/03-api-reference/04-functions/after.md`).
+**Sources :** [durée de la route de suivi:5](../../src/app/api/agent-runs/[id]/route.ts#L5), [reprogrammation depuis le suivi:284](../../src/lib/agent-runs.ts#L284), `documentation Next installée` (`node_modules/next/dist/docs/01-app/03-api-reference/04-functions/after.md`).
 
 Le suivi reprogramme un run `queued` avec `after()`. La route déclare `maxDuration = 60`, alors que les routes de lancement et la durée logique des runs utilisent 300 secondes. La documentation Next installée précise que `after()` hérite de la durée de sa route.
 
@@ -99,7 +101,7 @@ Le suivi reprogramme un run `queued` avec `after()`. La route déclare `maxDurat
 
 ## A07 — P2 — Une décision d'écarter peut écraser un lancement concurrent
 
-**Sources :** [lecture du statut:23](../src/app/api/action-plan/[id]/route.ts#L23), [écriture inconditionnelle:41](../src/app/api/action-plan/[id]/route.ts#L41), [transition finale du worker:51](../src/lib/agents/plan-runner.ts#L51).
+**Sources :** [lecture du statut:23](../../src/app/api/action-plan/[id]/route.ts#L23), [écriture inconditionnelle:41](../../src/app/api/action-plan/[id]/route.ts#L41), [transition finale du worker:51](../../src/lib/agents/plan-runner.ts#L51).
 
 Le PATCH refuse de modifier une action déjà `en_cours` lors de sa lecture, mais l'UPDATE final ne répète pas cette condition. Un lancement peut revendiquer l'action entre les deux.
 
@@ -109,7 +111,7 @@ Le PATCH refuse de modifier une action déjà `en_cours` lors de sa lecture, mai
 
 ## A08 — P2 — Un plan vide est annoncé prêt à examiner
 
-**Sources :** [résultat de génération:818](../src/lib/agents/co-ceo.ts#L818), [succès du moteur:348](../src/lib/agent-runs.ts#L348), [message affiché:70](../src/lib/agent-run-progress.ts#L70).
+**Sources :** [résultat de génération:818](../../src/lib/agents/co-ceo.ts#L818), [succès du moteur:348](../../src/lib/agent-runs.ts#L348), [message affiché:70](../../src/lib/agent-run-progress.ts#L70).
 
 Quand aucun appel à `propose_plan_item` n'a créé d'action, `runCoCeoPlanning` enregistre l'usage puis retourne `[]` normalement. Le moteur enregistre `succeeded` avec `resultCount=0`. Le message de Paul dit toujours que le plan est prêt, sans examiner ce nombre.
 
@@ -119,7 +121,7 @@ Quand aucun appel à `propose_plan_item` n'a créé d'action, `runCoCeoPlanning`
 
 ## Points d'architecture à suivre séparément
 
-- **Confirmation et mise en file non atomiques.** La carte est confirmée en transaction, puis le lancement se produit hors transaction uniquement après une nouvelle transition. Un arrêt entre ces étapes peut laisser une carte confirmée sans run, sans reprise par un nouveau clic. Voir [pending-actions.ts:250](../src/lib/agents/pending-actions.ts#L250). Prévoir une association durable carte/run et une reprise idempotente.
+- **Confirmation et mise en file non atomiques.** La carte est confirmée en transaction, puis le lancement se produit hors transaction uniquement après une nouvelle transition. Un arrêt entre ces étapes peut laisser une carte confirmée sans run, sans reprise par un nouveau clic. Voir [pending-actions.ts:250](../../src/lib/agents/pending-actions.ts#L250). Prévoir une association durable carte/run et une reprise idempotente.
 - **Réconciliation dépendante du suivi individuel.** Le nettoyage des runs périmés est dans `getAgentRun`, pas dans les lectures de liste ou d'état de l'équipe. Un worker interrompu peut laisser une réservation et une action actives tant qu'aucun client ne consulte ce run. Prévoir une réconciliation périodique côté serveur.
 - **Mesures des outils serveur ignorées.** Le SDK fournit notamment `server_tool_use.web_search_requests` ; ces champs sont perdus dans l'agrégation d'usage. Leur incidence tarifaire exacte n'a pas été vérifiée dans cet audit. Ne pas considérer le coût enregistré comme une mesure exhaustive de toutes les composantes du fournisseur.
 - **Traçabilité des délégations.** Les relations action/run et run/tentatives existent ; l'association carte/run reste dans un payload JSON. Un lien explicite, un identifiant de tour de Paul et un identifiant de tentative dans chaque résultat faciliteraient la supervision.

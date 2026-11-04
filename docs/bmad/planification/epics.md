@@ -6,7 +6,7 @@ inputDocuments:
   - docs/bmad/planification/architecture/architecture-BienDecider-paul-fiable-2026-10-22/ARCHITECTURE-SPINE.md
   - docs/bmad/planification/architecture/architecture-BienDecider-2026-10-22/ARCHITECTURE-SPINE.md
   - docs/charte.md
-  - BienDecider-test-entrepreneur-2026-10-22.md
+  - docs/archives/tests-entrepreneur/BienDecider-test-entrepreneur-2026-10-22.md
 runNotes: "Déroulé sans arrêt aux menus [C], à la demande de Samir (2026-10-22). Les PF valident le document entier."
 ---
 

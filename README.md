@@ -14,9 +14,13 @@ Réglages admin du risque et migration de base requise : **[docs/delegation-risk
 
 Copilote IA agentique pour indépendants et TPE (kiné, plombier, installateur solaire, etc.) : des agents spécialisés proposent des actions pour accroître visibilité, communication et démarchage, validées par l'utilisateur avant exécution.
 
+**Cible produit : la V5.2**, décrite dans **[docs/cible-produit.md](docs/cible-produit.md)** (maquette, cahier des charges, spécification, addendum technique et décisions des PF du 4 novembre 2026). Le suivi du PoC est dans l'[Issue #272](https://github.com/groupebienoubien/BienDecider/issues/272).
+
 ## Statut
 
-4 agents (Paul, Martine, Camille, Jean-Claude), plan d'action piloté par Paul avec validation/réorientation par le dirigeant, discussion avec Paul depuis toutes les pages (réponse au fil de l'eau, dictée et lecture à voix haute), exécutions réelles après approbation et confirmation (site d'une page publié sur `/site/[slug]`, publication sur la Page Facebook connectée, email Gmail manuel), connexion du profil LinkedIn (sans publication), rapport, vue admin (coûts/usage, quotas par entreprise), suppression du compte, login par email + mot de passe. Fiche Google et Instagram : non connectés (démarches externes). Base de données : PostgreSQL (plus de SQLite). Voir [docs/backlog.md](docs/backlog.md) pour le détail à jour.
+Ce qui suit décrit le prototype en ligne, qui ne suit pas encore la cible V5.2.
+
+4 agents (Paul, Martine, Camille, Jean-Claude), plan d'action piloté par Paul avec validation/réorientation par le dirigeant, discussion avec Paul depuis toutes les pages (réponse au fil de l'eau, dictée et lecture à voix haute), exécutions réelles après approbation et confirmation (site d'une page publié sur `/site/[slug]`, publication sur la Page Facebook connectée, email Gmail manuel), connexion du profil LinkedIn (sans publication), rapport, vue admin (coûts/usage, quotas par entreprise), suppression du compte, login par email + mot de passe. Fiche Google et Instagram : non connectés (démarches externes). Base de données : PostgreSQL (plus de SQLite). Le détail à jour est dans les [Issues](https://github.com/groupebienoubien/BienDecider/issues) ; l'historique des décisions jusqu'au 18 octobre 2026 est archivé dans [docs/archives/backlog.md](docs/archives/backlog.md).
 
 Parcours : `/` → `/login` → `/onboarding`, puis :
 
@@ -73,22 +77,24 @@ Les tests utilisent `DATABASE_URL` et `SESSION_SECRET` du fichier `.env`. Ils cr
 
 Le panneau admin des niveaux de risque utilise une table Prisma ajoutée après la mise en place initiale. Avant de l'utiliser, appliquer la mise à jour additive de schéma à la base prototype selon [docs/delegation-risk-admin.md](docs/delegation-risk-admin.md). La CI et le déploiement ne font jamais de `db push` automatiquement.
 
-## Décisions clés (V1)
+## Décisions clés
 
-- **Multi-métier** dès la conception, via un cœur générique + "packs de contexte" par métier.
+Les décisions produit en vigueur sont les décisions D1 à D13 des PF, prises le 4 novembre 2026 : voir [docs/cible-produit.md](docs/cible-produit.md). Celles de la V1 (packs de contexte par métier, prix de travail à 15 €/mois) sont archivées dans [docs/archives/backlog.md](docs/archives/backlog.md). Restent valables :
+
 - **Douleur cible** : manque de temps et manque de compétence marketing/communication des indépendants.
-- **Validation humaine obligatoire** avant toute exécution d'action par un agent (email envoyé, post publié, réponse à un avis, etc.). Pas d'autonomie totale en V1.
-- **Prix de travail** : 15€/mois (hypothèse à valider avec Finance avant verrouillage — risque de coût d'inférence par agent actif à chiffrer).
+- **Validation humaine obligatoire** : rien n'est diffusé sans une version validée et une confirmation explicite du dirigeant.
 - **Build du produit en mode agentique** : rôles inspirés d'une organisation (BA, Architecte/CTO, Dev, Test, Comm') utilisés comme agents de construction, chacun produisant un livrable vérifiable. Voir [docs/process-build-agentique.md](docs/process-build-agentique.md).
 
 ## Documents
 
 Pour s'y retrouver sans chercher : le **[wiki](https://github.com/groupebienoubien/BienDecider/wiki)**, généré depuis ce dépôt à chaque fusion sur `main` (accueil et aide-mémoire dans [wiki/](wiki), état du code calculé par [scripts/build-wiki.cjs](scripts/build-wiki.cjs)). Ne pas le modifier dans GitHub : corriger le fichier source dans une PR.
 
-- **[docs/architecture.md](docs/architecture.md) — logique inter-agents et stack technique à jour (diagrammes)**
-- [docs/spec-contextualisation.md](docs/spec-contextualisation.md) — parcours d'onboarding / contextualisation de l'entreprise
-- [docs/agents-roster.md](docs/agents-roster.md) — rôles, responsabilités et garde-fous des agents produit
+- **[docs/cible-produit.md](docs/cible-produit.md) — cible V5.2 : maquette, cahier des charges, spécification, addendum technique, décisions des PF**
+- **[docs/architecture.md](docs/architecture.md) — logique inter-agents et stack technique du prototype en ligne (diagrammes)**
+- [docs/charte.md](docs/charte.md) — charte graphique et rédactionnelle (mise à jour V5.2 : #276)
+- [docs/github-tracking.md](docs/github-tracking.md) — suivi des US : labels, jalons, routine à deux
+- [docs/ci-cd.md](docs/ci-cd.md) — CI, protections de `main`, déploiement
 - [docs/process-build-agentique.md](docs/process-build-agentique.md) — organisation du build en rôles agentiques
-- [docs/domaines.md](docs/domaines.md) — carte des douze domaines, trajectoire cible et répartition des US
-- [docs/backlog.md](docs/backlog.md) — backlog MVP priorisé, avec décisions de scope actées
-- [docs/oauth-setup.md](docs/oauth-setup.md) — démarches externes Google/Meta pour activer les connexions OAuth
+- [docs/oauth-setup.md](docs/oauth-setup.md), [docs/linkedin-setup.md](docs/linkedin-setup.md) — démarches externes Google, Meta et LinkedIn pour activer les connexions
+- [docs/bmad/](docs/bmad) — travaux BMAD : cahiers des charges, architecture, épopées et stories livrées
+- [docs/archives/](docs/archives/README.md) — documents remplacés (ancien backlog, domaines, spécifications V1 et V3, audits, tests d'octobre), avec ce qui les remplace

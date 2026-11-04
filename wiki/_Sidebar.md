@@ -9,14 +9,12 @@
 - [État du dépôt](Etat-du-depot.md)
 - [Présentation](../README.md)
 - [Architecture](../docs/architecture.md)
-- [Architecture technique](../docs/architecture-technique.md)
-- [Agents](../docs/agents-roster.md)
 
 **Produit**
-- [Domaines](../docs/domaines.md)
-- [Backlog](../docs/backlog.md)
-- [Spec contextualisation](../docs/spec-contextualisation.md)
+- [Cible produit](../docs/cible-produit.md)
+- [Charte](../docs/charte.md)
 - [Processus de build](../docs/process-build-agentique.md)
+- [Archives](../docs/archives/README.md)
 
 **Réglages**
 - [Risques de délégation](../docs/delegation-risk-admin.md)

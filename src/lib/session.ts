@@ -14,13 +14,13 @@ const COOKIE_NAME = "pepito_session";
  * pour révoquer toutes les sessions après déconnexion ou changement du mot
  * de passe.
  * Nécessite SESSION_SECRET dans l'environnement (généré une fois,
- * identique en local et en prod ; voir docs/backlog.md).
+ * identique en local et en prod ; voir docs/archives/backlog.md).
  */
 function getSecret(): string {
   const secret = process.env.SESSION_SECRET;
   if (!secret) {
     throw new Error(
-      "SESSION_SECRET manquant dans l'environnement — généré une fois, requis pour signer les sessions. Voir docs/backlog.md.",
+      "SESSION_SECRET manquant dans l'environnement — généré une fois, requis pour signer les sessions. Voir README.md, section « Démarrer en local ».",
     );
   }
   return secret;

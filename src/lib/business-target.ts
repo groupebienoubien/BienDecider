@@ -1,6 +1,6 @@
 /**
  * Calcul déterministe (aucun appel modèle) de l'écart entre la situation
- * déclarée et l'objectif chiffré — cf. docs/backlog.md "partenaire de
+ * déclarée et l'objectif chiffré — cf. docs/archives/backlog.md "partenaire de
  * croissance". Tout est déclaratif : Pepito n'estime jamais un CA lui-même.
  */
 

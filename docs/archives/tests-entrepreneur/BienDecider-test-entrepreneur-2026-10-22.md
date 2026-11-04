@@ -1,3 +1,5 @@
+> **Archivé le 2026-11-04** : ce document ne décrit plus la cible du produit. Voir la [cible produit](../../cible-produit.md) et l'[index des archives](../README.md).
+
 # BienDecider : test en production comme entrepreneur
 
 22 octobre 2026, nouveau compte en production. Persona fictif : Samuel Morel, Atelier Lumen, ébéniste à Nantes (cuisines et dressings sur mesure). Pas de site, un Instagram. Objectif : passer de 140 000 € à 200 000 € de chiffre d'affaires annuel, avec un panier moyen de 18 000 € et 6 cuisines par an aujourd'hui.

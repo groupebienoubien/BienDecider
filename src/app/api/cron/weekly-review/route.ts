@@ -6,7 +6,7 @@ import { WEEKLY_REVIEW_MARKER as MARKER } from "@/lib/weekly-review";
 
 /**
  * "Events" : le seul trigger qui ne vient pas d'un clic ou d'un message de
- * l'utilisateur (cf. docs/backlog.md "partenaire de croissance" — l'écart
+ * l'utilisateur (cf. docs/archives/backlog.md "partenaire de croissance" — l'écart
  * entre un assistant qui répond et un partenaire qui remarque les choses
  * seul). Déclenché par Vercel Cron (cf. vercel.json), une fois par semaine.
  *
