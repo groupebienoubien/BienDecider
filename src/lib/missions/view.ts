@@ -1,8 +1,8 @@
-import type { Mission } from "@prisma/client";
+import type { Mission, MissionContent } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { channelLabel, isMissionChannel } from "@/lib/missions/channels";
+import { channelLabel, isMissionChannel, type MissionChannel } from "@/lib/missions/channels";
 import { scopeSummary } from "@/lib/missions/scope";
-import { missionStage, orderMissions, priorityMissionId, type MissionStage, type StageMission } from "@/lib/missions/stage";
+import { missionStage, orderMissions, priorityMissionId, type ContentState, type MissionStage, type StageMission } from "@/lib/missions/stage";
 import { MISSION_TEMPLATES, type TemplateKey } from "@/lib/missions/templates";
 import type { MissionStatus } from "@/lib/missions/rules";
 
@@ -31,10 +31,34 @@ export type MissionView = StageMission & {
   scope: Record<string, unknown>;
   stopRuleDays: number | null;
   hasValidatedVersion: boolean;
+  contentId: string | null;
   actions: MissionActionData;
 };
 
-function toStageMission(mission: Mission): StageMission {
+type MissionWithContent = Mission & { content: MissionContent | null };
+
+/** Le site est publié par BienDecider : il n'a pas de connexion à établir. */
+function isConnected(channel: MissionChannel | null, connected: ReadonlySet<string>): boolean {
+  return channel === "site" || (channel !== null && connected.has(channel));
+}
+
+/** État du contenu principal ; la programmation, la diffusion et le bilan arrivent avec #315, #261, #295 et #290. */
+function contentStateOf(mission: MissionWithContent, connected: ReadonlySet<string>): ContentState | null {
+  const content = mission.content;
+  if (!content || content.currentNumber === 0) return null;
+  return {
+    number: content.currentNumber,
+    validated: content.validatedNumber === content.currentNumber,
+    currentDiffused: false,
+    scheduled: false,
+    diffusions: 0,
+    reportAt: null,
+    decisionAt: null,
+    channelConnected: isConnected(isMissionChannel(mission.channel) ? mission.channel : null, connected),
+  };
+}
+
+function toStageMission(mission: MissionWithContent, connected: ReadonlySet<string>): StageMission {
   return {
     id: mission.id,
     title: mission.title,
@@ -43,13 +67,12 @@ function toStageMission(mission: Mission): StageMission {
     template: mission.template as TemplateKey,
     channel: isMissionChannel(mission.channel) ? mission.channel : null,
     position: mission.position,
-    // Le contenu principal arrive avec l'atelier (#289) : d'ici là, une mission en cours est en préparation.
-    content: null,
+    content: contentStateOf(mission, connected),
   };
 }
 
-function toView(mission: Mission, priorityId: string | null): MissionView {
-  const base = toStageMission(mission);
+function toView(mission: MissionWithContent, priorityId: string | null, connected: ReadonlySet<string>): MissionView {
+  const base = toStageMission(mission, connected);
   const scope = mission.scope !== null && typeof mission.scope === "object" && !Array.isArray(mission.scope) ? (mission.scope as Record<string, unknown>) : {};
   const summary = scopeSummary(base.template, scope);
   const label = base.channel ? channelLabel(base.channel) : "Hors canal, diffusion déclarée";
@@ -65,6 +88,7 @@ function toView(mission: Mission, priorityId: string | null): MissionView {
     scope,
     stopRuleDays: mission.stopRuleDays,
     hasValidatedVersion: mission.hasValidatedVersion,
+    contentId: mission.content && mission.content.currentNumber > 0 ? mission.content.id : null,
     actions: {
       id: mission.id,
       title: mission.title,
@@ -82,9 +106,13 @@ function toView(mission: Mission, priorityId: string | null): MissionView {
 
 /** Missions de l'entreprise, la priorité d'abord puis l'ordre du plan. */
 export async function loadMissionViews(companyId: string): Promise<MissionView[]> {
-  const missions = await prisma.mission.findMany({ where: { companyId }, orderBy: [{ position: "asc" }, { id: "asc" }] });
-  const priorityId = priorityMissionId(missions.map(toStageMission));
-  return orderMissions(missions.map((mission) => toView(mission, priorityId)));
+  const [missions, connections] = await Promise.all([
+    prisma.mission.findMany({ where: { companyId }, orderBy: [{ position: "asc" }, { id: "asc" }], include: { content: true } }),
+    prisma.channelConnection.findMany({ where: { companyId, status: "connecte" }, select: { channel: true } }),
+  ]);
+  const connected = new Set(connections.map((connection) => connection.channel));
+  const priorityId = priorityMissionId(missions.map((mission) => toStageMission(mission, connected)));
+  return orderMissions(missions.map((mission) => toView(mission, priorityId, connected)));
 }
 
 export async function loadMissionView(companyId: string, missionId: string): Promise<MissionView | null> {

@@ -336,6 +336,67 @@ test("story 10.4: every mission decision is journaled with its author, in the tr
   expect(texts).toContain("Canal de la mission chang\u00e9 \u00b7 Salon du quartier : Page Facebook. Nouvelle version du brouillon \u00e0 relire.");
 });
 
+test("stories 11.1 to 11.3: Paul's first draft, versions, variant kept for one credit, refusal motive fed back to Paul", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { applyMissionTransition, createMission } = await import("../src/lib/missions/service");
+  const { applyContentAction, prepareFirstDraft } = await import("../src/lib/contents/service");
+  const { buildDraftPrompt } = await import("../src/lib/contents/writer");
+  type Writer = Parameters<typeof prepareFirstDraft>[2] & {};
+  const requests: Parameters<Writer>[0][] = [];
+  const writer: Writer = async (request) => {
+    requests.push(request);
+    return { title: `Accroche ${requests.length}`, body: `Texte ${requests.length} pour ${request.company.name}` };
+  };
+  const failing: Writer = async () => { throw new Error("modèle indisponible"); };
+  const mission = await createMission(company.id, { template: "social_post", title: "Publier un chantier", outcome: "Des demandes de devis", finding: "Aucune publication depuis trois mois", scope: { topic: "Nos chantiers de novembre" } });
+
+  // Un échec de Paul n'écrit rien et se dit en clair ; le brouillon suivant est créé une seule fois, sans crédit.
+  await expect(prepareFirstDraft(company.id, mission.id, failing)).rejects.toMatchObject({ code: "M-79", status: 503 });
+  expect(await prisma.missionContent.count({ where: { missionId: mission.id } })).toBe(0);
+  const [first, second] = await Promise.all([prepareFirstDraft(company.id, mission.id, writer), prepareFirstDraft(company.id, mission.id, writer)]);
+  expect(first.id).toBe(second.id);
+  expect(await prisma.contentVersion.count({ where: { contentId: first.id } })).toBe(1);
+  expect(await prisma.contentVersion.findFirstOrThrow({ where: { contentId: first.id } })).toMatchObject({ number: 1, author: "paul", note: "Premier brouillon préparé par Paul" });
+  expect(first).toMatchObject({ channel: "facebook", format: "social_post", currentNumber: 1 });
+  expect(requests[0]).toMatchObject({ channel: "facebook", format: "social_post", base: null, variant: null, rejections: [], mission: { scopeSummary: "Sujet : Nos chantiers de novembre" } });
+  const calls = requests.length;
+  expect((await prepareFirstDraft(company.id, mission.id, writer)).id).toBe(first.id);
+  expect(requests).toHaveLength(calls);
+  expect(await prisma.creditLedger.count({ where: { companyId: company.id, kind: "paul_version" } })).toBe(0);
+  const journal = await prisma.journalEntry.findFirstOrThrow({ where: { missionId: mission.id, code: "J-19" } });
+  expect(journal).toMatchObject({ actor: "paul", params: { n: "1", mission: "Publier un chantier" } });
+
+  // Refus motivé, puis « Retravailler avec Paul » : le motif part dans la demande, la proposition attend sans crédit.
+  await applyContentAction(company.id, first.id, { action: "reject", number: 1, input: { reason: "On ne tutoie pas nos clients" } }, writer);
+  await applyContentAction(company.id, first.id, { action: "variant", number: 1, input: { variant: "custom", instruction: "Parlez de nos délais" } }, writer);
+  const asked = requests[requests.length - 1];
+  expect(asked).toMatchObject({ base: { title: "Accroche 1" }, variant: { kind: "custom", instruction: "Parlez de nos délais" }, rejections: ["On ne tutoie pas nos clients"] });
+  expect(buildDraftPrompt(asked)).toContain("« On ne tutoie pas nos clients »");
+  expect(buildDraftPrompt(asked)).toContain("N'invente aucun prix");
+  expect(await prisma.missionContent.findUniqueOrThrow({ where: { id: first.id } })).toMatchObject({ currentNumber: 1, suggestion: { basedOn: 1, title: expect.stringMatching(/^Accroche/) } });
+  const kept = await applyContentAction(company.id, first.id, { action: "accept_variant", number: 1, input: {} }, writer);
+  expect(kept).toEqual({ currentNumber: 2, balance: 19 });
+  expect(await prisma.contentVersion.findFirstOrThrow({ where: { contentId: first.id, number: 2 } })).toMatchObject({ author: "paul", note: "Préparée avec Paul : « Parlez de nos délais »" });
+
+  // Plus de crédit : Paul n'est pas appelé (M-15).
+  await prisma.company.update({ where: { id: company.id }, data: { creditBalance: 0 } });
+  const before = requests.length;
+  await expect(applyContentAction(company.id, first.id, { action: "variant", number: 2, input: { variant: "shorter" } }, writer)).rejects.toMatchObject({ code: "M-15" });
+  expect(requests).toHaveLength(before);
+
+  // Reprise d'une ancienne version : nouvelle version, par vous.
+  await applyContentAction(company.id, first.id, { action: "restore", number: 2, input: { from: 1 } }, writer);
+  expect(await prisma.contentVersion.findFirstOrThrow({ where: { contentId: first.id, number: 3 } })).toMatchObject({ title: "Accroche 1", author: "owner", note: "Reprise de V1" });
+
+  // Canal changé avant validation (J-29) : le texte est repris dans une version système, au format du nouveau canal.
+  const custom = await createMission(company.id, { template: "custom", title: "Salon du quartier", outcome: "Dix contacts utiles", finding: "Un salon a lieu près de chez moi", stopRuleDays: 21, scope: { description: "Tenir un stand au salon de mon quartier" } });
+  const offGrid = await prepareFirstDraft(company.id, custom.id, writer);
+  expect(offGrid).toMatchObject({ channel: null, format: "text" });
+  await applyMissionTransition(company.id, custom.id, { action: "set_channel", channel: "facebook" }, 1);
+  expect(await prisma.missionContent.findUniqueOrThrow({ where: { id: offGrid.id } })).toMatchObject({ channel: "facebook", format: "social_post", currentNumber: 2 });
+  expect(await prisma.contentVersion.findFirstOrThrow({ where: { contentId: offGrid.id, number: 2 } })).toMatchObject({ author: "system", note: "Canal changé : Page Facebook. Texte à adapter" });
+});
+
 test("story 9.1 to 9.3: missions and credits follow the transitions of the specification, in one transaction each", async ({ company }) => {
   const { prisma } = await import("../src/lib/prisma");
   const { readCredits } = await import("../src/lib/credits");

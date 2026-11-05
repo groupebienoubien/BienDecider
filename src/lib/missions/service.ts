@@ -7,6 +7,7 @@ import { isMissionChannel, channelLabel } from "@/lib/missions/channels";
 import type { TemplateKey } from "@/lib/missions/templates";
 import { scopeSummary } from "@/lib/missions/scope";
 import { writeJournal, type JournalCode } from "@/lib/journal";
+import { adaptContentToChannel } from "@/lib/contents/service";
 
 export class MissionNotFoundError extends Error {
   constructor() {
@@ -96,6 +97,7 @@ export async function applyMissionTransition(companyId: string, missionId: strin
       ? await debitCredits(tx, { companyId, amount: result.debit, kind: "mission_launch", label: `Lancement de la mission « ${mission.title} »`, missionId: mission.id })
       : null;
     const updated = await tx.mission.findUniqueOrThrow({ where: { id: mission.id } });
+    if (request.action === "set_channel") await adaptContentToChannel(tx, updated);
     const entry = journalFor(request, updated);
     if (entry) await writeJournal(tx, { companyId, missionId: mission.id, ...entry });
     return { mission: updated, balance };

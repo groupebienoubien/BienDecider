@@ -9,6 +9,9 @@ export const JOURNAL_TEXTS = {
   "J-12": "Périmètre modifié · {mission} : {résumé}.",
   "J-17": "Mission lancée (ou reprise) : {mission}. Paul prépare le premier contenu.",
   "J-18": "Mission suspendue : {mission}. Programmations annulées.",
+  "J-19": "V{n} {origine} · {mission}.",
+  "J-20": "V{n} validée : {titre}. Aucun envoi effectué.",
+  "J-27": "V{n} refusée : {motif}.",
   "J-29": "Canal de la mission changé · {mission} : {canal}. Nouvelle version du brouillon à relire.",
 } as const;
 

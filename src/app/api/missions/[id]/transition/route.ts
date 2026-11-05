@@ -1,8 +1,11 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, after } from "next/server";
 import { getSessionCompany } from "@/lib/session";
 import { readJsonObject } from "@/lib/request-body";
 import { MissionError } from "@/lib/missions/messages";
 import { MissionNotFoundError, applyMissionTransition, parseTransitionBody } from "@/lib/missions/service";
+import { prepareFirstDraftQuietly } from "@/lib/contents/service";
+
+export const maxDuration = 60;
 
 // Transition d'une mission (story 9.1, spécification §2.2) : une seule porte, appliquée par le serveur sur l'entreprise de la session.
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -13,7 +16,10 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   if (!parsed) return NextResponse.json({ error: "Demande invalide." }, { status: 400 });
   const { id } = await params;
   try {
-    return NextResponse.json(await applyMissionTransition(company.id, id, parsed.request, parsed.expectedVersion));
+    const result = await applyMissionTransition(company.id, id, parsed.request, parsed.expectedVersion);
+    // Au lancement, Paul prépare le premier contenu s'il n'existe pas encore (J-17) ; sans effet s'il existe.
+    if (parsed.request.action === "launch" || parsed.request.action === "resume") after(() => prepareFirstDraftQuietly(company.id, id));
+    return NextResponse.json(result);
   } catch (error) {
     if (error instanceof MissionNotFoundError) return NextResponse.json({ error: "Mission introuvable" }, { status: 404 });
     if (error instanceof MissionError) return NextResponse.json({ error: error.message, code: error.code }, { status: error.status });
