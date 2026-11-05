@@ -289,6 +289,17 @@ test("story 6.4: an unverified address refuses every launch and reservation, and
   await expect(reserveUsageBudget(company.id, "co_ceo_chat")).resolves.toMatchObject({ purpose: "co_ceo_chat" });
 });
 
+test("story 7.1: a suspended company refuses every launch and reservation, and can resume once reactivated", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { reserveUsageBudget } = await import("../src/lib/agent-runs");
+  await prisma.company.update({ where: { id: company.id }, data: { suspendedAt: new Date() } });
+  for (const purpose of ["co_ceo_chat", "onboarding_interpret", "site_publish"]) {
+    await expect(reserveUsageBudget(company.id, purpose)).rejects.toMatchObject({ reason: "suspended", message: "Ce compte est suspendu. Vous pouvez écrire à contact@biendecider.com." });
+  }
+  expect(await prisma.usageReservation.count({ where: { companyId: company.id } })).toBe(0);
+  await prisma.company.update({ where: { id: company.id }, data: { suspendedAt: null } });
+  await expect(reserveUsageBudget(company.id, "co_ceo_chat")).resolves.toMatchObject({ purpose: "co_ceo_chat" });
+});
 test("audit A03: a suspended old worker cannot write or complete the action of its running retry", async ({ company }) => {
   const { prisma } = await import("../src/lib/prisma");
   const { anthropic } = await import("../src/lib/anthropic");

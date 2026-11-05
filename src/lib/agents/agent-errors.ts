@@ -3,7 +3,7 @@
  * enregistré sur l'exécution (AgentRun.failureReason), renvoyé à Paul et
  * aux routes, et toujours dit en clair au dirigeant via failureMessage.
  */
-export const RUN_FAILURE_REASONS = ["already_running", "quota_runs", "quota_budget", "email_not_verified", "no_result", "outage"] as const;
+export const RUN_FAILURE_REASONS = ["already_running", "quota_runs", "quota_budget", "email_not_verified", "suspended", "no_result", "outage"] as const;
 export type RunFailureReason = (typeof RUN_FAILURE_REASONS)[number];
 
 export function isRunFailureReason(value: unknown): value is RunFailureReason {
@@ -65,10 +65,13 @@ export class AgentRunConflictError extends Error {
 /** M-54 : une adresse non confirmée ne diffuse pas et ne consomme pas le budget IA (story 6.4). */
 export const EMAIL_NOT_VERIFIED_MESSAGE = "Confirmez votre adresse e-mail avant toute diffusion.";
 
-/** Quota de lancements ou budget atteint, ou adresse non confirmée : le motif est fixé à chaque `throw`. */
+/** Compte suspendu par un administrateur (story 7.1) : aucun lancement. */
+export const ACCOUNT_SUSPENDED_MESSAGE = "Ce compte est suspendu. Vous pouvez écrire à contact@biendecider.com.";
+
+/** Quota de lancements ou budget atteint, adresse non confirmée ou compte suspendu : le motif est fixé à chaque `throw`. */
 export class AgentRunQuotaError extends Error {
-  readonly reason: "quota_runs" | "quota_budget" | "email_not_verified";
-  constructor(message: string, reason: "quota_runs" | "quota_budget" | "email_not_verified") {
+  readonly reason: "quota_runs" | "quota_budget" | "email_not_verified" | "suspended";
+  constructor(message: string, reason: "quota_runs" | "quota_budget" | "email_not_verified" | "suspended") {
     super(message);
     this.name = "AgentRunQuotaError";
     this.reason = reason;
@@ -106,6 +109,8 @@ export function failureMessage(reason: RunFailureReason, agentName: string): str
       return "Le budget du jour est atteint. Réessayez demain.";
     case "email_not_verified":
       return EMAIL_NOT_VERIFIED_MESSAGE;
+    case "suspended":
+      return ACCOUNT_SUSPENDED_MESSAGE;
     case "no_result":
       return `${agentName} n'a pas pu produire de résultat exploitable cette fois-ci. Réessayez.`;
     case "outage":

@@ -4,6 +4,11 @@ import { prisma } from "@/lib/prisma";
 import { hashPassword, verifyPassword } from "@/lib/password";
 import { consumeIpAttempt, MAX_ATTEMPTS, recordFailedAttempt, refundIpAttempt } from "@/lib/auth-throttle";
 import { readJsonObject } from "@/lib/request-body";
+import { ACCOUNT_SUSPENDED_MESSAGE } from "@/lib/agents/agent-errors";
+
+function suspendedResponse() {
+  return NextResponse.json({ error: ACCOUNT_SUSPENDED_MESSAGE }, { status: 403 });
+}
 
 /**
  * Connexion par email + mot de passe. L'inscription est un flux séparé : une
@@ -56,6 +61,7 @@ export async function POST(request: NextRequest) {
   }
 
   if (!company.passwordHash) {
+    if (company.suspendedAt) return suspendedResponse();
     company = await prisma.company.update({
       where: { id: company.id },
       data: { passwordHash: await hashPassword(password), sessionVersion: { increment: 1 } },
@@ -75,6 +81,8 @@ export async function POST(request: NextRequest) {
   }
 
   await refundIpAttempt(ipAttempt);
+  // Story 7.1 : le message de suspension n'est donné qu'après authentification, pour ne rien révéler à un tiers.
+  if (company.suspendedAt) return suspendedResponse();
   await setSessionEmail(email);
   company = await prisma.company.update({
     where: { id: company.id },

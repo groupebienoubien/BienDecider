@@ -62,6 +62,7 @@ model Company {
   loginCount      Int       @default(0) // nombre de connexions réussies (vue admin)
   lastLoginAt     DateTime?
   emailVerifiedAt DateTime? @default(now()) // adresse confirmée par le lien envoyé (story 6.4). Défaut = confirmée (comptes antérieurs et fixtures de tests) ; seule l'inscription (src/app/api/auth/signup) crée un compte avec null
+  suspendedAt     DateTime? // compte bloqué par un administrateur (story 7.1) : données et site public conservés, plus de session ni de lancement
   createdAt       DateTime  @default(now())
   channels        ChannelConnection[]
   proposals       AgentProposal[]

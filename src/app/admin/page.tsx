@@ -7,6 +7,7 @@ import { PageHeading } from "@/components/mockup-ui";
 import { getShellPropsForEmail } from "@/lib/shell-data";
 import { PERSONAS, type AgentKey } from "@/lib/agents/personas";
 import { DeleteCompanyButton } from "./delete-company-button";
+import { SuspendCompanyButton } from "./suspend-company-button";
 import Link from "next/link";
 import { listUncoveredRequests } from "@/lib/agents/capabilities";
 import { CompanyQuotaForm } from "./company-quota-form";
@@ -166,6 +167,7 @@ export default async function AdminPage() {
                       <td>
                         {c.name}
                         <small>({c.trade})</small>
+                        {c.suspendedAt && <small className="badge"> Suspendue</small>}
                       </td>
                       <td>{c.ownerEmail}</td>
                       <td>{c.createdAt.toLocaleDateString("fr-FR")}</td>
@@ -187,7 +189,8 @@ export default async function AdminPage() {
                         reservedCost={(reservedMap.get(c.id) ?? 0) + (reservedInlineMap.get(c.id) ?? 0)}
                       /></td>}
                       <td>
-                        <DeleteCompanyButton companyId={c.id} companyName={c.name} />
+                        <SuspendCompanyButton companyId={c.id} companyName={c.name} suspended={c.suspendedAt !== null} isSelf={c.ownerEmail.toLowerCase() === ownerEmail.toLowerCase()} />
+                        <DeleteCompanyButton companyId={c.id} companyName={c.name || c.ownerEmail} />
                       </td>
                     </tr>
                   );

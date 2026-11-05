@@ -28,6 +28,7 @@ const GUARDED_ROUTES: Guarded[] = [
   { method: "POST", path: "/api/auth/resend-verification", denied: 401 },
   { method: "DELETE", path: "/api/admin/companies/[id]", denied: 403 },
   { method: "PATCH", path: "/api/admin/companies/[id]/limits", denied: 403 },
+  { method: "PATCH", path: "/api/admin/companies/[id]/suspension", denied: 403 },
   { method: "GET", path: "/api/admin/delegation-risk", denied: 403 },
   { method: "PATCH", path: "/api/admin/delegation-risk", denied: 403 },
   { method: "PATCH", path: "/api/admin/signup-control", denied: 403 },
@@ -776,6 +777,87 @@ test("password recovery: a one-hour single-use link replaces the password, close
   } finally {
     await sink.close();
     await prisma.company.deleteMany({ where: { id: { in: [company.id, legacy.id] } } });
+    await prisma.$disconnect();
+  }
+});
+
+test("suspending a company cuts its sessions and launches but keeps its data and public site; deletion needs its name", async ({ request, page }) => {
+  test.setTimeout(90000);
+  const admins = (process.env.ADMIN_EMAILS ?? "").split(",").map((email) => email.trim()).filter(Boolean);
+  test.skip(admins.length === 0, "Requires ADMIN_EMAILS on the server, as configured in CI.");
+  const prisma = openDatabase();
+  const adminEmail = admins[0];
+  const password = "mot-de-passe-valide";
+  const email = `security-suspend-${randomUUID()}@example.invalid`;
+  const slug = `suspension-${randomUUID().slice(0, 8)}`;
+  let createdAdmin = false;
+  let adminCompany = await prisma.company.findUnique({ where: { ownerEmail: adminEmail } });
+  if (!adminCompany) {
+    adminCompany = await prisma.company.create({ data: { ownerEmail: adminEmail, name: "Admin suspension test", trade: "Artisan", servingArea: "Paris" } });
+    createdAdmin = true;
+  }
+  const company = await prisma.company.create({ data: {
+    ownerEmail: email, passwordHash: await hashPassword(password), name: "Atelier Suspendu", trade: "Artisan", servingArea: "Paris", siteSlug: slug, siteHtml: "<p>Site public conservé</p>", sitePublishedAt: new Date(),
+  } });
+  const adminCookie = sessionCookie(adminEmail, adminCompany.sessionVersion);
+  const userCookie = sessionCookie(email, company.sessionVersion);
+  const admin = { Cookie: adminCookie, Origin: baseURL };
+  const suspension = `${baseURL}/api/admin/companies/${company.id}/suspension`;
+  const login = (who: string, secret: string) => request.post(`${baseURL}/api/auth/login`, { headers: { "x-real-ip": `test-${randomUUID()}` }, data: { email: who, password: secret } });
+  try {
+    expect((await request.get(`${baseURL}/api/companies`, { headers: { Cookie: userCookie } })).status()).toBe(200);
+
+    // Refus : non-administrateur, autre origine, corps invalide, son propre compte, entreprise inconnue.
+    expect((await request.patch(suspension, { headers: { Cookie: userCookie, Origin: baseURL }, data: { suspended: true } })).status()).toBe(403);
+    expect((await request.patch(suspension, { headers: { ...admin, Origin: "https://attacker.invalid" }, data: { suspended: true } })).status()).toBe(403);
+    expect((await request.patch(suspension, { headers: admin, data: { suspended: "oui" } })).status()).toBe(400);
+    expect((await request.patch(`${baseURL}/api/admin/companies/${adminCompany.id}/suspension`, { headers: admin, data: { suspended: true } })).status()).toBe(400);
+    expect((await request.patch(`${baseURL}/api/admin/companies/identifiant-inexistant/suspension`, { headers: admin, data: { suspended: true } })).status()).toBe(404);
+
+    // Suspension : la session ouverte est coupée, la connexion refusée avec le bon mot de passe seulement.
+    expect((await request.patch(suspension, { headers: admin, data: { suspended: true } })).status()).toBe(200);
+    const firstDate = (await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).suspendedAt;
+    expect(firstDate).not.toBeNull();
+    expect((await request.patch(suspension, { headers: admin, data: { suspended: true } })).status()).toBe(200);
+    expect((await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).suspendedAt?.getTime()).toBe(firstDate!.getTime());
+    expect((await request.get(`${baseURL}/api/companies`, { headers: { Cookie: userCookie } })).status()).toBe(401);
+    const refused = await login(email, password);
+    expect(refused.status()).toBe(403);
+    expect((await refused.json()).error).toContain("Ce compte est suspendu.");
+    expect(refused.headers()["set-cookie"]).toBeUndefined();
+    expect((await login(email, "mauvais-mot-de-passe")).status()).toBe(401);
+
+    // Données et site public conservés.
+    expect(await prisma.company.count({ where: { id: company.id } })).toBe(1);
+    expect((await request.get(`${baseURL}/site/${slug}`)).status()).toBe(200);
+
+    // L'administration montre l'état.
+    await page.context().clearCookies();
+    await page.context().addCookies([{ name: "pepito_session", value: adminCookie.slice(adminCookie.indexOf("=") + 1), url: baseURL }]);
+    await page.goto(`${baseURL}/admin`);
+    await expect(page.getByText("Suspendue", { exact: true }).first()).toBeVisible();
+    await expect(page.getByRole("button", { name: "Réactiver" }).first()).toBeVisible();
+
+    // Réactivation : tout refonctionne.
+    expect((await request.patch(suspension, { headers: admin, data: { suspended: false } })).status()).toBe(200);
+    expect((await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).suspendedAt).toBeNull();
+    expect((await request.get(`${baseURL}/api/companies`, { headers: { Cookie: userCookie } })).status()).toBe(200);
+    expect((await login(email, password)).status()).toBe(200);
+
+    // Suppression définitive : le nom exact est exigé, et seul un administrateur peut la demander.
+    const deletion = `${baseURL}/api/admin/companies/${company.id}`;
+    expect((await request.delete(deletion, { headers: { Cookie: userCookie, Origin: baseURL }, data: { confirmName: "Atelier Suspendu" } })).status()).toBe(403);
+    expect((await request.delete(deletion, { headers: { ...admin, Origin: "https://attacker.invalid" }, data: { confirmName: "Atelier Suspendu" } })).status()).toBe(403);
+    for (const data of [{}, { confirmName: "atelier suspendu" }, { confirmName: "" }, { confirmName: 42 }]) {
+      expect((await request.delete(deletion, { headers: admin, data })).status(), JSON.stringify(data)).toBe(400);
+    }
+    expect(await prisma.company.count({ where: { id: company.id } })).toBe(1);
+    expect((await request.delete(deletion, { headers: admin, data: { confirmName: "Atelier Suspendu" } })).status()).toBe(200);
+    expect(await prisma.company.count({ where: { id: company.id } })).toBe(0);
+  } finally {
+    await page.context().clearCookies();
+    await prisma.company.deleteMany({ where: { id: company.id } });
+    if (createdAdmin) await prisma.company.delete({ where: { id: adminCompany.id } });
     await prisma.$disconnect();
   }
 });

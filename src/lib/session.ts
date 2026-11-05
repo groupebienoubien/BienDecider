@@ -34,8 +34,10 @@ export async function getSessionEmail(): Promise<string | null> {
   if (!claims) return null;
   const company = await prisma.company.findUnique({
     where: { ownerEmail: claims.email },
-    select: { sessionVersion: true },
+    select: { sessionVersion: true, suspendedAt: true },
   });
+  // Un compte suspendu est traité comme déconnecté partout, sessions déjà ouvertes comprises (story 7.1).
+  if (company?.suspendedAt) return null;
   return company?.sessionVersion === claims.sessionVersion ? claims.email : null;
 }
 

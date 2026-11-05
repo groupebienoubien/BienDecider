@@ -63,7 +63,7 @@ export async function GET(request: NextRequest) {
 
   const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
   const companies = await prisma.company.findMany({
-    where: { name: { not: "" } },
+    where: { name: { not: "" }, suspendedAt: null },
   });
 
   let created = 0;
