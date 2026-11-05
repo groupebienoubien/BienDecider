@@ -71,10 +71,10 @@ development_status:
   epic-5-retrospective: optional
 
   epic-6: in-progress
-  6-1-plafonner-et-pouvoir-fermer-les-inscriptions: review
-  6-2-fermer-l-administration-par-defaut: backlog
-  6-3-envoyer-les-e-mails-du-service: backlog
-  6-4-confirmer-mon-e-mail-a-l-inscription: backlog
-  6-5-recuperer-mon-mot-de-passe: backlog
+  6-1-plafonner-et-pouvoir-fermer-les-inscriptions: done
+  6-2-fermer-l-administration-par-defaut: ready-for-dev
+  6-3-envoyer-les-e-mails-du-service: ready-for-dev
+  6-4-confirmer-mon-e-mail-a-l-inscription: ready-for-dev
+  6-5-recuperer-mon-mot-de-passe: ready-for-dev
   6-6-mettre-a-jour-la-charte-pour-la-cible-v5-2: backlog
   epic-6-retrospective: optional

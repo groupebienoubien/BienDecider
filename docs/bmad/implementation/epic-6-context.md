@@ -44,3 +44,12 @@ Hors epic mais dans la vague 0 : terminer #79 et #81 (déjà en relecture), puis
 ## Prérequis de déploiement
 
 - `ADMIN_EMAILS` doit être définie en Production (Vercel) avant de livrer 6.1 ou 6.2, puis redéployer ; sans elle, l'administration est inaccessible une fois 6.2 livrée.
+
+## Décisions du 2026-11-05 (lot accès et e-mails : stories 6.2 à 6.5, livrées ensemble)
+
+- Lot unique, un commit et une spec par US ; #63 reprise dans le lot (Samir prévenu sur l'Issue).
+- Envoi : SMTP générique par variables d'environnement, fournisseur choisi plus tard (`contact@biendecider.com` est un transfert en réception, il n'envoie pas).
+- Adresse non confirmée : espace accessible, mais ni budget IA ni diffusion (FR-11 et motif de #64) ; comptes existants confirmés d'office.
+- Mot de passe : 8 à 128 caractères pour les nouveaux mots de passe (cahier des charges FR-10 et #24) ; les existants restent valables.
+- Prérequis de déploiement : `ADMIN_EMAILS` (6.1, 6.2), puis `SERVICE_SMTP_URL`, `SERVICE_MAIL_FROM`, `APP_BASE_URL` et les enregistrements DNS du fournisseur (6.3 à 6.5).
+
