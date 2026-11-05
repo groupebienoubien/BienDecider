@@ -13,6 +13,9 @@ import { listUncoveredRequests } from "@/lib/agents/capabilities";
 import { CompanyQuotaForm } from "./company-quota-form";
 import { SignupControlForm } from "./signup-control-form";
 import { readSignupControl, todaySignupCount } from "@/lib/signup-control";
+import { UsageAlertsPanel } from "./usage-alerts-panel";
+import { readUsageAlertThresholds } from "@/lib/usage-alerts";
+import { parisDateKey } from "@/lib/agents/personas";
 import { CHAT_USAGE_PURPOSES, parisQuotaWindows } from "@/lib/quota-windows";
 
 export const dynamic = "force-dynamic";
@@ -105,6 +108,8 @@ export default async function AdminPage() {
 
   const uncoveredRequests = isExplicitAdminEmail(ownerEmail) ? await listUncoveredRequests() : null;
   const [signupControl, signupToday] = isExplicitAdminEmail(ownerEmail) ? await Promise.all([readSignupControl(), todaySignupCount(now)]) : [null, 0];
+  const [alertThresholds, recentAlerts] = await Promise.all([readUsageAlertThresholds(), prisma.usageAlert.findMany({ orderBy: { createdAt: "desc" }, take: 10 })]);
+  const alertDay = parisDateKey(now);
 
   return (
     <AppShell {...await getShellPropsForEmail(ownerEmail)}>
@@ -126,6 +131,12 @@ export default async function AdminPage() {
         </section>
 
         {signupControl && <SignupControlForm open={signupControl.open} dailyCap={signupControl.dailyCap} todayCount={signupToday} />}
+
+        <UsageAlertsPanel
+          thresholds={alertThresholds}
+          alerts={recentAlerts.map((alert) => ({ id: alert.id, day: alert.day, label: alert.label, scope: alert.scope, thresholdUsd: alert.thresholdUsd, costUsd: alert.costUsd }))}
+          today={alertDay}
+        />
 
         {isExplicitAdminEmail(ownerEmail) && (
           <section className="setting-section">

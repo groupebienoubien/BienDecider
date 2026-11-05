@@ -461,3 +461,26 @@ model UncoveredRequest {
   source             String // chat, plan
   createdAt          DateTime @default(now())
 }
+
+/** Seuils d'alerte de consommation (story 7.3, #72) : une seule ligne, id "global". Sans ligne : 3 $ par entreprise et 10 $ au total, par jour de Paris. */
+model UsageAlertSetting {
+  id              String   @id @default("global")
+  companyDailyUsd Float    @default(3)
+  totalDailyUsd   Float    @default(10)
+  updatedBy       String
+  updatedAt       DateTime @updatedAt
+}
+
+/** Alerte de consommation : au plus une par jour (AAAA-MM-JJ, heure de Paris) et par portée (company:<id> ou total). L'entreprise n'est pas une relation : l'historique survit à sa suppression. */
+model UsageAlert {
+  id           String   @id @default(cuid())
+  day          String
+  scope        String
+  label        String // nom de l'entreprise au moment de l'alerte, ou « Total »
+  thresholdUsd Float
+  costUsd      Float
+  createdAt    DateTime @default(now())
+
+  @@unique([day, scope])
+  @@index([createdAt])
+}

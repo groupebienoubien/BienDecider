@@ -29,6 +29,7 @@ const GUARDED_ROUTES: Guarded[] = [
   { method: "DELETE", path: "/api/admin/companies/[id]", denied: 403 },
   { method: "PATCH", path: "/api/admin/companies/[id]/limits", denied: 403 },
   { method: "PATCH", path: "/api/admin/companies/[id]/suspension", denied: 403 },
+  { method: "PATCH", path: "/api/admin/usage-alerts", denied: 403 },
   { method: "GET", path: "/api/admin/delegation-risk", denied: 403 },
   { method: "PATCH", path: "/api/admin/delegation-risk", denied: 403 },
   { method: "PATCH", path: "/api/admin/signup-control", denied: 403 },
@@ -917,6 +918,57 @@ test("the activity page of a company is for administrators only, scoped to that 
   }
 });
 
+test("usage alert thresholds are for administrators, validated, and today's alert shows in the administration", async ({ request, page }) => {
+  const admins = (process.env.ADMIN_EMAILS ?? "").split(",").map((email) => email.trim()).filter(Boolean);
+  test.skip(admins.length === 0, "Requires ADMIN_EMAILS on the server, as configured in CI.");
+  const prisma = openDatabase();
+  const adminEmail = admins[0];
+  const marker = randomUUID().slice(0, 8);
+  const today = signupDayKey(new Date());
+  let createdAdmin = false;
+  let adminCompany = await prisma.company.findUnique({ where: { ownerEmail: adminEmail } });
+  if (!adminCompany) {
+    adminCompany = await prisma.company.create({ data: { ownerEmail: adminEmail, name: "Admin alert test", trade: "Artisan", servingArea: "Paris" } });
+    createdAdmin = true;
+  }
+  const user = await prisma.company.create({ data: { ownerEmail: `security-alert-${marker}@example.invalid`, name: "Dirigeant simple", trade: "Artisan", servingArea: "Paris" } });
+  const previous = await prisma.usageAlertSetting.findUnique({ where: { id: "global" } });
+  const adminCookie = sessionCookie(adminEmail, adminCompany.sessionVersion);
+  const admin = { Cookie: adminCookie, Origin: baseURL };
+  const path = `${baseURL}/api/admin/usage-alerts`;
+  const seeded = await prisma.usageAlert.create({ data: { day: today, scope: `company:seed-${marker}`, label: `Atelier Alerte ${marker}`, thresholdUsd: 3, costUsd: 3.5 } });
+  try {
+    expect((await request.patch(path, { headers: { Cookie: sessionCookie(user.ownerEmail, user.sessionVersion), Origin: baseURL }, data: { companyDailyUsd: 3, totalDailyUsd: 10 } })).status()).toBe(403);
+    expect((await request.patch(path, { headers: { ...admin, Origin: "https://attacker.invalid" }, data: { companyDailyUsd: 3, totalDailyUsd: 10 } })).status()).toBe(403);
+    for (const data of [{}, { companyDailyUsd: 0, totalDailyUsd: 10 }, { companyDailyUsd: -1, totalDailyUsd: 10 }, { companyDailyUsd: "3", totalDailyUsd: 10 }, { companyDailyUsd: 3, totalDailyUsd: 1_000_000 }, "texte"]) {
+      expect((await request.patch(path, { headers: admin, data })).status(), JSON.stringify(data)).toBe(400);
+    }
+    const saved = await request.patch(path, { headers: admin, data: { companyDailyUsd: 2.5, totalDailyUsd: 20 } });
+    expect(saved.status()).toBe(200);
+    expect(await saved.json()).toEqual({ companyDailyUsd: 2.5, totalDailyUsd: 20 });
+    expect(await prisma.usageAlertSetting.findUniqueOrThrow({ where: { id: "global" } })).toMatchObject({ companyDailyUsd: 2.5, totalDailyUsd: 20, updatedBy: adminEmail });
+
+    await page.context().clearCookies();
+    await page.context().addCookies([{ name: "pepito_session", value: adminCookie.slice(adminCookie.indexOf("=") + 1), url: baseURL }]);
+    await page.goto(`${baseURL}/admin`);
+    await expect(page.getByRole("heading", { name: "Alertes de consommation" })).toBeVisible();
+    await expect(page.getByText("Seuil franchi aujourd'hui")).toBeVisible();
+    await expect(page.getByText(`Atelier Alerte ${marker} : 3.50 $ pour un seuil de 3.00 $`)).toBeVisible();
+    await expect(page.getByLabel("Seuil par entreprise et par jour en dollars")).toHaveValue("2.5");
+    await page.getByLabel("Seuil total par jour en dollars").fill("30");
+    await page.getByRole("button", { name: "Enregistrer les seuils" }).click();
+    await expect(page.getByText("Seuils enregistrés.")).toBeVisible();
+    expect((await prisma.usageAlertSetting.findUniqueOrThrow({ where: { id: "global" } })).totalDailyUsd).toBe(30);
+  } finally {
+    await page.context().clearCookies();
+    await prisma.usageAlert.deleteMany({ where: { id: seeded.id } });
+    if (previous) await prisma.usageAlertSetting.update({ where: { id: "global" }, data: { companyDailyUsd: previous.companyDailyUsd, totalDailyUsd: previous.totalDailyUsd } });
+    else await prisma.usageAlertSetting.deleteMany({ where: { id: "global" } });
+    await prisma.company.deleteMany({ where: { id: user.id } });
+    if (createdAdmin) await prisma.company.delete({ where: { id: adminCompany.id } });
+    await prisma.$disconnect();
+  }
+});
 test("company run history and a run detail never cross company boundaries", async ({ request }) => {
   const prisma = openDatabase();
   const owner = await prisma.company.create({ data: { ownerEmail: `security-run-owner-${randomUUID()}@example.invalid`, name: "Run owner", trade: "Artisan", servingArea: "Lyon" } });

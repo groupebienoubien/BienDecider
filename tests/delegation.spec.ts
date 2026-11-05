@@ -32,6 +32,7 @@ import { DEFAULT_SIGNUP_CONTROL, MAX_DAILY_SIGNUP_CAP, parseSignupControlInput, 
 import { appBaseUrl, isServiceMailConfigured, sendServiceEmail } from "../src/lib/service-mail";
 import { passwordResetEmail, passwordResetLink, verificationEmail, verificationLink } from "../src/lib/service-mail-templates";
 import { ERROR_MESSAGE_MAX_LENGTH, redactSecrets } from "../src/lib/redact-secrets";
+import { DEFAULT_USAGE_ALERT_THRESHOLDS, alertEmail, companyAlertScope, crossedAlerts, parseUsageAlertInput, safeAlertLabel } from "../src/lib/usage-alert-rules";
 import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH, passwordPolicyError } from "../src/lib/password-policy";
 import { startSmtpSink } from "./support/smtp-sink";
 import { BetaToolRunner } from "@anthropic-ai/sdk/lib/tools/BetaToolRunner";
@@ -1440,4 +1441,27 @@ test("redactSecrets masks tokens, passwords and connection secrets, keeps the us
   expect(long.endsWith("…")).toBe(true);
   // Le nettoyage précède la coupe : un secret à cheval sur la limite n'est pas coupé en un fragment lisible.
   expect(redactSecrets("x".repeat(290) + " password=hunter2-secret")).not.toContain("hunter2");
+});
+
+test("usage alerts: a scope is crossed at the threshold, never below, and the email keeps to one safe line", () => {
+  const base = { companyId: "c1", companyLabel: "Atelier Durand", thresholds: { companyDailyUsd: 3, totalDailyUsd: 10 } };
+  expect(crossedAlerts({ ...base, companyDayCostUsd: 2.99, totalDayCostUsd: 9.99 })).toEqual([]);
+  expect(crossedAlerts({ ...base, companyDayCostUsd: 3, totalDayCostUsd: 9.99 })).toEqual([{ scope: companyAlertScope("c1"), label: "Atelier Durand", thresholdUsd: 3, costUsd: 3 }]);
+  expect(crossedAlerts({ ...base, companyDayCostUsd: 1, totalDayCostUsd: 10 })).toEqual([{ scope: "total", label: "Total", thresholdUsd: 10, costUsd: 10 }]);
+  expect(crossedAlerts({ ...base, companyDayCostUsd: 4, totalDayCostUsd: 12 }).map((alert) => alert.scope)).toEqual(["company:c1", "total"]);
+  expect(DEFAULT_USAGE_ALERT_THRESHOLDS).toEqual({ companyDailyUsd: 3, totalDailyUsd: 10 });
+  expect(safeAlertLabel("Ligne 1\r\nBcc: x@y.z")).toBe("Ligne 1 Bcc: x@y.z");
+  expect(safeAlertLabel("   ")).toBe("Entreprise sans nom");
+  expect(safeAlertLabel("x".repeat(200))).toHaveLength(80);
+  const mail = alertEmail({ scope: "company:c1", label: "Atelier\nDurand", thresholdUsd: 3, costUsd: 3.456 }, "https://www.biendecider.com/admin");
+  expect(mail.subject).toBe("Consommation anormale : Atelier Durand");
+  expect(mail.text).toContain("3.46 $");
+  expect(mail.text).toContain("https://www.biendecider.com/admin");
+});
+
+test("usage alerts: thresholds are accepted only as numbers from 0.01 to 100000 dollars", () => {
+  expect(parseUsageAlertInput({ companyDailyUsd: 2.5, totalDailyUsd: 20 })).toEqual({ ok: true, value: { companyDailyUsd: 2.5, totalDailyUsd: 20 } });
+  for (const body of [null, [], "x", {}, { companyDailyUsd: 0, totalDailyUsd: 10 }, { companyDailyUsd: -1, totalDailyUsd: 10 }, { companyDailyUsd: "3", totalDailyUsd: 10 }, { companyDailyUsd: 3, totalDailyUsd: 100001 }, { companyDailyUsd: 3, totalDailyUsd: Number.NaN }, { companyDailyUsd: 3 }]) {
+    expect(parseUsageAlertInput(body).ok, JSON.stringify(body)).toBe(false);
+  }
 });

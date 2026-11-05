@@ -300,6 +300,75 @@ test("story 7.1: a suspended company refuses every launch and reservation, and c
   await prisma.company.update({ where: { id: company.id }, data: { suspendedAt: null } });
   await expect(reserveUsageBudget(company.id, "co_ceo_chat")).resolves.toMatchObject({ purpose: "co_ceo_chat" });
 });
+test("story 7.3: crossing a daily threshold records one alert and mails the administrators once, even when two costs arrive together", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { recordUsage } = await import("../src/lib/usage");
+  const { parisDateKey } = await import("../src/lib/agents/personas");
+  const { parisQuotaWindows } = await import("../src/lib/quota-windows");
+  const { startSmtpSink } = await import("./support/smtp-sink");
+  const sink = await startSmtpSink();
+  const names = ["SERVICE_SMTP_URL", "SERVICE_MAIL_FROM", "ADMIN_EMAILS"] as const;
+  const previousEnv = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+  const previousSetting = await prisma.usageAlertSetting.findUnique({ where: { id: "global" } });
+  const day = parisDateKey(new Date());
+  const scopes = [`company:${company.id}`, "total"];
+  const setThresholds = (companyDailyUsd: number, totalDailyUsd: number) => prisma.usageAlertSetting.upsert({ where: { id: "global" }, create: { id: "global", companyDailyUsd, totalDailyUsd, updatedBy: "test" }, update: { companyDailyUsd, totalDailyUsd } });
+  const spend = (tokens: number) => recordUsage({ companyId: company.id, agent: "marketing", model: "claude-sonnet-5-5", usage: { input_tokens: tokens, output_tokens: 0 } });
+  const alertsOf = (scope: string) => prisma.usageAlert.findMany({ where: { day, scope } });
+  process.env.SERVICE_SMTP_URL = `smtp://127.0.0.1:${sink.port}`;
+  process.env.SERVICE_MAIL_FROM = "BienDecider <noreply@biendecider.com>";
+  process.env.ADMIN_EMAILS = "fondateur-un@example.invalid, fondateur-deux@example.invalid";
+  try {
+    await prisma.usageAlert.deleteMany({ where: { day, scope: { in: scopes } } });
+    await setThresholds(0.01, 100000);
+
+    // Sous le seuil : rien. 1 000 jetons coûtent 0,002 $.
+    await spend(1000);
+    expect(await alertsOf(scopes[0])).toHaveLength(0);
+    expect(sink.messages).toHaveLength(0);
+
+    // Franchissement : une alerte, un e-mail par administrateur. 10 000 jetons coûtent 0,02 $.
+    await spend(10_000);
+    const [first] = await alertsOf(scopes[0]);
+    expect(first).toMatchObject({ thresholdUsd: 0.01, label: expect.any(String) });
+    expect(first.costUsd).toBeGreaterThanOrEqual(0.01);
+    await expect.poll(() => sink.messages.length, { timeout: 10000 }).toBe(2);
+    expect(sink.messages.flatMap((message) => message.to).sort()).toEqual(["fondateur-deux@example.invalid", "fondateur-un@example.invalid"]);
+    expect(sink.messages[0].subject).toMatch(/^Consommation anormale : /);
+    expect(sink.messages[0].text).toContain("/admin");
+
+    // Même jour, même portée : silence, aussi pour deux coûts simultanés.
+    await spend(1000);
+    expect(await alertsOf(scopes[0])).toHaveLength(1);
+    await prisma.usageAlert.deleteMany({ where: { day, scope: scopes[0] } });
+    await Promise.all([spend(1000), spend(1000)]);
+    expect(await alertsOf(scopes[0])).toHaveLength(1);
+    await expect.poll(() => sink.messages.length, { timeout: 10000 }).toBe(4);
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    expect(sink.messages).toHaveLength(4);
+
+    // Portée « total » : seuil juste au-dessus de la consommation actuelle de tout le monde.
+    const { dayStart } = parisQuotaWindows(new Date());
+    const so_far = (await prisma.usageEvent.aggregate({ where: { createdAt: { gte: dayStart } }, _sum: { costUsd: true } }))._sum.costUsd ?? 0;
+    await setThresholds(1000, so_far + 0.005);
+    await spend(5000);
+    expect((await alertsOf("total")).length).toBe(1);
+    await expect.poll(() => sink.messages.length, { timeout: 10000 }).toBe(6);
+
+    // Envoi impossible : l'alerte est quand même enregistrée, sans erreur pour l'appelant.
+    delete process.env.SERVICE_SMTP_URL;
+    await prisma.usageAlert.deleteMany({ where: { day, scope: "total" } });
+    await spend(5000);
+    expect((await alertsOf("total")).length).toBe(1);
+    expect(sink.messages).toHaveLength(6);
+  } finally {
+    for (const name of names) { if (previousEnv[name] === undefined) delete process.env[name]; else process.env[name] = previousEnv[name]; }
+    await sink.close();
+    await prisma.usageAlert.deleteMany({ where: { day, scope: { in: scopes } } });
+    if (previousSetting) await prisma.usageAlertSetting.update({ where: { id: "global" }, data: { companyDailyUsd: previousSetting.companyDailyUsd, totalDailyUsd: previousSetting.totalDailyUsd } });
+    else await prisma.usageAlertSetting.deleteMany({ where: { id: "global" } });
+  }
+});
 test("audit A03: a suspended old worker cannot write or complete the action of its running retry", async ({ company }) => {
   const { prisma } = await import("../src/lib/prisma");
   const { anthropic } = await import("../src/lib/anthropic");
