@@ -2,7 +2,8 @@ import type { Mission, MissionContent } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { channelLabel, isMissionChannel, type MissionChannel } from "@/lib/missions/channels";
 import { scopeSummary } from "@/lib/missions/scope";
-import { missionStage, orderMissions, priorityMissionId, type ContentState, type MissionStage, type StageMission } from "@/lib/missions/stage";
+import { missionStage, orderMissions, priorityMissionId, type ContentState, type Delegation, type MissionStage, type StageMission } from "@/lib/missions/stage";
+import { asDelegationLevel } from "@/lib/delegation-level";
 import { MISSION_TEMPLATES, type TemplateKey } from "@/lib/missions/templates";
 import type { MissionStatus } from "@/lib/missions/rules";
 
@@ -35,23 +36,25 @@ export type MissionView = StageMission & {
   actions: MissionActionData;
 };
 
-type MissionWithContent = Mission & { content: MissionContent | null };
+type MissionWithContent = Mission & { content: (MissionContent & { publications: { versionNumber: number; status: string }[] }) | null };
 
 /** Le site est publié par BienDecider : il n'a pas de connexion à établir. */
 function isConnected(channel: MissionChannel | null, connected: ReadonlySet<string>): boolean {
   return channel === "site" || (channel !== null && connected.has(channel));
 }
 
-/** État du contenu principal ; la programmation, la diffusion et le bilan arrivent avec #315, #261, #295 et #290. */
+/** État du contenu principal d'après ses diffusions ; le bilan et la décision arrivent avec #294 et #52. */
 function contentStateOf(mission: MissionWithContent, connected: ReadonlySet<string>): ContentState | null {
   const content = mission.content;
   if (!content || content.currentNumber === 0) return null;
+  const current = content.publications.filter((publication) => publication.versionNumber === content.currentNumber);
   return {
     number: content.currentNumber,
     validated: content.validatedNumber === content.currentNumber,
-    currentDiffused: false,
-    scheduled: false,
-    diffusions: 0,
+    currentDiffused: current.some((publication) => publication.status === "sent"),
+    scheduled: current.some((publication) => publication.status === "scheduled"),
+    uncertain: current.some((publication) => publication.status === "uncertain" || publication.status === "sending"),
+    diffusions: content.publications.filter((publication) => publication.status === "sent").length,
     reportAt: null,
     decisionAt: null,
     channelConnected: isConnected(isMissionChannel(mission.channel) ? mission.channel : null, connected),
@@ -71,14 +74,14 @@ function toStageMission(mission: MissionWithContent, connected: ReadonlySet<stri
   };
 }
 
-function toView(mission: MissionWithContent, priorityId: string | null, connected: ReadonlySet<string>): MissionView {
+function toView(mission: MissionWithContent, priorityId: string | null, connected: ReadonlySet<string>, delegation: Delegation): MissionView {
   const base = toStageMission(mission, connected);
   const scope = mission.scope !== null && typeof mission.scope === "object" && !Array.isArray(mission.scope) ? (mission.scope as Record<string, unknown>) : {};
   const summary = scopeSummary(base.template, scope);
   const label = base.channel ? channelLabel(base.channel) : "Hors canal, diffusion déclarée";
   return {
     ...base,
-    stage: missionStage(base),
+    stage: missionStage(base, delegation),
     priority: mission.id === priorityId,
     finding: mission.finding,
     createdBy: mission.createdBy,
@@ -106,13 +109,15 @@ function toView(mission: MissionWithContent, priorityId: string | null, connecte
 
 /** Missions de l'entreprise, la priorité d'abord puis l'ordre du plan. */
 export async function loadMissionViews(companyId: string): Promise<MissionView[]> {
-  const [missions, connections] = await Promise.all([
-    prisma.mission.findMany({ where: { companyId }, orderBy: [{ position: "asc" }, { id: "asc" }], include: { content: true } }),
+  const [missions, connections, company] = await Promise.all([
+    prisma.mission.findMany({ where: { companyId }, orderBy: [{ position: "asc" }, { id: "asc" }], include: { content: { include: { publications: { select: { versionNumber: true, status: true } } } } } }),
     prisma.channelConnection.findMany({ where: { companyId, status: "connecte" }, select: { channel: true } }),
+    prisma.company.findUniqueOrThrow({ where: { id: companyId }, select: { delegationLevel: true } }),
   ]);
   const connected = new Set(connections.map((connection) => connection.channel));
+  const delegation = asDelegationLevel(company.delegationLevel);
   const priorityId = priorityMissionId(missions.map((mission) => toStageMission(mission, connected)));
-  return orderMissions(missions.map((mission) => toView(mission, priorityId, connected)));
+  return orderMissions(missions.map((mission) => toView(mission, priorityId, connected, delegation)));
 }
 
 export async function loadMissionView(companyId: string, missionId: string): Promise<MissionView | null> {

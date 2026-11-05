@@ -28,6 +28,12 @@ export const MISSION_MESSAGES = {
   "M-51": "Confirmez la marque et les droits du visuel avant validation.",
   "M-52": "Cette version est déjà programmée.",
   "M-53": "Cette version est déjà diffusée.",
+  "M-54": "Confirmez votre adresse e-mail avant toute diffusion.",
+  "M-55": "Votre règle autorise uniquement la préparation. Diffusez vous-même ou modifiez les règles.",
+  "M-56": "La mission doit être en cours.",
+  "M-57": "Connectez le canal de destination avant de poursuivre.",
+  "M-58": "Validez la version courante avant de poursuivre.",
+  "M-59": "Une programmation existe déjà pour cette version.",
   "M-60": "Enregistrez vos retouches dans une nouvelle version avant cette décision.",
   "M-64": "Choisissez de 1 à 5 avis sans réponse.",
   "M-65": "Ajoutez un visuel : {canal} ne publie pas sans image.",
@@ -40,6 +46,13 @@ export const MISSION_MESSAGES = {
   "M-77": "Cochez « J'ai relu le contenu et vérifié les informations qui engagent mon entreprise » avant de valider.",
   "M-78": "Choisissez comment retravailler : plus court, plus humain, un autre angle, ou votre consigne (5 à 300 caractères).",
   "M-79": "Paul n'a pas pu préparer ce contenu. Réessayez dans un instant.",
+  "M-80": "Cette mission est menée hors canal : diffusez-la vous-même, puis déclarez-le.",
+  "M-81": "Le résultat de la diffusion précédente est incertain : vérifiez sur le canal, puis dites-le.",
+  "M-82": "Cochez « Je confirme cette version, cette destination et ce moment » avant de diffuser.",
+  "M-83": "Indiquez où vous avez diffusé (2 à 60 caractères) et une date passée ou d'aujourd'hui.",
+  "M-84": "Cochez « Je confirme avoir diffusé cette version » avant de déclarer.",
+  "M-85": "Choisissez l'un des trois niveaux de délégation.",
+  "M-86": "Aucun résultat incertain à vérifier pour cette version.",
 } as const;
 
 export type MissionMessageCode = keyof typeof MISSION_MESSAGES;

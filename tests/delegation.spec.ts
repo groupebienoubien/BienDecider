@@ -42,7 +42,9 @@ import { availableTemplates, enabledChannels, MISSION_TEMPLATES } from "../src/l
 import { missionStage, missionTracker, nextStep, orderMissions, type ContentState, type StageMission } from "../src/lib/missions/stage";
 import { scopeSummary } from "../src/lib/missions/scope";
 import { renderJournal } from "../src/lib/journal";
-import { BODY_MAX, checkNewVersion, checkRejection, checkValidation, contentFormat, contentStatus, exposureFor, parseVariant, reviewChecklist, titleLabel, validateDraft, validateRejection, variantLabel, type ContentSnapshot } from "../src/lib/contents/rules";
+import { DELEGATION_LABELS, asDelegationLevel, prepareOnlyRefusal } from "../src/lib/delegation-level";
+import { slugify } from "../src/lib/site/slug";
+import { BODY_MAX, checkDeclaration, checkDiffusion, checkNewVersion, checkRejection, checkValidation, contentFormat, contentStatus, exposureFor, parseVariant, reviewChecklist, titleLabel, validateDraft, validateRejection, variantLabel, type ContentSnapshot } from "../src/lib/contents/rules";
 import { firstNameOf } from "../src/lib/workspace";
 import { workspacePageLabel } from "../src/components/workspace-nav";
 import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH, passwordPolicyError } from "../src/lib/password-policy";
@@ -1754,4 +1756,59 @@ test("atelier review checklist (#179): what commits the company is pointed out, 
   expect(exposureFor("facebook")).toBe("Les personnes qui suivent votre Page Facebook, et celles à qui elles la partagent.");
   expect(exposureFor("gmail")).toBe("Chaque destinataire, depuis votre adresse et sous votre nom.");
   expect(exposureFor(null)).toBe("Les personnes à qui vous le diffuserez vous-même.");
+});
+
+test("diffusion (§5.1, §5.4): server checks in the specification order, declared diffusion, delegation levels", () => {
+  const context = { emailVerified: true, delegation: "review" as const, channelEnabled: true, channelConnected: true };
+  const ready = contentSnapshot({ validatedNumber: 2 });
+  const confirm = { number: 2, confirmed: true };
+  expect(checkDiffusion(ready, context, confirm)).toBeNull();
+  expect(checkDiffusion(ready, context, { number: 1, confirmed: true })).toEqual({ code: "M-02" });
+  expect(checkDiffusion(ready, { ...context, emailVerified: false, delegation: "prepare" }, confirm)).toEqual({ code: "M-54" });
+  expect(checkDiffusion(ready, { ...context, delegation: "prepare" }, confirm)).toEqual({ code: "M-55" });
+  expect(checkDiffusion(contentSnapshot({ validatedNumber: 2, missionStatus: "paused" }), context, confirm)).toEqual({ code: "M-56" });
+  expect(checkDiffusion(contentSnapshot({ validatedNumber: 2, channel: null, format: "text" }), context, confirm)).toEqual({ code: "M-80" });
+  expect(checkDiffusion(contentSnapshot({ validatedNumber: 2, channel: "instagram" }), { ...context, channelEnabled: false }, confirm)).toEqual({ code: "M-67", params: { canal: "Instagram" } });
+  expect(checkDiffusion(ready, { ...context, channelConnected: false }, confirm)).toEqual({ code: "M-57" });
+  expect(checkDiffusion(contentSnapshot(), context, confirm)).toEqual({ code: "M-58" });
+  expect(checkDiffusion(contentSnapshot({ validatedNumber: 2, scheduled: true }), context, confirm)).toEqual({ code: "M-59" });
+  expect(checkDiffusion(contentSnapshot({ validatedNumber: 2, uncertain: true }), context, confirm)).toEqual({ code: "M-81" });
+  expect(checkDiffusion(contentSnapshot({ validatedNumber: 2, currentDiffused: true }), context, confirm)).toEqual({ code: "M-53" });
+  expect(checkDiffusion(contentSnapshot({ validatedNumber: 2, channel: "gmail", format: "email", recipients: 0 }), context, confirm)).toEqual({ code: "M-49" });
+  expect(checkDiffusion(ready, context, { number: 2, confirmed: false })).toEqual({ code: "M-82" });
+  expect(checkNewVersion(contentSnapshot({ uncertain: true }))).toEqual({ code: "M-81" });
+
+  const now = new Date("2026-11-05T10:00:00Z");
+  const declare = (input: Partial<{ number: number; channel: unknown; date: unknown; confirmed: boolean }>, snapshot = ready) => checkDeclaration(snapshot, { number: 2, channel: "Affichage en boutique", date: "2026-11-05", confirmed: true, ...input }, now);
+  expect(declare({})).toEqual({ ok: true, value: { channel: "Affichage en boutique", date: new Date("2026-11-05T12:00:00Z") } });
+  expect(declare({}, contentSnapshot({ validatedNumber: 2, missionStatus: "proposed" }))).toMatchObject({ ok: false, code: "M-56" });
+  expect(declare({}, contentSnapshot())).toMatchObject({ ok: false, code: "M-58" });
+  expect(declare({}, contentSnapshot({ validatedNumber: 2, currentDiffused: true }))).toMatchObject({ ok: false, code: "M-53" });
+  expect(declare({ date: "2026-11-06" })).toMatchObject({ ok: false, code: "M-83" });
+  expect(declare({ date: "2025-01-01" })).toMatchObject({ ok: false, code: "M-83" });
+  expect(declare({ date: "demain" })).toMatchObject({ ok: false, code: "M-83" });
+  expect(declare({ channel: "x" })).toMatchObject({ ok: false, code: "M-83" });
+  expect(declare({ confirmed: false })).toMatchObject({ ok: false, code: "M-84" });
+
+  expect(asDelegationLevel("prepare")).toBe("prepare");
+  expect(asDelegationLevel("autre")).toBe("review");
+  expect(DELEGATION_LABELS.review).toBe("Valider avant chaque action");
+  expect(prepareOnlyRefusal({ delegationLevel: "prepare" })).toEqual({ code: "M-55", error: "Votre règle autorise uniquement la préparation. Diffusez vous-même ou modifiez les règles." });
+  expect(prepareOnlyRefusal({ delegationLevel: "review" })).toBeNull();
+  expect(slugify("Nos tarifs & délais")).toBe("nos-tarifs-delais");
+  expect(slugify("!!!", "page")).toBe("page");
+  expect(renderJournal("J-22", { n: "2", canal: "Page Facebook « Dupont »", destinataires: "" })).toBe("V2 publiée sur Page Facebook « Dupont ». Version désormais en lecture seule.");
+  expect(renderJournal("J-24", { n: "1", canal: "Salon", date: "1 novembre 2026" })).toBe("V1 diffusée par vous sur Salon, déclarée le 1 novembre 2026.");
+  expect(renderJournal("J-25", { n: "1", résultat: "non diffusée" })).toBe("Résultat de V1 vérifié : non diffusée.");
+  expect(renderJournal("J-26", { niveau: "Préparer seulement", suite: " Programmations annulées." })).toBe("Règle de collaboration mise à jour : Préparer seulement. Programmations annulées.");
+});
+
+test("mission stage with diffusion: uncertain result to verify, self-publishing under « Préparer seulement »", () => {
+  const validated = stageMission({ content: content({ validated: true, channelConnected: true }) });
+  expect(missionStage(validated, "prepare")).toBe("self-publish");
+  expect(missionStage(validated)).toBe("publish");
+  const uncertain = stageMission({ content: content({ validated: true, channelConnected: true, uncertain: true }) });
+  expect(missionStage(uncertain)).toBe("verify");
+  expect(missionTracker("verify")?.find((step) => step.state === "current")?.label).toBe("Diffuser");
+  expect(nextStep([uncertain])).toMatchObject({ stage: "verify", title: "Vérifier la diffusion", target: { href: "/atelier?mission=m1", label: "Ouvrir l'atelier" } });
 });

@@ -78,6 +78,9 @@ model Company {
   workspaceV52    Boolean   @default(true) // espace V5.2 pour tous depuis le 2026-11-06 ; faux seulement dans les tests de l'ancien parcours, retire avec lui
   journalEntries  JournalEntry[]
   missionContents MissionContent[]
+  publications    Publication[]
+  sitePages       SitePage[]
+  delegationLevel String    @default("review") // prepare | review | bounded (spécification §9) ; « Valider avant chaque action » par défaut
   agentRuns       AgentRun[]
   agentRunAttempts AgentRunAttempt[]
   usageReservations UsageReservation[]
@@ -558,6 +561,7 @@ model Mission {
   company             Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
   credits             CreditLedger[]
   content             MissionContent?
+  sitePage            SitePage?
 
   @@index([companyId, status])
 }
@@ -610,6 +614,7 @@ model MissionContent {
   company         Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
   mission         Mission          @relation(fields: [missionId], references: [id], onDelete: Cascade)
   versions        ContentVersion[]
+  publications    Publication[]
 
   @@unique([missionId]) // un contenu par mission pour le PoC
   @@index([companyId])
@@ -630,4 +635,50 @@ model ContentVersion {
   content         MissionContent @relation(fields: [contentId], references: [id], onDelete: Cascade)
 
   @@unique([contentId, number])
+}
+
+/// Diffusion d'une version (stories 12.1 et 12.2, #315 #295 ; addendum 4.3) : confirmee par BienDecider ou declaree par le dirigeant.
+model Publication {
+  id             String         @id @default(cuid())
+  companyId      String
+  missionId      String
+  contentId      String
+  versionNumber  Int
+  title          String
+  channel        String? // canal de la mission ; null = hors canal, diffusion declaree
+  channelLabel   String // destination en clair : Page Facebook, adresse du site, canal declare
+  mode           String // confirmed | declared
+  status         String // scheduled | sending | sent | failed | uncertain | cancelled
+  scheduledAt    DateTime? // UTC (#261)
+  timezone       String?
+  sentAt         DateTime?
+  recipientCount Int?
+  externalId     String? // identifiant renvoye par le canal
+  url            String? // adresse publique, si le canal en donne une
+  failureReason  String? // en clair (J-28)
+  cancelReason   String? // J-23
+  idempotencyKey String         @unique // contenu, version et rang de la tentative : deux confirmations simultanees n'en font qu'une
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  company        Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  content        MissionContent @relation(fields: [contentId], references: [id], onDelete: Cascade)
+
+  @@index([status, scheduledAt])
+  @@index([contentId])
+}
+
+/// Page du site vitrine mise en ligne par une diffusion (#172) : exactement la version validee et confirmee, servie sous /site/{siteSlug}/{slug}.
+model SitePage {
+  id            String   @id @default(cuid())
+  companyId     String
+  missionId     String   @unique
+  slug          String
+  title         String
+  body          String
+  versionNumber Int
+  publishedAt   DateTime
+  company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  mission       Mission  @relation(fields: [missionId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, slug])
 }

@@ -8,7 +8,7 @@ import type { TemplateKey } from "@/lib/missions/templates";
  */
 export type MissionStage =
   | "dismissed" | "closed" | "launch" | "preparing" | "scheduled" | "report" | "decide" | "next-round"
-  | "self-publish" | "publish" | "connect" | "approve";
+  | "self-publish" | "publish" | "connect" | "approve" | "verify";
 
 /** État du contenu principal : version courante, validation, diffusions et ce qui a été jugé dessus. */
 export type ContentState = {
@@ -20,6 +20,8 @@ export type ContentState = {
   reportAt: number | null;
   decisionAt: number | null;
   channelConnected: boolean;
+  /** Le canal n'a pas confirmé la dernière diffusion : le dirigeant doit vérifier (§5.5). */
+  uncertain?: boolean;
 };
 
 export type StageMission = {
@@ -42,6 +44,7 @@ export function missionStage(mission: StageMission, delegation: Delegation = "re
   const content = mission.content;
   if (!content) return "preparing";
   if (content.scheduled) return "scheduled";
+  if (content.uncertain) return "verify";
   if (content.currentDiffused) {
     if (content.reportAt !== content.diffusions) return "report";
     if (content.decisionAt !== content.diffusions) return "decide";
@@ -62,6 +65,7 @@ export const STAGE_LABELS: Record<MissionStage, string> = {
   publish: "diffusion à confirmer",
   "self-publish": "à diffuser vous-même",
   scheduled: "diffusion programmée",
+  verify: "diffusion à vérifier",
   report: "bilan à renseigner",
   decide: "décision de fin de test",
   "next-round": "série suivante à préparer",
@@ -73,7 +77,7 @@ export const TRACKER_STEPS = ["Cadrer", "Préparer", "Valider", "Diffuser", "Fai
 export type TrackerStep = { label: (typeof TRACKER_STEPS)[number]; state: "done" | "current" | "todo" };
 
 const CURRENT_STEP: Record<MissionStage, number> = {
-  launch: 0, preparing: 1, approve: 2, connect: 3, publish: 3, "self-publish": 3, scheduled: 3, report: 4, decide: 5, "next-round": 6, closed: 6, dismissed: -1,
+  launch: 0, preparing: 1, approve: 2, connect: 3, publish: 3, "self-publish": 3, scheduled: 3, verify: 3, report: 4, decide: 5, "next-round": 6, closed: 6, dismissed: -1,
 };
 
 /** Suivi en six temps : les temps précédents sont faits, le temps courant est marqué ; null pour une mission écartée. */
@@ -97,7 +101,7 @@ export function orderMissions<T extends StageMission>(missions: T[]): T[] {
 export type NextStepTarget = { kind: "link"; href: string; label: string } | { kind: "paul"; label: string };
 export type NextStep = { stage: MissionStage | "none"; missionId: string | null; title: string; detail: string; target: NextStepTarget };
 
-const WAITING_OWNER: MissionStage[] = ["approve", "connect", "publish", "self-publish", "report", "decide"];
+const WAITING_OWNER: MissionStage[] = ["approve", "verify", "connect", "publish", "self-publish", "report", "decide"];
 
 function stepFor(mission: StageMission, stage: MissionStage): NextStep {
   const version = mission.content ? `V${mission.content.number}` : "";
@@ -119,6 +123,8 @@ function stepFor(mission: StageMission, stage: MissionStage): NextStep {
       return { ...base, title: "Diffuser vous-même", detail: `${mission.title} · ${version} est validée. Récupérez le texte, diffusez-le, puis déclarez-le.`, target: { kind: "link", href: atelier, label: "Ouvrir l'atelier" } };
     case "scheduled":
       return { ...base, title: "Diffusion programmée", detail: "Rien à faire pour l'instant. Vous pouvez encore l'annuler dans l'atelier.", target: { kind: "link", href: atelier, label: "Voir la programmation" } };
+    case "verify":
+      return { ...base, title: "Vérifier la diffusion", detail: `${mission.title} · ${version} : ${canal || "le canal"} n'a pas confirmé. Vérifiez sur le canal, puis dites-le.`, target: { kind: "link", href: atelier, label: "Ouvrir l'atelier" } };
     case "report":
       return { ...base, title: "Renseigner le bilan", detail: `${mission.title} : notez les réponses reçues. Sans bilan, impossible de décider de la suite.`, target: { kind: "link", href: `/resultats?mission=${mission.id}`, label: "Renseigner mon bilan" } };
     case "decide":

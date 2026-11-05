@@ -7,6 +7,10 @@ import {
 } from "@/lib/contents/rules";
 import { readSuggestion, snapshotOf, type ContentSuggestion } from "@/lib/contents/service";
 import { PAUL_VERSION_CREDITS } from "@/lib/credits";
+import { renderMissionMessage } from "@/lib/missions/messages";
+import { DELEGATION_LABELS, asDelegationLevel, type DelegationLevel } from "@/lib/delegation-level";
+import { SENDING_STALE_MS, readDestination } from "@/lib/contents/publish";
+import { checkDiffusion } from "@/lib/contents/rules";
 
 export type AtelierItem = { contentId: string; missionId: string; label: string };
 
@@ -42,7 +46,18 @@ export type ContentDetail = {
   versions: VersionView[];
   suggestion: ContentSuggestion | null;
   variantCost: number;
+  delegation: DelegationLevel;
+  delegationLabel: string;
+  destination: { label: string; enabled: boolean; connected: boolean };
+  /** Refus de « Diffuser maintenant » si on cochait la case : null quand la diffusion est possible. */
+  publishRefusal: string | null;
+  /** Dernière diffusion de la version courante (envoyée, déclarée, échouée, incertaine). */
+  publication: PublicationView | null;
+  /** La version courante attend une vérification qu'on peut déjà faire (incertaine, ou envoi sans réponse depuis 15 minutes). */
+  resolvable: boolean;
 };
+
+export type PublicationView = { status: string; mode: string; channelLabel: string; sentAt: string | null; url: string | null; failureReason: string | null };
 
 const FORMAT_LABELS: Record<ContentFormat, string> = {
   social_post: "Publication",
@@ -61,7 +76,7 @@ export async function loadAtelierItems(companyId: string): Promise<AtelierItem[]
 export async function loadContentDetail(companyId: string, contentId: string): Promise<ContentDetail | null> {
   const content = await prisma.missionContent.findFirst({
     where: { id: contentId, companyId, currentNumber: { gt: 0 } },
-    include: { mission: true, company: { select: { name: true } }, versions: { orderBy: { number: "desc" } } },
+    include: { mission: true, company: { select: { name: true, emailVerifiedAt: true, delegationLevel: true } }, versions: { orderBy: { number: "desc" } }, publications: { orderBy: { createdAt: "desc" } } },
   });
   if (!content) return null;
   const missions = await loadMissionViews(companyId);
@@ -70,6 +85,12 @@ export async function loadContentDetail(companyId: string, contentId: string): P
   const snapshot = snapshotOf(content);
   const status = contentStatus(snapshot);
   const editRefusal = checkNewVersion(snapshot);
+  const delegation = asDelegationLevel(content.company.delegationLevel);
+  const destination = await readDestination(companyId, snapshot.channel);
+  const publishRefusal = checkDiffusion(snapshot, { emailVerified: content.company.emailVerifiedAt !== null, delegation, channelEnabled: destination.enabled, channelConnected: destination.connected }, { number: content.currentNumber, confirmed: true });
+  const latest = content.publications.find((publication) => publication.versionNumber === content.currentNumber && publication.status !== "cancelled") ?? null;
+  const sentVersions = new Set(content.publications.filter((publication) => publication.status === "sent").map((publication) => publication.versionNumber));
+  const now = Date.now();
   return {
     id: content.id,
     mission: { id: mission.id, title: mission.title, status: mission.status, outcome: mission.outcome, channel: snapshot.channel, channelLabel: snapshot.channel ? channelLabel(snapshot.channel) : "Hors canal", scopeSummary: mission.scopeSummary },
@@ -84,7 +105,7 @@ export async function loadContentDetail(companyId: string, contentId: string): P
     readOnly: isReadOnly(snapshot),
     editRefusal: editRefusal ? editRefusal.code : null,
     canValidate: mission.status === "active",
-    channelConnected: mission.content?.channelConnected ?? false,
+    channelConnected: destination.connected,
     exposure: exposureFor(snapshot.channel),
     companyName: content.company.name,
     versions: content.versions.map((version) => ({
@@ -97,10 +118,16 @@ export async function loadContentDetail(companyId: string, contentId: string): P
       rejectionReason: version.rejectionReason,
       state: version.number === content.currentNumber
         ? (version.rejectionReason ? "Refusée" : CONTENT_STATUS_LABELS[status])
-        : version.rejectionReason ? "Refusée · archive" : CONTENT_STATUS_LABELS.archive,
+        : sentVersions.has(version.number) ? "Diffusée · archive" : version.rejectionReason ? "Refusée · archive" : CONTENT_STATUS_LABELS.archive,
     })),
     suggestion: readSuggestion(content.suggestion),
     variantCost: PAUL_VERSION_CREDITS,
+    delegation,
+    delegationLabel: DELEGATION_LABELS[delegation],
+    destination: { label: destination.label, enabled: destination.enabled, connected: destination.connected },
+    publishRefusal: publishRefusal ? renderMissionMessage(publishRefusal.code, publishRefusal.params) : null,
+    publication: latest && { status: latest.status, mode: latest.mode, channelLabel: latest.channelLabel, sentAt: latest.sentAt?.toISOString() ?? null, url: latest.url, failureReason: latest.failureReason },
+    resolvable: latest !== null && (latest.status === "uncertain" || (latest.status === "sending" && now - latest.createdAt.getTime() > SENDING_STALE_MS)),
   };
 }
 

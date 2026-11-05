@@ -6,6 +6,7 @@ import { buildGmailMessage, decryptGmailAccount, decryptGmailToken, encryptGmail
 import { canExecuteAction } from "@/lib/delegation-risk";
 import { getConfiguredRiskLevels } from "@/lib/delegation-policy";
 import { EMAIL_NOT_VERIFIED_MESSAGE } from "@/lib/agents/agent-errors";
+import { prepareOnlyRefusal } from "@/lib/delegation-level";
 
 const inputSchema = gmailMessageSchema.extend({ requestId: z.uuid() });
 
@@ -13,6 +14,8 @@ export async function POST(request: NextRequest) {
   if (request.headers.get("origin") !== request.nextUrl.origin) return NextResponse.json({ error: "Origine refusée." }, { status: 403 });
   const company = await getSessionCompany();
   if (!company) return NextResponse.json({ error: "Non connecté." }, { status: 401 });
+  const prepareOnly = prepareOnlyRefusal(company);
+  if (prepareOnly) return NextResponse.json(prepareOnly, { status: 403 });
   if (!company.emailVerifiedAt) return NextResponse.json({ error: EMAIL_NOT_VERIFIED_MESSAGE }, { status: 403 });
   if (!isGmailConfigured()) return NextResponse.json({ error: "Gmail non configuré côté serveur." }, { status: 503 });
   const input = inputSchema.safeParse(await request.json().catch(() => null));

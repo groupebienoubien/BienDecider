@@ -453,6 +453,90 @@ test("V5.2 atelier: a mission content is retouched, refused with a motive, resto
   } finally { await prisma.$disconnect(); }
 });
 
+test("V5.2 diffusion: a validated page goes online once, an uncertain result is checked, a self-made diffusion is declared, and « Préparer seulement » is set in one place", async ({ page, company }, testInfo) => {
+  test.setTimeout(90000);
+  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }) });
+  try {
+    await prisma.company.update({ where: { id: company.id }, data: { workspaceV52: true } });
+    const seed = async (template: string, channel: string | null, title: string, position: number, scope: object = {}) => {
+      const mission = await prisma.mission.create({ data: { companyId: company.id, template, channel, title, outcome: "Deux demandes de devis", originalOutcome: "Deux demandes de devis", finding: "Un constat", scope, status: "active", firstLaunchedAt: new Date(), position } });
+      return prisma.missionContent.create({ data: { companyId: company.id, missionId: mission.id, channel, format: channel === "site" ? "site_page" : "text", currentNumber: 1, validatedNumber: 1, validatedAt: new Date(), versions: { create: { number: 1, title, body: "Sur devis, sous 48 heures.\n\nAppelez-nous pour en parler.", author: "paul" } } } });
+    };
+    const sitePage = await seed("site_page", "site", "Nos tarifs", 1, { page: "Nos tarifs" });
+    const offGrid = await seed("custom", null, "Stand au salon", 2);
+    const doubtful = await seed("site_page", "site", "Nos horaires", 3, { page: "Nos horaires" });
+    await prisma.publication.create({ data: { companyId: company.id, missionId: doubtful.missionId, contentId: doubtful.id, versionNumber: 1, title: "Nos horaires", channel: "site", channelLabel: "Votre site vitrine", mode: "confirmed", status: "uncertain", idempotencyKey: `${doubtful.id}:v1:1` } });
+
+    // Mise en ligne confirmée : version, destination, moment, case ; la version ne bouge plus.
+    await page.goto(`${baseURL}/atelier/${sitePage.id}`);
+    await expect(page.getByRole("heading", { level: 2, name: "V1 validée" })).toBeVisible();
+    await page.getByRole("button", { name: "Préparer la publication" }).click();
+    const publish = page.getByRole("dialog", { name: "Confirmer la diffusion" });
+    await expect(publish).toContainText("Votre site vitrine");
+    await expect(publish).toContainText("Maintenant");
+    await expect(publish.getByRole("button", { name: "Diffuser maintenant" })).toBeDisabled();
+    await publish.getByLabel("Je confirme cette version, cette destination et ce moment").check();
+    await publish.getByRole("button", { name: "Diffuser maintenant" }).click();
+    await expect(publish).toBeHidden();
+    await expect(page.getByRole("heading", { level: 2, name: "V1 diffusée" })).toBeVisible();
+    await expect(page.locator(".atelier .tags").first()).toHaveText(/V1 · courante\s*Diffusée/);
+    await expect(page.getByLabel("Titre de la page")).toBeDisabled();
+    const href = await page.getByRole("link", { name: "Voir la page publiée" }).getAttribute("href");
+    expect(href).toMatch(/^\/site\/[a-z0-9-]+\/nos-tarifs$/);
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.screenshot({ path: testInfo.outputPath("diffusion-1440.png"), fullPage: true });
+    await page.getByRole("button", { name: "Créer V2 à partir de V1" }).click();
+    await expect(page.locator(".atelier .tags").first()).toHaveText(/V2 · courante\s*Brouillon/);
+    await expect(page.getByRole("link", { name: /V1\s*Version\s*par Paul.*Diffusée · archive/ })).toBeVisible();
+    await page.goto(`${baseURL}${href}`);
+    await expect(page.getByRole("heading", { level: 1, name: "Nos tarifs" })).toBeVisible();
+    await expect(page.getByText("Appelez-nous pour en parler.")).toBeVisible();
+
+    // Résultat incertain : signalé dans la Stratégie, vérifié par vous, jamais renvoyé seul.
+    await page.goto(`${baseURL}/strategie`);
+    await expect(page.getByRole("region", { name: "À valider par vous" })).toContainText("Nos horaires · V1 · Site vitrine · diffusion à vérifier");
+    await page.goto(`${baseURL}/atelier/${doubtful.id}`);
+    await expect(page.getByRole("heading", { level: 2, name: "Résultat incertain" })).toBeVisible();
+    await page.getByRole("button", { name: "Ce n'est pas parti" }).click();
+    await expect(page.getByRole("heading", { level: 2, name: "V1 validée" })).toBeVisible();
+    await expect(page.locator(".atelier-decision")).toContainText("La dernière tentative n'a pas abouti : non parti, vérifié par vous.");
+    await expect(page.getByRole("button", { name: "Réessayer" })).toBeVisible();
+
+    // Hors canal : récupérer le texte, puis déclarer la diffusion faite par vous.
+    await page.goto(`${baseURL}/atelier/${offGrid.id}`);
+    await expect(page.getByRole("button", { name: "Récupérer le texte" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Préparer la publication" })).toHaveCount(0);
+    await page.getByRole("button", { name: "Je l'ai diffusé moi-même" }).click();
+    const declare = page.getByRole("dialog", { name: "Je l'ai diffusé moi-même" });
+    await declare.getByLabel("Où l'avez-vous diffusé ?").fill("Salon du quartier");
+    await declare.getByLabel("Je confirme avoir diffusé cette version").check();
+    await declare.getByRole("button", { name: "Déclarer la diffusion" }).click();
+    await expect(declare).toBeHidden();
+    await expect(page.getByRole("heading", { level: 2, name: "V1 diffusée" })).toBeVisible();
+    await expect(page.locator(".atelier-decision")).toContainText("Diffusée par vous sur Salon du quartier");
+    await expect(page.locator(".atelier-decision")).toContainText("déclarée par vous");
+
+    // Délégation réglée dans Canaux & délégation : « Préparer seulement » remplace la diffusion par « Récupérer le texte ».
+    await page.goto(`${baseURL}/connexions`);
+    const delegation = page.getByRole("region", { name: "Ma délégation" });
+    await expect(delegation.getByLabel(/Valider avant chaque action/)).toBeChecked();
+    await delegation.getByLabel(/Préparer seulement/).check();
+    await delegation.getByRole("button", { name: "Enregistrer les règles" }).click();
+    await page.getByRole("dialog", { name: "Passer en « Préparer seulement » ?" }).getByRole("button", { name: "Passer en préparation seule" }).click();
+    await expect(delegation.getByRole("status")).toContainText("Règle enregistrée : Préparer seulement.");
+    await page.goto(`${baseURL}/atelier/${doubtful.id}`);
+    await expect(page.getByRole("button", { name: "Récupérer le texte" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Réessayer" })).toHaveCount(0);
+    await expect(page.locator(".atelier-frame")).toContainText("Préparer seulement");
+
+    const journal = await prisma.journalEntry.findMany({ where: { companyId: company.id }, orderBy: [{ createdAt: "asc" }, { id: "asc" }], select: { code: true } });
+    expect(journal.map((entry) => entry.code)).toEqual(["J-22", "J-19", "J-25", "J-24", "J-26"]);
+    await page.setViewportSize({ width: 390, height: 800 });
+    await page.goto(`${baseURL}/atelier/${sitePage.id}`);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  } finally { await prisma.$disconnect(); }
+});
+
 test("Gmail start, refusal and send guards do not contact providers", async ({ page, company }) => {
   expect(company.id).toBeTruthy();
   await page.goto(`${baseURL}/connexions`);
