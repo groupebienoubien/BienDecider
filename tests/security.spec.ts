@@ -1,13 +1,14 @@
 import { test, expect, type APIRequestContext } from "@playwright/test";
 import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
-import { randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { readdirSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { config } from "dotenv";
 import { createSessionToken, SESSION_MAX_AGE_SECONDS } from "../src/lib/session-token";
 import { hashPassword } from "../src/lib/password";
 import { signupDayKey } from "../src/lib/signup-rules";
+import { startSmtpSink } from "./support/smtp-sink";
 
 config({ quiet: true });
 
@@ -24,6 +25,7 @@ const GUARDED_ROUTES: Guarded[] = [
   { method: "PATCH", path: "/api/action-plan/[id]", denied: 401 },
   { method: "POST", path: "/api/action-plan/[id]/launch", denied: 401 },
   { method: "POST", path: "/api/auth/password", denied: 401 },
+  { method: "POST", path: "/api/auth/resend-verification", denied: 401 },
   { method: "DELETE", path: "/api/admin/companies/[id]", denied: 403 },
   { method: "PATCH", path: "/api/admin/companies/[id]/limits", denied: 403 },
   { method: "GET", path: "/api/admin/delegation-risk", denied: 403 },
@@ -82,6 +84,7 @@ const PUBLIC_ROUTES: Record<string, string> = {
   "/api/auth/login": "point d'entrée de la connexion",
   "/api/auth/logout": "revoque les sessions et efface le cookie de l'appelant (POST même origine)",
   "/api/auth/signup": "inscription publique avec création explicite de compte",
+  "/api/auth/verify-email": "le jeton à usage unique du lien reçu par e-mail fait foi, sans session (POST même origine)",
   "/api/cron/weekly-review": "protégée par CRON_SECRET, pas par la session",
   "/api/health": "sonde publique sans donnée métier",
 };
@@ -331,6 +334,7 @@ test("malformed or oversized input gets a clear 4xx, never a server error", asyn
     const targets: [string, string, boolean?][] = [
       ["POST", "/api/auth/login", false],
       ["POST", "/api/auth/signup", false],
+      ["POST", "/api/auth/verify-email", false],
       ["POST", "/api/action-plan"],
       ["PATCH", `/api/action-plan/${planItem.id}`],
       ["POST", "/api/companies"],
@@ -584,6 +588,89 @@ test("a signed-in user who is not listed in ADMIN_EMAILS neither sees nor reache
   } finally {
     await page.context().clearCookies();
     await prisma.company.deleteMany({ where: { id: company.id } });
+    await prisma.$disconnect();
+  }
+});
+
+test("an unverified address blocks Paul and every send until the emailed link is used once", async ({ request, page }) => {
+  test.setTimeout(90000);
+  const smtp = process.env.SERVICE_SMTP_URL ? new URL(process.env.SERVICE_SMTP_URL) : null;
+  test.skip(!smtp || smtp.protocol !== "smtp:" || smtp.hostname !== "127.0.0.1", "Requires SERVICE_SMTP_URL=smtp://127.0.0.1:<port> on the server, as configured in CI.");
+  const prisma = openDatabase();
+  const sink = await startSmtpSink(Number(smtp!.port));
+  const email = `security-verify-${randomUUID()}@example.invalid`;
+  const sha = (value: string) => createHash("sha256").update(value).digest("hex");
+  const tokenIn = (mail: { text: string }) => /\/verifier-email\?token=([A-Za-z0-9_-]{43})/.exec(mail.text)?.[1] ?? "";
+  const headers = (cookie: string) => ({ Cookie: cookie, Origin: baseURL });
+  const verify = (token: string) => request.post(`${baseURL}/api/auth/verify-email`, { headers: { Origin: baseURL }, data: { token } });
+  try {
+    expect((await request.post(`${baseURL}/api/auth/signup`, { headers: { "x-real-ip": `test-${randomUUID()}` }, data: { email, password: "mot-de-passe-valide" } })).status()).toBe(201);
+    await expect.poll(() => sink.messages.length, { timeout: 15000 }).toBe(1);
+    expect(sink.messages[0]).toMatchObject({ to: [email], subject: "Confirmez votre adresse e-mail BienDecider" });
+    const first = tokenIn(sink.messages[0]);
+    expect(first).toHaveLength(43);
+
+    // Seule l'empreinte du jeton est conservée ; le compte n'est pas confirmé.
+    const company = await prisma.company.findUniqueOrThrow({ where: { ownerEmail: email } });
+    expect(company.emailVerifiedAt).toBeNull();
+    await prisma.company.update({ where: { id: company.id }, data: { name: "Sans confirmation", trade: "Artisan", servingArea: "Paris" } });
+    expect(await prisma.emailToken.findMany({ where: { companyId: company.id } })).toMatchObject([{ kind: "verify_email", tokenHash: sha(first), usedAt: null }]);
+    expect(await prisma.emailToken.count({ where: { tokenHash: first } })).toBe(0);
+    const cookie = sessionCookie(email, company.sessionVersion);
+
+    // Rien ne consomme de budget IA ni ne part vers l'extérieur, avant tout appel au modèle ou à un fournisseur.
+    const paul = await request.post(`${baseURL}/api/co-ceo/message`, { headers: headers(cookie), data: { message: "Bonjour" } });
+    expect(paul.status()).toBe(429);
+    expect(await paul.json()).toMatchObject({ reason: "email_not_verified", error: "Confirmez votre adresse e-mail avant toute diffusion." });
+    const gmail = await request.post(`${baseURL}/api/gmail/send`, { headers: headers(cookie), data: {} });
+    expect(gmail.status()).toBe(403);
+    expect((await gmail.json()).error).toContain("Confirmez votre adresse e-mail");
+    expect((await request.post(`${baseURL}/api/proposals/identifiant-inexistant/execute`, { headers: headers(cookie), data: {} })).status()).toBe(403);
+    expect(await prisma.usageReservation.count({ where: { companyId: company.id } })).toBe(0);
+
+    // Bandeau : renvoi limité à un par minute, puis nouveau lien qui annule l'ancien.
+    await page.context().clearCookies();
+    await page.context().addCookies([{ name: "pepito_session", value: cookie.slice(cookie.indexOf("=") + 1), url: baseURL }]);
+    await page.goto(`${baseURL}/compte`);
+    const banner = page.getByTestId("email-verification-banner");
+    await expect(banner).toContainText("Confirmez votre adresse e-mail avant toute diffusion.");
+    await banner.getByRole("button", { name: "Renvoyer le lien" }).click();
+    await expect(banner).toContainText("Réessayez dans");
+    expect(sink.messages).toHaveLength(1);
+    await prisma.emailToken.updateMany({ where: { companyId: company.id }, data: { createdAt: new Date(Date.now() - 120_000) } });
+    await banner.getByRole("button", { name: "Renvoyer le lien" }).click();
+    await expect(banner).toContainText("Un nouveau lien vient d'être envoyé.");
+    await expect.poll(() => sink.messages.length, { timeout: 15000 }).toBe(2);
+    const second = tokenIn(sink.messages[1]);
+    expect(second).not.toBe(first);
+    expect((await verify(first)).status()).toBe(400);
+
+    // Le chargement de la page ne consomme pas le jeton ; le clic le consomme une seule fois.
+    await page.goto(`${baseURL}/verifier-email?token=${second}`);
+    expect((await prisma.emailToken.findUniqueOrThrow({ where: { tokenHash: sha(second) } })).usedAt).toBeNull();
+    await page.getByRole("button", { name: "Confirmer mon adresse" }).click();
+    await expect(page.getByText("Votre adresse e-mail est confirmée.")).toBeVisible();
+    expect((await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).emailVerifiedAt).not.toBeNull();
+    expect((await verify(second)).status()).toBe(400);
+
+    // Un jeton expiré ou mal formé est refusé sans distinction.
+    const expired = randomBytes(32).toString("base64url");
+    await prisma.emailToken.create({ data: { companyId: company.id, kind: "verify_email", tokenHash: sha(expired), expiresAt: new Date(Date.now() - 1000) } });
+    for (const token of [expired, "trop-court", "", 42]) {
+      const response = await request.post(`${baseURL}/api/auth/verify-email`, { headers: { Origin: baseURL }, data: { token } });
+      expect(response.status(), String(token)).toBe(400);
+    }
+    expect((await request.post(`${baseURL}/api/auth/verify-email`, { headers: { Origin: "https://attacker.invalid" }, data: { token: second } })).status()).toBe(403);
+
+    // Confirmée : les envois ne sont plus refusés pour ce motif, et le bandeau disparaît.
+    const afterGmail = await request.post(`${baseURL}/api/gmail/send`, { headers: headers(cookie), data: {} });
+    expect((await afterGmail.json().catch(() => ({}))).error ?? "").not.toContain("Confirmez votre adresse e-mail");
+    await page.goto(`${baseURL}/compte`);
+    await expect(page.getByTestId("email-verification-banner")).toHaveCount(0);
+  } finally {
+    await page.context().clearCookies();
+    await sink.close();
+    await prisma.company.deleteMany({ where: { ownerEmail: email } });
     await prisma.$disconnect();
   }
 });

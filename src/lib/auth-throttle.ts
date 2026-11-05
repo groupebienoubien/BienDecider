@@ -2,7 +2,7 @@ import { createHmac } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 
-export type ThrottleScope = "login" | "signup";
+export type ThrottleScope = "login" | "signup" | "token" | "reset";
 
 export const MAX_ATTEMPTS = 5;
 const LOCK_DURATION_MS = 15 * 60 * 1000;
@@ -26,6 +26,10 @@ export async function recordFailedAttempt(companyId: string): Promise<number> {
 const POLICY: Record<ThrottleScope, { limit: number; windowSeconds: number }> = {
   login: { limit: 20, windowSeconds: 15 * 60 },
   signup: { limit: 10, windowSeconds: 60 * 60 },
+  // Liens à usage unique (confirmation d'adresse, réinitialisation) : jeton de 256 bits, la limite borne le coût, pas le risque.
+  token: { limit: 30, windowSeconds: 60 * 60 },
+  // Demandes de lien de réinitialisation : chacune peut envoyer un e-mail à un tiers.
+  reset: { limit: 5, windowSeconds: 60 * 60 },
 };
 
 export type ThrottleResult = { key: string; limited: false } | { key: string; limited: true; retryAfterSeconds: number } | null;

@@ -1,10 +1,11 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, after } from "next/server";
 import { setSessionEmail } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
 import { hashPassword } from "@/lib/password";
 import { consumeIpAttempt } from "@/lib/auth-throttle";
 import { readJsonObject } from "@/lib/request-body";
 import { readSignupControl, releaseSignupSlot, reserveSignupSlot, todaySignupCount } from "@/lib/signup-control";
+import { sendVerificationEmail } from "@/lib/email-verification";
 import { SIGNUP_CLOSED_MESSAGE, SIGNUP_FULL_MESSAGE, secondsUntilNextSignupDay, signupAvailability } from "@/lib/signup-rules";
 
 function signupFull() {
@@ -56,6 +57,8 @@ export async function POST(request: NextRequest) {
         name: "",
         trade: "",
         servingArea: "",
+        // Story 6.4 : seule l'inscription crée un compte non confirmé (le défaut de la colonne confirme les autres).
+        emailVerifiedAt: null,
       },
     });
   } catch (error) {
@@ -71,6 +74,12 @@ export async function POST(request: NextRequest) {
     data: { loginCount: { increment: 1 }, lastLoginAt: new Date() },
   });
   await setSessionEmail(email);
+
+  // Le lien part après la réponse : un envoi lent ou impossible ne retarde ni ne fait échouer l'inscription (le bandeau permet de le renvoyer).
+  const recipient = { id: company.id, ownerEmail: company.ownerEmail };
+  after(async () => {
+    try { await sendVerificationEmail(recipient); } catch { console.warn("Lien de confirmation non envoyé après l'inscription."); }
+  });
 
   return NextResponse.json({ hasCompany: Boolean(company.name), companyId: company.id }, { status: 201 });
 }

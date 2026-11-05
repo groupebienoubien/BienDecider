@@ -277,6 +277,18 @@ test("audit A01: a usage persistence failure retains the failed run's budget res
   await expect(reserveUsageBudget(company.id, "co_ceo_chat")).rejects.toMatchObject({ reason: "quota_budget" });
 });
 
+test("story 6.4: an unverified address refuses every launch and reservation, and reserves nothing", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { reserveUsageBudget } = await import("../src/lib/agent-runs");
+  await prisma.company.update({ where: { id: company.id }, data: { emailVerifiedAt: null } });
+  for (const purpose of ["co_ceo_chat", "onboarding_interpret", "site_publish"]) {
+    await expect(reserveUsageBudget(company.id, purpose), purpose).rejects.toMatchObject({ name: "EmailNotVerifiedError", reason: "email_not_verified", message: "Confirmez votre adresse e-mail avant toute diffusion." });
+  }
+  expect(await prisma.usageReservation.count({ where: { companyId: company.id } })).toBe(0);
+  await prisma.company.update({ where: { id: company.id }, data: { emailVerifiedAt: new Date() } });
+  await expect(reserveUsageBudget(company.id, "co_ceo_chat")).resolves.toMatchObject({ purpose: "co_ceo_chat" });
+});
+
 test("audit A03: a suspended old worker cannot write or complete the action of its running retry", async ({ company }) => {
   const { prisma } = await import("../src/lib/prisma");
   const { anthropic } = await import("../src/lib/anthropic");

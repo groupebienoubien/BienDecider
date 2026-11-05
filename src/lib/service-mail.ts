@@ -44,7 +44,8 @@ export async function sendServiceEmail(message: { to: string; subject: string; t
   const parsed = messageSchema.safeParse(message);
   if (!parsed.success) return "failed";
   try {
-    const transport = createTransport(process.env.SERVICE_SMTP_URL!.trim(), {
+    const transport = createTransport({
+      url: process.env.SERVICE_SMTP_URL!.trim(),
       connectionTimeout: 10_000,
       greetingTimeout: 10_000,
       socketTimeout: 15_000,

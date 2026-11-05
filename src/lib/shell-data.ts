@@ -11,6 +11,7 @@ type ShellCompany = {
   servingArea: string | null;
   objective: string | null;
   ownerEmail: string;
+  emailVerifiedAt: Date | null;
   monthlySpendLimitUsd: number;
 };
 
@@ -29,6 +30,8 @@ export async function getShellProps(company: ShellCompany) {
     ownerEmail: company.ownerEmail,
     // Le lien Administration n'est affiché qu'aux administrateurs listés (story 6.2).
     isAdmin: isAdminEmail(company.ownerEmail),
+    // Story 6.4 : bandeau tant que l'adresse n'est pas confirmée.
+    emailVerified: company.emailVerifiedAt !== null,
     // Décision du dirigeant (2026-10-22) : seules les productions qui l'attendent comptent, comme sur la page Décisions.
     decisionCount: teamState.pendingDecisions,
     budget: { spentUsd: monthUsage._sum.costUsd ?? 0, limitUsd: company.monthlySpendLimitUsd },

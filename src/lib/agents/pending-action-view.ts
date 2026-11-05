@@ -202,7 +202,7 @@ const LAUNCH_AGENTS = ["marketing", "contenu", "demarchage"] as const;
 /** Résultat du lancement, enregistré sur la carte au clic « Lancer » (motifs typés de l'épopée 1). */
 export const launchResultSchema = z.object({
   ok: z.boolean(),
-  reason: z.enum(["already_running", "quota_runs", "quota_budget", "no_result", "outage"]).optional(),
+  reason: z.enum(["already_running", "quota_runs", "quota_budget", "email_not_verified", "no_result", "outage"]).optional(),
   message: z.string(),
   runId: z.string().optional(),
 }).strict();

@@ -5,6 +5,7 @@ import { Icon } from "@/components/icon";
 import { PaulPanel } from "@/components/paul-panel";
 import { BrandLogo } from "@/components/brand-logo";
 import { WorkspaceBreadcrumb } from "@/components/workspace-breadcrumb";
+import { EmailVerificationBanner } from "@/components/email-verification-banner";
 
 const MONEY = new Intl.NumberFormat("fr-FR", { maximumFractionDigits: 2 });
 
@@ -19,6 +20,7 @@ export function AppShell({
   budget,
   paul = Boolean(companyName),
   isAdmin = false,
+  emailVerified = true,
   children,
 }: {
   companyName?: string;
@@ -30,6 +32,7 @@ export function AppShell({
   budget?: { spentUsd: number; limitUsd: number };
   paul?: boolean;
   isAdmin?: boolean;
+  emailVerified?: boolean;
   children: React.ReactNode;
 }) {
   const companyInitials = companyName
@@ -77,6 +80,7 @@ export function AppShell({
         </header>
         <main id="contenu" tabIndex={-1}>
           <Suspense fallback={null}><StageTabs /></Suspense>
+          {!emailVerified && <EmailVerificationBanner email={ownerEmail} />}
           {children}
         </main>
         <footer className="workspace-footer">

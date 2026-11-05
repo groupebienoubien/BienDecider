@@ -8,7 +8,7 @@ import { getConfiguredRiskLevels } from "@/lib/delegation-policy";
 import { AgentRunQuotaError } from "@/lib/agent-runs";
 import { syncPlanItemStatus } from "@/lib/plan-item-status";
 import { decideProposalReview, reviewProposal } from "@/lib/proposal-review";
-import { classifyRunError } from "@/lib/agents/agent-errors";
+import { classifyRunError, EMAIL_NOT_VERIFIED_MESSAGE } from "@/lib/agents/agent-errors";
 import { REVISION_IN_PROGRESS_MESSAGE, activeRevisionRun } from "@/lib/agents/revision-state";
 
 export const maxDuration = 60;
@@ -29,6 +29,9 @@ export async function POST(
   const company = await getSessionCompany();
   if (!company) {
     return NextResponse.json({ error: "Non connecté" }, { status: 401 });
+  }
+  if (!company.emailVerifiedAt) {
+    return NextResponse.json({ error: EMAIL_NOT_VERIFIED_MESSAGE }, { status: 403 });
   }
 
   const { id } = await params;
