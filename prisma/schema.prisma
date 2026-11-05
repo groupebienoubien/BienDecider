@@ -500,3 +500,28 @@ model Feedback {
   @@index([companyId, createdAt])
   @@index([createdAt])
 }
+
+/// Erreur serveur tracee (story 8.1, #83) : message nettoye de tout secret, chemin sans parametres.
+model ErrorEvent {
+  id          String   @id @default(cuid())
+  fingerprint String
+  message     String
+  path        String
+  method      String
+  routeType   String?
+  digest      String?
+  createdAt   DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([fingerprint, createdAt])
+}
+
+/// Solde constate chez le fournisseur du modele (story 8.2, #62) : le restant est calcule depuis la consommation mesuree.
+model LlmCreditSetting {
+  id            String   @id @default("global")
+  balanceUsd    Float
+  balanceAt     DateTime
+  alertBelowUsd Float    @default(5)
+  updatedBy     String
+  updatedAt     DateTime @updatedAt
+}

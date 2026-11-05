@@ -3,8 +3,14 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { MAX_USAGE_ALERT_USD, MIN_USAGE_ALERT_USD, type UsageAlertThresholds } from "@/lib/usage-alert-rules";
+import { CREDIT_ALERT_SCOPE } from "@/lib/llm-credit-rules";
 
 type AlertView = { id: string; day: string; label: string; scope: string; thresholdUsd: number; costUsd: number };
+
+function alertLine(alert: AlertView): string {
+  if (alert.scope === CREDIT_ALERT_SCOPE) return `${alert.label} : ${alert.costUsd.toFixed(2)} $ restants pour un seuil de ${alert.thresholdUsd.toFixed(2)} $`;
+  return `${alert.scope === "total" ? "Consommation totale" : alert.label} : ${alert.costUsd.toFixed(2)} $ pour un seuil de ${alert.thresholdUsd.toFixed(2)} $`;
+}
 
 /** Seuils d'alerte de consommation, alertes du jour et historique récent (story 7.3). */
 export function UsageAlertsPanel({ thresholds, alerts, today }: { thresholds: UsageAlertThresholds; alerts: AlertView[]; today: string }) {
@@ -50,7 +56,7 @@ export function UsageAlertsPanel({ thresholds, alerts, today }: { thresholds: Us
           <strong>Seuil franchi aujourd&apos;hui</strong>
           <ul>
             {todays.map((alert) => (
-              <li key={alert.id}>{alert.scope === "total" ? "Consommation totale" : alert.label} : {alert.costUsd.toFixed(2)} $ pour un seuil de {alert.thresholdUsd.toFixed(2)} $</li>
+              <li key={alert.id}>{alertLine(alert)}</li>
             ))}
           </ul>
         </div>

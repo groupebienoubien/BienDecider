@@ -34,6 +34,8 @@ import { passwordResetEmail, passwordResetLink, verificationEmail, verificationL
 import { ERROR_MESSAGE_MAX_LENGTH, redactSecrets } from "../src/lib/redact-secrets";
 import { DEFAULT_USAGE_ALERT_THRESHOLDS, alertEmail, companyAlertScope, crossedAlerts, parseUsageAlertInput, safeAlertLabel } from "../src/lib/usage-alert-rules";
 import { FEEDBACK_TEXT_MAX, cleanFeedbackPage, feedbackEmail, parseFeedbackInput } from "../src/lib/feedback";
+import { cleanErrorMessage, cleanErrorPath, errorAlertEmail, errorFingerprint } from "../src/lib/error-tracking-rules";
+import { computeCredit, creditAlertEmail, parseCreditInput } from "../src/lib/llm-credit-rules";
 import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH, passwordPolicyError } from "../src/lib/password-policy";
 import { startSmtpSink } from "./support/smtp-sink";
 import { BetaToolRunner } from "@anthropic-ai/sdk/lib/tools/BetaToolRunner";
@@ -1483,4 +1485,41 @@ test("feedback rules: a kind from the list, 1 to 1000 trimmed characters, and th
   expect(mail.text).toContain("Page : /plan");
   expect(mail.text).toContain("Je ne comprends pas\nce bouton");
   expect(mail.text).toContain("https://www.biendecider.com/admin");
+});
+
+test("error tracking rules: no secret, no query string, and one fingerprint for the same error with other numbers", () => {
+  const message = cleanErrorMessage(new Error("Connexion refusée postgres://user:hunter2@db.example.invalid/app token=abcdef Bearer sk-ant-api03-ABCDEFGHIJKL"));
+  for (const secret of ["hunter2", "abcdef", "ABCDEFGHIJKL"]) expect(message).not.toContain(secret);
+  expect(message.length).toBeLessThanOrEqual(300);
+  expect(cleanErrorMessage(undefined)).toBe("Erreur inconnue");
+  expect(cleanErrorPath("/api/x/42?token=secret#frag")).toBe("/api/x/42");
+  expect(cleanErrorPath("")).toBe("/");
+  expect(errorFingerprint("Timeout après 30 s", "/api/x/[id]", "post")).toBe(errorFingerprint("Timeout après 45 s", "/api/x/[id]", "POST"));
+  expect(errorFingerprint("Timeout après 30 s", "/api/x/[id]", "POST")).not.toBe(errorFingerprint("Timeout après 30 s", "/api/y", "POST"));
+  expect(errorFingerprint("a", "/", "GET")).toMatch(/^[0-9a-f]{16}$/);
+  const mail = errorAlertEmail({ message: "Boom", path: "/api/x", method: "POST" }, "https://www.biendecider.com/admin");
+  expect(mail.subject).toBe("Erreur en production : POST /api/x");
+  expect(mail.text).toContain("Boom");
+  expect(mail.text).toContain("https://www.biendecider.com/admin");
+});
+
+test("llm credit rules: the remaining credit follows the measured spend, days left need a rate, and inputs are bounded", () => {
+  const now = new Date("2026-11-10T12:00:00Z");
+  const base = { balanceUsd: 100, balanceAt: new Date("2026-11-03T12:00:00Z"), alertBelowUsd: 5, now };
+  const steady = computeCredit({ ...base, spentSinceBalanceUsd: 28, recentSpentUsd: 28 });
+  expect(steady.remainingUsd).toBe(72);
+  expect(steady.daysLeft).toBeCloseTo(18, 5);
+  expect(steady.belowThreshold).toBe(false);
+  expect(computeCredit({ ...base, spentSinceBalanceUsd: 0, recentSpentUsd: 0 }).daysLeft).toBeNull();
+  expect(computeCredit({ ...base, spentSinceBalanceUsd: 150, recentSpentUsd: 150 })).toMatchObject({ remainingUsd: 0, belowThreshold: true });
+  expect(computeCredit({ ...base, spentSinceBalanceUsd: 95, recentSpentUsd: 95 }).belowThreshold).toBe(true);
+  const fresh = computeCredit({ ...base, balanceAt: new Date("2026-11-10T11:00:00Z"), spentSinceBalanceUsd: 1, recentSpentUsd: 1 });
+  expect(fresh.daysLeft).toBeCloseTo(99, 5);
+  expect(parseCreditInput({ balanceUsd: 12.5, alertBelowUsd: 0 })).toEqual({ ok: true, value: { balanceUsd: 12.5, alertBelowUsd: 0 } });
+  for (const body of [null, [], {}, { balanceUsd: -1, alertBelowUsd: 5 }, { balanceUsd: "10", alertBelowUsd: 5 }, { balanceUsd: 10 }, { balanceUsd: 10, alertBelowUsd: 2_000_000 }, { balanceUsd: Number.NaN, alertBelowUsd: 5 }]) {
+    expect(parseCreditInput(body).ok, JSON.stringify(body)).toBe(false);
+  }
+  const mail = creditAlertEmail({ remainingUsd: 4.2, alertBelowUsd: 5 }, "https://www.biendecider.com/admin");
+  expect(mail.subject).toBe("Crédit du modèle bas : 4.20 $");
+  expect(mail.text).toContain("5.00 $");
 });
