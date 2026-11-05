@@ -50,5 +50,6 @@ context:
 
 - [x] Étape, suivi en six temps et prochain pas purs, avec tests de chaque cas.
 - [x] Page Stratégie : en-tête, prochaine décision, À valider par vous, missions regroupées.
-- [ ] Contenus prêts ou validés, programmations et marque dans « À valider par vous » (#289, #261, #290).
+- [x] Contenus prêts à relire dans « À valider par vous », prochain pas sur l'état réel du contenu (#289, story 11.1).
+- [ ] Contenus validés, programmations et marque dans « À valider par vous » (#315, #261, #290).
 - [ ] « Ce que Paul apprend » (#53) ; idées à cadrer (#312) ; constats de Paul et « Voir la source » (#284, #168).

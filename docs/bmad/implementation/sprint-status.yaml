@@ -104,3 +104,9 @@ development_status:
   10-3-parcourir-mes-missions-par-statut: done
   10-4-lancer-suspendre-reprendre-une-mission: in-progress
   epic-10-retrospective: optional
+
+  epic-11: in-progress
+  11-1-relire-et-faire-evoluer-un-contenu: review
+  11-2-refuser-une-version-avec-un-motif: review
+  11-3-savoir-quoi-verifier-avant-de-valider: review
+  epic-11-retrospective: optional

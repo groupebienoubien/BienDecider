@@ -2,6 +2,7 @@
 export const MISSION_MESSAGES = {
   "M-02": "Cette version a changé. Réexaminez le contenu avant de confirmer.",
   "M-15": "Crédits insuffisants : il en faut {n}, il vous en reste {m}.",
+  "M-16": "{element} doit être compris entre {min} et {max} {unite}.",
   "M-17": "Précisez le sujet de la publication (5 à 120 caractères).",
   "M-18": "Décrivez le périmètre (10 à 300 caractères) et fixez une règle d'arrêt entre 7 et 90 jours.",
   "M-19": "Le canal est figé dès qu'une version est validée. Créez une nouvelle mission pour un autre canal.",
@@ -19,12 +20,26 @@ export const MISSION_MESSAGES = {
   "M-41": "Choisissez d'abord au moins un contact recontactable.",
   "M-42": "Confirmez la pertinence et le droit de recontact des destinataires.",
   "M-43": "Seule une mission en cours peut être mise en pause.",
+  "M-44": "La mission est arrêtée ou écartée. Son contenu reste en lecture seule.",
+  "M-45": "Annulez la programmation avant de retravailler cette version.",
+  "M-46": "V{n} a été diffusée : elle est en lecture seule. Créez une nouvelle version pour la modifier.",
+  "M-47": "Lancez ou reprenez la mission avant de valider son contenu.",
+  "M-49": "Aucun destinataire dans le périmètre de cette mission.",
+  "M-51": "Confirmez la marque et les droits du visuel avant validation.",
+  "M-52": "Cette version est déjà programmée.",
+  "M-53": "Cette version est déjà diffusée.",
+  "M-60": "Enregistrez vos retouches dans une nouvelle version avant cette décision.",
   "M-64": "Choisissez de 1 à 5 avis sans réponse.",
+  "M-65": "Ajoutez un visuel : {canal} ne publie pas sans image.",
+  "M-66": "Ce texte dépasse {n} caractères, la limite de {canal}. Raccourcissez-le dans une nouvelle version.",
   "M-67": "{canal} n'est pas disponible pour le moment. Choisissez un autre canal.",
   "M-68": "Choisissez le canal de la mission.",
   "M-69": "Ce canal n'est pas proposé pour ce modèle de mission.",
   "M-75": "Vous avez déjà 10 missions non arrêtées. Arrêtez-en une avant d'en créer une autre.",
   "M-76": "Ce modèle de mission n'est pas disponible pour le moment.",
+  "M-77": "Cochez « J'ai relu le contenu et vérifié les informations qui engagent mon entreprise » avant de valider.",
+  "M-78": "Choisissez comment retravailler : plus court, plus humain, un autre angle, ou votre consigne (5 à 300 caractères).",
+  "M-79": "Paul n'a pas pu préparer ce contenu. Réessayez dans un instant.",
 } as const;
 
 export type MissionMessageCode = keyof typeof MISSION_MESSAGES;
@@ -38,7 +53,7 @@ export class MissionError extends Error {
     super(renderMissionMessage(code, params));
     this.name = "MissionError";
     this.code = code;
-    this.status = code === "M-02" ? 409 : 422;
+    this.status = code === "M-02" ? 409 : code === "M-79" ? 503 : 422;
   }
 }
 

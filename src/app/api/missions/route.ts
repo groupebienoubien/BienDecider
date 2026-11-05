@@ -1,8 +1,11 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, after } from "next/server";
 import { getSessionCompany } from "@/lib/session";
 import { readJsonObject } from "@/lib/request-body";
 import { MissionError } from "@/lib/missions/messages";
 import { createMission, listMissions } from "@/lib/missions/service";
+import { prepareFirstDraftQuietly } from "@/lib/contents/service";
+
+export const maxDuration = 60;
 
 export async function GET() {
   const company = await getSessionCompany();
@@ -18,7 +21,10 @@ export async function POST(request: NextRequest) {
   const body = await readJsonObject(request);
   if (!body) return NextResponse.json({ error: "Demande invalide." }, { status: 400 });
   try {
-    return NextResponse.json({ mission: await createMission(company.id, body) }, { status: 201 });
+    const mission = await createMission(company.id, body);
+    // La création produit un premier brouillon (§2.2), préparé par Paul après la réponse ; s'il échoue, l'atelier propose de réessayer.
+    after(() => prepareFirstDraftQuietly(company.id, mission.id));
+    return NextResponse.json({ mission }, { status: 201 });
   } catch (error) {
     if (error instanceof MissionError) return NextResponse.json({ error: error.message, code: error.code }, { status: error.status });
     throw error;

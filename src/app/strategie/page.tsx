@@ -21,6 +21,7 @@ export default async function StrategiePage() {
   const connected = await prisma.channelConnection.count({ where: { companyId: company.id, status: "connecte" } });
   const step = nextStep(missions);
   const stepMission = missions.find((mission) => mission.id === step.missionId) ?? null;
+  const toValidate = missions.filter((mission) => mission.stage === "approve" && mission.contentId);
   const firstName = firstNameOf(company.ownerName);
 
   return (
@@ -58,10 +59,18 @@ export default async function StrategiePage() {
 
       <section className="section-space" aria-labelledby="to-validate-title">
         <div className="section-title"><h2 id="to-validate-title">À valider par vous</h2></div>
-        <div className="decision">
-          <Icon name="panels-top-left" />
-          <span>Aucun contenu à valider pour le moment. Les contenus de vos missions en cours arriveront dans l&apos;atelier.</span>
-        </div>
+        {toValidate.length === 0 ? (
+          <div className="decision">
+            <Icon name="panels-top-left" />
+            <span>Aucun contenu à valider pour le moment. Les contenus de vos missions en cours arriveront dans l&apos;atelier.</span>
+          </div>
+        ) : toValidate.map((mission) => (
+          <div key={mission.id} className="decision">
+            <Icon name="panels-top-left" />
+            <span><strong>{mission.title}</strong> · V{mission.content?.number} · {mission.channelLabel} · prête à relire</span>
+            <Link href={`/atelier/${mission.contentId}`}>Relire et valider</Link>
+          </div>
+        ))}
         <div className="decision">
           <Icon name="refresh-cw" />
           <span>{connected === 0 ? "Aucun canal connecté." : `${connected} canal${connected > 1 ? "aux" : ""} connecté${connected > 1 ? "s" : ""}.`}</span>

@@ -52,6 +52,7 @@ context:
 
 - [x] Détail, dialogues de cadre, pause, écart, objectif ; canal et périmètre modifiables.
 - [x] Journal écrit dans la transaction de chaque décision.
-- [ ] Refus de validation et de diffusion d'un contenu d'une mission non active : avec l'atelier et la diffusion (#289, #315).
+- [x] Refus de validation d'un contenu d'une mission non active (M-47) : avec l'atelier (#289, story 11.1).
+- [ ] Refus de diffusion d'un contenu d'une mission non active : avec la diffusion (#315).
 - [ ] Annulation des programmations à la pause : avec la programmation (#261).
 - [ ] « Examiner » les destinataires, agences et réalisations avant lancement : avec chaque modèle (#316, #287, #317).
