@@ -26,6 +26,8 @@ Ce document dit **comment** la production rejoint la cible du [cahier des charge
 
 `ActionPlanItem` devient `Mission` **par évolution de la table**, pas par copie : le modèle Prisma est renommé, la table garde son nom (`@@map("ActionPlanItem")`) le temps de la bascule. Les clés étrangères existantes (`AgentProposal.planItemId`, `AgentRun`) restent valides. Une migration ultérieure renomme la table et les colonnes.
 
+> **Décision du 2026-11-05 (#277), contraire à ce choix :** les fondateurs préfèrent un modèle propre. `Mission` est une **table neuve**, sans colonnes historiques et sans reprise des données de l'ancien plan d'action (ni de ses propositions et exécutions, qui restent dans leurs tables jusqu'à la bascule). Les sections 2.2 à 2.5 restent valables pour les champs, le catalogue et les canaux ; la section 2.3 (reprise des données) est abandonnée. Voir `docs/bmad/implementation/epic-9-context.md`.
+
 ### 2.2 Schéma cible
 
 ```prisma

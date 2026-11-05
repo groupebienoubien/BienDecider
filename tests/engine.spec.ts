@@ -300,6 +300,79 @@ test("story 7.1: a suspended company refuses every launch and reservation, and c
   await prisma.company.update({ where: { id: company.id }, data: { suspendedAt: null } });
   await expect(reserveUsageBudget(company.id, "co_ceo_chat")).resolves.toMatchObject({ purpose: "co_ceo_chat" });
 });
+test("story 9.1 to 9.3: missions and credits follow the transitions of the specification, in one transaction each", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { readCredits } = await import("../src/lib/credits");
+  const { applyMissionTransition, createMission, listMissions, MissionNotFoundError } = await import("../src/lib/missions/service");
+  const { MissionError } = await import("../src/lib/missions/messages");
+  const other = await prisma.company.create({ data: { ownerEmail: `missions-other-${Date.now()}@example.invalid`, name: "Autre entreprise", trade: "Artisan", servingArea: "Paris" } });
+  const social = (title: string) => ({ template: "social_post", title, outcome: "Des demandes de devis", finding: "Aucune publication depuis trois mois", scope: { topic: "Nos chantiers de novembre" } });
+  const expectRefusal = async (promise: Promise<unknown>, code: string) => {
+    const error = await promise.then(() => null, (cause: unknown) => cause);
+    expect(error).toBeInstanceOf(MissionError);
+    expect((error as InstanceType<typeof MissionError>).code).toBe(code);
+  };
+  try {
+    // Les 20 credits offerts sont ecrits une seule fois, meme si deux lectures arrivent ensemble.
+    await Promise.all([readCredits(company.id), readCredits(company.id)]);
+    expect(await readCredits(company.id)).toMatchObject({ balance: 20, history: [{ delta: 20, label: "Cr\u00e9dits offerts \u00e0 l'inscription", balanceAfter: 20 }] });
+    expect(await prisma.creditLedger.count({ where: { companyId: company.id, kind: "grant" } })).toBe(1);
+
+    // Creation : 0 credit, a decider, rattachee a l'entreprise, jamais lancee.
+    const created = await createMission(company.id, social("Publier un chantier"));
+    expect(created).toMatchObject({ status: "proposed", channel: "facebook", stopRuleDays: 7, version: 1, position: 1, firstLaunchedAt: null, originalOutcome: "Des demandes de devis" });
+    expect((await readCredits(company.id)).balance).toBe(20);
+    const custom = await createMission(company.id, { template: "custom", title: "Salon du quartier", outcome: "Dix contacts utiles", finding: "Un salon a lieu pr\u00e8s de chez moi", stopRuleDays: 21, scope: { description: "Tenir un stand au salon de mon quartier" } });
+    expect(custom).toMatchObject({ channel: null, stopRuleDays: 21, position: 2 });
+    expect(await prisma.uncoveredRequest.count({ where: { companyId: company.id, source: "mission" } })).toBe(1);
+
+    // Lancement : 3 credits debites avec leur mouvement, une seule fois.
+    const launched = await applyMissionTransition(company.id, created.id, { action: "launch" }, 1);
+    expect(launched.mission).toMatchObject({ status: "active", version: 2 });
+    expect(launched.mission.firstLaunchedAt).not.toBeNull();
+    expect(launched.balance).toBe(17);
+    expect((await readCredits(company.id)).history[0]).toMatchObject({ delta: -3, balanceAfter: 17, label: "Lancement de la mission \u00ab Publier un chantier \u00bb" });
+    expect((await applyMissionTransition(company.id, created.id, { action: "launch" }, 2)).balance).toBeNull();
+    const paused = await applyMissionTransition(company.id, created.id, { action: "pause" }, 2);
+    expect(paused.mission).toMatchObject({ status: "paused", version: 3 });
+    const resumed = await applyMissionTransition(company.id, created.id, { action: "resume" }, 3);
+    expect(resumed).toMatchObject({ mission: { status: "active", version: 4 }, balance: null });
+    expect((await readCredits(company.id)).balance).toBe(17);
+
+    // Version perimee : refus M-02, rien d'ecrit ; deux lancements simultanes ne debitent qu'une fois.
+    await expectRefusal(applyMissionTransition(company.id, created.id, { action: "pause" }, 2), "M-02");
+    const fresh = await createMission(company.id, social("Une deuxi\u00e8me publication"));
+    const results = await Promise.allSettled([applyMissionTransition(company.id, fresh.id, { action: "launch" }, 1), applyMissionTransition(company.id, fresh.id, { action: "launch" }, 1)]);
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(await prisma.creditLedger.count({ where: { companyId: company.id, kind: "mission_launch", missionId: fresh.id } })).toBe(1);
+    expect((await readCredits(company.id)).balance).toBe(14);
+
+    // Credits insuffisants : refus M-15, la mission reste a decider, aucun mouvement.
+    await prisma.company.update({ where: { id: company.id }, data: { creditBalance: 2 } });
+    const broke = await createMission(company.id, social("Une troisi\u00e8me publication"));
+    await expectRefusal(applyMissionTransition(company.id, broke.id, { action: "launch" }, 1), "M-15");
+    expect(await prisma.mission.findUniqueOrThrow({ where: { id: broke.id } })).toMatchObject({ status: "proposed", version: 1, firstLaunchedAt: null });
+    expect(await prisma.creditLedger.count({ where: { companyId: company.id, missionId: broke.id } })).toBe(0);
+    expect((await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).creditBalance).toBe(2);
+
+    // Ecarter et remettre au plan ; un canal fige par une version validee ; isolation entre entreprises.
+    const dismissed = await applyMissionTransition(company.id, broke.id, { action: "dismiss" }, 1);
+    expect(dismissed.mission).toMatchObject({ status: "dismissed", previousStatus: "proposed" });
+    expect((await applyMissionTransition(company.id, broke.id, { action: "restore" }, 2)).mission.status).toBe("proposed");
+    await prisma.mission.update({ where: { id: broke.id }, data: { hasValidatedVersion: true } });
+    await expectRefusal(applyMissionTransition(company.id, broke.id, { action: "set_channel", channel: "facebook" }, 3), "M-19");
+    await expect(applyMissionTransition(other.id, created.id, { action: "pause" }, 4)).rejects.toBeInstanceOf(MissionNotFoundError);
+    expect(await listMissions(other.id)).toHaveLength(0);
+    expect((await listMissions(company.id)).map((mission) => mission.position)).toEqual([1, 2, 3, 4]);
+
+    // Plafond de dix missions non arretees.
+    for (let index = 0; index < 6; index++) await createMission(company.id, social(`Publication numero ${index + 5}`));
+    await expectRefusal(createMission(company.id, social("Une de trop")), "M-75");
+  } finally {
+    await prisma.company.deleteMany({ where: { id: other.id } });
+  }
+});
+
 test("story 8.1: a server error is stored without secrets and mails the administrators once per hour", async () => {
   const { prisma } = await import("../src/lib/prisma");
   const { onRequestError } = await import("../src/instrumentation");

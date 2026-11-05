@@ -71,6 +71,10 @@ model Company {
   planItems       ActionPlanItem[]
   usageEvents     UsageEvent[]
   feedbacks       Feedback[]
+  missions        Mission[]
+  creditLedger    CreditLedger[]
+  creditBalance   Int       @default(20) // credits offerts (D1) ; ne change que par CreditLedger
+  creditGrantedAt DateTime? // pose avec l'ecriture des 20 credits offerts dans le registre
   agentRuns       AgentRun[]
   agentRunAttempts AgentRunAttempt[]
   usageReservations UsageReservation[]
@@ -524,4 +528,48 @@ model LlmCreditSetting {
   alertBelowUsd Float    @default(5)
   updatedBy     String
   updatedAt     DateTime @updatedAt
+}
+
+/// Mission (story 9.1, #277) : test limite issu d'un constat. Table neuve, sans reprise de l'ancien plan d'action (decision du 2026-11-05).
+model Mission {
+  id                  String         @id @default(cuid())
+  companyId           String
+  template            String // agencies, leads, proof, social_post, google_profile, review_reply, site_page, custom
+  channel             String? // facebook, instagram, linkedin, google_business_profile, gmail, site ; null = hors canal (Sur mesure)
+  stopRuleDays        Int?
+  title               String
+  outcome             String // resultat recherche
+  originalOutcome     String // resultat recherche a la creation
+  finding             String
+  createdBy           String         @default("owner") // paul | owner
+  status              String         @default("proposed") // proposed, active, paused, stopped, dismissed
+  previousStatus      String? // pour « Remettre au plan »
+  position            Int
+  scope               Json           @default("{}")
+  contactsConfirmedAt DateTime?
+  firstLaunchedAt     DateTime? // le debit du lancement n'a lieu qu'une fois
+  hasValidatedVersion Boolean        @default(false) // pose par la validation d'une version (atelier) ; fige le canal
+  version             Int            @default(1) // concurrence optimiste
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+  company             Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  credits             CreditLedger[]
+
+  @@index([companyId, status])
+}
+
+/// Registre des credits en ajout seul (story 9.3, #56) : chaque mouvement, avec le solde apres.
+model CreditLedger {
+  id           String   @id @default(cuid())
+  companyId    String
+  delta        Int
+  kind         String // grant | mission_launch | paul_version
+  label        String
+  missionId    String?
+  balanceAfter Int
+  createdAt    DateTime @default(now())
+  company      Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  mission      Mission? @relation(fields: [missionId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, createdAt])
 }

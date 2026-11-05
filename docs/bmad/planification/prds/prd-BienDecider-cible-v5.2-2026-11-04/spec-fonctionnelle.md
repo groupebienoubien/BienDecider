@@ -616,6 +616,8 @@ Tout dialogue se ferme par Échap ou le bouton de fermeture ; une navigation le 
 | M-72 | Colonnes attendues, dans cet ordre : prenom;nom;email;mois_depuis_dernier_contact;recontact. |
 | M-73 | Ligne {n} ignorée : nom, e-mail ou ancienneté invalide. |
 | M-74 | Aucune ligne exploitable dans ce fichier. |
+| M-75 | Vous avez déjà 10 missions non arrêtées. Arrêtez-en une avant d'en créer une autre. |
+| M-76 | Ce modèle de mission n'est pas disponible pour le moment. |
 
 ## 15. Journal
 
