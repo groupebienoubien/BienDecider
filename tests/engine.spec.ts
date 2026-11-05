@@ -728,7 +728,7 @@ test("an agent that produces nothing raises a displayable error, technical error
 });
 
 test("run errors are classified by type into one reason, each with a clear message", async () => {
-  const { AgentNoResultError, AgentRunConflictError, AgentRunQuotaError, classifyRunError, failureMessage, RUN_FAILURE_REASONS } = await import("../src/lib/agents/agent-errors");
+  const { AgentNoResultError, AgentRunConflictError, AgentRunQuotaError, EmailNotVerifiedError, classifyRunError, failureMessage, RUN_FAILURE_REASONS } = await import("../src/lib/agents/agent-errors");
   const agentRuns = await import("../src/lib/agent-runs");
   // Réexport : les imports existants depuis agent-runs désignent les mêmes classes.
   expect(agentRuns.AgentRunQuotaError).toBe(AgentRunQuotaError);
@@ -740,6 +740,8 @@ test("run errors are classified by type into one reason, each with a clear messa
   expect(classifyRunError(new AgentRunConflictError("Demande de lancement invalide.", "outage"))).toBe("outage");
   expect(classifyRunError(new AgentRunQuotaError("Quota", "quota_runs"))).toBe("quota_runs");
   expect(classifyRunError(new AgentRunQuotaError("Budget", "quota_budget"))).toBe("quota_budget");
+  expect(classifyRunError(new EmailNotVerifiedError())).toBe("email_not_verified");
+  expect(new EmailNotVerifiedError()).toBeInstanceOf(AgentRunQuotaError);
   expect(classifyRunError(new AgentNoResultError("Martine"))).toBe("no_result");
   // Le texte d'une erreur ne compte jamais : seule sa classe la classe.
   expect(classifyRunError(new Error("Le quota journalier de lancements est atteint"))).toBe("outage");
@@ -748,8 +750,10 @@ test("run errors are classified by type into one reason, each with a clear messa
   for (const reason of RUN_FAILURE_REASONS) {
     const message = failureMessage(reason, "Martine");
     expect(message, reason).not.toMatch(/ÉCHEC/i);
-    expect(message, reason).toMatch(/(Vous|Réessayez)/);
+    // Vouvoiement : "Vous...", "Réessayez..." ou un impératif de la spécification (M-54 : "Confirmez votre adresse e-mail...").
+    expect(message, reason).toMatch(/(Vous|Réessayez|Confirmez)/);
   }
+  expect(failureMessage("email_not_verified", "Martine")).toBe("Confirmez votre adresse e-mail avant toute diffusion.");
   expect(failureMessage("already_running", "Martine")).toContain("y travaille déjà");
   expect(failureMessage("quota_runs", "Martine")).not.toMatch(/administrateur/i);
   expect(failureMessage("quota_budget", "Martine")).toContain("budget du jour");
