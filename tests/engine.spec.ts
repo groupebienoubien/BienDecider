@@ -979,7 +979,8 @@ test("the menu badge counts productions awaiting the owner, not actions to launc
   const { getShellProps } = await import("../src/lib/shell-data");
   await prisma.agentProposal.createMany({ data: [1, 2].map((index) => ({ companyId: company.id, agent: "contenu", kind: "social_post", title: `Post ${index}`, content: "Texte" })) });
   await prisma.actionPlanItem.create({ data: { companyId: company.id, agent: "contenu", title: "Action à lancer", rationale: "Raison", timing: "Cette semaine" } });
-  expect((await getShellProps(company)).decisionCount).toBe(2);
+  // Badge de l'ancien parcours : retire avec lui.
+  expect((await getShellProps({ ...company, workspaceV52: false })).decisionCount).toBe(2);
 });
 
 test("the plan receives what the owner said in the chat, and only that", async ({ company }) => {
@@ -4026,7 +4027,7 @@ test.describe("Recette Atelier Lumen", () => {
     const { countPendingDecisions } = await import("../src/lib/pending-decisions");
     const { buildCurrentStatus } = await import("../src/lib/agents/co-ceo");
     const current = await prisma.company.findUniqueOrThrow({ where: { id: company.id } });
-    const badge = (await getShellProps(current)).decisionCount;
+    const badge = (await getShellProps({ ...current, workspaceV52: false })).decisionCount;
     // L'accueil et la page Décisions comptent les productions de /dashboard avec needsAttention (aucune Page Facebook connectée).
     const proposals = await prisma.agentProposal.findMany({ where: { companyId: company.id } });
     const dashboard = countPendingDecisions(proposals, null);
