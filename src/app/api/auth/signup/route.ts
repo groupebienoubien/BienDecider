@@ -4,6 +4,12 @@ import { prisma } from "@/lib/prisma";
 import { hashPassword } from "@/lib/password";
 import { consumeIpAttempt } from "@/lib/auth-throttle";
 import { readJsonObject } from "@/lib/request-body";
+import { readSignupControl, releaseSignupSlot, reserveSignupSlot, todaySignupCount } from "@/lib/signup-control";
+import { SIGNUP_CLOSED_MESSAGE, SIGNUP_FULL_MESSAGE, secondsUntilNextSignupDay, signupAvailability } from "@/lib/signup-rules";
+
+function signupFull() {
+  return NextResponse.json({ error: SIGNUP_FULL_MESSAGE }, { status: 429, headers: { "Retry-After": String(secondsUntilNextSignupDay(new Date())) } });
+}
 
 export async function POST(request: NextRequest) {
   const body = await readJsonObject(request);
@@ -19,6 +25,11 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Mot de passe requis (6 caractères minimum)" }, { status: 400 });
   }
 
+  const control = await readSignupControl();
+  const availability = signupAvailability(control, await todaySignupCount());
+  if (availability === "closed") return NextResponse.json({ error: SIGNUP_CLOSED_MESSAGE }, { status: 403 });
+  if (availability === "full") return signupFull();
+
   const ipAttempt = await consumeIpAttempt(request, "signup");
   if (ipAttempt?.limited) {
     return NextResponse.json(
@@ -32,6 +43,10 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Un compte existe déjà avec cet email. Connectez-vous." }, { status: 409 });
   }
 
+  // Un e-mail déjà inscrit (409) ne consomme pas d'emplacement : la réservation vient après ce contrôle.
+  const slotDay = await reserveSignupSlot(control.dailyCap);
+  if (!slotDay) return signupFull();
+
   let company;
   try {
     company = await prisma.company.create({
@@ -44,6 +59,7 @@ export async function POST(request: NextRequest) {
       },
     });
   } catch (error) {
+    await releaseSignupSlot(slotDay);
     if (typeof error === "object" && error !== null && "code" in error && error.code === "P2002") {
       return NextResponse.json({ error: "Un compte existe déjà avec cet email. Connectez-vous." }, { status: 409 });
     }

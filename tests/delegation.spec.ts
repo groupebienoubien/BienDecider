@@ -28,6 +28,7 @@ import { runStreamingToolLoop, runToolLoop, type ToolLoopOptions, type UsageTota
 import { AgentRunLimitError } from "../src/lib/agent-run-limits";
 import { createAgentExecution, withAgentExecution } from "../src/lib/agent-run-execution";
 import Anthropic from "@anthropic-ai/sdk";
+import { DEFAULT_SIGNUP_CONTROL, MAX_DAILY_SIGNUP_CAP, parseSignupControlInput, secondsUntilNextSignupDay, signupAvailability, signupCapAlert, signupDayKey } from "../src/lib/signup-rules";
 import { BetaToolRunner } from "@anthropic-ai/sdk/lib/tools/BetaToolRunner";
 
 type UsageLike = Partial<UsageTotal> | undefined;
@@ -1292,4 +1293,39 @@ test("audit A01 : un échec du finaliseur après succès reste visible", async (
   let calls = 0;
   await expect(runToolLoop(runner(), { persistUsage: async () => { calls++; throw failure; } })).rejects.toBe(failure);
   expect(calls).toBe(1);
+});
+
+test("signup rules: closed refuses first, the cap refuses at the limit, no cap stays open", () => {
+  expect(signupAvailability(DEFAULT_SIGNUP_CONTROL, 5000)).toBe("open");
+  expect(signupAvailability({ open: false, dailyCap: null }, 0)).toBe("closed");
+  expect(signupAvailability({ open: false, dailyCap: 10 }, 10)).toBe("closed");
+  expect(signupAvailability({ open: true, dailyCap: 10 }, 9)).toBe("open");
+  expect(signupAvailability({ open: true, dailyCap: 10 }, 10)).toBe("full");
+  expect(signupAvailability({ open: true, dailyCap: 10 }, 11)).toBe("full");
+});
+
+test("signup rules: the alert starts at 80 % of the cap and never without a cap", () => {
+  expect(signupCapAlert({ open: true, dailyCap: null }, 999)).toBe(false);
+  expect(signupCapAlert({ open: true, dailyCap: 10 }, 7)).toBe(false);
+  expect(signupCapAlert({ open: true, dailyCap: 10 }, 8)).toBe(true);
+  expect(signupCapAlert({ open: true, dailyCap: 10 }, 10)).toBe(true);
+});
+
+test("signup rules: the day runs from midnight to midnight in Paris, also across daylight saving changes", () => {
+  expect(signupDayKey(new Date("2026-11-05T22:59:00Z"))).toBe("2026-11-05");
+  expect(signupDayKey(new Date("2026-11-05T23:00:00Z"))).toBe("2026-11-06");
+  expect(secondsUntilNextSignupDay(new Date("2026-11-05T22:59:30Z"))).toBe(30);
+  // 25 octobre 2026 : retour à l'heure d'hiver, jour de 25 h ; minuit suivant à 23:00 UTC.
+  expect(secondsUntilNextSignupDay(new Date("2026-10-25T10:00:00Z"))).toBe(13 * 3600);
+  // 29 mars 2026 : passage à l'heure d'été, jour de 23 h ; minuit suivant à 22:00 UTC.
+  expect(secondsUntilNextSignupDay(new Date("2026-03-29T12:00:00Z"))).toBe(10 * 3600);
+});
+
+test("signup rules: a setting is accepted only as an open flag and a whole cap from 1", () => {
+  expect(parseSignupControlInput({ open: true, dailyCap: 10 })).toEqual({ ok: true, value: { open: true, dailyCap: 10 } });
+  expect(parseSignupControlInput({ open: false })).toEqual({ ok: true, value: { open: false, dailyCap: null } });
+  expect(parseSignupControlInput({ open: true, dailyCap: null })).toEqual({ ok: true, value: { open: true, dailyCap: null } });
+  for (const body of [null, [], "texte", 42, {}, { open: "oui" }, { open: true, dailyCap: 0 }, { open: true, dailyCap: -1 }, { open: true, dailyCap: 2.5 }, { open: true, dailyCap: "10" }, { open: true, dailyCap: MAX_DAILY_SIGNUP_CAP + 1 }]) {
+    expect(parseSignupControlInput(body).ok, JSON.stringify(body)).toBe(false);
+  }
 });

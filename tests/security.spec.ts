@@ -7,6 +7,7 @@ import { join, relative, sep } from "node:path";
 import { config } from "dotenv";
 import { createSessionToken, SESSION_MAX_AGE_SECONDS } from "../src/lib/session-token";
 import { hashPassword } from "../src/lib/password";
+import { signupDayKey } from "../src/lib/signup-rules";
 
 config({ quiet: true });
 
@@ -27,6 +28,7 @@ const GUARDED_ROUTES: Guarded[] = [
   { method: "PATCH", path: "/api/admin/companies/[id]/limits", denied: 403 },
   { method: "GET", path: "/api/admin/delegation-risk", denied: 403 },
   { method: "PATCH", path: "/api/admin/delegation-risk", denied: 403 },
+  { method: "PATCH", path: "/api/admin/signup-control", denied: 403 },
   { method: "POST", path: "/api/agents/contenu/run", denied: 401 },
   { method: "POST", path: "/api/agents/demarchage/run", denied: 401 },
   { method: "POST", path: "/api/agents/marketing/run", denied: 401 },
@@ -461,6 +463,100 @@ test("only an explicit administrator can configure company agent quotas", async 
   } finally {
     await prisma.company.delete({ where: { id: company.id } });
     if (createdAdmin) await prisma.company.delete({ where: { id: adminCompany.id } });
+    await prisma.$disconnect();
+  }
+});
+
+test("an explicit administrator closes or caps signups, and the server enforces it", async ({ request, page }) => {
+  test.setTimeout(90000);
+  const admins = (process.env.ADMIN_EMAILS ?? "").split(",").map((email) => email.trim()).filter(Boolean);
+  test.skip(admins.length === 0, "Signup control requires ADMIN_EMAILS, as configured in CI.");
+  const prisma = openDatabase();
+  const adminEmail = admins[0];
+  const password = "mot-de-passe-valide";
+  const created: string[] = [];
+  const fresh = () => { const email = `security-cap-${randomUUID()}@example.invalid`; created.push(email); return email; };
+  // Une adresse IP distincte par appel : la limite par IP ne doit pas masquer ce que ce test vérifie.
+  const signup = (email: string) => request.post(`${baseURL}/api/auth/signup`, { headers: { "x-real-ip": `test-${randomUUID()}` }, data: { email, password } });
+  const today = signupDayKey(new Date());
+  const controlPath = `${baseURL}/api/admin/signup-control`;
+  let createdAdmin = false;
+  let adminCompany = await prisma.company.findUnique({ where: { ownerEmail: adminEmail } });
+  if (!adminCompany) {
+    adminCompany = await prisma.company.create({ data: { ownerEmail: adminEmail, name: "Admin signup test", trade: "Artisan", servingArea: "Paris" } });
+    createdAdmin = true;
+  }
+  const previousControl = await prisma.signupControl.findUnique({ where: { id: "global" } });
+  const previousDay = await prisma.signupDay.findUnique({ where: { day: today } });
+  const adminCookie = sessionCookie(adminEmail, adminCompany.sessionVersion);
+  const adminHeaders = { Cookie: adminCookie, Origin: baseURL };
+  const setControl = (data: unknown) => request.patch(controlPath, { headers: adminHeaders, data });
+  try {
+    expect((await request.patch(controlPath, { headers: { ...adminHeaders, Origin: "https://attacker.invalid" }, data: { open: false } })).status()).toBe(403);
+    for (const invalid of [{ open: true, dailyCap: 0 }, { open: true, dailyCap: 2.5 }, { dailyCap: 5 }, "texte"]) {
+      expect((await setControl(invalid)).status(), JSON.stringify(invalid)).toBe(400);
+    }
+
+    // Fermées : refus côté serveur sans compte créé, message sur la page, connexion des comptes existants inchangée.
+    const existing = fresh();
+    await prisma.company.create({ data: { ownerEmail: existing, passwordHash: await hashPassword(password), name: "Existant", trade: "Artisan", servingArea: "Paris" } });
+    expect((await setControl({ open: false, dailyCap: null })).status()).toBe(200);
+    const closedEmail = fresh();
+    const closed = await signup(closedEmail);
+    expect(closed.status()).toBe(403);
+    expect((await closed.json()).error).toContain("fermées");
+    expect(closed.headers()["set-cookie"]).toBeUndefined();
+    expect(await prisma.company.count({ where: { ownerEmail: closedEmail } })).toBe(0);
+    await page.goto(`${baseURL}/signup`);
+    await expect(page.getByText("Les inscriptions sont fermées pour le moment.")).toBeVisible();
+    await expect(page.getByLabel("Adresse e-mail")).toHaveCount(0);
+    const login = await request.post(`${baseURL}/api/auth/login`, { headers: { "x-real-ip": `test-${randomUUID()}` }, data: { email: existing, password } });
+    expect(login.status()).toBe(200);
+
+    // Un seul emplacement, deux inscriptions simultanées : une seule est acceptée.
+    await prisma.signupDay.deleteMany({ where: { day: today } });
+    expect((await setControl({ open: true, dailyCap: 1 })).status()).toBe(200);
+    const [first, second] = [fresh(), fresh()];
+    const raced = await Promise.all([signup(first), signup(second)]);
+    expect(raced.map((response) => response.status()).sort()).toEqual([201, 429]);
+    const refused = raced.find((response) => response.status() === 429)!;
+    expect((await refused.json()).error).toContain("revenez demain");
+    expect(Number(refused.headers()["retry-after"])).toBeGreaterThan(0);
+    expect(await prisma.company.count({ where: { ownerEmail: { in: [first, second] } } })).toBe(1);
+    expect((await prisma.signupDay.findUniqueOrThrow({ where: { day: today } })).count).toBe(1);
+    await page.goto(`${baseURL}/signup`);
+    await expect(page.getByText("Inscriptions complètes aujourd'hui, revenez demain.")).toBeVisible();
+
+    // Un e-mail déjà inscrit ne consomme pas d'emplacement ; le compteur du jour et l'alerte s'affichent dans l'administration.
+    await prisma.signupDay.deleteMany({ where: { day: today } });
+    expect((await setControl({ open: true, dailyCap: 2 })).status()).toBe(200);
+    const taken = fresh();
+    expect((await signup(taken)).status()).toBe(201);
+    expect((await signup(taken)).status()).toBe(409);
+    expect((await prisma.signupDay.findUniqueOrThrow({ where: { day: today } })).count).toBe(1);
+    expect((await signup(fresh())).status()).toBe(201);
+    expect((await signup(fresh())).status()).toBe(429);
+    expect((await prisma.signupDay.findUniqueOrThrow({ where: { day: today } })).count).toBe(2);
+    await page.context().clearCookies();
+    await page.context().addCookies([{ name: "pepito_session", value: adminCookie.slice(adminCookie.indexOf("=") + 1), url: baseURL }]);
+    await page.goto(`${baseURL}/admin`);
+    await expect(page.getByRole("heading", { name: "Inscriptions", exact: true })).toBeVisible();
+    await expect(page.getByText("Le plafond du jour est atteint")).toBeVisible();
+    await expect(page.getByText("2 inscriptions aujourd'hui sur 2")).toBeVisible();
+  } finally {
+    if (previousControl) {
+      await prisma.signupControl.update({ where: { id: "global" }, data: { open: previousControl.open, dailyCap: previousControl.dailyCap, updatedBy: previousControl.updatedBy } });
+    } else {
+      await prisma.signupControl.deleteMany({ where: { id: "global" } });
+    }
+    if (previousDay) {
+      await prisma.signupDay.upsert({ where: { day: today }, create: { day: today, count: previousDay.count }, update: { count: previousDay.count } });
+    } else {
+      await prisma.signupDay.deleteMany({ where: { day: today } });
+    }
+    await prisma.company.deleteMany({ where: { ownerEmail: { in: created } } });
+    if (createdAdmin) await prisma.company.delete({ where: { id: adminCompany.id } });
+    await page.context().clearCookies();
     await prisma.$disconnect();
   }
 });
