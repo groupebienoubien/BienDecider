@@ -69,15 +69,19 @@ test("risk rules use registered kinds and contextual factors, then fail closed",
   expect(canExecuteAction("piste_croissance", "accompagner", true)).toBe(true);
 });
 
-test("global risk settings require an explicit admin allowlist even in prototype mode", () => {
+test("administration is closed by default: only listed addresses are administrators", () => {
   const previous = process.env.ADMIN_EMAILS;
   try {
     delete process.env.ADMIN_EMAILS;
-    expect(isAdminEmail("pilot@example.invalid")).toBe(true);
+    expect(isAdminEmail("pilot@example.invalid")).toBe(false);
     expect(isExplicitAdminEmail("pilot@example.invalid")).toBe(false);
+    process.env.ADMIN_EMAILS = " , ";
+    expect(isAdminEmail("pilot@example.invalid")).toBe(false);
     process.env.ADMIN_EMAILS = "Founder@biendecider.com, other@example.invalid";
-    expect(isExplicitAdminEmail("founder@biendecider.com")).toBe(true);
-    expect(isExplicitAdminEmail("pilot@example.invalid")).toBe(false);
+    expect(isAdminEmail("founder@biendecider.com")).toBe(true);
+    expect(isExplicitAdminEmail("OTHER@example.invalid")).toBe(true);
+    expect(isAdminEmail("pilot@example.invalid")).toBe(false);
+    expect(isAdminEmail(null)).toBe(false);
   } finally {
     if (previous === undefined) delete process.env.ADMIN_EMAILS;
     else process.env.ADMIN_EMAILS = previous;

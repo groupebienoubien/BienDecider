@@ -1,5 +1,6 @@
 // Données du menu latéral communes à toutes les pages connectées (cf. docs/maquette : décisions en attente et budget IA du mois).
 import { prisma } from "@/lib/prisma";
+import { isAdminEmail } from "@/lib/admin";
 import { getTeamState } from "@/lib/team-state";
 import { parisQuotaWindows } from "@/lib/quota-windows";
 
@@ -26,6 +27,8 @@ export async function getShellProps(company: ShellCompany) {
     companyArea: company.servingArea,
     objective: company.objective,
     ownerEmail: company.ownerEmail,
+    // Le lien Administration n'est affiché qu'aux administrateurs listés (story 6.2).
+    isAdmin: isAdminEmail(company.ownerEmail),
     // Décision du dirigeant (2026-10-22) : seules les productions qui l'attendent comptent, comme sur la page Décisions.
     decisionCount: teamState.pendingDecisions,
     budget: { spentUsd: monthUsage._sum.costUsd ?? 0, limitUsd: company.monthlySpendLimitUsd },
@@ -35,5 +38,5 @@ export async function getShellProps(company: ShellCompany) {
 /** Pages sans entreprise garantie (administration) : coque complète si le compte en a une, sinon coque minimale. */
 export async function getShellPropsForEmail(ownerEmail: string) {
   const company = await prisma.company.findUnique({ where: { ownerEmail } });
-  return company?.name ? getShellProps(company) : { ownerEmail };
+  return company?.name ? getShellProps(company) : { ownerEmail, isAdmin: isAdminEmail(ownerEmail) };
 }

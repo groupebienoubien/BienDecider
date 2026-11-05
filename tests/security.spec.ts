@@ -541,6 +541,7 @@ test("an explicit administrator closes or caps signups, and the server enforces 
     await page.context().addCookies([{ name: "pepito_session", value: adminCookie.slice(adminCookie.indexOf("=") + 1), url: baseURL }]);
     await page.goto(`${baseURL}/admin`);
     await expect(page.getByRole("heading", { name: "Inscriptions", exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Administration", exact: true })).toBeVisible();
     await expect(page.getByText("Le plafond du jour est atteint")).toBeVisible();
     await expect(page.getByText("2 inscriptions aujourd'hui sur 2")).toBeVisible();
   } finally {
@@ -557,6 +558,32 @@ test("an explicit administrator closes or caps signups, and the server enforces 
     await prisma.company.deleteMany({ where: { ownerEmail: { in: created } } });
     if (createdAdmin) await prisma.company.delete({ where: { id: adminCompany.id } });
     await page.context().clearCookies();
+    await prisma.$disconnect();
+  }
+});
+
+test("a signed-in user who is not listed in ADMIN_EMAILS neither sees nor reaches the administration", async ({ request, page }) => {
+  const admins = (process.env.ADMIN_EMAILS ?? "").split(",").map((email) => email.trim()).filter(Boolean);
+  test.skip(admins.length === 0, "Requires ADMIN_EMAILS on the server, as configured in CI.");
+  const prisma = openDatabase();
+  const email = `security-noadmin-${randomUUID()}@example.invalid`;
+  const company = await prisma.company.create({ data: { ownerEmail: email, name: "Sans admin", trade: "Artisan", servingArea: "Paris" } });
+  const cookie = sessionCookie(email, company.sessionVersion);
+  try {
+    await page.context().clearCookies();
+    await page.context().addCookies([{ name: "pepito_session", value: cookie.slice(cookie.indexOf("=") + 1), url: baseURL }]);
+    await page.goto(`${baseURL}/admin`);
+    await expect(page.getByText("Accès réservé")).toBeVisible();
+    await expect(page.getByRole("link", { name: "Administration", exact: true })).toHaveCount(0);
+    await page.goto(`${baseURL}/compte`);
+    await expect(page.getByRole("link", { name: "Mon entreprise", exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Administration", exact: true })).toHaveCount(0);
+    const removal = await request.delete(`${baseURL}/api/admin/companies/${company.id}`, { headers: { Cookie: cookie, Origin: baseURL } });
+    expect(removal.status()).toBe(403);
+    expect(await prisma.company.count({ where: { id: company.id } })).toBe(1);
+  } finally {
+    await page.context().clearCookies();
+    await prisma.company.deleteMany({ where: { id: company.id } });
     await prisma.$disconnect();
   }
 });

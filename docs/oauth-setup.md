@@ -116,7 +116,7 @@ Le CEO a confirmé l'usage **envoyer des emails depuis Gmail**, pas la connexion
 
    Générer la clé **dans votre terminal privé**, puis la saisir dans Vercel sans la partager : `node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"`. Conserver cette clé dans un gestionnaire de secrets. Ne pas utiliser `SESSION_SECRET` ni une clé d'exemple. Changer cette clé sans migration rend les jetons existants illisibles : déconnecter/réautoriser ou prévoir une migration de rotation.
 6. Redéployer après modification des variables. En local, utiliser `.env` ignoré par Git avec une clé propre à l'environnement. Les noms `GOOGLE_OAUTH_*` continuent à servir uniquement GBP.
-   Avant ouverture aux clients externes, restreindre aussi `ADMIN_EMAILS` : l'administration reste ouverte aux utilisateurs connectés si cette variable est absente (décision du pilote), avec visibilité sur les entreprises et possibilité de suppression.
+   `ADMIN_EMAILS` est obligatoire pour accéder à l'administration : sans cette variable, personne n'est administrateur (story 6.2, #63). L'administration donne la visibilité sur les entreprises et la possibilité de les supprimer.
 7. Ouvrir **`https://www.biendecider.com/connexions`**, **Autoriser Gmail**, choisir le compte expéditeur et accepter l'envoi. Ouvrir **Écrire un email**, renseigner le destinataire, l'objet et le texte, confirmer puis envoyer. Commencer par un message à une adresse de test que vous contrôlez.
 
 ### Fonctionnement livré et limites

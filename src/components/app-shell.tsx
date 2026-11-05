@@ -18,6 +18,7 @@ export function AppShell({
   decisionCount = 0,
   budget,
   paul = Boolean(companyName),
+  isAdmin = false,
   children,
 }: {
   companyName?: string;
@@ -28,6 +29,7 @@ export function AppShell({
   decisionCount?: number;
   budget?: { spentUsd: number; limitUsd: number };
   paul?: boolean;
+  isAdmin?: boolean;
   children: React.ReactNode;
 }) {
   const companyInitials = companyName
@@ -52,7 +54,7 @@ export function AppShell({
         <Suspense fallback={null}><SidebarNav decisionCount={decisionCount} /></Suspense>
         <div className="sidebar-bottom">
           <div className="nav-label">Réglages</div>
-          <Suspense fallback={null}><SidebarSettingsLinks /></Suspense>
+          <Suspense fallback={null}><SidebarSettingsLinks showAdmin={isAdmin} /></Suspense>
           {budget && (
             <div className="credit">
               <span>Budget IA du mois</span>
