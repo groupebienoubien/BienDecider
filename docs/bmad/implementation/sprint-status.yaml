@@ -76,14 +76,14 @@ development_status:
   6-3-envoyer-les-e-mails-du-service: done
   6-4-confirmer-mon-e-mail-a-l-inscription: done
   6-5-recuperer-mon-mot-de-passe: done
-  6-6-mettre-a-jour-la-charte-pour-la-cible-v5-2: backlog
+  6-6-mettre-a-jour-la-charte-pour-la-cible-v5-2: review
   epic-6-retrospective: optional
 
   epic-7: in-progress
-  7-1-suspendre-une-entreprise: review
-  7-2-voir-l-activite-et-les-erreurs-d-une-entreprise: review
-  7-3-etre-alerte-d-une-consommation-anormale: review
-  7-4-dire-ce-qui-ne-va-pas-depuis-n-importe-quelle-page: review
+  7-1-suspendre-une-entreprise: done
+  7-2-voir-l-activite-et-les-erreurs-d-une-entreprise: done
+  7-3-etre-alerte-d-une-consommation-anormale: done
+  7-4-dire-ce-qui-ne-va-pas-depuis-n-importe-quelle-page: done
   epic-7-retrospective: optional
 
   epic-8: in-progress
