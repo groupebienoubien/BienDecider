@@ -61,6 +61,7 @@ model Company {
   sitePublishedAt DateTime?
   loginCount      Int       @default(0) // nombre de connexions réussies (vue admin)
   lastLoginAt     DateTime?
+  emailVerifiedAt DateTime? @default(now()) // adresse confirmée par le lien envoyé (story 6.4). Défaut = confirmée (comptes antérieurs et fixtures de tests) ; seule l'inscription (src/app/api/auth/signup) crée un compte avec null
   createdAt       DateTime  @default(now())
   channels        ChannelConnection[]
   proposals       AgentProposal[]
@@ -77,6 +78,7 @@ model Company {
   paulPendingActions PaulPendingAction[]
   sitePhotos      SitePhoto[]
   sourceReads     SourceRead[]
+  emailTokens     EmailToken[]
 }
 
 model LinkedInAuthorization {
@@ -428,6 +430,20 @@ model SignupControl {
 model SignupDay {
   day   String @id
   count Int
+}
+
+/** Jeton à usage unique envoyé par e-mail (confirmation d'adresse, mot de passe oublié). Seule l'empreinte SHA-256 est conservée : le jeton lui-même n'est jamais stocké. */
+model EmailToken {
+  id        String    @id @default(cuid())
+  companyId String
+  company   Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  kind      String // verify_email ou reset_password
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([companyId, kind])
 }
 
 /**

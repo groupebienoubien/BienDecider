@@ -12,7 +12,7 @@ import { createAgentExecution, withAgentExecution, withAgentRunWrite } from "@/l
 import { AGENT_RUN_MAX_DURATION_SECONDS, AGENT_RUN_COST_RESERVATION_USD, AgentRunLimitError } from "@/lib/agent-run-limits";
 export { AGENT_RUN_MAX_DURATION_SECONDS, AGENT_RUN_COST_RESERVATION_USD } from "@/lib/agent-run-limits";
 import { isAuditPlanItemTitle } from "@/lib/agents/plan-item-shared";
-import { AgentRunConflictError, AgentRunQuotaError, RevisionConflictError, classifyRunError, failureMessage } from "@/lib/agents/agent-errors";
+import { AgentRunConflictError, AgentRunQuotaError, EmailNotVerifiedError, RevisionConflictError, classifyRunError, failureMessage } from "@/lib/agents/agent-errors";
 import { PERSONAS } from "@/lib/agents/personas";
 import { isSerializationConflict } from "@/lib/serialization-conflict";
 import { revisionActiveKey } from "@/lib/agents/revision-state";
@@ -434,6 +434,8 @@ async function assertRunQuota(tx: Prisma.TransactionClient, companyId: string, c
     where: { id: companyId },
     data: { quotaEpoch: { increment: 1 } },
   });
+  // Story 6.4 : une adresse non confirmée ne consomme ni lancement ni budget IA (inscription ouverte).
+  if (!company.emailVerifiedAt) throw new EmailNotVerifiedError();
   const { dayStart, monthStart, nextMonthName } = parisQuotaWindows(now);
   const chatPurposes = [...CHAT_USAGE_PURPOSES];
 

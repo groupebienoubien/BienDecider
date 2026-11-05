@@ -68,7 +68,7 @@ export default function LoginPage() {
           required
           type={showPassword ? "text" : "password"}
           autoComplete="current-password"
-          placeholder="Mot de passe (6 caractères minimum)"
+          placeholder="Mot de passe"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           className="rounded border px-3 py-2 text-sm"
@@ -85,6 +85,9 @@ export default function LoginPage() {
           {loading ? "Connexion…" : "Continuer"}
         </button>
         {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
+        <p className="text-sm text-gray-600">
+          <Link className="underline" href="/mot-de-passe-oublie">Mot de passe oublié ?</Link>
+        </p>
         <p className="text-sm text-gray-600">
           Pas encore de compte ? <Link className="underline" href="/signup">Créer un compte</Link>
         </p>

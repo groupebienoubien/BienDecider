@@ -48,8 +48,13 @@ Prérequis : Node.js, une clé API Anthropic (https://console.anthropic.com/), u
    # META_APP_ID=""
    # META_APP_SECRET=""
 
-   # Optionnel — referme la vue /admin à une liste d'emails (sinon ouverte à tout connecté) :
+   # Obligatoire pour accéder à /admin : liste d'adresses séparées par une virgule (sans elle, personne n'est administrateur) :
    # ADMIN_EMAILS="vous@exemple.com"
+
+   # Optionnel — e-mails du service (confirmation d'adresse, mot de passe oublié) ; sans eux, aucun e-mail n'est envoyé (voir docs/domain-email-setup.md) :
+   # SERVICE_SMTP_URL="smtps://utilisateur:motdepasse@smtp.fournisseur.example:465"
+   # SERVICE_MAIL_FROM="BienDecider <noreply@biendecider.com>"
+   # APP_BASE_URL="http://localhost:3000"
    ```
    `DATABASE_URL` est le nom recommandé. Pour les intégrations Prisma Postgres, le serveur accepte aussi `DATABASE_PRISMA_DATABASE_URL` puis `DATABASE_POSTGRES_URL`, dans cet ordre de repli. Si plusieurs sont définies, `DATABASE_URL` a priorité. Ne pas réutiliser une URL divulguée ; la renouveler chez le fournisseur.
 2. Installer les dépendances : `npm install` (génère aussi le client Prisma via `postinstall`)
@@ -70,7 +75,7 @@ Les tests utilisent `DATABASE_URL` et `SESSION_SECRET` du fichier `.env`. Ils cr
 
 1. Sur [vercel.com](https://vercel.com), importer le repo GitHub `groupebienoubien/BienDecider` — aucune clé API Vercel n'est nécessaire, la connexion se fait directement via l'intégration GitHub native (sécurisé, zéro secret à partager).
 2. Onglet **Storage** du projet Vercel → créer/relier la base **Postgres**. Le nom canonique attendu est `DATABASE_URL`. Si l'intégration Prisma fournit seulement `DATABASE_PRISMA_DATABASE_URL` ou `DATABASE_POSTGRES_URL`, le serveur les accepte en repli ; préférer `DATABASE_URL` et ne pas stocker plusieurs URLs contradictoires.
-3. Onglet **Settings → Environment Variables** → ajouter `ANTHROPIC_API_KEY` et `SESSION_SECRET` (même valeur qu'en local, sinon les sessions existantes deviennent invalides). Clés OAuth si prêtes. Laisser `ADMIN_EMAILS` non défini tant que l'admin doit rester ouvert à tous.
+3. Onglet **Settings → Environment Variables** → ajouter `ANTHROPIC_API_KEY` et `SESSION_SECRET` (même valeur qu'en local, sinon les sessions existantes deviennent invalides). Clés OAuth si prêtes. Définir `ADMIN_EMAILS` (adresses des administrateurs séparées par une virgule) : sans elle, personne n'a accès à l'administration. Redéployer après toute modification d'une variable.
 4. Premier déploiement : Vercel lance `npm install` (génère le client Prisma) puis `next build` automatiquement.
 5. Schéma en prod : il évolue par les migrations versionnées de `prisma/migrations`, appliquées au déploiement une fois `MIGRATE_ON_DEPLOY=1` défini dans Vercel. L'activation initiale sur la base existante est décrite dans [docs/ci-cd.md](docs/ci-cd.md) ; ne plus utiliser `prisma db push` sur cette base.
 6. Chaque fusion sur `main` redéploie automatiquement. Les autres branches ne sont pas déployées. Ne pas pousser directement sur `main` dans le processus d'équipe ; voir [docs/ci-cd.md](docs/ci-cd.md) pour les protections à activer.

@@ -1,4 +1,4 @@
-﻿import { expect, test } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 import { assessActionRisk, canExecuteAction, effectiveRiskLevel, requiresHumanApproval } from "../src/lib/delegation-risk";
 import { isAdminEmail, isExplicitAdminEmail } from "../src/lib/admin";
 import { describeProgress, isActionDone, summarizeProposals } from "../src/lib/proposal-progress";
@@ -29,6 +29,10 @@ import { AgentRunLimitError } from "../src/lib/agent-run-limits";
 import { createAgentExecution, withAgentExecution } from "../src/lib/agent-run-execution";
 import Anthropic from "@anthropic-ai/sdk";
 import { DEFAULT_SIGNUP_CONTROL, MAX_DAILY_SIGNUP_CAP, parseSignupControlInput, secondsUntilNextSignupDay, signupAvailability, signupCapAlert, signupDayKey } from "../src/lib/signup-rules";
+import { appBaseUrl, isServiceMailConfigured, sendServiceEmail } from "../src/lib/service-mail";
+import { passwordResetEmail, passwordResetLink, verificationEmail, verificationLink } from "../src/lib/service-mail-templates";
+import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH, passwordPolicyError } from "../src/lib/password-policy";
+import { startSmtpSink } from "./support/smtp-sink";
 import { BetaToolRunner } from "@anthropic-ai/sdk/lib/tools/BetaToolRunner";
 
 type UsageLike = Partial<UsageTotal> | undefined;
@@ -69,15 +73,19 @@ test("risk rules use registered kinds and contextual factors, then fail closed",
   expect(canExecuteAction("piste_croissance", "accompagner", true)).toBe(true);
 });
 
-test("global risk settings require an explicit admin allowlist even in prototype mode", () => {
+test("administration is closed by default: only listed addresses are administrators", () => {
   const previous = process.env.ADMIN_EMAILS;
   try {
     delete process.env.ADMIN_EMAILS;
-    expect(isAdminEmail("pilot@example.invalid")).toBe(true);
+    expect(isAdminEmail("pilot@example.invalid")).toBe(false);
     expect(isExplicitAdminEmail("pilot@example.invalid")).toBe(false);
+    process.env.ADMIN_EMAILS = " , ";
+    expect(isAdminEmail("pilot@example.invalid")).toBe(false);
     process.env.ADMIN_EMAILS = "Founder@biendecider.com, other@example.invalid";
-    expect(isExplicitAdminEmail("founder@biendecider.com")).toBe(true);
-    expect(isExplicitAdminEmail("pilot@example.invalid")).toBe(false);
+    expect(isAdminEmail("founder@biendecider.com")).toBe(true);
+    expect(isExplicitAdminEmail("OTHER@example.invalid")).toBe(true);
+    expect(isAdminEmail("pilot@example.invalid")).toBe(false);
+    expect(isAdminEmail(null)).toBe(false);
   } finally {
     if (previous === undefined) delete process.env.ADMIN_EMAILS;
     else process.env.ADMIN_EMAILS = previous;
@@ -1328,4 +1336,89 @@ test("signup rules: a setting is accepted only as an open flag and a whole cap f
   for (const body of [null, [], "texte", 42, {}, { open: "oui" }, { open: true, dailyCap: 0 }, { open: true, dailyCap: -1 }, { open: true, dailyCap: 2.5 }, { open: true, dailyCap: "10" }, { open: true, dailyCap: MAX_DAILY_SIGNUP_CAP + 1 }]) {
     expect(parseSignupControlInput(body).ok, JSON.stringify(body)).toBe(false);
   }
+});
+
+function withServiceMailEnv(values: Record<string, string | undefined>) {
+  const names = ["SERVICE_SMTP_URL", "SERVICE_MAIL_FROM", "APP_BASE_URL"] as const;
+  const previous = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+  for (const name of names) {
+    if (values[name] === undefined) delete process.env[name];
+    else process.env[name] = values[name];
+  }
+  return () => { for (const name of names) { if (previous[name] === undefined) delete process.env[name]; else process.env[name] = previous[name]; } };
+}
+
+test("service mail: a message reaches the SMTP server from the service address, with accents and a long link intact", async () => {
+  const sink = await startSmtpSink();
+  const restore = withServiceMailEnv({ SERVICE_SMTP_URL: `smtp://127.0.0.1:${sink.port}`, SERVICE_MAIL_FROM: "BienDecider <noreply@biendecider.com>", APP_BASE_URL: "https://app.example.invalid/" });
+  try {
+    expect(isServiceMailConfigured()).toBe(true);
+    const link = verificationLink("jeton-de-test-" + "x".repeat(60));
+    expect(link.startsWith("https://app.example.invalid/verifier-email?token=")).toBe(true);
+    const content = passwordResetEmail(passwordResetLink("abc"));
+    expect(await sendServiceEmail({ to: "dirigeante@example.invalid", ...content })).toBe("sent");
+    expect(await sendServiceEmail({ to: "dirigeante@example.invalid", ...verificationEmail(link) })).toBe("sent");
+    expect(sink.messages).toHaveLength(2);
+    expect(sink.messages[0]).toMatchObject({ from: "noreply@biendecider.com", to: ["dirigeante@example.invalid"], subject: "Réinitialisez votre mot de passe BienDecider" });
+    expect(sink.messages[0].text).toContain("https://app.example.invalid/reinitialiser?token=abc");
+    expect(sink.messages[1].text).toContain(link);
+  } finally {
+    restore();
+    await sink.close();
+  }
+});
+
+test("service mail: not configured sends nothing, and a refused or broken send never leaks the SMTP credentials", async () => {
+  const warnings: string[] = [];
+  const originalWarn = console.warn;
+  console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(" ")); };
+  try {
+    let restore = withServiceMailEnv({});
+    expect(isServiceMailConfigured()).toBe(false);
+    expect(await sendServiceEmail({ to: "a@example.invalid", subject: "Objet", text: "Texte" })).toBe("not_configured");
+    restore();
+
+    const sink = await startSmtpSink();
+    restore = withServiceMailEnv({ SERVICE_SMTP_URL: `smtp://utilisateur:secret-du-fournisseur@127.0.0.1:${sink.port}`, SERVICE_MAIL_FROM: "noreply@biendecider.com" });
+    for (const bad of [{ to: "a@example.invalid\nBcc: b@example.invalid", subject: "Objet", text: "Texte" }, { to: "a@example.invalid", subject: "Objet\nBcc: b@example.invalid", text: "Texte" }, { to: "pas-une-adresse", subject: "Objet", text: "Texte" }, { to: "a@example.invalid", subject: "", text: "Texte" }]) {
+      expect(await sendServiceEmail(bad), JSON.stringify(bad)).toBe("failed");
+    }
+    expect(sink.messages).toHaveLength(0);
+    await sink.close();
+    expect(await sendServiceEmail({ to: "a@example.invalid", subject: "Objet", text: "Texte" })).toBe("failed");
+    restore();
+  } finally {
+    console.warn = originalWarn;
+  }
+  expect(warnings.length).toBeGreaterThan(0);
+  for (const line of warnings) {
+    expect(line).not.toContain("secret-du-fournisseur");
+    expect(line).not.toContain("a@example.invalid");
+  }
+});
+
+test("service mail: links come from APP_BASE_URL, never from a request, and fall back to the public domain", () => {
+  let restore = withServiceMailEnv({});
+  expect(appBaseUrl()).toBe("https://www.biendecider.com");
+  restore();
+  restore = withServiceMailEnv({ APP_BASE_URL: "javascript:alert(1)" });
+  expect(appBaseUrl()).toBe("https://www.biendecider.com");
+  restore();
+  restore = withServiceMailEnv({ APP_BASE_URL: "http://localhost:3000/" });
+  expect(verificationLink("a b")).toBe("http://localhost:3000/verifier-email?token=a%20b");
+  restore();
+  for (const content of [verificationEmail("LIEN"), passwordResetEmail("LIEN")]) {
+    expect(content.text).toContain("LIEN");
+    expect(content.subject).not.toMatch(/[\r\n]/);
+  }
+});
+
+test("password policy: 8 to 128 characters for new passwords, with the message of the functional spec", () => {
+  expect(PASSWORD_MIN_LENGTH).toBe(8);
+  expect(PASSWORD_MAX_LENGTH).toBe(128);
+  expect(passwordPolicyError("1234567")).toBe("Le mot de passe doit contenir au moins 8 caractères.");
+  expect(passwordPolicyError("12345678")).toBeNull();
+  expect(passwordPolicyError("x".repeat(128))).toBeNull();
+  expect(passwordPolicyError("x".repeat(129))).toBe("Le mot de passe ne peut pas dépasser 128 caractères.");
+  for (const value of [undefined, null, 12345678, {}, ["12345678"]]) expect(passwordPolicyError(value), String(value)).toBe("Le mot de passe doit contenir au moins 8 caractères.");
 });

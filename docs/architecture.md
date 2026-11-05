@@ -175,7 +175,7 @@ erDiagram
 | Suppression du compte | `POST /api/companies/delete` : mot de passe et confirmation exigés ; effacement en cascade des données et des jetons chiffrés, révocation Google/Meta au mieux avant effacement ; sauvegardes de la base non purgées |
 | Contenu généré (site) | HTML nettoyé (scripts/handlers retirés) + servi dans une `<iframe sandbox="">` sans droits |
 | OAuth | Jamais de mot de passe tiers collecté — flux OAuth officiel uniquement (Google/Meta) |
-| Admin (`/admin`) | **Ouvert par défaut** à tout utilisateur connecté (décision CEO le 2026-10-05) — à refermer via `ADMIN_EMAILS` avant tout client externe non trié sur le volet |
+| Admin (`/admin`) | **Fermé par défaut** : seules les adresses listées dans `ADMIN_EMAILS` sont administrateurs ; sans la variable, personne ne l'est et le lien n'est pas affiché (story 6.2, #63, le 2026-11-05) |
 
 ## 6. Déploiement
 

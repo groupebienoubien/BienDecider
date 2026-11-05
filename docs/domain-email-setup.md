@@ -32,6 +32,18 @@ Ce transfert ne donne pas la capacité de répondre en tant que `contact@biendec
 
 La réception du contact est indépendante du fournisseur d'envoi des rapports et de la prospection : le transfert ne débloque aucune de ces fonctionnalités applicatives.
 
+### E-mails du service (confirmation d'adresse, mot de passe oublié, bilans)
+
+L'application envoie ses propres messages par SMTP (`src/lib/service-mail.ts`), depuis une adresse du domaine, indépendamment de Gmail (qui part au nom du dirigeant). Le fournisseur est au choix des fondateurs (Resend, Brevo, Postmark, SMTP OVH…) ; le code ne dépend d'aucun.
+
+1. Créer le compte chez le fournisseur et y **vérifier le domaine `biendecider.com`**.
+2. Publier dans la zone DNS OVH les enregistrements demandés (**SPF**, **DKIM**, et **DMARC**) en les **fusionnant** avec l'existant : un seul enregistrement SPF par domaine (ne jamais en ajouter un second).
+3. Créer l'expéditeur, par exemple `noreply@biendecider.com`, et relever l'URL SMTP du fournisseur.
+4. Dans Vercel (Production), définir : `SERVICE_SMTP_URL` (secret : ne jamais le communiquer dans une Issue, un message ou un agent), `SERVICE_MAIL_FROM` (par exemple `BienDecider <noreply@biendecider.com>`) et `APP_BASE_URL` (`https://www.biendecider.com`). Redéployer.
+5. Recette : demander un lien de réinitialisation sur `/mot-de-passe-oublie` pour une adresse de test ; vérifier la réception en boîte de réception (pas dans les indésirables), l'expéditeur et le lien.
+
+Sans ces variables, aucun e-mail n'est envoyé : l'application continue de fonctionner, mais une adresse ne peut pas être confirmée (la diffusion reste bloquée) et un mot de passe ne peut pas être réinitialisé.
+
 ## 3. Adapter Google et Meta
 
 - Nom de l'application : **BienDecider** ; email de support : `contact@biendecider.com` une fois sa réception confirmée.
@@ -51,6 +63,7 @@ Les sessions existantes sur `vercel.app` ne sont pas transférables au nouveau d
 - [ ] Connexions OAuth : callbacks et autorisations corrects si les providers sont actifs.
 - [ ] Site publié accessible sous `/site/<slug>` sur le nouveau domaine.
 - [ ] `contact@biendecider.com` reçu dans le Gmail depuis deux expéditeurs distincts.
+- [ ] E-mail du service reçu en boîte de réception, expéditeur `biendecider.com`, SPF/DKIM/DMARC valides (outil de contrôle d'en-têtes du fournisseur).
 - [ ] Mentions légales complétées, confidentialité revue et `ADMIN_EMAILS` restreint avant ouverture publique.
 
 ## Références officielles

@@ -277,6 +277,18 @@ test("audit A01: a usage persistence failure retains the failed run's budget res
   await expect(reserveUsageBudget(company.id, "co_ceo_chat")).rejects.toMatchObject({ reason: "quota_budget" });
 });
 
+test("story 6.4: an unverified address refuses every launch and reservation, and reserves nothing", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { reserveUsageBudget } = await import("../src/lib/agent-runs");
+  await prisma.company.update({ where: { id: company.id }, data: { emailVerifiedAt: null } });
+  for (const purpose of ["co_ceo_chat", "onboarding_interpret", "site_publish"]) {
+    await expect(reserveUsageBudget(company.id, purpose), purpose).rejects.toMatchObject({ name: "EmailNotVerifiedError", reason: "email_not_verified", message: "Confirmez votre adresse e-mail avant toute diffusion." });
+  }
+  expect(await prisma.usageReservation.count({ where: { companyId: company.id } })).toBe(0);
+  await prisma.company.update({ where: { id: company.id }, data: { emailVerifiedAt: new Date() } });
+  await expect(reserveUsageBudget(company.id, "co_ceo_chat")).resolves.toMatchObject({ purpose: "co_ceo_chat" });
+});
+
 test("audit A03: a suspended old worker cannot write or complete the action of its running retry", async ({ company }) => {
   const { prisma } = await import("../src/lib/prisma");
   const { anthropic } = await import("../src/lib/anthropic");
@@ -716,7 +728,7 @@ test("an agent that produces nothing raises a displayable error, technical error
 });
 
 test("run errors are classified by type into one reason, each with a clear message", async () => {
-  const { AgentNoResultError, AgentRunConflictError, AgentRunQuotaError, classifyRunError, failureMessage, RUN_FAILURE_REASONS } = await import("../src/lib/agents/agent-errors");
+  const { AgentNoResultError, AgentRunConflictError, AgentRunQuotaError, EmailNotVerifiedError, classifyRunError, failureMessage, RUN_FAILURE_REASONS } = await import("../src/lib/agents/agent-errors");
   const agentRuns = await import("../src/lib/agent-runs");
   // Réexport : les imports existants depuis agent-runs désignent les mêmes classes.
   expect(agentRuns.AgentRunQuotaError).toBe(AgentRunQuotaError);
@@ -728,6 +740,8 @@ test("run errors are classified by type into one reason, each with a clear messa
   expect(classifyRunError(new AgentRunConflictError("Demande de lancement invalide.", "outage"))).toBe("outage");
   expect(classifyRunError(new AgentRunQuotaError("Quota", "quota_runs"))).toBe("quota_runs");
   expect(classifyRunError(new AgentRunQuotaError("Budget", "quota_budget"))).toBe("quota_budget");
+  expect(classifyRunError(new EmailNotVerifiedError())).toBe("email_not_verified");
+  expect(new EmailNotVerifiedError()).toBeInstanceOf(AgentRunQuotaError);
   expect(classifyRunError(new AgentNoResultError("Martine"))).toBe("no_result");
   // Le texte d'une erreur ne compte jamais : seule sa classe la classe.
   expect(classifyRunError(new Error("Le quota journalier de lancements est atteint"))).toBe("outage");
@@ -736,8 +750,10 @@ test("run errors are classified by type into one reason, each with a clear messa
   for (const reason of RUN_FAILURE_REASONS) {
     const message = failureMessage(reason, "Martine");
     expect(message, reason).not.toMatch(/ÉCHEC/i);
-    expect(message, reason).toMatch(/(Vous|Réessayez)/);
+    // Vouvoiement : "Vous...", "Réessayez..." ou un impératif de la spécification (M-54 : "Confirmez votre adresse e-mail...").
+    expect(message, reason).toMatch(/(Vous|Réessayez|Confirmez)/);
   }
+  expect(failureMessage("email_not_verified", "Martine")).toBe("Confirmez votre adresse e-mail avant toute diffusion.");
   expect(failureMessage("already_running", "Martine")).toContain("y travaille déjà");
   expect(failureMessage("quota_runs", "Martine")).not.toMatch(/administrateur/i);
   expect(failureMessage("quota_budget", "Martine")).toContain("budget du jour");

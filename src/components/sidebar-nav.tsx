@@ -72,11 +72,11 @@ export function StageTabs() {
 }
 
 /** Réglages, hors du parcours : entreprise, compte et administration. */
-export function SidebarSettingsLinks() {
+export function SidebarSettingsLinks({ showAdmin = false }: { showAdmin?: boolean }) {
   const pathname = usePathname();
   return (
     <>
-      {SETTINGS_PAGES.map((item) => {
+      {SETTINGS_PAGES.filter((item) => showAdmin || item.href !== "/admin").map((item) => {
         const current = item.paths.some((path) => pathname === path || pathname.startsWith(path + "/"));
         return (
           <Link key={item.href} href={item.href} aria-current={current ? "page" : undefined}>

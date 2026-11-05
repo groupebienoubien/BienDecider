@@ -5,6 +5,7 @@ import { Icon } from "@/components/icon";
 import { PaulPanel } from "@/components/paul-panel";
 import { BrandLogo } from "@/components/brand-logo";
 import { WorkspaceBreadcrumb } from "@/components/workspace-breadcrumb";
+import { EmailVerificationBanner } from "@/components/email-verification-banner";
 
 const MONEY = new Intl.NumberFormat("fr-FR", { maximumFractionDigits: 2 });
 
@@ -18,6 +19,8 @@ export function AppShell({
   decisionCount = 0,
   budget,
   paul = Boolean(companyName),
+  isAdmin = false,
+  emailVerified = true,
   children,
 }: {
   companyName?: string;
@@ -28,6 +31,8 @@ export function AppShell({
   decisionCount?: number;
   budget?: { spentUsd: number; limitUsd: number };
   paul?: boolean;
+  isAdmin?: boolean;
+  emailVerified?: boolean;
   children: React.ReactNode;
 }) {
   const companyInitials = companyName
@@ -52,7 +57,7 @@ export function AppShell({
         <Suspense fallback={null}><SidebarNav decisionCount={decisionCount} /></Suspense>
         <div className="sidebar-bottom">
           <div className="nav-label">Réglages</div>
-          <Suspense fallback={null}><SidebarSettingsLinks /></Suspense>
+          <Suspense fallback={null}><SidebarSettingsLinks showAdmin={isAdmin} /></Suspense>
           {budget && (
             <div className="credit">
               <span>Budget IA du mois</span>
@@ -75,6 +80,7 @@ export function AppShell({
         </header>
         <main id="contenu" tabIndex={-1}>
           <Suspense fallback={null}><StageTabs /></Suspense>
+          {!emailVerified && <EmailVerificationBanner email={ownerEmail} />}
           {children}
         </main>
         <footer className="workspace-footer">
