@@ -85,3 +85,9 @@ development_status:
   7-3-etre-alerte-d-une-consommation-anormale: review
   7-4-dire-ce-qui-ne-va-pas-depuis-n-importe-quelle-page: review
   epic-7-retrospective: optional
+
+  epic-8: in-progress
+  8-1-suivre-les-erreurs-en-production: review
+  8-2-visualiser-le-credit-du-modele: review
+  8-3-tester-la-sauvegarde-et-la-restauration: review
+  epic-8-retrospective: optional
