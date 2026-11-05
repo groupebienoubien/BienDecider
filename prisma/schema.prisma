@@ -9,85 +9,85 @@ generator client {
 }
 
 model Company {
-  id                       String                  @id @default(cuid())
-  ownerEmail               String                  @unique // identifiant de session (login minimal, cf. docs/archives/architecture-technique.md)
-  passwordHash             String? // hash+sel (scrypt), jamais en clair — cf. src/lib/password.ts. Null = compte créé avant ce champ (accepte un premier mot de passe au prochain login).
-  sessionVersion           Int                     @default(0)
-  dailyAgentRunLimit       Int                     @default(10)
-  monthlyAgentRunLimit     Int                     @default(100)
-  dailyChatMessageLimit    Int                     @default(50) // messages à Paul et « Préremplir mon profil » (story 4.1), compteur distinct des lancements
-  monthlyChatMessageLimit  Int                     @default(500)
-  dailySpendLimitUsd       Float                   @default(5)
-  monthlySpendLimitUsd     Float                   @default(25)
-  quotaEpoch               Int                     @default(0)
-  failedLoginAttempts      Int                     @default(0) // anti-force-brute, cf. docs/archives/backlog.md
-  lockedUntil              DateTime? // compte verrouillé jusqu'à cette date après trop d'échecs
-  name                     String
-  ownerName                String? // prénom et nom du dirigeant, facultatif : signature des emails rédigés par les agents (story 3.1)
-  trade                    String // métier, saisi via recherche libre (ex: Restaurant, Plombier...)
-  servingArea              String // zone de chalandise
-  website                  String? // optionnel : beaucoup de TPE n'ont pas de site
-  socialHandles            String? // ex: @cabinet_kine_demo (Instagram)
-  googlePlaceId            String? // fiche Google confirmée par le dirigeant : le Place ID est le seul contenu Google conservé (conditions Places API)
-  googlePlaceCandidateId   String? // fiche proposée, en attente de la confirmation du dirigeant
-  googlePlaceDeclinedIds   String[]                @default([]) // fiches refusées ou retirées (les plus récentes) : jamais reproposées
-  facebookPageUrl          String? // lien de la Page Facebook confirmé par le dirigeant : seul contenu Facebook conservé
-  facebookPageCandidateUrl String? // lien proposé, en attente de la confirmation du dirigeant
-  facebookPageDeclinedUrls String[]                @default([]) // liens refusés ou retirés (les plus récents) : jamais reproposés
-  objective                String? // objectif business déclaré, ex: "10 nouveaux clients par mois" (cf. docs/archives/backlog.md #1)
+  id              String    @id @default(cuid())
+  ownerEmail      String    @unique // identifiant de session (login minimal, cf. docs/archives/architecture-technique.md)
+  passwordHash    String? // hash+sel (scrypt), jamais en clair — cf. src/lib/password.ts. Null = compte créé avant ce champ (accepte un premier mot de passe au prochain login).
+  sessionVersion  Int       @default(0)
+  dailyAgentRunLimit       Int       @default(10)
+  monthlyAgentRunLimit     Int       @default(100)
+  dailyChatMessageLimit    Int       @default(50) // messages à Paul et « Préremplir mon profil » (story 4.1), compteur distinct des lancements
+  monthlyChatMessageLimit  Int       @default(500)
+  dailySpendLimitUsd       Float     @default(5)
+  monthlySpendLimitUsd     Float     @default(25)
+  quotaEpoch               Int       @default(0)
+  failedLoginAttempts Int @default(0) // anti-force-brute, cf. docs/archives/backlog.md
+  lockedUntil     DateTime? // compte verrouillé jusqu'à cette date après trop d'échecs
+  name            String
+  ownerName       String? // prénom et nom du dirigeant, facultatif : signature des emails rédigés par les agents (story 3.1)
+  trade           String // métier, saisi via recherche libre (ex: Restaurant, Plombier...)
+  servingArea     String // zone de chalandise
+  website         String? // optionnel : beaucoup de TPE n'ont pas de site
+  socialHandles   String? // ex: @cabinet_kine_demo (Instagram)
+  googlePlaceId          String? // fiche Google confirmée par le dirigeant : le Place ID est le seul contenu Google conservé (conditions Places API)
+  googlePlaceCandidateId String? // fiche proposée, en attente de la confirmation du dirigeant
+  googlePlaceDeclinedIds String[] @default([]) // fiches refusées ou retirées (les plus récentes) : jamais reproposées
+  facebookPageUrl           String? // lien de la Page Facebook confirmé par le dirigeant : seul contenu Facebook conservé
+  facebookPageCandidateUrl  String? // lien proposé, en attente de la confirmation du dirigeant
+  facebookPageDeclinedUrls  String[] @default([]) // liens refusés ou retirés (les plus récents) : jamais reproposés
+  objective       String? // objectif business déclaré, ex: "10 nouveaux clients par mois" (cf. docs/archives/backlog.md #1)
   // Profil business chiffré (cf. docs/archives/backlog.md, "partenaire de croissance") — déclaratif,
   // jamais calculé par Pepito : CA mensuel actuel, cible et échéance, valeur moyenne
   // d'un client (pas "panier" : pour une activité récurrente c'est la valeur sur la
   // durée qui compte). Sert au calcul déterministe de l'écart et du nombre de clients
   // nécessaires (src/lib/business-target.ts), injecté dans les prompts.
-  monthlyRevenue           Int? // € / mois
-  revenueTarget            Int? // € / mois visés
-  targetDate               DateTime?
-  averageClientValue       Int? // € par client
-  newClientsPerMonth       Float? // décimal : un rythme annuel converti (6 par an = 0,5 par mois)
-  description              String? // description libre de l'activité et du positionnement — remplace l'ancien champ "tone" figé, injectée dans tous les prompts agents
-  phone                    String? // téléphone affiché aux clients — utilisé par les agents pour éviter les placeholders "[Votre téléphone]"
-  certifications           String? // labels/certifications (ex: RGE, Qualibat) — utile pour la crédibilité locale et le contenu généré
-  openingHours             String? // horaires d'ouverture, libre — utile pour la fiche Google et le site
-  direction                String? // consigne libre du dirigeant pour réorienter Paul et les agents ("Réorienter")
+  monthlyRevenue     Int? // € / mois
+  revenueTarget      Int? // € / mois visés
+  targetDate         DateTime?
+  averageClientValue Int? // € par client
+  newClientsPerMonth Float? // décimal : un rythme annuel converti (6 par an = 0,5 par mois)
+  description     String? // description libre de l'activité et du positionnement — remplace l'ancien champ "tone" figé, injectée dans tous les prompts agents
+  phone           String? // téléphone affiché aux clients — utilisé par les agents pour éviter les placeholders "[Votre téléphone]"
+  certifications  String? // labels/certifications (ex: RGE, Qualibat) — utile pour la crédibilité locale et le contenu généré
+  openingHours    String? // horaires d'ouverture, libre — utile pour la fiche Google et le site
+  direction       String? // consigne libre du dirigeant pour réorienter Paul et les agents ("Réorienter")
   // Décision CEO du 2026-10-07 (cf. docs/archives/backlog.md "partenaire de croissance") :
   // le dirigeant peut choisir de laisser Pepito prendre contact lui-même avec les
   // prospects validés, par défaut non. Capture la décision dès maintenant ; l'envoi
   // réel reste bloqué tant qu'aucun fournisseur d'envoi n'est configuré (même
   // principe honnête que les connexions OAuth "bientôt" — cf. src/app/connexions).
-  autoOutreachEnabled      Boolean                 @default(false)
-  siteSlug                 String?                 @unique // site d'une page hébergé par Pepito : /site/[slug]
-  siteHtml                 String?
-  sitePublishedAt          DateTime?
-  loginCount               Int                     @default(0) // nombre de connexions réussies (vue admin)
-  lastLoginAt              DateTime?
-  emailVerifiedAt          DateTime?               @default(now()) // adresse confirmée par le lien envoyé (story 6.4). Défaut = confirmée (comptes antérieurs et fixtures de tests) ; seule l'inscription (src/app/api/auth/signup) crée un compte avec null
-  suspendedAt              DateTime? // compte bloqué par un administrateur (story 7.1) : données et site public conservés, plus de session ni de lancement
-  createdAt                DateTime                @default(now())
-  channels                 ChannelConnection[]
-  proposals                AgentProposal[]
-  auditFindings            AuditFinding[]
-  chatMessages             ChatMessage[]
-  planItems                ActionPlanItem[]
-  usageEvents              UsageEvent[]
-  feedbacks                Feedback[]
-  missions                 Mission[]
-  creditLedger             CreditLedger[]
-  creditBalance            Int                     @default(20) // credits offerts (D1) ; ne change que par CreditLedger
-  creditGrantedAt          DateTime? // pose avec l'ecriture des 20 credits offerts dans le registre
-  workspaceV52             Boolean                 @default(true) // espace V5.2 pour tous depuis le 2026-11-06 ; faux seulement dans les tests de l'ancien parcours, retire avec lui
-  journalEntries           JournalEntry[]
-  missionContents          MissionContent[]
-  agentRuns                AgentRun[]
-  agentRunAttempts         AgentRunAttempt[]
-  usageReservations        UsageReservation[]
-  leads                    Lead[]
-  uncoveredRequests        UncoveredRequest[]
-  linkedinAuthorizations   LinkedInAuthorization[]
-  paulPendingActions       PaulPendingAction[]
-  sitePhotos               SitePhoto[]
-  sourceReads              SourceRead[]
-  emailTokens              EmailToken[]
+  autoOutreachEnabled Boolean @default(false)
+  siteSlug        String?   @unique // site d'une page hébergé par Pepito : /site/[slug]
+  siteHtml        String?
+  sitePublishedAt DateTime?
+  loginCount      Int       @default(0) // nombre de connexions réussies (vue admin)
+  lastLoginAt     DateTime?
+  emailVerifiedAt DateTime? @default(now()) // adresse confirmée par le lien envoyé (story 6.4). Défaut = confirmée (comptes antérieurs et fixtures de tests) ; seule l'inscription (src/app/api/auth/signup) crée un compte avec null
+  suspendedAt     DateTime? // compte bloqué par un administrateur (story 7.1) : données et site public conservés, plus de session ni de lancement
+  createdAt       DateTime  @default(now())
+  channels        ChannelConnection[]
+  proposals       AgentProposal[]
+  auditFindings   AuditFinding[]
+  chatMessages    ChatMessage[]
+  planItems       ActionPlanItem[]
+  usageEvents     UsageEvent[]
+  feedbacks       Feedback[]
+  missions        Mission[]
+  creditLedger    CreditLedger[]
+  creditBalance   Int       @default(20) // credits offerts (D1) ; ne change que par CreditLedger
+  creditGrantedAt DateTime? // pose avec l'ecriture des 20 credits offerts dans le registre
+  workspaceV52    Boolean   @default(true) // espace V5.2 pour tous depuis le 2026-11-06 ; faux seulement dans les tests de l'ancien parcours, retire avec lui
+  journalEntries  JournalEntry[]
+  missionContents MissionContent[]
+  agentRuns       AgentRun[]
+  agentRunAttempts AgentRunAttempt[]
+  usageReservations UsageReservation[]
+  leads           Lead[]
+  uncoveredRequests UncoveredRequest[]
+  linkedinAuthorizations LinkedInAuthorization[]
+  paulPendingActions PaulPendingAction[]
+  sitePhotos      SitePhoto[]
+  sourceReads     SourceRead[]
+  emailTokens     EmailToken[]
 }
 
 model LinkedInAuthorization {
@@ -112,25 +112,25 @@ model LinkedInAuthorization {
  * déclarées par le dirigeant : Pepito ne prétend pas connaître les ventes.
  */
 model Lead {
-  id            String         @id @default(cuid())
+  id            String    @id @default(cuid())
   companyId     String
-  company       Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  proposalId    String?        @unique
+  company       Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  proposalId    String?   @unique
   proposal      AgentProposal? @relation(fields: [proposalId], references: [id], onDelete: SetNull)
   name          String // organisation ciblée
   reason        String // pourquoi elle correspond à la cible / à l'objectif
   publicContact String? // canal professionnel public (site, téléphone pro, formulaire) — jamais de donnée personnelle
   source        String? // URL ayant permis de l'identifier
   segment       String? // type de cible (ex: "associations", "copropriétés") — base de la boucle d'apprentissage
-  stage         String         @default("propose") // propose, a_contacter, contacte, repondu, rdv, gagne, perdu, ecarte
+  stage         String    @default("propose") // propose, a_contacter, contacte, repondu, rdv, gagne, perdu, ecarte
   contactedAt   DateTime?
   repliedAt     DateTime?
   meetingAt     DateTime?
   closedAt      DateTime?
   statusReason  String? // raison saisie par le dirigeant quand il écarte ou diffère le prospect
   deferredUntil DateTime? // prospect différé : exclu du "prochain prospect" jusqu'à cette date
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 }
 
 /**
@@ -139,31 +139,31 @@ model Lead {
  * Base de la vue admin (coût par entreprise/agent/modèle) — cf. docs/archives/backlog.md.
  */
 model UsageEvent {
-  id            String            @id @default(cuid())
-  companyId     String
-  company       Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  agentRunId    String?
-  agentRun      AgentRun?         @relation(fields: [agentRunId], references: [id], onDelete: SetNull)
-  agent         String // marketing, contenu, demarchage, co_ceo, site_publish
-  model         String // ex: claude-sonnet-5-5
-  inputTokens   Int
-  outputTokens  Int
-  costUsd       Float
-  createdAt     DateTime          @default(now())
-  reservationId String?           @unique
+  id           String   @id @default(cuid())
+  companyId    String
+  company      Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  agentRunId   String?
+  agentRun     AgentRun? @relation(fields: [agentRunId], references: [id], onDelete: SetNull)
+  agent        String // marketing, contenu, demarchage, co_ceo, site_publish
+  model        String // ex: claude-sonnet-5-5
+  inputTokens  Int
+  outputTokens Int
+  costUsd      Float
+  createdAt    DateTime @default(now())
+  reservationId String? @unique
   reservation   UsageReservation? @relation(fields: [reservationId], references: [id], onDelete: SetNull)
 }
 
 model UsageReservation {
-  id         String      @id @default(cuid())
-  companyId  String
-  company    Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  purpose    String
-  amountUsd  Float       @default(1)
-  createdAt  DateTime    @default(now())
-  expiresAt  DateTime
-  releasedAt DateTime?
-  usageEvent UsageEvent?
+  id          String   @id @default(cuid())
+  companyId   String
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  purpose     String
+  amountUsd   Float    @default(1)
+  createdAt   DateTime @default(now())
+  expiresAt   DateTime
+  releasedAt  DateTime?
+  usageEvent  UsageEvent?
 
   @@index([companyId, expiresAt])
 }
@@ -177,52 +177,52 @@ model UsageReservation {
  * de validation que partout ailleurs.
  */
 model ActionPlanItem {
-  id           String          @id @default(cuid())
-  companyId    String
-  company      Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  agent        String // marketing, contenu, demarchage
-  title        String
-  rationale    String
+  id          String   @id @default(cuid())
+  companyId   String
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  agent       String // marketing, contenu, demarchage
+  title       String
+  rationale   String
   launchExtras Json? // actualité ou cible de prospection conservée avec la demande ; null pour les actions historiques
-  outcome      String? // résultat attendu, une phrase écrite pour le dirigeant (charte, #218) ; null pour les actions antérieures
-  timing       String // ex: "cette semaine", "aujourd'hui"
-  theme        String?
-  priority     Int?
-  status       String          @default("propose") // propose, en_cours, lance, termine, ecarte
-  feedback     String? // raison donnée par le dirigeant quand il écarte l'action — relue par Paul au plan suivant
-  createdAt    DateTime        @default(now())
-  updatedAt    DateTime        @default(now()) @updatedAt // story 3.5 : Paul situe chaque état dans le temps
-  proposals    AgentProposal[]
-  agentRuns    AgentRun[]
+  outcome     String? // résultat attendu, une phrase écrite pour le dirigeant (charte, #218) ; null pour les actions antérieures
+  timing      String // ex: "cette semaine", "aujourd'hui"
+  theme       String?
+  priority    Int?
+  status      String   @default("propose") // propose, en_cours, lance, termine, ecarte
+  feedback    String? // raison donnée par le dirigeant quand il écarte l'action — relue par Paul au plan suivant
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @default(now()) @updatedAt // story 3.5 : Paul situe chaque état dans le temps
+  proposals   AgentProposal[]
+  agentRuns   AgentRun[]
 }
 
 model AgentRun {
-  id                 String            @id @default(cuid())
+  id                 String         @id @default(cuid())
   companyId          String
-  company            Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  company            Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
   planItemId         String?
-  planItem           ActionPlanItem?   @relation(fields: [planItemId], references: [id], onDelete: SetNull)
+  planItem           ActionPlanItem? @relation(fields: [planItemId], references: [id], onDelete: SetNull)
   agent              String
   requestKey         String
   activeDedupeKey    String?
   payload            Json
-  status             String            @default("queued")
-  attempts           Int               @default(0)
-  reservedCostUsd    Float             @default(1)
-  maxDurationSeconds Int               @default(300)
-  queuedAt           DateTime          @default(now())
+  status             String         @default("queued")
+  attempts           Int            @default(0)
+  reservedCostUsd    Float          @default(1)
+  maxDurationSeconds Int            @default(300)
+  queuedAt           DateTime       @default(now())
   startedAt          DateTime?
   finishedAt         DateTime?
-  resultCount        Int               @default(0)
+  resultCount        Int            @default(0)
   errorMessage       String?
   failureReason      String?
-  createdAt          DateTime          @default(now())
-  updatedAt          DateTime          @updatedAt
-  attemptHistory     AgentRunAttempt[]
-  usageEvents        UsageEvent[]
-  proposals          AgentProposal[]
-  auditFindings      AuditFinding[]
-  sourceReads        SourceRead[]
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+  attemptHistory      AgentRunAttempt[]
+  usageEvents         UsageEvent[]
+  proposals           AgentProposal[]
+  auditFindings       AuditFinding[]
+  sourceReads         SourceRead[]
 
   @@unique([companyId, requestKey])
   @@unique([companyId, activeDedupeKey])
@@ -231,15 +231,15 @@ model AgentRun {
 }
 
 model AgentRunAttempt {
-  id           String    @id @default(cuid())
-  companyId    String
-  company      Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  agentRunId   String
-  agentRun     AgentRun  @relation(fields: [agentRunId], references: [id], onDelete: Cascade)
-  status       String    @default("queued")
-  queuedAt     DateTime  @default(now())
-  startedAt    DateTime?
-  finishedAt   DateTime?
+  id          String   @id @default(cuid())
+  companyId   String
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  agentRunId  String
+  agentRun    AgentRun @relation(fields: [agentRunId], references: [id], onDelete: Cascade)
+  status      String   @default("queued")
+  queuedAt    DateTime @default(now())
+  startedAt   DateTime?
+  finishedAt  DateTime?
   errorMessage String?
 
   @@index([companyId, queuedAt])
@@ -247,12 +247,12 @@ model AgentRunAttempt {
 }
 
 model ChatMessage {
-  id             String              @id @default(cuid())
-  companyId      String
-  company        Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  role           String // user, assistant
-  content        String
-  createdAt      DateTime            @default(now())
+  id          String   @id @default(cuid())
+  companyId   String
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  role        String // user, assistant
+  content     String
+  createdAt   DateTime @default(now())
   pendingActions PaulPendingAction[]
 }
 
@@ -293,22 +293,22 @@ model SitePhoto {
 }
 
 model AuditFinding {
-  id           String    @id @default(cuid())
-  companyId    String
-  company      Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  category     String // site_web, reseaux_sociaux, concurrence
-  title        String
-  content      String // résumé court (1-2 phrases) affiché sur la carte compacte — cf. docs/archives/backlog.md "lisibilité des constats"
+  id          String   @id @default(cuid())
+  companyId   String
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  category    String // site_web, reseaux_sociaux, concurrence
+  title       String
+  content     String // résumé court (1-2 phrases) affiché sur la carte compacte — cf. docs/archives/backlog.md "lisibilité des constats"
   // Détail structuré affiché dans la pop-up (nullable : constats créés avant
   // cette structuration n'ont que `content`, affiché tel quel en repli).
-  whatWorks    String? // "Ce qui est bien"
-  toImprove    String? // "Ce qu'il faut améliorer"
-  actionItems  Json? // Plan d'action suggéré, potentiellement exécutable par Pepito : { agent, title, rationale }[]
-  sourceUrl    String?
+  whatWorks   String? // "Ce qui est bien"
+  toImprove   String? // "Ce qu'il faut améliorer"
+  actionItems Json? // Plan d'action suggéré, potentiellement exécutable par Pepito : { agent, title, rationale }[]
+  sourceUrl   String?
   sourceStatus String?
-  agentRunId   String?
-  agentRun     AgentRun? @relation(fields: [agentRunId], references: [id], onDelete: SetNull)
-  createdAt    DateTime  @default(now())
+  agentRunId  String?
+  agentRun    AgentRun? @relation(fields: [agentRunId], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now())
 
   // Plafonds par exécution (story 3.2) : comptés par agentRunId.
   @@index([agentRunId])
@@ -327,54 +327,54 @@ model SourceRead {
   status     String // lue, non_lue
   reason     String? // not_configured, to_confirm, not_found, unavailable
   itemCount  Int? // nombre d'avis lus
-  createdAt  DateTime  @default(now())
+  createdAt  DateTime @default(now())
 
   @@index([companyId, createdAt])
   @@index([agentRunId])
 }
 
 model ChannelConnection {
-  id           String    @id @default(cuid())
-  companyId    String
-  company      Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  channel      String // google_business_profile, instagram, facebook
-  status       String    @default("non_connecte") // non_connecte, connecte, erreur
+  id            String   @id @default(cuid())
+  companyId     String
+  company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  channel       String // google_business_profile, instagram, facebook
+  status        String   @default("non_connecte") // non_connecte, connecte, erreur
   // Jetons OAuth (jamais de mot de passe utilisateur — cf. docs/archives/backlog.md).
   // TODO prod : chiffrer au repos avant d'aller au-delà du pilote (cf.
   // docs/archives/architecture-technique.md § risques techniques).
-  accessToken  String?
-  refreshToken String?
-  expiresAt    DateTime?
-  createdAt    DateTime  @default(now())
+  accessToken   String?
+  refreshToken  String?
+  expiresAt     DateTime?
+  createdAt     DateTime @default(now())
 
   @@unique([companyId, channel])
 }
 
 model AgentProposal {
-  id              String             @id @default(cuid())
-  companyId       String
-  company         Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  agentRunId      String?
-  agentRun        AgentRun?          @relation(fields: [agentRunId], references: [id], onDelete: SetNull)
-  agent           String // marketing, contenu, demarchage
-  kind            String // ex: gbp_update, review_reply, social_post, prospecting_email
-  title           String
-  content         String // contenu généré, prêt à être validé/modifié
-  status          String             @default("en_attente") // en_attente, validee, modifiee, rejetee, executee ; envois et publications : envoi_en_cours, envoi_incertain, publication_en_cours, publication_incertaine
+  id          String   @id @default(cuid())
+  companyId   String
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  agentRunId  String?
+  agentRun    AgentRun? @relation(fields: [agentRunId], references: [id], onDelete: SetNull)
+  agent       String // marketing, contenu, demarchage
+  kind        String // ex: gbp_update, review_reply, social_post, prospecting_email
+  title       String
+  content     String // contenu généré, prêt à être validé/modifié
+  status      String   @default("en_attente") // en_attente, validee, modifiee, rejetee, executee ; envois et publications : envoi_en_cours, envoi_incertain, publication_en_cours, publication_incertaine
   // Chaque changement de contenu crée une version ; seule la version approuvée
   // peut être exécutée (US #171). Un brouillon enregistré reste en_attente.
-  version         Int                @default(1)
+  version         Int       @default(1)
   approvedVersion Int? // null pour les approbations antérieures au versionnage : à reconfirmer avant exécution
   approvedAt      DateTime?
   draftSavedAt    DateTime?
-  createdAt       DateTime           @default(now())
-  decidedAt       DateTime?
+  createdAt   DateTime @default(now())
+  decidedAt   DateTime?
   rejectionReason String?
-  planItemId      String? // action du plan de Paul dont cette proposition découle (lisibilité plan → agent → proposition)
-  planItem        ActionPlanItem?    @relation(fields: [planItemId], references: [id], onDelete: SetNull)
-  executionLog    ExecutionLog?
-  lead            Lead?
-  revisions       ProposalRevision[]
+  planItemId  String? // action du plan de Paul dont cette proposition découle (lisibilité plan → agent → proposition)
+  planItem    ActionPlanItem? @relation(fields: [planItemId], references: [id], onDelete: SetNull)
+  executionLog ExecutionLog?
+  lead        Lead?
+  revisions   ProposalRevision[]
 
   // Plafonds par exécution (story 3.2) : comptés par agentRunId.
   @@index([agentRunId])
@@ -400,17 +400,15 @@ model ProposalRevision {
 }
 
 model ExecutionLog {
-  id         String        @id @default(cuid())
-  proposalId String        @unique
-  proposal   AgentProposal @relation(fields: [proposalId], references: [id], onDelete: Cascade)
-  executedAt DateTime      @default(now())
-  result     String // succes, echec, incertain
-  detail     String?
+  id          String   @id @default(cuid())
+  proposalId  String   @unique
+  proposal    AgentProposal @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+  executedAt  DateTime @default(now())
+  result      String // succes, echec, incertain
+  detail      String?
 }
 
-/**
- * Compteur de tentatives d'authentification par adresse IP (hachée), fenêtre fixe — cf. src/lib/auth-throttle.ts.
- */
+/** Compteur de tentatives d'authentification par adresse IP (hachée), fenêtre fixe — cf. src/lib/auth-throttle.ts. */
 model AuthThrottle {
   key         String   @id // scope:HMAC(IP)
   count       Int
@@ -420,17 +418,15 @@ model AuthThrottle {
 }
 
 model DelegationRiskSetting {
-  id         String   @id @default(cuid())
-  actionKind String   @unique
-  riskLevel  String
-  updatedBy  String
-  updatedAt  DateTime @updatedAt
-  createdAt  DateTime @default(now())
+  id          String   @id @default(cuid())
+  actionKind  String   @unique
+  riskLevel   String
+  updatedBy   String
+  updatedAt   DateTime @updatedAt
+  createdAt   DateTime @default(now())
 }
 
-/**
- * Réglage global des inscriptions (story 6.1, #274) : une seule ligne, id "global". Sans ligne : ouvertes et sans plafond.
- */
+/** Réglage global des inscriptions (story 6.1, #274) : une seule ligne, id "global". Sans ligne : ouvertes et sans plafond. */
 model SignupControl {
   id        String   @id @default("global")
   open      Boolean  @default(true)
@@ -439,17 +435,13 @@ model SignupControl {
   updatedAt DateTime @updatedAt
 }
 
-/**
- * Inscriptions acceptées par jour, clé AAAA-MM-JJ en heure de Paris : compteur atomique du plafond.
- */
+/** Inscriptions acceptées par jour, clé AAAA-MM-JJ en heure de Paris : compteur atomique du plafond. */
 model SignupDay {
   day   String @id
   count Int
 }
 
-/**
- * Jeton à usage unique envoyé par e-mail (confirmation d'adresse, mot de passe oublié). Seule l'empreinte SHA-256 est conservée : le jeton lui-même n'est jamais stocké.
- */
+/** Jeton à usage unique envoyé par e-mail (confirmation d'adresse, mot de passe oublié). Seule l'empreinte SHA-256 est conservée : le jeton lui-même n'est jamais stocké. */
 model EmailToken {
   id        String    @id @default(cuid())
   companyId String
@@ -478,9 +470,7 @@ model UncoveredRequest {
   createdAt          DateTime @default(now())
 }
 
-/**
- * Seuils d'alerte de consommation (story 7.3, #72) : une seule ligne, id "global". Sans ligne : 3 $ par entreprise et 10 $ au total, par jour de Paris.
- */
+/** Seuils d'alerte de consommation (story 7.3, #72) : une seule ligne, id "global". Sans ligne : 3 $ par entreprise et 10 $ au total, par jour de Paris. */
 model UsageAlertSetting {
   id              String   @id @default("global")
   companyDailyUsd Float    @default(3)
@@ -489,9 +479,7 @@ model UsageAlertSetting {
   updatedAt       DateTime @updatedAt
 }
 
-/**
- * Alerte de consommation : au plus une par jour (AAAA-MM-JJ, heure de Paris) et par portée (company:<id> ou total). L'entreprise n'est pas une relation : l'historique survit à sa suppression.
- */
+/** Alerte de consommation : au plus une par jour (AAAA-MM-JJ, heure de Paris) et par portée (company:<id> ou total). L'entreprise n'est pas une relation : l'historique survit à sa suppression. */
 model UsageAlert {
   id           String   @id @default(cuid())
   day          String
@@ -547,7 +535,7 @@ model LlmCreditSetting {
 
 /// Mission (story 9.1, #277) : test limite issu d'un constat. Table neuve, sans reprise de l'ancien plan d'action (decision du 2026-11-05).
 model Mission {
-  id                  String          @id @default(cuid())
+  id                  String         @id @default(cuid())
   companyId           String
   template            String // agencies, leads, proof, social_post, google_profile, review_reply, site_page, custom
   channel             String? // facebook, instagram, linkedin, google_business_profile, gmail, site ; null = hors canal (Sur mesure)
@@ -556,18 +544,18 @@ model Mission {
   outcome             String // resultat recherche
   originalOutcome     String // resultat recherche a la creation
   finding             String
-  createdBy           String          @default("owner") // paul | owner
-  status              String          @default("proposed") // proposed, active, paused, stopped, dismissed
+  createdBy           String         @default("owner") // paul | owner
+  status              String         @default("proposed") // proposed, active, paused, stopped, dismissed
   previousStatus      String? // pour « Remettre au plan »
   position            Int
-  scope               Json            @default("{}")
+  scope               Json           @default("{}")
   contactsConfirmedAt DateTime?
   firstLaunchedAt     DateTime? // le debit du lancement n'a lieu qu'une fois
-  hasValidatedVersion Boolean         @default(false) // pose par la validation d'une version (atelier) ; fige le canal
-  version             Int             @default(1) // concurrence optimiste
-  createdAt           DateTime        @default(now())
-  updatedAt           DateTime        @updatedAt
-  company             Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  hasValidatedVersion Boolean        @default(false) // pose par la validation d'une version (atelier) ; fige le canal
+  version             Int            @default(1) // concurrence optimiste
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+  company             Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
   credits             CreditLedger[]
   content             MissionContent?
 
