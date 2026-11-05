@@ -30,6 +30,7 @@ const GUARDED_ROUTES: Guarded[] = [
   { method: "PATCH", path: "/api/admin/companies/[id]/limits", denied: 403 },
   { method: "PATCH", path: "/api/admin/companies/[id]/suspension", denied: 403 },
   { method: "PATCH", path: "/api/admin/usage-alerts", denied: 403 },
+  { method: "PATCH", path: "/api/admin/llm-credit", denied: 403 },
   { method: "POST", path: "/api/feedback", denied: 401 },
   { method: "PATCH", path: "/api/admin/feedback/[id]", denied: 403 },
   { method: "GET", path: "/api/admin/delegation-risk", denied: 403 },
@@ -1010,6 +1011,61 @@ test("feedback is listed for administrators only, shown as text, and can be mark
     expect((await prisma.feedback.findUniqueOrThrow({ where: { id: item.id } })).handledAt).toBeNull();
   } finally {
     await page.context().clearCookies();
+    await prisma.company.deleteMany({ where: { id: user.id } });
+    if (createdAdmin) await prisma.company.delete({ where: { id: adminCompany.id } });
+    await prisma.$disconnect();
+  }
+});
+
+test("the model credit and the server errors are for administrators, validated, and shown in the administration", async ({ request, page }) => {
+  const admins = (process.env.ADMIN_EMAILS ?? "").split(",").map((email) => email.trim()).filter(Boolean);
+  test.skip(admins.length === 0, "Requires ADMIN_EMAILS on the server, as configured in CI.");
+  const prisma = openDatabase();
+  const adminEmail = admins[0];
+  const marker = randomUUID().slice(0, 8);
+  let createdAdmin = false;
+  let adminCompany = await prisma.company.findUnique({ where: { ownerEmail: adminEmail } });
+  if (!adminCompany) {
+    adminCompany = await prisma.company.create({ data: { ownerEmail: adminEmail, name: "Admin credit test", trade: "Artisan", servingArea: "Paris" } });
+    createdAdmin = true;
+  }
+  const user = await prisma.company.create({ data: { ownerEmail: `security-credit-${marker}@example.invalid`, name: "Dirigeant simple", trade: "Artisan", servingArea: "Paris" } });
+  const previous = await prisma.llmCreditSetting.findUnique({ where: { id: "global" } });
+  const adminCookie = sessionCookie(adminEmail, adminCompany.sessionVersion);
+  const admin = { Cookie: adminCookie, Origin: baseURL };
+  const path = `${baseURL}/api/admin/llm-credit`;
+  const failure = await prisma.errorEvent.create({ data: { fingerprint: `seed-${marker}`, message: `Boom ${marker} <b>gras</b>`, path: `/api/seed-${marker}`, method: "POST", routeType: "route", digest: "seed-digest" } });
+  try {
+    expect((await request.patch(path, { headers: { Cookie: sessionCookie(user.ownerEmail, user.sessionVersion), Origin: baseURL }, data: { balanceUsd: 10, alertBelowUsd: 1 } })).status()).toBe(403);
+    expect((await request.patch(path, { headers: { ...admin, Origin: "https://attacker.invalid" }, data: { balanceUsd: 10, alertBelowUsd: 1 } })).status()).toBe(403);
+    for (const data of [{}, { balanceUsd: -1, alertBelowUsd: 1 }, { balanceUsd: "10", alertBelowUsd: 1 }, { balanceUsd: 10 }, { balanceUsd: 10, alertBelowUsd: 5_000_000 }, "texte"]) {
+      expect((await request.patch(path, { headers: admin, data })).status(), JSON.stringify(data)).toBe(400);
+    }
+    const saved = await request.patch(path, { headers: admin, data: { balanceUsd: 250, alertBelowUsd: 20 } });
+    expect(saved.status()).toBe(200);
+    expect(await prisma.llmCreditSetting.findUniqueOrThrow({ where: { id: "global" } })).toMatchObject({ balanceUsd: 250, alertBelowUsd: 20, updatedBy: adminEmail });
+
+    await page.context().clearCookies();
+    await page.context().addCookies([{ name: "pepito_session", value: adminCookie.slice(adminCookie.indexOf("=") + 1), url: baseURL }]);
+    await page.goto(`${baseURL}/admin`);
+    await expect(page.getByRole("heading", { name: "Crédit du modèle" })).toBeVisible();
+    await expect(page.getByText("Crédit restant estimé")).toBeVisible();
+    await expect(page.getByLabel("Solde constaté chez le fournisseur en dollars")).toHaveValue("250");
+    await page.getByLabel("Solde constaté chez le fournisseur en dollars").fill("300");
+    await page.getByRole("button", { name: "Enregistrer le solde" }).click();
+    await expect(page.getByText("Solde enregistré.")).toBeVisible();
+    expect((await prisma.llmCreditSetting.findUniqueOrThrow({ where: { id: "global" } })).balanceUsd).toBe(300);
+
+    await expect(page.getByRole("heading", { name: "Erreurs en production" })).toBeVisible();
+    await expect(page.getByText(`Boom ${marker} <b>gras</b>`)).toBeVisible();
+    await expect(page.getByText(`POST /api/seed-${marker}`)).toBeVisible();
+    expect(await page.locator("b", { hasText: "gras" }).count()).toBe(0);
+  } finally {
+    await page.context().clearCookies();
+    await prisma.errorEvent.deleteMany({ where: { id: failure.id } });
+    if (previous) await prisma.llmCreditSetting.update({ where: { id: "global" }, data: { balanceUsd: previous.balanceUsd, balanceAt: previous.balanceAt, alertBelowUsd: previous.alertBelowUsd } });
+    else await prisma.llmCreditSetting.deleteMany({ where: { id: "global" } });
+    await prisma.usageAlert.deleteMany({ where: { scope: "credit-llm" } });
     await prisma.company.deleteMany({ where: { id: user.id } });
     if (createdAdmin) await prisma.company.delete({ where: { id: adminCompany.id } });
     await prisma.$disconnect();

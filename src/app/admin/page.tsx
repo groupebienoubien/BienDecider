@@ -15,6 +15,9 @@ import { SignupControlForm } from "./signup-control-form";
 import { readSignupControl, todaySignupCount } from "@/lib/signup-control";
 import { UsageAlertsPanel } from "./usage-alerts-panel";
 import { FeedbackList } from "./feedback-list";
+import { ErrorsPanel } from "./errors-panel";
+import { LlmCreditPanel } from "./llm-credit-panel";
+import { readCreditStatus, readLlmSpend } from "@/lib/llm-credit";
 import { readUsageAlertThresholds } from "@/lib/usage-alerts";
 import { parisDateKey } from "@/lib/agents/personas";
 import { CHAT_USAGE_PURPOSES, parisQuotaWindows } from "@/lib/quota-windows";
@@ -111,6 +114,7 @@ export default async function AdminPage() {
   const [signupControl, signupToday] = isExplicitAdminEmail(ownerEmail) ? await Promise.all([readSignupControl(), todaySignupCount(now)]) : [null, 0];
   const [alertThresholds, recentAlerts] = await Promise.all([readUsageAlertThresholds(), prisma.usageAlert.findMany({ orderBy: { createdAt: "desc" }, take: 10 })]);
   const alertDay = parisDateKey(now);
+  const [creditStatus, llmSpend] = await Promise.all([readCreditStatus(now), readLlmSpend(now)]);
 
   return (
     <AppShell {...await getShellPropsForEmail(ownerEmail)}>
@@ -139,8 +143,15 @@ export default async function AdminPage() {
           today={alertDay}
         />
 
-        <FeedbackList />
+        <LlmCreditPanel
+          credit={creditStatus ? { balanceUsd: creditStatus.balanceUsd, balanceAt: creditStatus.balanceAt.toISOString(), alertBelowUsd: creditStatus.alertBelowUsd, remainingUsd: creditStatus.remainingUsd, daysLeft: creditStatus.daysLeft, belowThreshold: creditStatus.belowThreshold } : null}
+          todayUsd={llmSpend.todayUsd}
+          monthUsd={llmSpend.monthUsd}
+        />
 
+        <ErrorsPanel now={now} />
+
+        <FeedbackList />
         {isExplicitAdminEmail(ownerEmail) && (
           <section className="setting-section">
             <h2>Politique de risque des actions</h2>

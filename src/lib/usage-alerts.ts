@@ -4,6 +4,7 @@ import { listAdminEmails } from "@/lib/admin";
 import { parisDateKey } from "@/lib/agents/personas";
 import { parisQuotaWindows } from "@/lib/quota-windows";
 import { appBaseUrl, sendServiceEmail } from "@/lib/service-mail";
+import { evaluateCreditAlert } from "@/lib/llm-credit";
 import { alertEmail, crossedAlerts, DEFAULT_USAGE_ALERT_THRESHOLDS, safeAlertLabel, type CrossedAlert, type UsageAlertThresholds } from "@/lib/usage-alert-rules";
 
 const SETTING_ID = "global";
@@ -58,5 +59,6 @@ export async function evaluateUsageAlerts(companyId: string, now = new Date()): 
     created.push(alert);
     await notifyAdmins(alert);
   }
+  await evaluateCreditAlert(now);
   return created;
 }

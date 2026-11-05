@@ -300,6 +300,110 @@ test("story 7.1: a suspended company refuses every launch and reservation, and c
   await prisma.company.update({ where: { id: company.id }, data: { suspendedAt: null } });
   await expect(reserveUsageBudget(company.id, "co_ceo_chat")).resolves.toMatchObject({ purpose: "co_ceo_chat" });
 });
+test("story 8.1: a server error is stored without secrets and mails the administrators once per hour", async () => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { onRequestError } = await import("../src/instrumentation");
+  const { startSmtpSink } = await import("./support/smtp-sink");
+  const sink = await startSmtpSink();
+  const names = ["SERVICE_SMTP_URL", "SERVICE_MAIL_FROM", "ADMIN_EMAILS", "NEXT_RUNTIME"] as const;
+  const previousEnv = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+  const marker = Date.now().toString(36);
+  const path = `/api/test-${marker}`;
+  const secrets = ["hunter2", "sk-ant-api03-ABCDEFGHIJKLMNOP", "abc-query-token"];
+  const error = Object.assign(new Error(`Connexion refusée postgres://user:${secrets[0]}@db.example.invalid/app avec ${secrets[1]}`), { digest: "d1g3st" });
+  const request = { path: `${path}?token=${secrets[2]}#frag`, method: "POST", headers: {} };
+  const context = { routerKind: "App Router", routePath: path, routeType: "route" } as Parameters<typeof onRequestError>[2];
+  const fire = () => onRequestError(error, request, context);
+  process.env.NEXT_RUNTIME = "nodejs";
+  process.env.SERVICE_SMTP_URL = `smtp://127.0.0.1:${sink.port}`;
+  process.env.SERVICE_MAIL_FROM = "BienDecider <noreply@biendecider.com>";
+  process.env.ADMIN_EMAILS = "fondateur-un@example.invalid, fondateur-deux@example.invalid";
+  try {
+    await fire();
+    const [stored] = await prisma.errorEvent.findMany({ where: { path } });
+    expect(stored).toMatchObject({ method: "POST", routeType: "route", digest: "d1g3st" });
+    for (const secret of secrets) expect(stored.message).not.toContain(secret);
+    expect(stored.path).toBe(path);
+    await expect.poll(() => sink.messages.length, { timeout: 10000 }).toBe(2);
+    expect(sink.messages.flatMap((message) => message.to).sort()).toEqual(["fondateur-deux@example.invalid", "fondateur-un@example.invalid"]);
+    expect(sink.messages[0].subject).toBe(`Erreur en production : POST ${path}`);
+    for (const secret of secrets) expect(sink.messages[0].text).not.toContain(secret);
+
+    // Même erreur dans l'heure : traçee, sans nouvel e-mail ; une heure plus tard : de nouveau prévenu.
+    await fire();
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    expect(await prisma.errorEvent.count({ where: { path } })).toBe(2);
+    expect(sink.messages).toHaveLength(2);
+    await prisma.errorEvent.updateMany({ where: { path }, data: { createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000) } });
+    await fire();
+    await expect.poll(() => sink.messages.length, { timeout: 10000 }).toBe(4);
+
+    // Un envoi impossible ne lève rien et l'erreur reste tracée.
+    delete process.env.SERVICE_SMTP_URL;
+    await prisma.errorEvent.updateMany({ where: { path }, data: { createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000) } });
+    await expect(fire()).resolves.toBeUndefined();
+    expect(await prisma.errorEvent.count({ where: { path } })).toBe(4);
+  } finally {
+    for (const name of names) { if (previousEnv[name] === undefined) delete process.env[name]; else process.env[name] = previousEnv[name]; }
+    await sink.close();
+    await prisma.errorEvent.deleteMany({ where: { path } });
+  }
+});
+
+test("story 8.2: the remaining credit follows the measured spend and alerts once a day under the threshold", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { recordUsage } = await import("../src/lib/usage");
+  const { readCreditStatus, saveCredit, evaluateCreditAlert } = await import("../src/lib/llm-credit");
+  const { parisDateKey } = await import("../src/lib/agents/personas");
+  const { startSmtpSink } = await import("./support/smtp-sink");
+  const sink = await startSmtpSink();
+  const names = ["SERVICE_SMTP_URL", "SERVICE_MAIL_FROM", "ADMIN_EMAILS"] as const;
+  const previousEnv = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+  const previous = await prisma.llmCreditSetting.findUnique({ where: { id: "global" } });
+  const day = parisDateKey(new Date());
+  const spend = (tokens: number) => recordUsage({ companyId: company.id, agent: "marketing", model: "claude-sonnet-5-5", usage: { input_tokens: tokens, output_tokens: 0 } });
+  const alerts = () => prisma.usageAlert.findMany({ where: { day, scope: "credit-llm" } });
+  process.env.SERVICE_SMTP_URL = `smtp://127.0.0.1:${sink.port}`;
+  process.env.SERVICE_MAIL_FROM = "BienDecider <noreply@biendecider.com>";
+  process.env.ADMIN_EMAILS = "fondateur-un@example.invalid, fondateur-deux@example.invalid";
+  try {
+    await prisma.usageAlert.deleteMany({ where: { day, scope: "credit-llm" } });
+    await prisma.llmCreditSetting.deleteMany({ where: { id: "global" } });
+    expect(await readCreditStatus()).toBeNull();
+    expect(await evaluateCreditAlert()).toBe(false);
+
+    // Solde saisi : le restant en déduit la consommation mesurée depuis. 10 000 jetons coûtent 0,02 $.
+    await saveCredit({ balanceUsd: 100, alertBelowUsd: 5 }, "test@example.invalid");
+    expect(await readCreditStatus()).toMatchObject({ remainingUsd: 100, daysLeft: null, belowThreshold: false });
+    await spend(10_000);
+    const status = await readCreditStatus();
+    expect(status!.remainingUsd).toBeCloseTo(99.98, 6);
+    expect(status!.daysLeft).toBeGreaterThan(100);
+    expect(sink.messages).toHaveLength(0);
+
+    // Sous le seuil : une alerte et un e-mail par administrateur, puis silence le même jour.
+    await saveCredit({ balanceUsd: 0.03, alertBelowUsd: 0.015 }, "test@example.invalid");
+    await spend(1000);
+    expect(await alerts()).toHaveLength(0);
+    await spend(10_000);
+    const [alert] = await alerts();
+    expect(alert).toMatchObject({ label: "Crédit du modèle", thresholdUsd: 0.015 });
+    expect(alert.costUsd).toBeCloseTo(0.008, 6);
+    await expect.poll(() => sink.messages.length, { timeout: 10000 }).toBe(2);
+    expect(sink.messages[0].subject).toMatch(/^Crédit du modèle bas : /);
+    await spend(1000);
+    expect(await alerts()).toHaveLength(1);
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    expect(sink.messages).toHaveLength(2);
+  } finally {
+    for (const name of names) { if (previousEnv[name] === undefined) delete process.env[name]; else process.env[name] = previousEnv[name]; }
+    await sink.close();
+    await prisma.usageAlert.deleteMany({ where: { day, scope: "credit-llm" } });
+    if (previous) await prisma.llmCreditSetting.update({ where: { id: "global" }, data: { balanceUsd: previous.balanceUsd, balanceAt: previous.balanceAt, alertBelowUsd: previous.alertBelowUsd } });
+    else await prisma.llmCreditSetting.deleteMany({ where: { id: "global" } });
+  }
+});
+
 test("story 7.3: crossing a daily threshold records one alert and mails the administrators once, even when two costs arrive together", async ({ company }) => {
   const { prisma } = await import("../src/lib/prisma");
   const { recordUsage } = await import("../src/lib/usage");
