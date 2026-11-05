@@ -115,6 +115,7 @@ Une mission « soldée » (Arrêter, Poursuivre) exige le statut En cours (M-34)
 Calculée dans cet ordre, à partir du contenu principal de la mission (pour une mission à plusieurs contenus, comme « Réponse aux avis », le premier contenu qui attend une action) :
 
 1. Écartée → `écartée` ; Arrêtée → `close` ; pas En cours → `à lancer`.
+   En cours sans contenu principal (la première proposition se prépare) → `en préparation` (ajouté le 2026-11-06, story 10.2).
 2. Une diffusion est programmée → `programmée`.
 3. La version courante a été diffusée (confirmée ou déclarée) :
    - bilan absent ou rattaché à un autre nombre de diffusions → `bilan` ;
@@ -127,7 +128,7 @@ Calculée dans cet ordre, à partir du contenu principal de la mission (pour une
 
 ### 3.2 Suivi en six temps
 
-Cadrer, Préparer, Valider, Diffuser, Faire le bilan, Décider. Temps courant selon l'étape : `à lancer` = Cadrer ; `valider` = Valider ; `connecter`, `diffuser`, `diffuser soi-même`, `programmée` = Diffuser ; `bilan` = Faire le bilan ; `décider` = Décider ; `série suivante` = tout fait. Les temps précédents sont cochés.
+Cadrer, Préparer, Valider, Diffuser, Faire le bilan, Décider. Temps courant selon l'étape : `à lancer` = Cadrer ; `en préparation` = Préparer ; `valider` = Valider ; `connecter`, `diffuser`, `diffuser soi-même`, `programmée` = Diffuser ; `bilan` = Faire le bilan ; `décider` = Décider ; `série suivante` = tout fait. Les temps précédents sont cochés.
 
 ### 3.3 Prochain pas
 
@@ -144,6 +145,7 @@ Cadrer, Préparer, Valider, Diffuser, Faire le bilan, Décider. Temps courant se
 | connecter | Connecter {canal} | Le contenu est validé. Il manque seulement le canal de diffusion (aucun envoi à cette étape). | Connecter {canal} |
 | diffuser | Confirmer l'envoi / Confirmer la publication | {mission} · V{n} est validée et {canal} est connecté. Rien ne part sans votre confirmation. | Ouvrir l'atelier |
 | diffuser soi-même | Diffuser vous-même | {mission} · V{n} est validée. Récupérez le texte, diffusez-le, puis déclarez-le. | Ouvrir l'atelier |
+| en préparation | Préparer le premier contenu | « {mission} » est lancée : son premier contenu se prépare dans l'atelier. Rien ne sera diffusé sans votre accord. | Voir la mission → détail |
 | programmée | Diffusion programmée | Rien à faire pour l'instant. Vous pouvez encore l'annuler dans l'atelier. | Voir la programmation |
 | bilan | Renseigner le bilan | {mission} : notez les réponses reçues. Sans bilan, impossible de décider de la suite. | Renseigner mon bilan |
 | décider | Décider de la suite | {mission} : poursuivre, adapter avec Paul ou arrêter, au regard de votre bilan. | Décider la suite |
