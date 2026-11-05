@@ -31,6 +31,12 @@ Livrées ensemble dans une seule PR, une spec par story.
 - **Paul** : la mission est un élément de contexte (`PaulElement` « mission ») : « Ajuster avec Paul », « Affiner avec Paul » et « Challenger avec Paul » ouvrent le panneau existant sur la mission. Les conversations par contexte (D12) restent à faire (#288).
 - **Rafraîchissement** : après une transition, le dialogue se ferme avec l'affichage de l'état à jour (`useTransition`), pour qu'un geste suivant parte toujours de la bonne version.
 
+## Bascule generale (2026-11-06)
+
+- Decision des fondateurs : pleine refonte. Toutes les entreprises passent sur l'espace V5.2 (`workspaceV52` vrai par defaut et pour les comptes existants) ; le bouton de bascule de l'administration est retire. Le drapeau ne reste faux que dans les tests de l'ancien parcours, dont le code est retire au fil des US qui le remplacent.
+- Donnees de l'ancien parcours effacees par la migration `20261106110000_bascule_v52` : prospects, productions (revisions et journaux d'execution en cascade), actions du plan. Conserves : comptes, site public publie, diagnostic, conversations, consommation, connexions.
+- Reste incoherent jusqu'a #288 : Paul garde ses outils de l'ancien plan (propositions de lancement d'agents, revisions de productions), dont les resultats ne s'affichent plus. Le bouton « Preparer le plan » du diagnostic mene a la Strategie, sans plan.
+
 ## Cross-Story Dependencies
 
 - 10.2 et 10.3 utilisent les vues de mission (`src/lib/missions/view.ts`) et les actions (`MissionActions`) de 10.4.

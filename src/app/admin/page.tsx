@@ -8,7 +8,6 @@ import { getShellPropsForEmail } from "@/lib/shell-data";
 import { PERSONAS, type AgentKey } from "@/lib/agents/personas";
 import { DeleteCompanyButton } from "./delete-company-button";
 import { SuspendCompanyButton } from "./suspend-company-button";
-import { WorkspaceToggle } from "./workspace-toggle";
 import Link from "next/link";
 import { listUncoveredRequests } from "@/lib/agents/capabilities";
 import { CompanyQuotaForm } from "./company-quota-form";
@@ -217,7 +216,6 @@ export default async function AdminPage() {
                       <td>
                         <Link href={`/admin/entreprises/${c.id}`}>Activité</Link>
                         <SuspendCompanyButton companyId={c.id} companyName={c.name} suspended={c.suspendedAt !== null} isSelf={c.ownerEmail.toLowerCase() === ownerEmail.toLowerCase()} />
-                        <WorkspaceToggle companyId={c.id} enabled={c.workspaceV52} />
                         <DeleteCompanyButton companyId={c.id} companyName={c.name || c.ownerEmail} />
                       </td>
                     </tr>

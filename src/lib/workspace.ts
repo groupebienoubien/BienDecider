@@ -2,8 +2,8 @@ import { redirect } from "next/navigation";
 import { getSessionCompany } from "@/lib/session";
 
 /**
- * Espace V5.2 (Stratégie, Missions, Atelier, Résultats), activé entreprise par entreprise pendant la bascule
- * (addendum §1.7). Sans drapeau, l'ancien parcours reste en service et les nouvelles pages renvoient vers lui.
+ * Espace V5.2 (Stratégie, Missions, Atelier, Résultats), actif pour toutes les entreprises depuis le 2026-11-06.
+ * Le drapeau ne reste faux que dans les tests de l'ancien parcours, retiré au fil des US V5.2.
  */
 export async function requireWorkspaceCompany() {
   const company = await getSessionCompany();

@@ -75,7 +75,7 @@ model Company {
   creditLedger    CreditLedger[]
   creditBalance   Int       @default(20) // credits offerts (D1) ; ne change que par CreditLedger
   creditGrantedAt DateTime? // pose avec l'ecriture des 20 credits offerts dans le registre
-  workspaceV52    Boolean   @default(false) // espace V5.2 (Strategie, Missions, Atelier, Resultats) active pour cette entreprise pendant la bascule
+  workspaceV52    Boolean   @default(true) // espace V5.2 pour tous depuis le 2026-11-06 ; faux seulement dans les tests de l'ancien parcours, retire avec lui
   journalEntries  JournalEntry[]
   agentRuns       AgentRun[]
   agentRunAttempts AgentRunAttempt[]
