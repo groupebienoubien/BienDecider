@@ -2,7 +2,7 @@
 title: 'Story 7.2 : Voir l''activité et les erreurs d''une entreprise'
 type: 'feature'
 created: '2026-11-05'
-status: 'ready-for-dev'
+status: 'review'
 baseline_commit: 'd411853'
 route: 'dispatch'
 review_loop_iteration: 0
@@ -49,6 +49,6 @@ context:
 
 ## Tasks & Acceptance
 
-- [ ] Fonction de nettoyage et tests.
-- [ ] Page d'activité et lien.
-- [ ] Tests : accès, isolation, nettoyage, état vide.
+- [x] Fonction de nettoyage et tests.
+- [x] Page d'activité et lien.
+- [x] Tests : accès, isolation, nettoyage, état vide.

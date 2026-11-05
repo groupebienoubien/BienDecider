@@ -80,8 +80,8 @@ development_status:
   epic-6-retrospective: optional
 
   epic-7: in-progress
-  7-1-suspendre-une-entreprise: ready-for-dev
-  7-2-voir-l-activite-et-les-erreurs-d-une-entreprise: ready-for-dev
-  7-3-etre-alerte-d-une-consommation-anormale: ready-for-dev
-  7-4-dire-ce-qui-ne-va-pas-depuis-n-importe-quelle-page: ready-for-dev
+  7-1-suspendre-une-entreprise: review
+  7-2-voir-l-activite-et-les-erreurs-d-une-entreprise: review
+  7-3-etre-alerte-d-une-consommation-anormale: review
+  7-4-dire-ce-qui-ne-va-pas-depuis-n-importe-quelle-page: review
   epic-7-retrospective: optional

@@ -2,7 +2,7 @@
 title: 'Story 7.1 : Suspendre une entreprise au lieu de la supprimer'
 type: 'feature'
 created: '2026-11-05'
-status: 'ready-for-dev'
+status: 'review'
 baseline_commit: 'd411853'
 route: 'dispatch'
 review_loop_iteration: 0
@@ -55,8 +55,8 @@ context:
 
 ## Tasks & Acceptance
 
-- [ ] Colonne, migration, session et connexion.
-- [ ] Garde-fou des lancements et du bilan hebdomadaire.
-- [ ] Route de suspension et suppression à confirmation renforcée.
-- [ ] Interface d'administration.
-- [ ] Tests : suspension et réactivation, session coupée, connexion, lancement refusé, soi-même, suppression avec et sans nom, accès refusé.
+- [x] Colonne, migration, session et connexion.
+- [x] Garde-fou des lancements et du bilan hebdomadaire.
+- [x] Route de suspension et suppression à confirmation renforcée.
+- [x] Interface d'administration.
+- [x] Tests : suspension et réactivation, session coupée, connexion, lancement refusé, soi-même, suppression avec et sans nom, accès refusé.

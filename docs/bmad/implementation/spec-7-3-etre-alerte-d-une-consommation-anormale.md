@@ -2,7 +2,7 @@
 title: 'Story 7.3 : Être alerté d''une consommation anormale'
 type: 'feature'
 created: '2026-11-05'
-status: 'ready-for-dev'
+status: 'review'
 baseline_commit: 'd411853'
 route: 'dispatch'
 review_loop_iteration: 0
@@ -52,7 +52,7 @@ context:
 
 ## Tasks & Acceptance
 
-- [ ] Règle pure du franchissement et tests (jour de Paris, égalité, une alerte par jour).
-- [ ] Évaluation à l'enregistrement de l'usage, alerte atomique, e-mail.
-- [ ] Route de réglage et panneau d'administration.
-- [ ] Tests : franchissement entreprise et total, un seul e-mail, nouveau jour, envoi impossible, réglage invalide, accès refusé.
+- [x] Règle pure du franchissement et tests (jour de Paris, égalité, une alerte par jour).
+- [x] Évaluation à l'enregistrement de l'usage, alerte atomique, e-mail.
+- [x] Route de réglage et panneau d'administration.
+- [x] Tests : franchissement entreprise et total, un seul e-mail, nouveau jour, envoi impossible, réglage invalide, accès refusé.

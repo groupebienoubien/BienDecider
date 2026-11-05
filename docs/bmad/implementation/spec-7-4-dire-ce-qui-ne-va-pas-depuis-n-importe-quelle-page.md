@@ -2,7 +2,7 @@
 title: 'Story 7.4 : Dire ce qui ne va pas depuis n''importe quelle page'
 type: 'feature'
 created: '2026-11-05'
-status: 'ready-for-dev'
+status: 'review'
 baseline_commit: 'd411853'
 route: 'dispatch'
 review_loop_iteration: 0
@@ -56,7 +56,7 @@ context:
 
 ## Tasks & Acceptance
 
-- [ ] Règles pures (validation, nettoyage du chemin) et tests.
-- [ ] Modèle, route d'envoi avec limite, e-mail aux administrateurs.
-- [ ] Fenêtre dans la coque, accusé ; liste et traitement dans l'administration.
-- [ ] Tests : validation, limite, isolation, échappement, e-mail reçu, parcours depuis une page et sur mobile.
+- [x] Règles pures (validation, nettoyage du chemin) et tests.
+- [x] Modèle, route d'envoi avec limite, e-mail aux administrateurs.
+- [x] Fenêtre dans la coque, accusé ; liste et traitement dans l'administration.
+- [x] Tests : validation, limite, isolation, échappement, e-mail reçu, parcours depuis une page et sur mobile.
