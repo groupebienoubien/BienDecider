@@ -189,6 +189,7 @@ export default async function AdminPage() {
                         reservedCost={(reservedMap.get(c.id) ?? 0) + (reservedInlineMap.get(c.id) ?? 0)}
                       /></td>}
                       <td>
+                        <Link href={`/admin/entreprises/${c.id}`}>Activité</Link>
                         <SuspendCompanyButton companyId={c.id} companyName={c.name} suspended={c.suspendedAt !== null} isSelf={c.ownerEmail.toLowerCase() === ownerEmail.toLowerCase()} />
                         <DeleteCompanyButton companyId={c.id} companyName={c.name || c.ownerEmail} />
                       </td>

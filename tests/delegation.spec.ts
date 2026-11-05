@@ -31,6 +31,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { DEFAULT_SIGNUP_CONTROL, MAX_DAILY_SIGNUP_CAP, parseSignupControlInput, secondsUntilNextSignupDay, signupAvailability, signupCapAlert, signupDayKey } from "../src/lib/signup-rules";
 import { appBaseUrl, isServiceMailConfigured, sendServiceEmail } from "../src/lib/service-mail";
 import { passwordResetEmail, passwordResetLink, verificationEmail, verificationLink } from "../src/lib/service-mail-templates";
+import { ERROR_MESSAGE_MAX_LENGTH, redactSecrets } from "../src/lib/redact-secrets";
 import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH, passwordPolicyError } from "../src/lib/password-policy";
 import { startSmtpSink } from "./support/smtp-sink";
 import { BetaToolRunner } from "@anthropic-ai/sdk/lib/tools/BetaToolRunner";
@@ -1421,4 +1422,22 @@ test("password policy: 8 to 128 characters for new passwords, with the message o
   expect(passwordPolicyError("x".repeat(128))).toBeNull();
   expect(passwordPolicyError("x".repeat(129))).toBe("Le mot de passe ne peut pas dépasser 128 caractères.");
   for (const value of [undefined, null, 12345678, {}, ["12345678"]]) expect(passwordPolicyError(value), String(value)).toBe("Le mot de passe doit contenir au moins 8 caractères.");
+});
+
+test("redactSecrets masks tokens, passwords and connection secrets, keeps the useful text and truncates", () => {
+  expect(redactSecrets(null)).toBe("");
+  expect(redactSecrets("Le modèle est indisponible (529).")).toBe("Le modèle est indisponible (529).");
+  const secret = "Erreur 401 Bearer abc.def-123_xyz password=hunter2 token: \"valeur-secrete\" api_key=ABC sk-ant-api03-abcdefghij postgresql://user:dbpass@db.example.invalid/prod";
+  const clean = redactSecrets(secret);
+  for (const leak of ["abc.def-123_xyz", "hunter2", "valeur-secrete", "ABC", "sk-ant-api03", "dbpass"]) expect(clean, leak).not.toContain(leak);
+  expect(clean).toContain("Erreur 401");
+  expect(clean).toContain("Bearer [masqué]");
+  expect(clean).toContain("postgresql://[masqué]@db.example.invalid/prod");
+  const hex = "a".repeat(20) + "1".repeat(44);
+  expect(redactSecrets(`clé ${hex} fin`)).toBe("clé [masqué] fin");
+  const long = redactSecrets("mot ".repeat(200));
+  expect(long.length).toBe(ERROR_MESSAGE_MAX_LENGTH);
+  expect(long.endsWith("…")).toBe(true);
+  // Le nettoyage précède la coupe : un secret à cheval sur la limite n'est pas coupé en un fragment lisible.
+  expect(redactSecrets("x".repeat(290) + " password=hunter2-secret")).not.toContain("hunter2");
 });
