@@ -29,6 +29,7 @@ export default function ConfidentialitePage() {
           <li>Email et mot de passe (le mot de passe est stocké sous forme de hash, jamais en clair).</li>
           <li>Informations sur votre entreprise que vous saisissez (nom, métier, zone, description, téléphone, objectifs).</li>
           <li>Contenu des échanges avec les agents BienDecider (historique de conversation).</li>
+          <li>Signalements que vous nous envoyez avec « Signaler un problème » : votre message, son type et la page où vous étiez, lus par l&apos;équipe BienDecider pour corriger le service ; aucune capture d&apos;écran n&apos;est jointe.</li>
           <li>Propositions générées par les agents et vos décisions de validation.</li>
           <li>Statistiques d&apos;usage (nombre de connexions, tokens et coût d&apos;appel au modèle d&apos;IA).</li>
           <li>

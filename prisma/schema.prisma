@@ -62,6 +62,7 @@ model Company {
   loginCount      Int       @default(0) // nombre de connexions réussies (vue admin)
   lastLoginAt     DateTime?
   emailVerifiedAt DateTime? @default(now()) // adresse confirmée par le lien envoyé (story 6.4). Défaut = confirmée (comptes antérieurs et fixtures de tests) ; seule l'inscription (src/app/api/auth/signup) crée un compte avec null
+  suspendedAt     DateTime? // compte bloqué par un administrateur (story 7.1) : données et site public conservés, plus de session ni de lancement
   createdAt       DateTime  @default(now())
   channels        ChannelConnection[]
   proposals       AgentProposal[]
@@ -69,6 +70,7 @@ model Company {
   chatMessages    ChatMessage[]
   planItems       ActionPlanItem[]
   usageEvents     UsageEvent[]
+  feedbacks       Feedback[]
   agentRuns       AgentRun[]
   agentRunAttempts AgentRunAttempt[]
   usageReservations UsageReservation[]
@@ -459,4 +461,42 @@ model UncoveredRequest {
   closestAlternative String? // ce que Paul a proposé à la place
   source             String // chat, plan
   createdAt          DateTime @default(now())
+}
+
+/** Seuils d'alerte de consommation (story 7.3, #72) : une seule ligne, id "global". Sans ligne : 3 $ par entreprise et 10 $ au total, par jour de Paris. */
+model UsageAlertSetting {
+  id              String   @id @default("global")
+  companyDailyUsd Float    @default(3)
+  totalDailyUsd   Float    @default(10)
+  updatedBy       String
+  updatedAt       DateTime @updatedAt
+}
+
+/** Alerte de consommation : au plus une par jour (AAAA-MM-JJ, heure de Paris) et par portée (company:<id> ou total). L'entreprise n'est pas une relation : l'historique survit à sa suppression. */
+model UsageAlert {
+  id           String   @id @default(cuid())
+  day          String
+  scope        String
+  label        String // nom de l'entreprise au moment de l'alerte, ou « Total »
+  thresholdUsd Float
+  costUsd      Float
+  createdAt    DateTime @default(now())
+
+  @@unique([day, scope])
+  @@index([createdAt])
+}
+
+/// Signalement laisse par un dirigeant depuis n'importe quelle page connectee (story 7.4, #275).
+model Feedback {
+  id        String    @id @default(cuid())
+  companyId String
+  kind      String // problem | confusion | idea
+  page      String // chemin seul, sans parametres ni fragment
+  text      String
+  handledAt DateTime? // null = a traiter
+  createdAt DateTime  @default(now())
+  company   Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, createdAt])
+  @@index([createdAt])
 }

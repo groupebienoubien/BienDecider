@@ -17,6 +17,11 @@ export function isAdminEmail(email: string | null): boolean {
   return adminList().includes(email.toLowerCase());
 }
 
+/** Adresses des administrateurs, pour les alertes envoyées aux fondateurs (story 7.3). */
+export function listAdminEmails(): string[] {
+  return adminList();
+}
+
 /** Réglages globaux (risques, inscriptions, plafonds) : même règle que l'administration, nom conservé pour distinguer les usages. */
 export function isExplicitAdminEmail(email: string | null): boolean {
   return isAdminEmail(email);

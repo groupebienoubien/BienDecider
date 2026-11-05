@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { evaluateUsageAlerts } from "@/lib/usage-alerts";
 import { assertAgentExecutionActive, awaitAgentOperation, createAgentExecution, currentAgentExecution, withAgentExecution } from "@/lib/agent-run-execution";
 import { AGENT_RUN_COST_RESERVATION_USD, AGENT_RUN_MAX_TURNS, AgentRunLimitError } from "@/lib/agent-run-limits";
 
@@ -202,6 +203,12 @@ export async function recordUsage(params: {
         });
       }
     });
+    // Story 7.3 : alerte aux fondateurs si un seuil du jour est franchi. Jamais bloquant : le coût est déjà enregistré.
+    try {
+      await evaluateUsageAlerts(params.companyId);
+    } catch (alertError) {
+      console.error("Évaluation des alertes de consommation impossible (non bloquant):", alertError);
+    }
   } catch (error) {
     if (params.required || params.agentRunId || params.reservationId) throw error;
     console.error("Erreur enregistrement usage (non bloquant):", error);

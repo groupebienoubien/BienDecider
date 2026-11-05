@@ -28,6 +28,10 @@ const GUARDED_ROUTES: Guarded[] = [
   { method: "POST", path: "/api/auth/resend-verification", denied: 401 },
   { method: "DELETE", path: "/api/admin/companies/[id]", denied: 403 },
   { method: "PATCH", path: "/api/admin/companies/[id]/limits", denied: 403 },
+  { method: "PATCH", path: "/api/admin/companies/[id]/suspension", denied: 403 },
+  { method: "PATCH", path: "/api/admin/usage-alerts", denied: 403 },
+  { method: "POST", path: "/api/feedback", denied: 401 },
+  { method: "PATCH", path: "/api/admin/feedback/[id]", denied: 403 },
   { method: "GET", path: "/api/admin/delegation-risk", denied: 403 },
   { method: "PATCH", path: "/api/admin/delegation-risk", denied: 403 },
   { method: "PATCH", path: "/api/admin/signup-control", denied: 403 },
@@ -91,7 +95,7 @@ const PUBLIC_ROUTES: Record<string, string> = {
   "/api/health": "sonde publique sans donnée métier",
 };
 
-const GUARDED_PAGES = ["/admin", "/admin/risques", "/compte", "/connexions", "/dashboard", "/diagnostic", "/equipe", "/entreprise", "/prospection", "/rapport", "/studio/identifiant-inexistant"];
+const GUARDED_PAGES = ["/admin", "/admin/risques", "/admin/entreprises/identifiant-inexistant", "/compte", "/connexions", "/dashboard", "/diagnostic", "/equipe", "/entreprise", "/prospection", "/rapport", "/studio/identifiant-inexistant"];
 
 function requireSecret(): string {
   if (!process.env.SESSION_SECRET) throw new Error("SESSION_SECRET is required for security tests.");
@@ -606,7 +610,7 @@ test("an unverified address blocks Paul and every send until the emailed link is
   const sha = (value: string) => createHash("sha256").update(value).digest("hex");
   const tokenIn = (mail: { text: string }) => /\/verifier-email\?token=([A-Za-z0-9_-]{43})/.exec(mail.text)?.[1] ?? "";
   const headers = (cookie: string) => ({ Cookie: cookie, Origin: baseURL });
-  const verify = (token: string) => request.post(`${baseURL}/api/auth/verify-email`, { headers: { Origin: baseURL }, data: { token } });
+  const verify = (token: string) => request.post(`${baseURL}/api/auth/verify-email`, { headers: { Origin: baseURL, "x-real-ip": `test-${randomUUID()}` }, data: { token } });
   try {
     expect((await request.post(`${baseURL}/api/auth/signup`, { headers: { "x-real-ip": `test-${randomUUID()}` }, data: { email, password: "mot-de-passe-valide" } })).status()).toBe(201);
     await expect.poll(() => sink.messages.length, { timeout: 15000 }).toBe(1);
@@ -661,7 +665,7 @@ test("an unverified address blocks Paul and every send until the emailed link is
     const expired = randomBytes(32).toString("base64url");
     await prisma.emailToken.create({ data: { companyId: company.id, kind: "verify_email", tokenHash: sha(expired), expiresAt: new Date(Date.now() - 1000) } });
     for (const token of [expired, "trop-court", "", 42]) {
-      const response = await request.post(`${baseURL}/api/auth/verify-email`, { headers: { Origin: baseURL }, data: { token } });
+      const response = await verify(token as string);
       expect(response.status(), String(token)).toBe(400);
     }
     expect((await request.post(`${baseURL}/api/auth/verify-email`, { headers: { Origin: "https://attacker.invalid" }, data: { token: second } })).status()).toBe(403);
@@ -692,7 +696,7 @@ test("password recovery: a one-hour single-use link replaces the password, close
   const tokenIn = (mail: { text: string }) => /\/reinitialiser\?token=([A-Za-z0-9_-]{43})/.exec(mail.text)?.[1] ?? "";
   const ip = () => ({ "x-real-ip": `test-${randomUUID()}` });
   const forgot = (who: string, headers: Record<string, string> = ip()) => request.post(`${baseURL}/api/auth/forgot-password`, { headers: { Origin: baseURL, ...headers }, data: { email: who } });
-  const reset = (token: string, password: string) => request.post(`${baseURL}/api/auth/reset-password`, { headers: { Origin: baseURL }, data: { token, password } });
+  const reset = (token: string, password: string) => request.post(`${baseURL}/api/auth/reset-password`, { headers: { Origin: baseURL, "x-real-ip": `test-${randomUUID()}` }, data: { token, password } });
   const login = (who: string, password: string) => request.post(`${baseURL}/api/auth/login`, { headers: ip(), data: { email: who, password } });
   const company = await prisma.company.create({ data: {
     ownerEmail: email, passwordHash: await hashPassword(oldPassword), name: "Reset Test", trade: "Artisan", servingArea: "Paris",
@@ -780,6 +784,289 @@ test("password recovery: a one-hour single-use link replaces the password, close
   }
 });
 
+test("suspending a company cuts its sessions and launches but keeps its data and public site; deletion needs its name", async ({ request, page }) => {
+  test.setTimeout(90000);
+  const admins = (process.env.ADMIN_EMAILS ?? "").split(",").map((email) => email.trim()).filter(Boolean);
+  test.skip(admins.length === 0, "Requires ADMIN_EMAILS on the server, as configured in CI.");
+  const prisma = openDatabase();
+  const adminEmail = admins[0];
+  const password = "mot-de-passe-valide";
+  const email = `security-suspend-${randomUUID()}@example.invalid`;
+  const slug = `suspension-${randomUUID().slice(0, 8)}`;
+  let createdAdmin = false;
+  let adminCompany = await prisma.company.findUnique({ where: { ownerEmail: adminEmail } });
+  if (!adminCompany) {
+    adminCompany = await prisma.company.create({ data: { ownerEmail: adminEmail, name: "Admin suspension test", trade: "Artisan", servingArea: "Paris" } });
+    createdAdmin = true;
+  }
+  const company = await prisma.company.create({ data: {
+    ownerEmail: email, passwordHash: await hashPassword(password), name: "Atelier Suspendu", trade: "Artisan", servingArea: "Paris", siteSlug: slug, siteHtml: "<p>Site public conservé</p>", sitePublishedAt: new Date(),
+  } });
+  const adminCookie = sessionCookie(adminEmail, adminCompany.sessionVersion);
+  const userCookie = sessionCookie(email, company.sessionVersion);
+  const admin = { Cookie: adminCookie, Origin: baseURL };
+  const suspension = `${baseURL}/api/admin/companies/${company.id}/suspension`;
+  const login = (who: string, secret: string) => request.post(`${baseURL}/api/auth/login`, { headers: { "x-real-ip": `test-${randomUUID()}` }, data: { email: who, password: secret } });
+  try {
+    expect((await request.get(`${baseURL}/api/companies`, { headers: { Cookie: userCookie } })).status()).toBe(200);
+
+    // Refus : non-administrateur, autre origine, corps invalide, son propre compte, entreprise inconnue.
+    expect((await request.patch(suspension, { headers: { Cookie: userCookie, Origin: baseURL }, data: { suspended: true } })).status()).toBe(403);
+    expect((await request.patch(suspension, { headers: { ...admin, Origin: "https://attacker.invalid" }, data: { suspended: true } })).status()).toBe(403);
+    expect((await request.patch(suspension, { headers: admin, data: { suspended: "oui" } })).status()).toBe(400);
+    expect((await request.patch(`${baseURL}/api/admin/companies/${adminCompany.id}/suspension`, { headers: admin, data: { suspended: true } })).status()).toBe(400);
+    expect((await request.patch(`${baseURL}/api/admin/companies/identifiant-inexistant/suspension`, { headers: admin, data: { suspended: true } })).status()).toBe(404);
+
+    // Suspension : la session ouverte est coupée, la connexion refusée avec le bon mot de passe seulement.
+    expect((await request.patch(suspension, { headers: admin, data: { suspended: true } })).status()).toBe(200);
+    const firstDate = (await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).suspendedAt;
+    expect(firstDate).not.toBeNull();
+    expect((await request.patch(suspension, { headers: admin, data: { suspended: true } })).status()).toBe(200);
+    expect((await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).suspendedAt?.getTime()).toBe(firstDate!.getTime());
+    expect((await request.get(`${baseURL}/api/companies`, { headers: { Cookie: userCookie } })).status()).toBe(401);
+    const refused = await login(email, password);
+    expect(refused.status()).toBe(403);
+    expect((await refused.json()).error).toContain("Ce compte est suspendu.");
+    expect(refused.headers()["set-cookie"]).toBeUndefined();
+    expect((await login(email, "mauvais-mot-de-passe")).status()).toBe(401);
+
+    // Données et site public conservés.
+    expect(await prisma.company.count({ where: { id: company.id } })).toBe(1);
+    expect((await request.get(`${baseURL}/site/${slug}`)).status()).toBe(200);
+
+    // L'administration montre l'état.
+    await page.context().clearCookies();
+    await page.context().addCookies([{ name: "pepito_session", value: adminCookie.slice(adminCookie.indexOf("=") + 1), url: baseURL }]);
+    await page.goto(`${baseURL}/admin`);
+    await expect(page.getByText("Suspendue", { exact: true }).first()).toBeVisible();
+    await expect(page.getByRole("button", { name: "Réactiver" }).first()).toBeVisible();
+
+    // Réactivation : tout refonctionne.
+    expect((await request.patch(suspension, { headers: admin, data: { suspended: false } })).status()).toBe(200);
+    expect((await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).suspendedAt).toBeNull();
+    expect((await request.get(`${baseURL}/api/companies`, { headers: { Cookie: userCookie } })).status()).toBe(200);
+    expect((await login(email, password)).status()).toBe(200);
+
+    // Suppression définitive : le nom exact est exigé, et seul un administrateur peut la demander.
+    const deletion = `${baseURL}/api/admin/companies/${company.id}`;
+    expect((await request.delete(deletion, { headers: { Cookie: userCookie, Origin: baseURL }, data: { confirmName: "Atelier Suspendu" } })).status()).toBe(403);
+    expect((await request.delete(deletion, { headers: { ...admin, Origin: "https://attacker.invalid" }, data: { confirmName: "Atelier Suspendu" } })).status()).toBe(403);
+    for (const data of [{}, { confirmName: "atelier suspendu" }, { confirmName: "" }, { confirmName: 42 }]) {
+      expect((await request.delete(deletion, { headers: admin, data })).status(), JSON.stringify(data)).toBe(400);
+    }
+    expect(await prisma.company.count({ where: { id: company.id } })).toBe(1);
+    expect((await request.delete(deletion, { headers: admin, data: { confirmName: "Atelier Suspendu" } })).status()).toBe(200);
+    expect(await prisma.company.count({ where: { id: company.id } })).toBe(0);
+  } finally {
+    await page.context().clearCookies();
+    await prisma.company.deleteMany({ where: { id: company.id } });
+    if (createdAdmin) await prisma.company.delete({ where: { id: adminCompany.id } });
+    await prisma.$disconnect();
+  }
+});
+
+test("the activity page of a company is for administrators only, scoped to that company, and never shows a secret", async ({ page }) => {
+  const admins = (process.env.ADMIN_EMAILS ?? "").split(",").map((email) => email.trim()).filter(Boolean);
+  test.skip(admins.length === 0, "Requires ADMIN_EMAILS on the server, as configured in CI.");
+  const prisma = openDatabase();
+  const adminEmail = admins[0];
+  const marker = randomUUID().slice(0, 8);
+  let createdAdmin = false;
+  let adminCompany = await prisma.company.findUnique({ where: { ownerEmail: adminEmail } });
+  if (!adminCompany) {
+    adminCompany = await prisma.company.create({ data: { ownerEmail: adminEmail, name: "Admin activity test", trade: "Artisan", servingArea: "Paris" } });
+    createdAdmin = true;
+  }
+  const target = await prisma.company.create({ data: { ownerEmail: `security-activity-${marker}@example.invalid`, passwordHash: "hash-que-la-page-ne-lit-jamais", name: `Cible ${marker}`, trade: "Plombier", servingArea: "Lyon" } });
+  const other = await prisma.company.create({ data: { ownerEmail: `security-activity-other-${marker}@example.invalid`, name: `Autre ${marker}`, trade: "Artisan", servingArea: "Paris" } });
+  const empty = await prisma.company.create({ data: { ownerEmail: `security-activity-empty-${marker}@example.invalid`, name: `Vide ${marker}`, trade: "Artisan", servingArea: "Paris" } });
+  const secrets = "Bearer abcdef1234567890SECRETTOKEN password=hunter2-motdepasse sk-ant-api03-abcdefghijklmnopqrstuvwx postgresql://user:dbpassword@db.example.invalid:5432/prod";
+  await prisma.agentRun.create({ data: { companyId: target.id, agent: "marketing", requestKey: randomUUID(), payload: { kind: "plan_generation" }, status: "failed", failureReason: "outage", errorMessage: `Échec fournisseur : ${secrets}`, resultCount: 0, finishedAt: new Date() } });
+  await prisma.agentRun.create({ data: { companyId: other.id, agent: "contenu", requestKey: randomUUID(), payload: { kind: "plan_generation" }, status: "failed", failureReason: "outage", errorMessage: `Erreur privée de l'autre entreprise ${marker}`, resultCount: 0, finishedAt: new Date() } });
+  const cookieFor = (email: string, version: number) => { const cookie = sessionCookie(email, version); return { name: "pepito_session", value: cookie.slice(cookie.indexOf("=") + 1), url: baseURL }; };
+  try {
+    // Un dirigeant simple ne voit rien.
+    await page.context().clearCookies();
+    await page.context().addCookies([cookieFor(other.ownerEmail, other.sessionVersion)]);
+    await page.goto(`${baseURL}/admin/entreprises/${target.id}`);
+    await expect(page.getByText("Accès réservé")).toBeVisible();
+    expect(await page.content()).not.toContain(`Cible ${marker}`);
+
+    // L'administrateur voit les lancements de cette entreprise seulement, sans secret.
+    await page.context().clearCookies();
+    await page.context().addCookies([cookieFor(adminEmail, adminCompany.sessionVersion)]);
+    await page.goto(`${baseURL}/admin/entreprises/${target.id}`);
+    await expect(page.getByRole("heading", { name: `Activité de Cible ${marker}` })).toBeVisible();
+    await expect(page.getByRole("cell", { name: "Échec", exact: true }).first()).toBeVisible();
+    const html = await page.content();
+    expect(html).toContain("Bearer [masqué]");
+    for (const secret of ["SECRETTOKEN", "hunter2", "abcdefghijklmnopqrstuvwx", "dbpassword", "hash-que-la-page-ne-lit-jamais"]) expect(html, secret).not.toContain(secret);
+    expect(html).not.toContain(`Erreur privée de l'autre entreprise ${marker}`);
+
+    // Entreprise sans lancement : état vide ; identifiant inconnu : introuvable.
+    await page.goto(`${baseURL}/admin/entreprises/${empty.id}`);
+    await expect(page.getByText("Aucun lancement pour cette entreprise.")).toBeVisible();
+    await page.goto(`${baseURL}/admin/entreprises/identifiant-inexistant`);
+    await expect(page.getByRole("heading", { name: "Page introuvable" })).toBeVisible();
+
+    // Lien depuis la liste des entreprises.
+    await page.goto(`${baseURL}/admin`);
+    await expect(page.locator(`a[href="/admin/entreprises/${target.id}"]`)).toBeVisible();
+  } finally {
+    await page.context().clearCookies();
+    await prisma.company.deleteMany({ where: { id: { in: [target.id, other.id, empty.id] } } });
+    if (createdAdmin) await prisma.company.delete({ where: { id: adminCompany.id } });
+    await prisma.$disconnect();
+  }
+});
+
+test("feedback is attached to the session company, validated, rate limited and mailed to the administrators", async ({ request }) => {
+  test.setTimeout(60000);
+  const prisma = openDatabase();
+  const marker = randomUUID().slice(0, 8);
+  const a = await prisma.company.create({ data: { ownerEmail: `security-feedback-a-${marker}@example.invalid`, name: `Feedback A ${marker}`, trade: "Artisan", servingArea: "Paris" } });
+  const b = await prisma.company.create({ data: { ownerEmail: `security-feedback-b-${marker}@example.invalid`, name: `Feedback B ${marker}`, trade: "Artisan", servingArea: "Paris" } });
+  const headers = (company: typeof a) => ({ Cookie: sessionCookie(company.ownerEmail, company.sessionVersion), Origin: baseURL });
+  const post = (company: typeof a, data: unknown, extra: Record<string, string> = {}) => request.post(`${baseURL}/api/feedback`, { headers: { ...headers(company), ...extra }, data });
+  const smtp = process.env.SERVICE_SMTP_URL ? new URL(process.env.SERVICE_SMTP_URL) : null;
+  const admins = (process.env.ADMIN_EMAILS ?? "").split(",").map((email) => email.trim()).filter(Boolean);
+  const sink = smtp && smtp.protocol === "smtp:" && smtp.hostname === "127.0.0.1" && admins.length > 0 ? await startSmtpSink(Number(smtp.port)) : null;
+  try {
+    expect((await request.post(`${baseURL}/api/feedback`, { headers: { Origin: baseURL }, data: { kind: "problem", text: "Sans session" } })).status()).toBe(401);
+    expect((await request.post(`${baseURL}/api/feedback`, { headers: { Cookie: headers(a).Cookie, Origin: "https://attacker.invalid" }, data: { kind: "problem", text: "Autre origine" } })).status()).toBe(403);
+    for (const data of [{}, { kind: "autre", text: "x" }, { kind: "problem", text: "   " }, { kind: "problem", text: "x".repeat(1001) }, "texte"]) {
+      expect((await post(a, data)).status(), JSON.stringify(data)).toBe(400);
+    }
+    expect(await prisma.feedback.count({ where: { companyId: a.id } })).toBe(0);
+
+    // Le texte hostile est conservé tel quel ; l'identifiant d'entreprise du corps est ignoré ; seul le chemin de la page est gardé.
+    const hostile = `<script>alert("${marker}")</script>`;
+    const sent = await post(a, { kind: "confusion", text: hostile, page: "/equipe?token=secret#frag", companyId: b.id });
+    expect(sent.status()).toBe(201);
+    expect(await prisma.feedback.findMany({ where: { companyId: b.id } })).toHaveLength(0);
+    expect(await prisma.feedback.findMany({ where: { companyId: a.id } })).toMatchObject([{ kind: "confusion", text: hostile, page: "/equipe", handledAt: null }]);
+
+    if (sink) {
+      await expect.poll(() => sink.messages.length, { timeout: 15000 }).toBe(admins.length);
+      expect(sink.messages.flatMap((message) => message.to).sort()).toEqual([...admins].sort());
+      expect(sink.messages[0].subject).toContain(`Feedback A ${marker}`);
+      expect(sink.messages[0].text).toContain("Page : /equipe");
+      expect(sink.messages[0].text).toContain(hostile);
+    }
+
+    // Limite : 10 par heure et par entreprise, au-delà 429 avec Retry-After ; l'autre entreprise n'est pas touchée.
+    for (let index = 1; index < 10; index++) expect((await post(a, { kind: "problem", text: `Signalement ${index}` })).status()).toBe(201);
+    const limited = await post(a, { kind: "problem", text: "Le onzième" });
+    expect(limited.status()).toBe(429);
+    expect(Number(limited.headers()["retry-after"])).toBeGreaterThan(0);
+    expect(await prisma.feedback.count({ where: { companyId: a.id } })).toBe(10);
+    expect((await post(b, { kind: "idea", text: "Une idée" })).status()).toBe(201);
+  } finally {
+    await sink?.close();
+    await prisma.company.deleteMany({ where: { id: { in: [a.id, b.id] } } });
+    await prisma.$disconnect();
+  }
+});
+
+test("feedback is listed for administrators only, shown as text, and can be marked handled", async ({ request, page }) => {
+  const admins = (process.env.ADMIN_EMAILS ?? "").split(",").map((email) => email.trim()).filter(Boolean);
+  test.skip(admins.length === 0, "Requires ADMIN_EMAILS on the server, as configured in CI.");
+  const prisma = openDatabase();
+  const adminEmail = admins[0];
+  const marker = randomUUID().slice(0, 8);
+  let createdAdmin = false;
+  let adminCompany = await prisma.company.findUnique({ where: { ownerEmail: adminEmail } });
+  if (!adminCompany) {
+    adminCompany = await prisma.company.create({ data: { ownerEmail: adminEmail, name: "Admin feedback test", trade: "Artisan", servingArea: "Paris" } });
+    createdAdmin = true;
+  }
+  const user = await prisma.company.create({ data: { ownerEmail: `security-feedback-list-${marker}@example.invalid`, name: `Dirigeant ${marker}`, trade: "Artisan", servingArea: "Paris" } });
+  const hostile = `<b id="hostile-${marker}">gras</b> & <script>window.__feedback${marker}=1</script>`;
+  const item = await prisma.feedback.create({ data: { companyId: user.id, kind: "problem", page: "/plan", text: hostile } });
+  const adminCookie = sessionCookie(adminEmail, adminCompany.sessionVersion);
+  const patch = (headers: Record<string, string>, data: unknown) => request.patch(`${baseURL}/api/admin/feedback/${item.id}`, { headers, data });
+  try {
+    expect((await patch({ Cookie: sessionCookie(user.ownerEmail, user.sessionVersion), Origin: baseURL }, { handled: true })).status()).toBe(403);
+    expect((await patch({ Cookie: adminCookie, Origin: "https://attacker.invalid" }, { handled: true })).status()).toBe(403);
+    expect((await patch({ Cookie: adminCookie, Origin: baseURL }, { handled: "oui" })).status()).toBe(400);
+    expect((await request.patch(`${baseURL}/api/admin/feedback/inexistant`, { headers: { Cookie: adminCookie, Origin: baseURL }, data: { handled: true } })).status()).toBe(404);
+    expect((await prisma.feedback.findUniqueOrThrow({ where: { id: item.id } })).handledAt).toBeNull();
+
+    await page.context().clearCookies();
+    await page.context().addCookies([{ name: "pepito_session", value: adminCookie.slice(adminCookie.indexOf("=") + 1), url: baseURL }]);
+    await page.goto(`${baseURL}/admin`);
+    const row = page.locator(`tr[data-feedback-id="${item.id}"]`);
+    await expect(row).toContainText(hostile);
+    await expect(row).toContainText(`Dirigeant ${marker}`);
+    await expect(row).toContainText("/plan");
+    await expect(row).toContainText("À traiter");
+    expect(await page.locator(`#hostile-${marker}`).count()).toBe(0);
+    expect(await page.evaluate((name) => (window as unknown as Record<string, unknown>)[name], `__feedback${marker}`)).toBeUndefined();
+    await row.getByRole("button", { name: "Marquer traité" }).click();
+    await expect(row).toContainText("Traité");
+    expect((await prisma.feedback.findUniqueOrThrow({ where: { id: item.id } })).handledAt).not.toBeNull();
+    await row.getByRole("button", { name: "Remettre à traiter" }).click();
+    await expect(row).toContainText("À traiter");
+    expect((await prisma.feedback.findUniqueOrThrow({ where: { id: item.id } })).handledAt).toBeNull();
+  } finally {
+    await page.context().clearCookies();
+    await prisma.company.deleteMany({ where: { id: user.id } });
+    if (createdAdmin) await prisma.company.delete({ where: { id: adminCompany.id } });
+    await prisma.$disconnect();
+  }
+});
+
+test("usage alert thresholds are for administrators, validated, and today's alert shows in the administration", async ({ request, page }) => {
+  const admins = (process.env.ADMIN_EMAILS ?? "").split(",").map((email) => email.trim()).filter(Boolean);
+  test.skip(admins.length === 0, "Requires ADMIN_EMAILS on the server, as configured in CI.");
+  const prisma = openDatabase();
+  const adminEmail = admins[0];
+  const marker = randomUUID().slice(0, 8);
+  const today = signupDayKey(new Date());
+  let createdAdmin = false;
+  let adminCompany = await prisma.company.findUnique({ where: { ownerEmail: adminEmail } });
+  if (!adminCompany) {
+    adminCompany = await prisma.company.create({ data: { ownerEmail: adminEmail, name: "Admin alert test", trade: "Artisan", servingArea: "Paris" } });
+    createdAdmin = true;
+  }
+  const user = await prisma.company.create({ data: { ownerEmail: `security-alert-${marker}@example.invalid`, name: "Dirigeant simple", trade: "Artisan", servingArea: "Paris" } });
+  const previous = await prisma.usageAlertSetting.findUnique({ where: { id: "global" } });
+  const adminCookie = sessionCookie(adminEmail, adminCompany.sessionVersion);
+  const admin = { Cookie: adminCookie, Origin: baseURL };
+  const path = `${baseURL}/api/admin/usage-alerts`;
+  const seeded = await prisma.usageAlert.create({ data: { day: today, scope: `company:seed-${marker}`, label: `Atelier Alerte ${marker}`, thresholdUsd: 3, costUsd: 3.5 } });
+  try {
+    expect((await request.patch(path, { headers: { Cookie: sessionCookie(user.ownerEmail, user.sessionVersion), Origin: baseURL }, data: { companyDailyUsd: 3, totalDailyUsd: 10 } })).status()).toBe(403);
+    expect((await request.patch(path, { headers: { ...admin, Origin: "https://attacker.invalid" }, data: { companyDailyUsd: 3, totalDailyUsd: 10 } })).status()).toBe(403);
+    for (const data of [{}, { companyDailyUsd: 0, totalDailyUsd: 10 }, { companyDailyUsd: -1, totalDailyUsd: 10 }, { companyDailyUsd: "3", totalDailyUsd: 10 }, { companyDailyUsd: 3, totalDailyUsd: 1_000_000 }, "texte"]) {
+      expect((await request.patch(path, { headers: admin, data })).status(), JSON.stringify(data)).toBe(400);
+    }
+    const saved = await request.patch(path, { headers: admin, data: { companyDailyUsd: 2.5, totalDailyUsd: 20 } });
+    expect(saved.status()).toBe(200);
+    expect(await saved.json()).toEqual({ companyDailyUsd: 2.5, totalDailyUsd: 20 });
+    expect(await prisma.usageAlertSetting.findUniqueOrThrow({ where: { id: "global" } })).toMatchObject({ companyDailyUsd: 2.5, totalDailyUsd: 20, updatedBy: adminEmail });
+
+    await page.context().clearCookies();
+    await page.context().addCookies([{ name: "pepito_session", value: adminCookie.slice(adminCookie.indexOf("=") + 1), url: baseURL }]);
+    await page.goto(`${baseURL}/admin`);
+    await expect(page.getByRole("heading", { name: "Alertes de consommation" })).toBeVisible();
+    await expect(page.getByText("Seuil franchi aujourd'hui")).toBeVisible();
+    await expect(page.getByText(`Atelier Alerte ${marker} : 3.50 $ pour un seuil de 3.00 $`)).toBeVisible();
+    await expect(page.getByLabel("Seuil par entreprise et par jour en dollars")).toHaveValue("2.5");
+    await page.getByLabel("Seuil total par jour en dollars").fill("30");
+    await page.getByRole("button", { name: "Enregistrer les seuils" }).click();
+    await expect(page.getByText("Seuils enregistrés.")).toBeVisible();
+    expect((await prisma.usageAlertSetting.findUniqueOrThrow({ where: { id: "global" } })).totalDailyUsd).toBe(30);
+  } finally {
+    await page.context().clearCookies();
+    await prisma.usageAlert.deleteMany({ where: { id: seeded.id } });
+    if (previous) await prisma.usageAlertSetting.update({ where: { id: "global" }, data: { companyDailyUsd: previous.companyDailyUsd, totalDailyUsd: previous.totalDailyUsd } });
+    else await prisma.usageAlertSetting.deleteMany({ where: { id: "global" } });
+    await prisma.company.deleteMany({ where: { id: user.id } });
+    if (createdAdmin) await prisma.company.delete({ where: { id: adminCompany.id } });
+    await prisma.$disconnect();
+  }
+});
 test("company run history and a run detail never cross company boundaries", async ({ request }) => {
   const prisma = openDatabase();
   const owner = await prisma.company.create({ data: { ownerEmail: `security-run-owner-${randomUUID()}@example.invalid`, name: "Run owner", trade: "Artisan", servingArea: "Lyon" } });

@@ -7,11 +7,16 @@ import { PageHeading } from "@/components/mockup-ui";
 import { getShellPropsForEmail } from "@/lib/shell-data";
 import { PERSONAS, type AgentKey } from "@/lib/agents/personas";
 import { DeleteCompanyButton } from "./delete-company-button";
+import { SuspendCompanyButton } from "./suspend-company-button";
 import Link from "next/link";
 import { listUncoveredRequests } from "@/lib/agents/capabilities";
 import { CompanyQuotaForm } from "./company-quota-form";
 import { SignupControlForm } from "./signup-control-form";
 import { readSignupControl, todaySignupCount } from "@/lib/signup-control";
+import { UsageAlertsPanel } from "./usage-alerts-panel";
+import { FeedbackList } from "./feedback-list";
+import { readUsageAlertThresholds } from "@/lib/usage-alerts";
+import { parisDateKey } from "@/lib/agents/personas";
 import { CHAT_USAGE_PURPOSES, parisQuotaWindows } from "@/lib/quota-windows";
 
 export const dynamic = "force-dynamic";
@@ -104,6 +109,8 @@ export default async function AdminPage() {
 
   const uncoveredRequests = isExplicitAdminEmail(ownerEmail) ? await listUncoveredRequests() : null;
   const [signupControl, signupToday] = isExplicitAdminEmail(ownerEmail) ? await Promise.all([readSignupControl(), todaySignupCount(now)]) : [null, 0];
+  const [alertThresholds, recentAlerts] = await Promise.all([readUsageAlertThresholds(), prisma.usageAlert.findMany({ orderBy: { createdAt: "desc" }, take: 10 })]);
+  const alertDay = parisDateKey(now);
 
   return (
     <AppShell {...await getShellPropsForEmail(ownerEmail)}>
@@ -125,6 +132,14 @@ export default async function AdminPage() {
         </section>
 
         {signupControl && <SignupControlForm open={signupControl.open} dailyCap={signupControl.dailyCap} todayCount={signupToday} />}
+
+        <UsageAlertsPanel
+          thresholds={alertThresholds}
+          alerts={recentAlerts.map((alert) => ({ id: alert.id, day: alert.day, label: alert.label, scope: alert.scope, thresholdUsd: alert.thresholdUsd, costUsd: alert.costUsd }))}
+          today={alertDay}
+        />
+
+        <FeedbackList />
 
         {isExplicitAdminEmail(ownerEmail) && (
           <section className="setting-section">
@@ -166,6 +181,7 @@ export default async function AdminPage() {
                       <td>
                         {c.name}
                         <small>({c.trade})</small>
+                        {c.suspendedAt && <small className="badge"> Suspendue</small>}
                       </td>
                       <td>{c.ownerEmail}</td>
                       <td>{c.createdAt.toLocaleDateString("fr-FR")}</td>
@@ -187,7 +203,9 @@ export default async function AdminPage() {
                         reservedCost={(reservedMap.get(c.id) ?? 0) + (reservedInlineMap.get(c.id) ?? 0)}
                       /></td>}
                       <td>
-                        <DeleteCompanyButton companyId={c.id} companyName={c.name} />
+                        <Link href={`/admin/entreprises/${c.id}`}>Activité</Link>
+                        <SuspendCompanyButton companyId={c.id} companyName={c.name} suspended={c.suspendedAt !== null} isSelf={c.ownerEmail.toLowerCase() === ownerEmail.toLowerCase()} />
+                        <DeleteCompanyButton companyId={c.id} companyName={c.name || c.ownerEmail} />
                       </td>
                     </tr>
                   );
