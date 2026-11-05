@@ -83,14 +83,21 @@ export function missionTracker(stage: MissionStage): TrackerStep[] | null {
   return TRACKER_STEPS.map((label, index) => ({ label, state: index < current ? "done" : index === current ? "current" : "todo" }));
 }
 
-/** Priorité : la première mission ni écartée ni close dans l'ordre du plan (la priorité choisie avec Paul arrive avec #288). */
-export function priorityMissionId(missions: StageMission[]): string | null {
-  return [...missions].sort((a, b) => a.position - b.position).find((mission) => mission.status !== "dismissed" && mission.status !== "stopped")?.id ?? null;
+const isLive = (mission: StageMission) => mission.status !== "dismissed" && mission.status !== "stopped";
+
+/**
+ * Priorité : celle choisie avec Paul (J-08) tant qu'elle n'est ni écartée ni close ; sinon la première mission
+ * ni écartée ni close dans l'ordre du plan (§2.2 : écarter la priorité la donne à la première non écartée).
+ */
+export function priorityMissionId(missions: StageMission[], chosen: string | null = null): string | null {
+  const picked = chosen ? missions.find((mission) => mission.id === chosen) : undefined;
+  if (picked && isLive(picked)) return picked.id;
+  return [...missions].sort((a, b) => a.position - b.position).find(isLive)?.id ?? null;
 }
 
 /** Ordre des missions : la priorité, puis les autres dans l'ordre du plan. */
-export function orderMissions<T extends StageMission>(missions: T[]): T[] {
-  const priority = priorityMissionId(missions);
+export function orderMissions<T extends StageMission>(missions: T[], chosen: string | null = null): T[] {
+  const priority = priorityMissionId(missions, chosen);
   return [...missions].sort((a, b) => (a.id === priority ? -1 : b.id === priority ? 1 : a.position - b.position));
 }
 
@@ -135,8 +142,8 @@ function noneStep(): NextStep {
 }
 
 /** Prochain pas (§3.3) : ce qui attend le dirigeant, puis un lancement, puis toute mission vivante, sinon aucune mission. */
-export function nextStep(missions: StageMission[], delegation: Delegation = "review"): NextStep {
-  const ordered = orderMissions(missions).map((mission) => ({ mission, stage: missionStage(mission, delegation) }));
+export function nextStep(missions: StageMission[], delegation: Delegation = "review", chosen: string | null = null): NextStep {
+  const ordered = orderMissions(missions, chosen).map((mission) => ({ mission, stage: missionStage(mission, delegation) }));
   const pick = ordered.find(({ stage }) => WAITING_OWNER.includes(stage))
     ?? ordered.find(({ stage }) => stage === "launch")
     ?? ordered.find(({ stage }) => stage !== "closed" && stage !== "dismissed");

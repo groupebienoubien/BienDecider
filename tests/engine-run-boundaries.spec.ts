@@ -229,7 +229,8 @@ test("audit B1: the real worker returns while preparation is blocked and keeps i
   }
 });
 
-for (const target of ["card", "plan_action", "uncovered_request"] as const) {
+// GH-288 : le chat ne crée plus d'action de plan ; ses écritures sont des cartes et des demandes non couvertes.
+for (const target of ["card", "uncovered_request"] as const) {
   test(`audit B2: a chat ${target} released after cancellation leaves no orphan write`, async ({ company }) => {
     const { prisma } = await import("../src/lib/prisma");
     const { runCoCeoTurn } = await import("../src/lib/agents/co-ceo");
@@ -240,7 +241,7 @@ for (const target of ["card", "plan_action", "uncovered_request"] as const) {
     const toolFinished = deferred();
     const db = prisma as unknown as TransactionDb;
     const original = db.$transaction;
-    const table = target === "card" ? "paulPendingAction" : target === "plan_action" ? "actionPlanItem" : "uncoveredRequest";
+    const table = target === "card" ? "paulPendingAction" : "uncoveredRequest";
     let intercepted = false;
     db.$transaction = (operation, options) => original.call(prisma, (tx) => operation(new Proxy(tx, {
       get(transaction, key) {
@@ -263,10 +264,9 @@ for (const target of ["card", "plan_action", "uncovered_request"] as const) {
     try {
       await withRunner((tools) => (async function* () {
         try {
-          const name = target === "card" ? "propose_profile_update" : target === "plan_action" ? "propose_launch_contenu" : "record_uncovered_request";
+          const name = target === "card" ? "propose_profile_update" : "record_uncovered_request";
           const input = target === "card" ? { ownerName: "Samuel Morel" }
-            : target === "plan_action" ? { actionTitle: "Préparer trois posts", brief: "Montrer les chantiers", outcome: "Trois posts à relire", theme: "Visibilité", priority: 2 }
-              : { request: "Gérer ma comptabilité" };
+            : { request: "Gérer ma comptabilité" };
           await tools.find((tool) => tool.name === name)!.run(input);
           yield finalMessage();
         } finally { toolFinished.resolve(); }

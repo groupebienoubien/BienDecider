@@ -10,6 +10,11 @@ test("spoken text replaces known reference markers by their label and drops unkn
   );
 });
 
+test("GH-288: spoken text reads a mission link by its name and drops an unknown one", () => {
+  const references = [{ marker: "[[bd:mission:m-1]]", type: "mission", id: "m-1", label: "Publier un chantier", href: "/missions/m-1" }];
+  assert.equal(spokenText("Lancez [[bd:mission:m-1]] puis [[bd:mission:autre]] vite.", references), "Lancez Publier un chantier puis vite.");
+});
+
 test("dictation is appended to the existing draft within the field limit", () => {
   assert.equal(appendDictation("", "  bonjour Paul ", 100), "bonjour Paul");
   assert.equal(appendDictation("Question :  ", "où en est mon plan", 100), "Question : où en est mon plan");

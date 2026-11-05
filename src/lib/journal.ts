@@ -3,6 +3,7 @@ import type { Prisma } from "@prisma/client";
 /** Journal des décisions (spécification §15) : un code et ses paramètres ; le texte est rendu à l'affichage, jamais stocké. */
 export const JOURNAL_TEXTS = {
   "J-01": "Mission créée avec Paul : {titre}. Périmètre et brouillon à vérifier avant lancement.",
+  "J-08": "Priorité confirmée avec Paul : {mission}. Aucune mission lancée automatiquement.",
   "J-09": "Mission écartée du plan : {mission}.",
   "J-10": "Mission remise au plan : {mission}.",
   "J-11": "Objectif modifié · {mission} : « {résultat} ».",

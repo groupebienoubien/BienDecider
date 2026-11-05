@@ -80,11 +80,19 @@ function toView(mission: Mission, priorityId: string | null): MissionView {
   };
 }
 
-/** Missions de l'entreprise, la priorité d'abord puis l'ordre du plan. */
+/** Missions de l'entreprise, la priorité d'abord (choisie avec Paul si elle est valable) puis l'ordre du plan. */
 export async function loadMissionViews(companyId: string): Promise<MissionView[]> {
-  const missions = await prisma.mission.findMany({ where: { companyId }, orderBy: [{ position: "asc" }, { id: "asc" }] });
-  const priorityId = priorityMissionId(missions.map(toStageMission));
-  return orderMissions(missions.map((mission) => toView(mission, priorityId)));
+  const [missions, company] = await Promise.all([
+    prisma.mission.findMany({ where: { companyId }, orderBy: [{ position: "asc" }, { id: "asc" }] }),
+    prisma.company.findUnique({ where: { id: companyId }, select: { priorityMissionId: true } }),
+  ]);
+  const priorityId = priorityMissionId(missions.map(toStageMission), company?.priorityMissionId ?? null);
+  return orderMissions(missions.map((mission) => toView(mission, priorityId)), priorityId);
+}
+
+/** Identifiant de la mission prioritaire parmi des vues déjà calculées. */
+export function priorityOf(views: MissionView[]): string | null {
+  return views.find((view) => view.priority)?.id ?? null;
 }
 
 export async function loadMissionView(companyId: string, missionId: string): Promise<MissionView | null> {

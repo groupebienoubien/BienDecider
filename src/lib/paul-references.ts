@@ -1,6 +1,6 @@
-export const PAUL_REFERENCE_MARKER = /\[\[bd:(proposal|finding|lead):([A-Za-z0-9_-]{1,100})\]\]/g;
+export const PAUL_REFERENCE_MARKER = /\[\[bd:(proposal|finding|lead|mission):([A-Za-z0-9_-]{1,100})\]\]/g;
 
-export type PaulReferenceType = "proposal" | "finding" | "lead";
+export type PaulReferenceType = "proposal" | "finding" | "lead" | "mission";
 export type PaulReference = {
   marker: string;
   type: PaulReferenceType;
@@ -23,6 +23,8 @@ function referenceHref(type: PaulReferenceType, id: string) {
   const safeId = encodeURIComponent(id);
   if (type === "proposal") return `/dashboard?proposal=${safeId}#proposal-${safeId}`;
   if (type === "finding") return `/diagnostic#finding-${safeId}`;
+  // Lien d'action (FR-58) : le détail de la mission, où le dirigeant agit.
+  if (type === "mission") return `/missions/${safeId}`;
   return `/prospection#lead-${safeId}`;
 }
 
@@ -34,11 +36,13 @@ export async function resolvePaulReferences(companyId: string, contents: string[
   const proposalIds = idsByType("proposal");
   const findingIds = idsByType("finding");
   const leadIds = idsByType("lead");
+  const missionIds = idsByType("mission");
 
-  const [proposals, findings, leads] = await Promise.all([
+  const [proposals, findings, leads, missions] = await Promise.all([
     proposalIds.length ? prisma.agentProposal.findMany({ where: { companyId, id: { in: proposalIds } }, select: { id: true, title: true } }) : [],
     findingIds.length ? prisma.auditFinding.findMany({ where: { companyId, id: { in: findingIds } }, select: { id: true, title: true } }) : [],
     leadIds.length ? prisma.lead.findMany({ where: { companyId, id: { in: leadIds }, stage: { notIn: ["propose", "ecarte"] } }, select: { id: true, name: true } }) : [],
+    missionIds.length ? prisma.mission.findMany({ where: { companyId, id: { in: missionIds } }, select: { id: true, title: true } }) : [],
   ]);
 
   const valid = new Map<string, PaulReference>();
@@ -50,6 +54,10 @@ export async function resolvePaulReferences(companyId: string, contents: string[
   }
   for (const lead of leads) {
     valid.set(`lead:${lead.id}`, { marker: `[[bd:lead:${lead.id}]]`, type: "lead", id: lead.id, label: lead.name, href: referenceHref("lead", lead.id) });
+  }
+
+  for (const mission of missions) {
+    valid.set(`mission:${mission.id}`, { marker: `[[bd:mission:${mission.id}]]`, type: "mission", id: mission.id, label: mission.title, href: referenceHref("mission", mission.id) });
   }
 
   return contents.map((content, index) => {

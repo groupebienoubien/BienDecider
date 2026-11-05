@@ -35,7 +35,16 @@ export function describePage(path: string, view?: string | null): string {
   return PAGE_LABELS[path] ?? (path.startsWith("/studio/") ? "Studio d'une production" : path.startsWith("/missions/") ? "Détail d'une mission" : "une page de BienDecider");
 }
 
-/** Ouvre la discussion avec Paul, éventuellement centrée sur l'élément consulté. */
-export function openPaul(element?: PaulElement) {
-  window.dispatchEvent(new CustomEvent<PaulElement | null>(PAUL_OPEN_EVENT, { detail: element ?? null }));
+/** Demande d'ouverture : élément consulté et conversation (clé de contexte, spécification §16.1) à afficher. */
+export type PaulOpenDetail = { element: PaulElement | null; context: string | null };
+
+/** Conversation « Nouvelle idée » : le panneau lui donne le prochain numéro libre. */
+export const NEW_IDEA_CONTEXT = "idee:new";
+
+/**
+ * Ouvre la discussion avec Paul, éventuellement centrée sur l'élément consulté et sur une conversation
+ * (`mission:{id}`, `strategie`, NEW_IDEA_CONTEXT…). Sans conversation, le panneau prend celle de la page.
+ */
+export function openPaul(element?: PaulElement, context?: string) {
+  window.dispatchEvent(new CustomEvent<PaulOpenDetail>(PAUL_OPEN_EVENT, { detail: { element: element ?? null, context: context ?? null } }));
 }

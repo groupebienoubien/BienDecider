@@ -40,7 +40,7 @@ export function MissionList({ missions }: { missions: MissionCardData[] }) {
         <p>Une mission part d&apos;un constat et le teste dans un cadre limité. Créez la première, ou explorez une idée avec Paul.</p>
         <div className="heading-actions">
           <Link className="btn" href="/missions/nouvelle"><Icon name="plus" />Créer une mission</Link>
-          <PaulButton label="Explorer une idée" />
+          <PaulButton label="Explorer une idée" idea />
         </div>
       </div>
     );

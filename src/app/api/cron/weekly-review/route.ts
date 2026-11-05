@@ -84,7 +84,8 @@ export async function GET(request: NextRequest) {
     const content = buildMessage({ company, delta, pendingCount });
     if (!content) continue;
 
-    await prisma.chatMessage.create({ data: { companyId: company.id, role: "assistant", content } });
+    // Le point hebdomadaire va dans la conversation « stratégie » (spécification §16.1).
+    await prisma.chatMessage.create({ data: { companyId: company.id, role: "assistant", content, contextKey: "strategie" } });
     created++;
   }
 

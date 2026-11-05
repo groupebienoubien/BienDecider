@@ -17,7 +17,8 @@ import { latestAuditLines } from "../src/lib/agents/audit-plan-context";
 import { groupPlanItems, planItemStatusView, planTabFromParam, splitPlanItems } from "../src/lib/action-plan-view";
 import { facebookAuditSource } from "../src/lib/facebook-audit-source";
 import { businessTargetLines, clientGapLabel, clientsToMonthly, computeBusinessTarget, toMonthly } from "../src/lib/business-target";
-import { PROFILE_PAGE_ONLY_MESSAGE, PENDING_ACTION_TYPES, REVISION_INSTRUCTION_MAX, decidedText, launchesRun, launchPlanItemPayloadSchema, reviseProposalPayloadSchema, describePendingAction, expiredMessage, mergeProfilePayloads, objectiveUpdateValues, profileUpdateToolSchema, profileUpdateValues, readProfileToolInput, toPendingActionView, updateObjectivePayloadSchema, updateProfilePayloadSchema } from "../src/lib/agents/pending-action-view";
+import { KEEP_COURSE_LABEL, KEEP_COURSE_REPLY, PROFILE_PAGE_ONLY_MESSAGE, PENDING_ACTION_TYPES, decidedText, describePendingAction, expiredMessage, launchFrameHref, mergeProfilePayloads, profileUpdateToolSchema, profileUpdateValues, readProfileToolInput, toPendingActionView, updateProfilePayloadSchema } from "../src/lib/agents/pending-action-view";
+import { CONTEXT_DISPLAYED_MESSAGES, CONTEXT_HISTORY_MESSAGES, DEFAULT_CONTEXT_KEY, contextIntro, contextKeyOf, contextSuggestions, contextTitle, defaultContextKey, nextIdeaKey, parseContextKey } from "../src/lib/paul-contexts";
 import { chatWindow, lastMessageBefore, latestOf, paulMessageTimes } from "../src/lib/agents/paul-message-times";
 import { WEEKLY_REVIEW_MARKER } from "../src/lib/weekly-review";
 import { RUN_CAPS, capGroup, runCapReachedMessage, withRunCap } from "../src/lib/agents/run-caps";
@@ -39,7 +40,7 @@ import { computeCredit, creditAlertEmail, parseCreditInput } from "../src/lib/ll
 import { renderMissionMessage } from "../src/lib/missions/messages";
 import { LAUNCH_COST_CREDITS, checkTransition, validateNewMission, type MissionSnapshot } from "../src/lib/missions/rules";
 import { availableTemplates, enabledChannels, MISSION_TEMPLATES } from "../src/lib/missions/templates";
-import { missionStage, missionTracker, nextStep, orderMissions, type ContentState, type StageMission } from "../src/lib/missions/stage";
+import { missionStage, missionTracker, nextStep, orderMissions, priorityMissionId, type ContentState, type StageMission } from "../src/lib/missions/stage";
 import { scopeSummary } from "../src/lib/missions/scope";
 import { renderJournal } from "../src/lib/journal";
 import { firstNameOf } from "../src/lib/workspace";
@@ -385,35 +386,17 @@ test("the results story groups by week and never mixes channel proof with owner 
 
 /** Les montants formatés en français utilisent des espaces insécables : comparés après normalisation. */
 const spaces = (text: string) => text.replace(/\s/g, " ");
-const ANNUAL_OBJECTIVE = { targetPeriod: "year", revenueTarget: 200000, currentRevenue: 140000, currentPeriod: "year", averageClientValue: 18000, newClients: 6, newClientsPeriod: "year" } as const;
-
 test("an annual objective is converted to monthly values by the code, rounded to the euro", () => {
   expect(toMonthly(200000, "year")).toBe(16667);
   expect(toMonthly(140000, "year")).toBe(11667);
   expect(toMonthly(5000, "month")).toBe(5000);
   expect(clientsToMonthly(6, "year")).toBe(0.5);
   expect(clientsToMonthly(3, "month")).toBe(3);
-  const values = objectiveUpdateValues(ANNUAL_OBJECTIVE);
-  expect(values).toMatchObject({ revenueTarget: 16667, monthlyRevenue: 11667, averageClientValue: 18000, newClientsPerMonth: 0.5 });
-  expect(spaces(values.objective)).toBe("Passer de 140 000 € à 200 000 € de chiffre d'affaires par an");
-  expect(spaces(objectiveUpdateValues({ targetPeriod: "month", revenueTarget: 10000 }).objective)).toBe("Atteindre 10 000 € de chiffre d'affaires par mois");
-  // Un champ non dit n'est pas écrit.
-  expect(Object.keys(objectiveUpdateValues({ targetPeriod: "month", revenueTarget: 10000 })).sort()).toEqual(["objective", "revenueTarget"]);
-});
-
-test("the objective card lists the converted values, from the recorded intention only", () => {
-  const card = describePendingAction({ type: "update_objective", payload: ANNUAL_OBJECTIVE });
-  expect(card?.confirmLabel).toBe("Confirmer");
-  expect(card?.lines.map(spaces)).toEqual(["16 667 €/mois visés", "11 667 €/mois actuels", "18 000 € par client", "0,5 client/mois aujourd'hui"]);
-  // Une intention sans période ou d'un type inconnu ne donne pas de carte.
-  expect(updateObjectivePayloadSchema.safeParse({ revenueTarget: 200000 }).success).toBe(false);
-  expect(describePendingAction({ type: "update_objective", payload: { revenueTarget: 200000 } })).toBeNull();
-  expect(describePendingAction({ type: "inconnu", payload: ANNUAL_OBJECTIVE })).toBeNull();
 });
 
 test("a pending card past its 24 hours is shown expired", () => {
   const now = new Date("2026-10-23T12:00:00Z");
-  const base = { id: "a1", type: "update_objective", payload: ANNUAL_OBJECTIVE };
+  const base = { id: "a1", type: "mission_pause", payload: { missionId: "m-1", title: "Publier un chantier" } };
   expect(toPendingActionView({ ...base, status: "pending", expiresAt: new Date("2026-10-23T11:59:59Z") }, now)?.status).toBe("expired");
   expect(toPendingActionView({ ...base, status: "pending", expiresAt: new Date("2026-10-24T11:00:00Z") }, now)?.status).toBe("pending");
   expect(toPendingActionView({ ...base, status: "confirmed", expiresAt: new Date("2026-10-23T11:00:00Z") }, now)?.status).toBe("confirmed");
@@ -437,25 +420,7 @@ test("the client gap is computed per year and per month without rounding up, sho
   expect(lines).toContain("rythme actuel déclaré : 0,5/mois");
 });
 
-test("each amount keeps its own period, with an optional deadline stored at the end of the month", () => {
-  const values = objectiveUpdateValues({ revenueTarget: 200000, targetPeriod: "year", currentRevenue: 12000, currentPeriod: "month", newClients: 2, newClientsPeriod: "month", targetDate: "2027-06" });
-  expect(values).toMatchObject({ revenueTarget: 16667, monthlyRevenue: 12000, newClientsPerMonth: 2 });
-  expect(values.targetDate?.toISOString()).toBe("2027-06-30T00:00:00.000Z");
-  expect(spaces(values.objective)).toBe("Passer de 12 000 € par mois à 200 000 € par an de chiffre d'affaires d'ici juin 2027");
-  expect(describePendingAction({ type: "update_objective", payload: { revenueTarget: 200000, targetPeriod: "year", targetDate: "2027-06" } })?.lines).toContain("Échéance : juin 2027");
-  // Un montant sans sa période, une échéance mal formée ou un montant qui arrondit sous 1 € est refusé.
-  for (const payload of [
-    { revenueTarget: 200000, targetPeriod: "year", currentRevenue: 12000 },
-    { revenueTarget: 200000, targetPeriod: "year", newClients: 2 },
-    { revenueTarget: 200000, targetPeriod: "year", targetDate: "2027-13" },
-    { revenueTarget: 5, targetPeriod: "year" },
-    { revenueTarget: 200000, targetPeriod: "year", currentRevenue: 0.4, currentPeriod: "month" },
-    { revenueTarget: 200000, targetPeriod: "year", averageClientValue: 0.4 },
-    { revenueTarget: 2_000_000_000, targetPeriod: "year" },
-  ]) {
-    expect(updateObjectivePayloadSchema.safeParse(payload).success, JSON.stringify(payload)).toBe(false);
-  }
-});
+
 
 test("the client gap picks month or year on the exact value and never shows zero clients", () => {
   // 0,96 client par mois : arrondi à 1, mais affiché par an.
@@ -471,7 +436,7 @@ test("the client gap picks month or year on the exact value and never shows zero
 
 test("an Instagram account given to Paul becomes a profile card with the Entreprise page label", () => {
   const card = describePendingAction({ type: "update_profile", payload: { socialHandles: "@atelierlumen.nantes" } });
-  expect(card).toEqual({ title: "Enregistrer dans votre profil", lines: ["Compte Instagram ou Facebook : @atelierlumen.nantes"], confirmLabel: "Confirmer", cancelLabel: "Corriger" });
+  expect(card).toEqual({ title: "Enregistrer dans votre profil", lines: ["Compte Instagram ou Facebook : @atelierlumen.nantes"], confirmLabel: "Enregistrer dans mon profil", cancelLabel: KEEP_COURSE_LABEL });
   expect(profileUpdateValues({ socialHandles: "@atelierlumen.nantes" })).toEqual({ socialHandles: "@atelierlumen.nantes" });
 });
 
@@ -485,7 +450,6 @@ test("one profile card carries several fields, one line each, cleaned like the E
   expect(clearableText("  ")).toBeNull();
   expect(clearableText(undefined)).toBeUndefined();
   expect(expiredMessage("update_profile")).toContain("profil");
-  expect(expiredMessage("update_objective")).toBe("Cette proposition a expiré. Redites votre objectif à Paul.");
   expect(expiredMessage("inconnu")).toBe("Cette proposition a expiré. Redites votre demande à Paul.");
   expect(decidedText("expired", "update_profile")).toBe(expiredMessage("update_profile"));
   expect(decidedText("pending", "update_profile")).toBe("");
@@ -527,40 +491,99 @@ test("a profile text over the Entreprise page limit gives no card and a readable
   expect(profileTextIssue("phone", ` ${"0".repeat(100)} `)).toBeNull();
 });
 
-const LAUNCH_PAYLOAD = { planItemId: "item-1", agent: "demarchage", title: "Pistes de croissance du quartier", outcome: "Trois pistes de clients à contacter" } as const;
+const MISSION_REF = { missionId: "m-1", title: "Publier un chantier" } as const;
 
-test("a launch card reads « Lancer {agent} : {titre} » with Lancer and Plus tard, from the recorded intention only", () => {
-  expect(describePendingAction({ type: "launch_plan_item", payload: LAUNCH_PAYLOAD })).toEqual({
-    title: "Lancer Jean-Claude : Pistes de croissance du quartier", lines: ["Trois pistes de clients à contacter"], confirmLabel: "Lancer", cancelLabel: "Plus tard",
+test("GH-288: each mission card reads its §16.3 label, with « Garder le cap actuel », from the recorded intention only", () => {
+  expect([...PENDING_ACTION_TYPES].sort()).toEqual(["mission_create", "mission_dismiss", "mission_launch", "mission_pause", "mission_priority", "mission_restore", "mission_scope", "update_profile"]);
+  const labels = Object.fromEntries(["mission_priority", "mission_pause", "mission_dismiss", "mission_restore", "mission_launch"].map((type) => {
+    const card = describePendingAction({ type, payload: MISSION_REF });
+    expect(card?.cancelLabel).toBe(KEEP_COURSE_LABEL);
+    return [type, card?.confirmLabel];
+  }));
+  expect(labels).toEqual({ mission_priority: "Retenir cette priorité", mission_pause: "Mettre en pause", mission_dismiss: "Écarter", mission_restore: "Remettre au plan", mission_launch: "Lancer" });
+  expect(describePendingAction({ type: "mission_priority", payload: MISSION_REF })?.title).toBe("Faire de « Publier un chantier » la priorité");
+  expect(describePendingAction({ type: "mission_scope", payload: { ...MISSION_REF, scope: { topic: "Nos chantiers" }, summary: "Nos chantiers" } })).toMatchObject({
+    title: "Modifier le périmètre de « Publier un chantier »", lines: ["Nouveau périmètre : Nos chantiers"], confirmLabel: "Modifier le périmètre",
   });
-  // Un agent hors plan ou une action sans identifiant ne donne pas de carte.
-  expect(describePendingAction({ type: "launch_plan_item", payload: { ...LAUNCH_PAYLOAD, agent: "co_ceo" } })).toBeNull();
-  expect(launchPlanItemPayloadSchema.safeParse({ ...LAUNCH_PAYLOAD, planItemId: "" }).success).toBe(false);
-  // Actualité et description de prospects plafonnées à 1 000 caractères.
-  expect(launchPlanItemPayloadSchema.safeParse({ ...LAUNCH_PAYLOAD, extras: { prospectDescription: "a".repeat(1000) } }).success).toBe(true);
-  expect(launchPlanItemPayloadSchema.safeParse({ ...LAUNCH_PAYLOAD, extras: { newsContext: "a".repeat(1001) } }).success).toBe(false);
+  const create = describePendingAction({ type: "mission_create", payload: {
+    template: "custom", channel: null, title: "Salon du quartier", outcome: "Dix contacts utiles", finding: "Un salon a lieu près de chez moi", scope: { description: "Tenir un stand" }, stopRuleDays: 21,
+  } });
+  expect(create).toMatchObject({ title: "Créer la mission « Salon du quartier »", confirmLabel: "Créer la mission" });
+  expect(create?.lines[0]).toBe("Sur mesure · Hors canal, diffusion déclarée");
+  // La carte montre ce que l'acceptation écrira : le périmètre et la règle d'arrêt.
+  expect(create?.lines).toContain("Périmètre : Tenir un stand · Règle d'arrêt : 21 jours");
+  // Une intention incomplète ou un ancien type de carte (lancement d'agent, révision, objectif) ne donne pas de carte.
+  expect(describePendingAction({ type: "mission_pause", payload: { title: "Sans identifiant" } })).toBeNull();
+  for (const type of ["launch_plan_item", "revise_proposal", "update_objective", "inconnu"]) expect(describePendingAction({ type, payload: MISSION_REF })).toBeNull();
 });
 
-test("a launch card that reuses an action already in the plan says so before the expected result", () => {
-  expect(describePendingAction({ type: "launch_plan_item", payload: { ...LAUNCH_PAYLOAD, reused: true } })?.lines).toEqual([
-    "Je reprends l'action déjà au plan.", "Trois pistes de clients à contacter",
-  ]);
-  expect(launchPlanItemPayloadSchema.safeParse({ ...LAUNCH_PAYLOAD, reused: false }).success).toBe(false);
+test("GH-288: a decided card says what changed, « Garder le cap actuel » changes nothing, « Lancer » leads to the mission frame", () => {
+  expect(KEEP_COURSE_REPLY).toBe("Nous gardons le cap actuel. Aucun changement appliqué.");
+  expect(decidedText("confirmed", "mission_priority")).toBe("Priorité retenue. Aucune mission lancée.");
+  expect(decidedText("confirmed", "mission_launch")).toBe("Confirmez le cadre de la mission pour la lancer.");
+  expect(decidedText("cancelled", "mission_pause")).toBe("Proposition écartée : rien n'a changé.");
+  expect(decidedText("pending", "mission_pause")).toBe("");
+  expect(launchFrameHref("m-1")).toBe("/missions/m-1?cadre=1");
+  expect(expiredMessage("update_profile")).toContain("profil");
+  const view = toPendingActionView({ id: "c1", type: "mission_launch", status: "confirmed", payload: MISSION_REF, expiresAt: new Date("2026-11-06T12:00:00Z") }, new Date("2026-11-05T12:00:00Z"));
+  expect(view).toMatchObject({ status: "confirmed", confirmLabel: "Lancer", cancelLabel: KEEP_COURSE_LABEL });
+  expect(view).not.toHaveProperty("result");
 });
 
-test("a decided launch card shows the launch result in plain words, Plus tard keeps the action to launch", () => {
-  const base = { id: "l1", type: "launch_plan_item", expiresAt: new Date("2026-10-24T12:00:00Z") };
-  const now = new Date("2026-10-23T12:00:00Z");
-  expect(toPendingActionView({ ...base, status: "pending", payload: LAUNCH_PAYLOAD }, now)).not.toHaveProperty("result");
-  const refused = { ok: false, reason: "quota_runs", message: "Le quota journalier de lancements est atteint." } as const;
-  const view = toPendingActionView({ ...base, status: "confirmed", payload: { ...LAUNCH_PAYLOAD, result: refused } }, now)!;
-  expect(view.result).toEqual(refused);
-  expect(decidedText(view.status, view.type, view.result)).toBe(refused.message);
-  // Confirmée sans résultat connu : texte neutre, jamais « lancé ».
-  expect(decidedText("confirmed", "launch_plan_item")).toBe("Lancement en cours de vérification…");
-  expect(decidedText("cancelled", "launch_plan_item")).toContain("reste dans votre plan, à lancer");
-  expect(decidedText("cancelled", "update_objective")).toContain("corriger");
-  expect(expiredMessage("launch_plan_item")).toContain("plan");
+test("GH-288: one conversation per context, keys read safely, titles and default context per page", () => {
+  expect(CONTEXT_HISTORY_MESSAGES).toBe(60);
+  expect(CONTEXT_DISPLAYED_MESSAGES).toBe(40);
+  expect(parseContextKey("strategie")).toEqual({ kind: "strategie" });
+  expect(parseContextKey("mission:abc_12-3")).toEqual({ kind: "mission", id: "abc_12-3" });
+  expect(parseContextKey("idee:2")).toEqual({ kind: "idee", n: 2 });
+  for (const bad of ["", "mission:", "mission:a b", "idee:0", "idee:new", "autre", "strategie:1", 42, null, `mission:${"a".repeat(80)}`]) expect(parseContextKey(bad)).toBeNull();
+  expect(contextKeyOf({ kind: "mission", id: "m-1" })).toBe("mission:m-1");
+  expect(contextTitle({ kind: "strategie" })).toBe("Votre stratégie");
+  expect(contextTitle({ kind: "mission", id: "m-1" }, "Publier un chantier")).toBe("Mission · Publier un chantier");
+  expect(contextTitle({ kind: "resultats" })).toBe("Bilan et prochaine décision");
+  expect(contextTitle({ kind: "idee", n: 3 })).toBe("Nouvelle idée n°3");
+  expect(defaultContextKey("/missions/m-1")).toBe("mission:m-1");
+  expect(defaultContextKey("/missions/nouvelle")).toBe("strategie");
+  expect(defaultContextKey("/missions")).toBe("strategie");
+  expect(defaultContextKey("/resultats")).toBe("resultats");
+  expect(defaultContextKey("/diagnostic")).toBe("positionnement");
+  expect(defaultContextKey("/strategie")).toBe(DEFAULT_CONTEXT_KEY);
+  expect(nextIdeaKey([])).toBe("idee:1");
+  expect(nextIdeaKey(["strategie", "idee:1", "idee:4", "mission:m-1"])).toBe("idee:5");
+  expect(contextIntro({ kind: "mission", id: "m-1" })).toContain("Rien ne change sans votre accord");
+});
+
+test("GH-288: quick suggestions follow the context and, for a mission, its model (§16.2)", () => {
+  expect(contextSuggestions({ kind: "strategie" })).toEqual(["Que faire maintenant ?", "Combien ça coûte ?", "Quelle mission écarter ?", "Quel risque ?", "Comparer les pistes"]);
+  const mission = { kind: "mission" as const, id: "m-1" };
+  expect(contextSuggestions(mission, "agencies")).toContain("Réduis à 1 agence");
+  expect(contextSuggestions(mission, "leads")).toContain("Limite à 5 contacts");
+  expect(contextSuggestions(mission, "proof")).toContain("Pourquoi cette mission ?");
+  expect(contextSuggestions(mission, "social_post")).toContain("Quel canal choisir ?");
+  expect(contextSuggestions(mission, null)).toEqual(expect.arrayContaining(["Mets cette mission en pause", "Écarte cette mission"]));
+  for (const context of [{ kind: "resultats" }, { kind: "ambition" }, { kind: "idee", n: 1 }, { kind: "sources" }] as const) {
+    const suggestions = contextSuggestions(context);
+    expect(suggestions.length).toBeGreaterThan(0);
+    expect(suggestions.length).toBeLessThanOrEqual(5);
+  }
+});
+
+test("GH-288: a priority chosen with Paul orders the missions and the next step; a dismissed one falls back to the computed one", () => {
+  const live = (id: string, position: number, status: MissionSnapshot["status"] = "proposed") => ({ id, title: `Mission ${id}`, outcome: "Des demandes", status, template: "social_post" as const, channel: "facebook" as const, position, content: null });
+  const missions = [live("a", 1), live("b", 2), live("c", 3, "dismissed")];
+  expect(priorityMissionId(missions)).toBe("a");
+  expect(priorityMissionId(missions, "b")).toBe("b");
+  expect(priorityMissionId(missions, "c")).toBe("a");
+  expect(priorityMissionId(missions, "inconnue")).toBe("a");
+  expect(orderMissions(missions, "b").map((mission) => mission.id)[0]).toBe("b");
+  expect(nextStep(missions, "review", "b").missionId).toBe("b");
+  // Retenir une priorité ne change pas la mission ; seule une mission écartée la refuse (M-21).
+  const snapshot: MissionSnapshot = { template: "social_post", channel: "facebook", status: "proposed", previousStatus: null, scope: {}, contactsConfirmedAt: null, firstLaunchedAt: null, hasValidatedVersion: false };
+  expect(checkTransition(snapshot, { action: "set_priority" })).toMatchObject({ ok: true, debit: 0, patch: {} });
+  expect(checkTransition({ ...snapshot, status: "active" }, { action: "set_priority" })).toMatchObject({ ok: true, debit: 0 });
+  expect(checkTransition({ ...snapshot, status: "dismissed" }, { action: "set_priority" })).toMatchObject({ ok: false, code: "M-21" });
+  expect(checkTransition({ ...snapshot, status: "stopped" }, { action: "set_priority" })).toMatchObject({ ok: false, code: "M-23" });
+  expect(renderJournal("J-08", { mission: "Mission b" })).toBe("Priorité confirmée avec Paul : Mission b. Aucune mission lancée automatiquement.");
 });
 
 test("story 3.1: agents get today's Paris date and the owner's name to sign with", async () => {
@@ -712,42 +735,7 @@ test("story 3.2: a reached cap writes nothing and answers the group's message", 
   expect(writes).toBe(0);
 });
 
-const REVISION_PAYLOAD = { proposalId: "p-1", agent: "demarchage", title: "Offre aux syndics", fromVersion: 1, instruction: "Retire l'avertissement et signe avec mon nom" } as const;
 
-test("story 3.3: a revision card asks the author agent for version N+1 of the production, with the instruction in line", () => {
-  expect(PENDING_ACTION_TYPES).toContain("revise_proposal");
-  expect(describePendingAction({ type: "revise_proposal", payload: REVISION_PAYLOAD })).toEqual({
-    title: "Demander à Jean-Claude une version 2 de « Offre aux syndics »",
-    lines: ["Consigne : Retire l'avertissement et signe avec mon nom"],
-    confirmLabel: "Confirmer",
-    cancelLabel: "Annuler",
-  });
-  expect(describePendingAction({ type: "revise_proposal", payload: { ...REVISION_PAYLOAD, fromVersion: 3 } })?.title).toBe("Demander à Jean-Claude une version 4 de « Offre aux syndics »");
-  // Paul n'est pas un agent auteur ; une consigne vide ou trop longue, une version invalide ne donnent pas de carte.
-  expect(describePendingAction({ type: "revise_proposal", payload: { ...REVISION_PAYLOAD, agent: "co_ceo" } })).toBeNull();
-  expect(REVISION_INSTRUCTION_MAX).toBe(1000);
-  expect(reviseProposalPayloadSchema.safeParse({ ...REVISION_PAYLOAD, instruction: "a".repeat(1000) }).success).toBe(true);
-  expect(reviseProposalPayloadSchema.safeParse({ ...REVISION_PAYLOAD, instruction: "a".repeat(1001) }).success).toBe(false);
-  expect(reviseProposalPayloadSchema.safeParse({ ...REVISION_PAYLOAD, instruction: "" }).success).toBe(false);
-  expect(reviseProposalPayloadSchema.safeParse({ ...REVISION_PAYLOAD, fromVersion: 0 }).success).toBe(false);
-  expect(reviseProposalPayloadSchema.safeParse({ ...REVISION_PAYLOAD, content: "nouveau texte" }).success).toBe(false);
-});
-
-test("story 3.3: a decided revision card shows what the click gave, Annuler leaves the production as it is", () => {
-  const base = { id: "r1", type: "revise_proposal", expiresAt: new Date("2026-10-25T12:00:00Z") };
-  const now = new Date("2026-10-24T12:00:00Z");
-  expect(launchesRun("revise_proposal")).toBe(true);
-  expect(launchesRun("launch_plan_item")).toBe(true);
-  expect(launchesRun("update_profile")).toBe(false);
-  expect(toPendingActionView({ ...base, status: "pending", payload: REVISION_PAYLOAD }, now)).not.toHaveProperty("result");
-  const running = { ok: false, reason: "already_running", message: "Jean-Claude y travaille déjà. Vous pouvez suivre l'exécution en cours.", runId: "run-1" } as const;
-  const view = toPendingActionView({ ...base, status: "confirmed", payload: { ...REVISION_PAYLOAD, result: running } }, now)!;
-  expect(view.result).toEqual(running);
-  expect(decidedText(view.status, view.type, view.result)).toBe(running.message);
-  expect(decidedText("confirmed", "revise_proposal")).toBe("Lancement en cours de vérification…");
-  expect(decidedText("cancelled", "revise_proposal")).toBe("Annulé : la production reste à relire, telle quelle.");
-  expect(expiredMessage("revise_proposal")).toContain("redemandez la correction à Paul");
-});
 
 test("story 3.3: a finished revision run names the new version and links to the decisions, even for Martine", () => {
   const revision = { proposalId: "p-1", fromVersion: 1, title: "Horaires de la fiche" };

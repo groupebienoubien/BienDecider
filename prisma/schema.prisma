@@ -76,6 +76,7 @@ model Company {
   creditBalance   Int       @default(20) // credits offerts (D1) ; ne change que par CreditLedger
   creditGrantedAt DateTime? // pose avec l'ecriture des 20 credits offerts dans le registre
   workspaceV52    Boolean   @default(true) // espace V5.2 pour tous depuis le 2026-11-06 ; faux seulement dans les tests de l'ancien parcours, retire avec lui
+  priorityMissionId String? // priorite choisie avec Paul (J-08) ; ignoree si la mission est ecartee, close ou absente : la priorite calculee sert alors (spec 2.2)
   journalEntries  JournalEntry[]
   agentRuns       AgentRun[]
   agentRunAttempts AgentRunAttempt[]
@@ -251,8 +252,11 @@ model ChatMessage {
   company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   role        String // user, assistant
   content     String
+  contextKey  String   @default("strategie") // conversation de Paul par contexte (spec 16.1) : strategie, mission:{id}, contenu:{id}, resultats, ambition, positionnement, concurrence, sources, idee:{n}
   createdAt   DateTime @default(now())
   pendingActions PaulPendingAction[]
+
+  @@index([companyId, contextKey, createdAt])
 }
 
 // Intention proposée par Paul (carte de confirmation) : rien n'est écrit ni
@@ -263,7 +267,7 @@ model PaulPendingAction {
   company       Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
   chatMessageId String? // message de Paul qui porte la carte, rattaché à la fin du tour
   chatMessage   ChatMessage? @relation(fields: [chatMessageId], references: [id], onDelete: SetNull)
-  type          String // update_objective (2.2 et 2.3 ajoutent leurs types)
+  type          String // update_profile, mission_priority, mission_scope, mission_pause, mission_dismiss, mission_restore, mission_create, mission_launch (#288)
   payload       Json
   status        String       @default("pending") // pending, confirmed, cancelled, expired, superseded (remplacée par une plus récente)
   createdAt     DateTime     @default(now())
