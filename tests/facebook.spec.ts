@@ -977,7 +977,7 @@ test("the dashboard names the Page and asks for an explicit confirmation before 
   requireLocalDatabase("Facebook tests");
   if (!process.env.SESSION_SECRET) throw new Error("SESSION_SECRET is required for Facebook tests.");
   const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }) });
-  const company = await prisma.company.create({ data: { name: "Atelier Tableau de bord", trade: "Artisan", servingArea: "Paris", ownerEmail: `facebook-ui-${randomUUID()}@example.invalid` } });
+  const company = await prisma.company.create({ data: { name: "Atelier Tableau de bord", trade: "Artisan", servingArea: "Paris", ownerEmail: `facebook-ui-${randomUUID()}@example.invalid`, workspaceV52: false } });
   try {
     const proposal = await prisma.agentProposal.create({ data: {
       companyId: company.id, agent: "contenu", kind: "social_post", title: "Post approuvé pour Facebook", content: "Texte approuvé.", status: "validee", approvedVersion: 1,

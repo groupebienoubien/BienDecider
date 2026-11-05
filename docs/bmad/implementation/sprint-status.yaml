@@ -99,8 +99,8 @@ development_status:
   epic-9-retrospective: optional
 
   epic-10: in-progress
-  10-1-naviguer-en-quatre-pages: review
-  10-2-voir-ma-strategie: review
-  10-3-parcourir-mes-missions-par-statut: review
-  10-4-lancer-suspendre-reprendre-une-mission: review
+  10-1-naviguer-en-quatre-pages: done
+  10-2-voir-ma-strategie: in-progress
+  10-3-parcourir-mes-missions-par-statut: done
+  10-4-lancer-suspendre-reprendre-une-mission: in-progress
   epic-10-retrospective: optional

@@ -20,7 +20,7 @@ const ANALYSIS_DATE = new Intl.DateTimeFormat("fr-FR", { day: "numeric", month: 
 const PREVIOUS_DATE = new Intl.DateTimeFormat("fr-FR", { day: "2-digit", month: "2-digit", timeZone: "Europe/Paris" });
 const ANALYSIS_TIME = new Intl.DateTimeFormat("fr-FR", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Paris" });
 
-export function DiagnosticClient({ initialAudits, feedback, leadCount, initialPlanUpToDate, coverage, hasGoogleCandidate, hasFacebookCandidate }: { initialAudits: AuditFindingsView<AuditFinding>; feedback: string[]; leadCount: number; initialPlanUpToDate: boolean; coverage: CoverageItem[]; hasGoogleCandidate: boolean; hasFacebookCandidate: boolean }) {
+export function DiagnosticClient({ initialAudits, feedback, leadCount, initialPlanUpToDate, coverage, hasGoogleCandidate, hasFacebookCandidate, workspace = false }: { initialAudits: AuditFindingsView<AuditFinding>; feedback: string[]; leadCount: number; initialPlanUpToDate: boolean; coverage: CoverageItem[]; hasGoogleCandidate: boolean; hasFacebookCandidate: boolean; workspace?: boolean }) {
   const { requestProfile, profileDialog, checking } = useAgentProfileCompletion();
   const router = useRouter();
   // Story 5.2 : plan à jour = des actions créées après la fin du dernier audit.
@@ -115,12 +115,13 @@ export function DiagnosticClient({ initialAudits, feedback, leadCount, initialPl
     <div>
       <PageHeading
         kicker={`DIAGNOSTIC · ${findings.length} CONSTAT${findings.length > 1 ? "S" : ""}`}
-        title="Ce que Martine a constaté."
-        description={latest ? <>Dernière analyse le {ANALYSIS_DATE.format(latest)} à {ANALYSIS_TIME.format(latest)} · {leadCount} prospect(s) suivi(s)</> : "Martine examine votre présence en ligne et vos concurrents."}
+        title={workspace ? "Ce que Paul a constaté." : "Ce que Martine a constaté."}
+        description={latest ? <>Dernière analyse le {ANALYSIS_DATE.format(latest)} à {ANALYSIS_TIME.format(latest)}{workspace ? null : <> · {leadCount} prospect(s) suivi(s)</>}</> : workspace ? "Paul examine votre présence en ligne et vos concurrents." : "Martine examine votre présence en ligne et vos concurrents."}
         actions={<>
           {/* Une action principale : lancer le diagnostic, puis préparer le plan qui en découle (story 5.2). */}
           <button type="button" className={findings.length ? undefined : "primary"} onClick={() => void requestProfile("marketing", run)} disabled={running || checking || preparing}><Icon name="refresh-cw" /> {running ? "Analyse en cours…" : findings.length ? "Actualiser le diagnostic" : "Lancer le diagnostic"}</button>
-          {findings.length > 0 && (planUpToDate && !preparing
+          {/* Espace V5.2 : l'ancien plan n'existe plus ; les missions naissent du diagnostic avec #284. */}
+          {!workspace && findings.length > 0 && (planUpToDate && !preparing
             ? <Link className="btn" href="/dashboard?view=plan">Voir le plan d’action</Link>
             : <button type="button" className="primary" onClick={() => void preparePlan()} disabled={preparing || running || checking}>{preparing ? "Paul prépare le plan…" : "Préparer le plan à partir du diagnostic"}</button>)}
         </>}
@@ -129,9 +130,9 @@ export function DiagnosticClient({ initialAudits, feedback, leadCount, initialPl
       <GooglePlaceDialog hasCandidate={hasGoogleCandidate} />
       <FacebookPageDialog hasCandidate={hasFacebookCandidate} />
       {error && <p role="alert" className="warning">{error}</p>}
-      {done && <p role="status" className="notice">Diagnostic actualisé. <Link href="/dashboard?view=validation">Voir les productions à valider</Link></p>}
+      {done && <p role="status" className="notice">Diagnostic actualisé.{workspace ? null : <> <Link href="/dashboard?view=validation">Voir les productions à valider</Link></>}</p>}
       {findings.length === 0 && (
-        <EmptyState agent="marketing" label="Diagnostic à préparer" title="Repérer les premières opportunités" says="J’examine votre présence en ligne et vos concurrents, puis je vous dis par où commencer. Lancez le diagnostic quand vous voulez." />
+        <EmptyState agent={workspace ? "co_ceo" : "marketing"} label="Diagnostic à préparer" title="Repérer les premières opportunités" says="J’examine votre présence en ligne et vos concurrents, puis je vous dis par où commencer. Lancez le diagnostic quand vous voulez." />
       )}
       {groups.length > 0 && <div className="diagnostic-groups">
         {groups.map((group) => (

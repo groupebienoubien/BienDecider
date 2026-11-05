@@ -27,6 +27,8 @@ const test = base.extend<{ company: Company }>({
     if (process.env.ADMIN_UI_TEST === "1") await prisma.company.deleteMany({ where: { ownerEmail } });
     const company = await prisma.company.create({ data: {
       ownerEmail, name: "Atelier Test Parcours", trade: "Artisan", servingArea: "Paris",
+      // L'ancien parcours n'existe plus que pour ces tests : il est retiré, avec eux, au fil des US V5.2.
+      workspaceV52: false,
       objective: "Développer les demandes de devis", monthlyRevenue: 4000, revenueTarget: 6000, averageClientValue: 500,
       description: "Artisan de proximité", phone: "0100000000", certifications: "Label de test", openingHours: "Lundi au vendredi",
     } });

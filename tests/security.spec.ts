@@ -29,7 +29,6 @@ const GUARDED_ROUTES: Guarded[] = [
   { method: "DELETE", path: "/api/admin/companies/[id]", denied: 403 },
   { method: "PATCH", path: "/api/admin/companies/[id]/limits", denied: 403 },
   { method: "PATCH", path: "/api/admin/companies/[id]/suspension", denied: 403 },
-  { method: "PATCH", path: "/api/admin/companies/[id]/workspace", denied: 403 },
   { method: "PATCH", path: "/api/admin/usage-alerts", denied: 403 },
   { method: "PATCH", path: "/api/admin/llm-credit", denied: 403 },
   { method: "GET", path: "/api/missions", denied: 401 },
@@ -595,7 +594,7 @@ test("a signed-in user who is not listed in ADMIN_EMAILS neither sees nor reache
     await expect(page.getByText("Accès réservé")).toBeVisible();
     await expect(page.getByRole("link", { name: "Administration", exact: true })).toHaveCount(0);
     await page.goto(`${baseURL}/compte`);
-    await expect(page.getByRole("link", { name: "Mon entreprise", exact: true })).toBeVisible();
+    await expect(page.getByRole("navigation", { name: "Pages" })).toBeVisible();
     await expect(page.getByRole("link", { name: "Administration", exact: true })).toHaveCount(0);
     const removal = await request.delete(`${baseURL}/api/admin/companies/${company.id}`, { headers: { Cookie: cookie, Origin: baseURL } });
     expect(removal.status()).toBe(403);
@@ -1023,22 +1022,12 @@ test("feedback is listed for administrators only, shown as text, and can be mark
   }
 });
 
-test("the V5.2 workspace is switched per company by an administrator only, and its pages stay closed without it", async ({ request, page: browser }) => {
-  const admins = (process.env.ADMIN_EMAILS ?? "").split(",").map((email) => email.trim()).filter(Boolean);
-  test.skip(admins.length === 0, "Requires ADMIN_EMAILS on the server, as configured in CI.");
+test("every company is on the V5.2 workspace: its pages need a session, old addresses lead to them, and a mission stays in its company", async ({ page: browser }) => {
   const prisma = openDatabase();
   const marker = randomUUID().slice(0, 8);
-  const adminEmail = admins[0];
-  let createdAdmin = false;
-  let adminCompany = await prisma.company.findUnique({ where: { ownerEmail: adminEmail } });
-  if (!adminCompany) {
-    adminCompany = await prisma.company.create({ data: { ownerEmail: adminEmail, name: "Admin workspace test", trade: "Artisan", servingArea: "Paris" } });
-    createdAdmin = true;
-  }
   const user = await prisma.company.create({ data: { ownerEmail: `security-v52-${marker}@example.invalid`, name: `Espace ${marker}`, trade: "Artisan", servingArea: "Paris" } });
+  const other = await prisma.company.create({ data: { ownerEmail: `security-v52-other-${marker}@example.invalid`, name: "Autre", trade: "Artisan", servingArea: "Paris" } });
   const userCookie = sessionCookie(user.ownerEmail, user.sessionVersion);
-  const admin = { Cookie: sessionCookie(adminEmail, adminCompany.sessionVersion), Origin: baseURL };
-  const path = `${baseURL}/api/admin/companies/${user.id}/workspace`;
   // Les pages diffusent leur contenu en continu : la redirection se constate dans le navigateur, par l'adresse finale.
   const landing = async (target: string, signedIn: boolean) => {
     await browser.context().clearCookies();
@@ -1048,36 +1037,20 @@ test("the V5.2 workspace is switched per company by an administrator only, and i
     return new URL(browser.url()).pathname;
   };
   try {
+    expect(user.workspaceV52).toBe(true);
     for (const target of ["/strategie", "/missions", "/missions/nouvelle", "/atelier", "/resultats"]) {
       expect(await landing(target, false), target).toBe("/login");
-      expect(await landing(target, true), target).toBe("/dashboard");
+      expect(await landing(target, true), target).toBe(target);
     }
-    expect((await request.patch(path, { headers: { Cookie: userCookie, Origin: baseURL }, data: { enabled: true } })).status()).toBe(403);
-    expect((await request.patch(path, { headers: { ...admin, Origin: "https://attacker.invalid" }, data: { enabled: true } })).status()).toBe(403);
-    expect((await request.patch(path, { headers: admin, data: { enabled: "oui" } })).status()).toBe(400);
-    expect((await request.patch(`${baseURL}/api/admin/companies/inexistante/workspace`, { headers: admin, data: { enabled: true } })).status()).toBe(404);
-    expect((await prisma.company.findUniqueOrThrow({ where: { id: user.id } })).workspaceV52).toBe(false);
-
-    expect((await request.patch(path, { headers: admin, data: { enabled: true } })).status()).toBe(200);
-    expect((await prisma.company.findUniqueOrThrow({ where: { id: user.id } })).workspaceV52).toBe(true);
-    expect(await landing("/strategie", true)).toBe("/strategie");
-    for (const [from, to] of [["/dashboard", "/strategie"], ["/equipe", "/strategie"], ["/prospection", "/missions"], ["/rapport", "/resultats"]]) {
+    for (const [from, to] of [["/dashboard", "/strategie"], ["/cockpit", "/strategie"], ["/equipe", "/strategie"], ["/prospection", "/missions"], ["/rapport", "/resultats"]]) {
       expect(await landing(from, true), from).toBe(to);
     }
-    // Une mission d'une autre entreprise n'existe pas pour celle-ci.
-    const other = await prisma.company.create({ data: { ownerEmail: `security-v52-other-${marker}@example.invalid`, name: "Autre", trade: "Artisan", servingArea: "Paris" } });
-    const foreign = await prisma.mission.create({ data: { companyId: other.id, template: "custom", title: "Mission étrangère", outcome: "Rien à voir", originalOutcome: "Rien à voir", finding: "Une autre entreprise", position: 1 } });
+    const foreign = await prisma.mission.create({ data: { companyId: other.id, template: "custom", title: "Mission \u00e9trang\u00e8re", outcome: "Rien \u00e0 voir", originalOutcome: "Rien \u00e0 voir", finding: "Une autre entreprise", position: 1 } });
     await landing(`/missions/${foreign.id}`, true);
-    await expect(browser.getByRole("heading", { level: 1 })).not.toHaveText("Mission étrangère");
-    await expect(browser.getByText("Mission étrangère")).toHaveCount(0);
-    await prisma.company.delete({ where: { id: other.id } });
-
-    expect((await request.patch(path, { headers: admin, data: { enabled: false } })).status()).toBe(200);
-    expect(await landing("/strategie", true)).toBe("/dashboard");
+    await expect(browser.getByText("Mission \u00e9trang\u00e8re")).toHaveCount(0);
   } finally {
     await browser.context().clearCookies();
-    await prisma.company.deleteMany({ where: { id: user.id } });
-    if (createdAdmin) await prisma.company.delete({ where: { id: adminCompany.id } });
+    await prisma.company.deleteMany({ where: { id: { in: [user.id, other.id] } } });
     await prisma.$disconnect();
   }
 });
