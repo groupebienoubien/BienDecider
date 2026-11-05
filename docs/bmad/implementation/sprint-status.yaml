@@ -86,8 +86,14 @@ development_status:
   7-4-dire-ce-qui-ne-va-pas-depuis-n-importe-quelle-page: done
   epic-7-retrospective: optional
 
-  epic-8: in-progress
-  8-1-suivre-les-erreurs-en-production: review
-  8-2-visualiser-le-credit-du-modele: review
+  epic-8: done
+  8-1-suivre-les-erreurs-en-production: done
+  8-2-visualiser-le-credit-du-modele: done
   8-3-tester-la-sauvegarde-et-la-restauration: review
   epic-8-retrospective: optional
+
+  epic-9: in-progress
+  9-1-cadrer-le-modele-mission: review
+  9-2-un-catalogue-ouvert-de-modeles-d-action: review
+  9-3-voir-mon-solde-de-credits: review
+  epic-9-retrospective: optional
