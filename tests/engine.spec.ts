@@ -300,6 +300,42 @@ test("story 7.1: a suspended company refuses every launch and reservation, and c
   await prisma.company.update({ where: { id: company.id }, data: { suspendedAt: null } });
   await expect(reserveUsageBudget(company.id, "co_ceo_chat")).resolves.toMatchObject({ purpose: "co_ceo_chat" });
 });
+test("story 10.4: every mission decision is journaled with its author, in the transaction of the decision, never on a refusal", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { applyMissionTransition, createMission } = await import("../src/lib/missions/service");
+  const { renderJournal } = await import("../src/lib/journal");
+  const codes = async (missionId: string) => (await prisma.journalEntry.findMany({ where: { companyId: company.id, missionId }, orderBy: [{ createdAt: "asc" }, { id: "asc" }] })).map((entry) => entry.code);
+  const mission = await createMission(company.id, { template: "custom", title: "Salon du quartier", outcome: "Dix contacts utiles", finding: "Un salon a lieu pr\u00e8s de chez moi", stopRuleDays: 21, scope: { description: "Tenir un stand au salon de mon quartier" } });
+  expect(await codes(mission.id)).toEqual(["J-01"]);
+
+  let version = 1;
+  const step = async (request: Parameters<typeof applyMissionTransition>[2]) => { version = (await applyMissionTransition(company.id, mission.id, request, version)).mission.version; };
+  await step({ action: "set_outcome", outcome: "Quinze contacts utiles" });
+  await step({ action: "set_scope", scope: { description: "Tenir un stand au salon de printemps" } });
+  await step({ action: "set_channel", channel: "facebook" });
+  await step({ action: "launch" });
+  await step({ action: "pause" });
+  await step({ action: "resume" });
+  await step({ action: "launch" }); // deja en cours : aucun effet, aucune trace
+  expect(await codes(mission.id)).toEqual(["J-01", "J-11", "J-12", "J-29", "J-17", "J-18", "J-17"]);
+
+  // Un refus n'ecrit rien : ni la mission, ni la trace.
+  await expect(applyMissionTransition(company.id, mission.id, { action: "dismiss" }, version)).rejects.toMatchObject({ code: "M-22" });
+  await expect(applyMissionTransition(company.id, mission.id, { action: "set_outcome", outcome: "abc" }, version)).rejects.toMatchObject({ code: "M-25" });
+  expect(await codes(mission.id)).toHaveLength(7);
+
+  await step({ action: "pause" });
+  await step({ action: "dismiss" });
+  await step({ action: "restore" });
+  const entries = await prisma.journalEntry.findMany({ where: { companyId: company.id, missionId: mission.id }, orderBy: [{ createdAt: "asc" }, { id: "asc" }] });
+  expect(entries.map((entry) => entry.code).slice(-3)).toEqual(["J-18", "J-09", "J-10"]);
+  expect(entries.every((entry) => entry.actor === "owner")).toBe(true);
+  const texts = entries.map((entry) => renderJournal(entry.code as Parameters<typeof renderJournal>[0], entry.params as Record<string, string>));
+  expect(texts).toContain("Objectif modifi\u00e9 \u00b7 Salon du quartier : \u00ab Quinze contacts utiles \u00bb.");
+  expect(texts).toContain("P\u00e9rim\u00e8tre modifi\u00e9 \u00b7 Salon du quartier : Tenir un stand au salon de printemps.");
+  expect(texts).toContain("Canal de la mission chang\u00e9 \u00b7 Salon du quartier : Page Facebook. Nouvelle version du brouillon \u00e0 relire.");
+});
+
 test("story 9.1 to 9.3: missions and credits follow the transitions of the specification, in one transaction each", async ({ company }) => {
   const { prisma } = await import("../src/lib/prisma");
   const { readCredits } = await import("../src/lib/credits");

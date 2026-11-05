@@ -29,6 +29,7 @@ const GUARDED_ROUTES: Guarded[] = [
   { method: "DELETE", path: "/api/admin/companies/[id]", denied: 403 },
   { method: "PATCH", path: "/api/admin/companies/[id]/limits", denied: 403 },
   { method: "PATCH", path: "/api/admin/companies/[id]/suspension", denied: 403 },
+  { method: "PATCH", path: "/api/admin/companies/[id]/workspace", denied: 403 },
   { method: "PATCH", path: "/api/admin/usage-alerts", denied: 403 },
   { method: "PATCH", path: "/api/admin/llm-credit", denied: 403 },
   { method: "GET", path: "/api/missions", denied: 401 },
@@ -1022,6 +1023,65 @@ test("feedback is listed for administrators only, shown as text, and can be mark
   }
 });
 
+test("the V5.2 workspace is switched per company by an administrator only, and its pages stay closed without it", async ({ request, page: browser }) => {
+  const admins = (process.env.ADMIN_EMAILS ?? "").split(",").map((email) => email.trim()).filter(Boolean);
+  test.skip(admins.length === 0, "Requires ADMIN_EMAILS on the server, as configured in CI.");
+  const prisma = openDatabase();
+  const marker = randomUUID().slice(0, 8);
+  const adminEmail = admins[0];
+  let createdAdmin = false;
+  let adminCompany = await prisma.company.findUnique({ where: { ownerEmail: adminEmail } });
+  if (!adminCompany) {
+    adminCompany = await prisma.company.create({ data: { ownerEmail: adminEmail, name: "Admin workspace test", trade: "Artisan", servingArea: "Paris" } });
+    createdAdmin = true;
+  }
+  const user = await prisma.company.create({ data: { ownerEmail: `security-v52-${marker}@example.invalid`, name: `Espace ${marker}`, trade: "Artisan", servingArea: "Paris" } });
+  const userCookie = sessionCookie(user.ownerEmail, user.sessionVersion);
+  const admin = { Cookie: sessionCookie(adminEmail, adminCompany.sessionVersion), Origin: baseURL };
+  const path = `${baseURL}/api/admin/companies/${user.id}/workspace`;
+  // Les pages diffusent leur contenu en continu : la redirection se constate dans le navigateur, par l'adresse finale.
+  const landing = async (target: string, signedIn: boolean) => {
+    await browser.context().clearCookies();
+    if (signedIn) await browser.context().addCookies([{ name: "pepito_session", value: userCookie.slice(userCookie.indexOf("=") + 1), url: baseURL }]);
+    await browser.goto(`${baseURL}${target}`);
+    await browser.waitForLoadState("networkidle");
+    return new URL(browser.url()).pathname;
+  };
+  try {
+    for (const target of ["/strategie", "/missions", "/missions/nouvelle", "/atelier", "/resultats"]) {
+      expect(await landing(target, false), target).toBe("/login");
+      expect(await landing(target, true), target).toBe("/dashboard");
+    }
+    expect((await request.patch(path, { headers: { Cookie: userCookie, Origin: baseURL }, data: { enabled: true } })).status()).toBe(403);
+    expect((await request.patch(path, { headers: { ...admin, Origin: "https://attacker.invalid" }, data: { enabled: true } })).status()).toBe(403);
+    expect((await request.patch(path, { headers: admin, data: { enabled: "oui" } })).status()).toBe(400);
+    expect((await request.patch(`${baseURL}/api/admin/companies/inexistante/workspace`, { headers: admin, data: { enabled: true } })).status()).toBe(404);
+    expect((await prisma.company.findUniqueOrThrow({ where: { id: user.id } })).workspaceV52).toBe(false);
+
+    expect((await request.patch(path, { headers: admin, data: { enabled: true } })).status()).toBe(200);
+    expect((await prisma.company.findUniqueOrThrow({ where: { id: user.id } })).workspaceV52).toBe(true);
+    expect(await landing("/strategie", true)).toBe("/strategie");
+    for (const [from, to] of [["/dashboard", "/strategie"], ["/equipe", "/strategie"], ["/prospection", "/missions"], ["/rapport", "/resultats"]]) {
+      expect(await landing(from, true), from).toBe(to);
+    }
+    // Une mission d'une autre entreprise n'existe pas pour celle-ci.
+    const other = await prisma.company.create({ data: { ownerEmail: `security-v52-other-${marker}@example.invalid`, name: "Autre", trade: "Artisan", servingArea: "Paris" } });
+    const foreign = await prisma.mission.create({ data: { companyId: other.id, template: "custom", title: "Mission étrangère", outcome: "Rien à voir", originalOutcome: "Rien à voir", finding: "Une autre entreprise", position: 1 } });
+    await landing(`/missions/${foreign.id}`, true);
+    await expect(browser.getByRole("heading", { level: 1 })).not.toHaveText("Mission étrangère");
+    await expect(browser.getByText("Mission étrangère")).toHaveCount(0);
+    await prisma.company.delete({ where: { id: other.id } });
+
+    expect((await request.patch(path, { headers: admin, data: { enabled: false } })).status()).toBe(200);
+    expect(await landing("/strategie", true)).toBe("/dashboard");
+  } finally {
+    await browser.context().clearCookies();
+    await prisma.company.deleteMany({ where: { id: user.id } });
+    if (createdAdmin) await prisma.company.delete({ where: { id: adminCompany.id } });
+    await prisma.$disconnect();
+  }
+});
+
 test("missions and credits belong to the session company: validated, refused across companies and origins, one debit", async ({ request }) => {
   const prisma = openDatabase();
   const marker = randomUUID().slice(0, 8);
@@ -1050,7 +1110,7 @@ test("missions and credits belong to the session company: validated, refused acr
     expect((await (await request.get(`${baseURL}/api/missions`, { headers: headers(b) })).json()).missions).toHaveLength(0);
     expect((await (await request.get(`${baseURL}/api/missions`, { headers: headers(a) })).json()).missions).toHaveLength(1);
     const catalogue = (await (await request.get(`${baseURL}/api/missions/catalogue`, { headers: headers(a) })).json()).templates as { key: string; channels: { key: string }[] }[];
-    expect(catalogue.map((template) => template.key)).toEqual(["agencies", "proof", "social_post", "site_page", "custom"]);
+    expect(catalogue.map((template) => template.key)).toEqual(["social_post", "site_page", "custom"]);
     expect(catalogue.flatMap((template) => template.channels.map((channel) => channel.key))).not.toContain("instagram");
 
     // Transitions : autre entreprise, autre origine, corps illisible, version perimee.

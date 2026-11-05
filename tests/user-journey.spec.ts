@@ -238,6 +238,128 @@ test("Mon compte shows the credit balance, the scale and the latest movements", 
   expect(company.id).toBeTruthy();
 });
 
+test("V5.2 workspace: four pages, a single next decision, and a mission created, launched, paused, resumed and re-aimed", async ({ page, company }) => {
+  test.setTimeout(90000);
+  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }) });
+  try {
+    await prisma.company.update({ where: { id: company.id }, data: { workspaceV52: true, ownerName: "Rémi Durand" } });
+    await page.goto(`${baseURL}/dashboard`);
+    await expect(page).toHaveURL(/\/strategie$/);
+    await expect(page.getByRole("heading", { level: 1, name: "Bonjour Rémi." })).toBeVisible();
+    const pages = page.getByRole("navigation", { name: "Pages" });
+    for (const name of ["Stratégie", "Missions", "Atelier", "Résultats"]) await expect(pages.getByRole("link", { name })).toBeVisible();
+    await expect(page.getByRole("link", { name: /Mon compte\s*20 crédits/ })).toBeVisible();
+    await expect(page.locator(".goal-mini")).toContainText("Développer les demandes de devis");
+    await expect(page.getByRole("button", { name: "Laisser un avis" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Discuter avec Paul" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Aucune mission en cours" })).toBeVisible();
+    for (const name of ["Martine", "Camille", "Jean-Claude"]) await expect(page.locator("body")).not.toContainText(name);
+
+    // Créer une mission : 0 crédit, à décider, aucune diffusion.
+    await page.getByRole("link", { name: "Créer une mission" }).first().click();
+    await expect(page).toHaveURL(/\/missions\/nouvelle$/);
+    await page.getByLabel("Le constat de départ").fill("Aucune publication depuis trois mois sur la Page.");
+    await page.getByLabel("Nom de la mission").fill("Publier un chantier");
+    await page.getByLabel("Type d'action").selectOption("social_post");
+    await page.getByLabel("Sujet de la publication").fill("Notre chantier de cuisine à Paris");
+    await page.getByLabel("Résultat recherché").fill("Deux demandes de devis");
+    await page.getByRole("button", { name: "Créer la mission" }).click();
+    await expect(page).toHaveURL(/\/missions\/[a-z0-9]+$/);
+    await expect(page.getByRole("heading", { level: 1, name: "Publier un chantier" })).toBeVisible();
+    await expect(page.locator(".mission-heading .tags").first()).toContainText("À décider");
+
+    // Lancer dans un cadre confirmé : 3 crédits, solde affiché, rien n'est diffusé.
+    await page.getByRole("button", { name: "Confirmer et lancer" }).click();
+    const launch = page.getByRole("dialog", { name: "Confirmer le cadre de la mission" });
+    await expect(launch).toContainText("3 crédits · solde 20");
+    await expect(launch).toContainText("0 € engagé");
+    await expect(launch).toContainText("Sujet : Notre chantier de cuisine à Paris");
+    await launch.getByRole("button", { name: "Confirmer le lancement" }).click();
+    await expect(page.locator(".mission-heading .tags").first()).toContainText("En cours");
+    await expect(page.getByRole("link", { name: /Mon compte\s*17 crédits/ })).toBeVisible();
+    await expect(pages.getByRole("link", { name: /Missions\s*1/ })).toBeVisible();
+
+    // Pause puis reprise sans frais.
+    await page.getByRole("button", { name: "Mettre en pause" }).click();
+    await page.getByRole("dialog", { name: "Mettre cette mission en pause ?" }).getByRole("button", { name: "Confirmer la pause" }).click();
+    await expect(page.locator(".mission-heading .tags").first()).toContainText("En pause");
+    await page.getByRole("button", { name: "Reprendre la mission" }).click();
+    const resume = page.getByRole("dialog", { name: "Confirmer le cadre de la mission" });
+    await expect(resume).toContainText("Reprise sans frais");
+    await resume.getByRole("button", { name: "Reprendre la mission" }).click();
+    await expect(page.locator(".mission-heading .tags").first()).toContainText("En cours");
+    await expect(page.getByRole("link", { name: /Mon compte\s*17 crédits/ })).toBeVisible();
+
+    // Modifier l'objectif, puis y revenir.
+    await page.getByRole("button", { name: "Modifier l'objectif" }).click();
+    const edit = page.getByRole("dialog", { name: "Modifier l'objectif de la mission" });
+    await edit.getByLabel("Résultat recherché").fill("Trois demandes de devis");
+    await edit.getByRole("button", { name: "Enregistrer l'objectif" }).click();
+    await expect(edit).toBeHidden();
+    await expect(page.locator(".mission-heading h1 + p")).toHaveText("Trois demandes de devis");
+    await page.getByRole("button", { name: "Modifier l'objectif" }).click();
+    await edit.getByRole("button", { name: "Y revenir" }).click();
+    await expect(edit.getByLabel("Résultat recherché")).toHaveValue("Deux demandes de devis");
+    await edit.getByRole("button", { name: "Enregistrer l'objectif" }).click();
+    await expect(edit).toBeHidden();
+    await expect(page.locator(".mission-heading h1 + p")).toHaveText("Deux demandes de devis");
+
+    // Une deuxième mission à décider passe avant la mission en préparation dans le prochain pas.
+    await page.goto(`${baseURL}/missions/nouvelle`);
+    await page.getByLabel("Le constat de départ").fill("Un salon a lieu près de chez nous ce printemps.");
+    await page.getByLabel("Nom de la mission").fill("Salon du quartier");
+    await page.getByLabel("Type d'action").selectOption("custom");
+    await page.getByLabel("Canal").selectOption("");
+    await page.getByLabel("Ce que vous voulez faire").fill("Tenir un stand au salon de printemps du quartier");
+    await page.getByLabel("Résultat recherché").fill("Dix contacts utiles");
+    await page.getByRole("button", { name: "Créer la mission" }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "Salon du quartier" })).toBeVisible();
+    await pages.getByRole("link", { name: "Stratégie" }).click();
+    await expect(page.getByRole("heading", { level: 2, name: "Examiner « Salon du quartier »" })).toBeVisible();
+    await expect(page.getByText("Rien ne sera lancé ou diffusé sans votre accord.")).toBeVisible();
+    await expect(page.getByRole("article", { name: "Publier un chantier" })).toContainText("Déclaré par vous");
+
+    // Liste filtrée par statut, filtre gardé dans l'adresse.
+    await pages.getByRole("link", { name: /Missions/ }).click();
+    await expect(page.getByRole("button", { name: "Toutes (2)" })).toBeVisible();
+    await page.getByRole("button", { name: "En cours (1)" }).click();
+    await expect(page).toHaveURL(/statut=en-cours/);
+    await expect(page.locator(".mission-card")).toHaveCount(1);
+    await expect(page.locator(".mission-card")).toContainText("Publier un chantier");
+    await page.reload();
+    await expect(page.locator(".mission-card")).toHaveCount(1);
+    await page.getByRole("button", { name: "Écartées (0)" }).click();
+    await expect(page.getByText("Aucune mission dans cette vue")).toBeVisible();
+
+    // Anciennes adresses et pages encore vides, honnêtes.
+    await page.goto(`${baseURL}/rapport`);
+    await expect(page).toHaveURL(/\/resultats$/);
+    await expect(page.getByText("Rien n'a encore été diffusé")).toBeVisible();
+
+    // Téléphone : menu repliable, page derrière inerte, Échap ferme.
+    await page.setViewportSize({ width: 390, height: 800 });
+    await page.goto(`${baseURL}/strategie`);
+    await expect(pages).toBeHidden();
+    await page.getByRole("button", { name: "Ouvrir le menu" }).click();
+    await expect(pages).toBeVisible();
+    expect(await page.locator(".mq .workspace").evaluate((element) => (element as HTMLElement).inert)).toBe(true);
+    await page.keyboard.press("Escape");
+    await expect(pages).toBeHidden();
+    expect(await page.locator(".mq .workspace").evaluate((element) => (element as HTMLElement).inert)).toBe(false);
+    await page.getByRole("button", { name: "Ouvrir le menu" }).click();
+    await pages.getByRole("link", { name: /Missions/ }).click();
+    await expect(page).toHaveURL(/\/missions$/);
+    await expect(pages).toBeHidden();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.setViewportSize({ width: 360, height: 760 });
+    await page.goto(`${baseURL}/missions/nouvelle`);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+
+    const journal = await prisma.journalEntry.findMany({ where: { companyId: company.id }, select: { code: true } });
+    expect(journal.map((entry) => entry.code).sort()).toEqual(["J-01", "J-01", "J-11", "J-11", "J-17", "J-17", "J-18"]);
+  } finally { await prisma.$disconnect(); }
+});
+
 test("Gmail start, refusal and send guards do not contact providers", async ({ page, company }) => {
   expect(company.id).toBeTruthy();
   await page.goto(`${baseURL}/connexions`);

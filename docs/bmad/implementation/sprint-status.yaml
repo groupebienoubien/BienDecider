@@ -92,8 +92,15 @@ development_status:
   8-3-tester-la-sauvegarde-et-la-restauration: review
   epic-8-retrospective: optional
 
-  epic-9: in-progress
-  9-1-cadrer-le-modele-mission: review
-  9-2-un-catalogue-ouvert-de-modeles-d-action: review
-  9-3-voir-mon-solde-de-credits: review
+  epic-9: done
+  9-1-cadrer-le-modele-mission: done
+  9-2-un-catalogue-ouvert-de-modeles-d-action: done
+  9-3-voir-mon-solde-de-credits: done
   epic-9-retrospective: optional
+
+  epic-10: in-progress
+  10-1-naviguer-en-quatre-pages: review
+  10-2-voir-ma-strategie: review
+  10-3-parcourir-mes-missions-par-statut: review
+  10-4-lancer-suspendre-reprendre-une-mission: review
+  epic-10-retrospective: optional

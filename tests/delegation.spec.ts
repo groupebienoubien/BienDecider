@@ -39,6 +39,11 @@ import { computeCredit, creditAlertEmail, parseCreditInput } from "../src/lib/ll
 import { renderMissionMessage } from "../src/lib/missions/messages";
 import { LAUNCH_COST_CREDITS, checkTransition, validateNewMission, type MissionSnapshot } from "../src/lib/missions/rules";
 import { availableTemplates, enabledChannels, MISSION_TEMPLATES } from "../src/lib/missions/templates";
+import { missionStage, missionTracker, nextStep, orderMissions, type ContentState, type StageMission } from "../src/lib/missions/stage";
+import { scopeSummary } from "../src/lib/missions/scope";
+import { renderJournal } from "../src/lib/journal";
+import { firstNameOf } from "../src/lib/workspace";
+import { workspacePageLabel } from "../src/components/workspace-nav";
 import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH, passwordPolicyError } from "../src/lib/password-policy";
 import { startSmtpSink } from "./support/smtp-sink";
 import { BetaToolRunner } from "@anthropic-ai/sdk/lib/tools/BetaToolRunner";
@@ -1531,7 +1536,7 @@ const mission = (over: Partial<MissionSnapshot> = {}): MissionSnapshot => ({ tem
 const codeOf = (result: { ok: boolean; code?: string }) => (result.ok ? "ok" : result.code);
 
 test("mission catalogue: only open models with an active channel are offered, plus Sur mesure", () => {
-  expect(availableTemplates().map((template) => template.key)).toEqual(["agencies", "proof", "social_post", "site_page", "custom"]);
+  expect(availableTemplates().map((template) => template.key)).toEqual(["social_post", "site_page", "custom"]);
   expect(enabledChannels(MISSION_TEMPLATES.social_post)).toEqual(["facebook"]);
   expect(enabledChannels(MISSION_TEMPLATES.google_profile)).toEqual([]);
   expect(MISSION_TEMPLATES.custom.stopRuleDays).toBeNull();
@@ -1551,9 +1556,9 @@ test("mission creation: bounded fields, one permitted and active channel, scope 
   expect(codeOf(validateNewMission({ ...base, channel: "gmail" }, 0))).toBe("M-69");
   expect(codeOf(validateNewMission({ ...base, scope: { topic: "x" } }, 0))).toBe("M-17");
   expect(validateNewMission({ ...base, scope: undefined }, 0)).toMatchObject({ ok: true, value: { scope: {} } });
-  expect(validateNewMission({ template: "agencies", title: "Deux agences", outcome: "Une r\u00e9ponse", finding: "Aucune agence partenaire connue" }, 0)).toMatchObject({ ok: true, value: { channel: "gmail", stopRuleDays: 30 } });
-  expect(codeOf(validateNewMission({ template: "agencies", title: "Deux agences", outcome: "Une r\u00e9ponse", finding: "Aucune agence partenaire connue", scope: { agencyIds: ["a", "b", "c"] } }, 0))).toBe("M-30");
-  expect(codeOf(validateNewMission({ template: "proof", title: "Une r\u00e9alisation", outcome: "Des demandes", finding: "Une belle r\u00e9alisation r\u00e9cente", channel: "instagram" }, 0))).toBe("M-67");
+  expect(codeOf(validateNewMission({ template: "agencies", title: "Deux agences", outcome: "Une r\u00e9ponse", finding: "Aucune agence partenaire connue" }, 0))).toBe("M-76");
+  expect(MISSION_TEMPLATES.agencies.validateScope({ agencyIds: ["a", "b", "c"] })).toEqual({ ok: false, code: "M-30" });
+  expect(codeOf(validateNewMission({ template: "proof", title: "Une r\u00e9alisation", outcome: "Des demandes", finding: "Une belle r\u00e9alisation r\u00e9cente", channel: "facebook" }, 0))).toBe("M-76");
   const custom = { template: "custom", title: "Salon local", outcome: "Dix contacts", finding: "Un salon a lieu dans ma ville", scope: { description: "Tenir un stand au salon de mon quartier" } };
   expect(validateNewMission({ ...custom, stopRuleDays: 21 }, 0)).toMatchObject({ ok: true, value: { channel: null, stopRuleDays: 21 } });
   expect(codeOf(validateNewMission(custom, 0))).toBe("M-18");
@@ -1604,4 +1609,70 @@ test("mission transitions: statuses, launch cost once, idempotence, locks and me
   expect(codeOf(checkTransition(mission({ template: "leads", channel: "gmail", scope: {} }), { action: "confirm_contacts" }))).toBe("M-41");
   expect(renderMissionMessage("M-15", { n: 3, m: 2 })).toBe("Cr\u00e9dits insuffisants : il en faut 3, il vous en reste 2.");
   expect(renderMissionMessage("M-67", { canal: "Instagram" })).toBe("Instagram n'est pas disponible pour le moment. Choisissez un autre canal.");
+});
+
+const stageMission = (over: Partial<StageMission> = {}): StageMission => ({ id: "m1", title: "Publier un chantier", outcome: "Deux demandes de devis", status: "active", template: "social_post", channel: "facebook", position: 1, content: null, ...over });
+const content = (over: Partial<ContentState> = {}): ContentState => ({ number: 2, validated: false, currentDiffused: false, scheduled: false, diffusions: 0, reportAt: null, decisionAt: null, channelConnected: false, ...over });
+
+test("mission stage follows the specification order, from the mission status to its main content", () => {
+  expect(missionStage(stageMission({ status: "dismissed" }))).toBe("dismissed");
+  expect(missionStage(stageMission({ status: "stopped" }))).toBe("closed");
+  expect(missionStage(stageMission({ status: "proposed" }))).toBe("launch");
+  expect(missionStage(stageMission({ status: "paused", content: content() }))).toBe("launch");
+  expect(missionStage(stageMission())).toBe("preparing");
+  expect(missionStage(stageMission({ content: content({ scheduled: true, validated: true }) }))).toBe("scheduled");
+  expect(missionStage(stageMission({ content: content({ currentDiffused: true, diffusions: 1 }) }))).toBe("report");
+  expect(missionStage(stageMission({ content: content({ currentDiffused: true, diffusions: 2, reportAt: 1 }) }))).toBe("report");
+  expect(missionStage(stageMission({ content: content({ currentDiffused: true, diffusions: 1, reportAt: 1 }) }))).toBe("decide");
+  expect(missionStage(stageMission({ content: content({ currentDiffused: true, diffusions: 1, reportAt: 1, decisionAt: 1 }) }))).toBe("next-round");
+  expect(missionStage(stageMission({ content: content({ validated: true }) }))).toBe("connect");
+  expect(missionStage(stageMission({ content: content({ validated: true, channelConnected: true }) }))).toBe("publish");
+  expect(missionStage(stageMission({ content: content({ validated: true, channelConnected: true }) }), "prepare")).toBe("self-publish");
+  expect(missionStage(stageMission({ template: "custom", channel: null, content: content({ validated: true }) }))).toBe("self-publish");
+  expect(missionStage(stageMission({ content: content() }))).toBe("approve");
+});
+
+test("six-step tracker: earlier steps done, the current one marked, nothing for a dismissed mission", () => {
+  expect(missionTracker("launch")!.map((step) => step.state)).toEqual(["current", "todo", "todo", "todo", "todo", "todo"]);
+  expect(missionTracker("approve")!.map((step) => step.state)).toEqual(["done", "done", "current", "todo", "todo", "todo"]);
+  expect(missionTracker("scheduled")![3]).toEqual({ label: "Diffuser", state: "current" });
+  expect(missionTracker("next-round")!.every((step) => step.state === "done")).toBe(true);
+  expect(missionTracker("dismissed")).toBeNull();
+});
+
+test("next step: what waits for the owner first, then a launch, then any live mission, priority first", () => {
+  expect(nextStep([])).toMatchObject({ stage: "none", missionId: null, title: "Aucune mission en cours", target: { kind: "paul", label: "Explorer une idée" } });
+  expect(nextStep([stageMission({ status: "stopped" }), stageMission({ id: "m2", status: "dismissed", position: 2 })]).stage).toBe("none");
+  const launch = stageMission({ id: "launch", status: "proposed", position: 1 });
+  const preparing = stageMission({ id: "preparing", position: 2 });
+  const approve = stageMission({ id: "approve", position: 3, content: content() });
+  expect(nextStep([launch, preparing, approve])).toMatchObject({ stage: "approve", missionId: "approve", title: "Relire et valider le contenu", detail: "Publier un chantier · V2 attend votre accord. Valider n'envoie rien.", target: { kind: "link", href: "/atelier?mission=approve", label: "Ouvrir l'atelier" } });
+  expect(nextStep([preparing, launch])).toMatchObject({ stage: "launch", missionId: "launch", title: "Examiner « Publier un chantier »", detail: "Deux demandes de devis.", target: { href: "/missions/launch", label: "Examiner cette mission" } });
+  expect(nextStep([preparing])).toMatchObject({ stage: "preparing", target: { label: "Voir la mission" } });
+  expect(nextStep([stageMission({ content: content({ validated: true }) })])).toMatchObject({ title: "Connecter Page Facebook", target: { href: "/connexions" } });
+  expect(nextStep([stageMission({ channel: "gmail", template: "custom", content: content({ validated: true, channelConnected: true }) })]).title).toBe("Confirmer l'envoi");
+  expect(nextStep([stageMission({ content: content({ validated: true, channelConnected: true }) })]).title).toBe("Confirmer la publication");
+  expect(nextStep([stageMission({ content: content({ currentDiffused: true, diffusions: 1 }) })])).toMatchObject({ title: "Renseigner le bilan", target: { href: "/resultats?mission=m1" } });
+  // La priorité (première mission vivante de l'ordre du plan) passe avant, à étape égale.
+  const first = stageMission({ id: "first", status: "proposed", position: 1 });
+  const second = stageMission({ id: "second", status: "proposed", position: 2 });
+  expect(nextStep([second, first]).missionId).toBe("first");
+  expect(orderMissions([stageMission({ id: "gone", status: "dismissed", position: 1 }), second, first]).map((mission) => mission.id)).toEqual(["first", "gone", "second"]);
+});
+
+test("scope summary, journal texts, first name and breadcrumb of the V5.2 workspace", () => {
+  expect(scopeSummary("social_post", { topic: "Nos chantiers" })).toBe("Sujet : Nos chantiers");
+  expect(scopeSummary("social_post", {})).toBe("À préciser");
+  expect(scopeSummary("site_page", {})).toBe("Une page du site");
+  expect(scopeSummary("agencies", { agencyIds: ["a", "b"] })).toBe("2 agences");
+  expect(scopeSummary("custom", { description: "Un stand au salon" })).toBe("Un stand au salon");
+  expect(renderJournal("J-11", { mission: "Publier", résultat: "Trois devis" })).toBe("Objectif modifié · Publier : « Trois devis ».");
+  expect(renderJournal("J-17", { mission: "Publier" })).toBe("Mission lancée (ou reprise) : Publier. Paul prépare le premier contenu.");
+  expect(firstNameOf("  Rémi Durand ")).toBe("Rémi");
+  expect(firstNameOf(null)).toBeNull();
+  expect(workspacePageLabel("/strategie")).toBe("Stratégie");
+  expect(workspacePageLabel("/missions/abc")).toBe("Missions");
+  expect(workspacePageLabel("/missions/nouvelle")).toBe("Nouvelle mission");
+  expect(workspacePageLabel("/connexions")).toBe("Entreprise");
+  expect(workspacePageLabel("/studio/x")).toBe("Atelier");
 });

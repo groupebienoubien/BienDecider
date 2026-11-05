@@ -75,6 +75,8 @@ model Company {
   creditLedger    CreditLedger[]
   creditBalance   Int       @default(20) // credits offerts (D1) ; ne change que par CreditLedger
   creditGrantedAt DateTime? // pose avec l'ecriture des 20 credits offerts dans le registre
+  workspaceV52    Boolean   @default(false) // espace V5.2 (Strategie, Missions, Atelier, Resultats) active pour cette entreprise pendant la bascule
+  journalEntries  JournalEntry[]
   agentRuns       AgentRun[]
   agentRunAttempts AgentRunAttempt[]
   usageReservations UsageReservation[]
@@ -572,4 +574,19 @@ model CreditLedger {
   mission      Mission? @relation(fields: [missionId], references: [id], onDelete: SetNull)
 
   @@index([companyId, createdAt])
+}
+
+/// Journal des decisions et evenements (spec §15) : un code et ses parametres, le texte est rendu a l'affichage.
+model JournalEntry {
+  id        String   @id @default(cuid())
+  companyId String
+  missionId String?
+  code      String // J-01 ... J-29
+  actor     String   @default("owner") // owner | paul | system
+  params    Json     @default("{}")
+  createdAt DateTime @default(now())
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, createdAt])
+  @@index([missionId])
 }
