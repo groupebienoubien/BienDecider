@@ -72,9 +72,16 @@ development_status:
 
   epic-6: in-progress
   6-1-plafonner-et-pouvoir-fermer-les-inscriptions: done
-  6-2-fermer-l-administration-par-defaut: review
-  6-3-envoyer-les-e-mails-du-service: review
-  6-4-confirmer-mon-e-mail-a-l-inscription: review
-  6-5-recuperer-mon-mot-de-passe: review
+  6-2-fermer-l-administration-par-defaut: done
+  6-3-envoyer-les-e-mails-du-service: done
+  6-4-confirmer-mon-e-mail-a-l-inscription: done
+  6-5-recuperer-mon-mot-de-passe: done
   6-6-mettre-a-jour-la-charte-pour-la-cible-v5-2: backlog
   epic-6-retrospective: optional
+
+  epic-7: in-progress
+  7-1-suspendre-une-entreprise: ready-for-dev
+  7-2-voir-l-activite-et-les-erreurs-d-une-entreprise: ready-for-dev
+  7-3-etre-alerte-d-une-consommation-anormale: ready-for-dev
+  7-4-dire-ce-qui-ne-va-pas-depuis-n-importe-quelle-page: ready-for-dev
+  epic-7-retrospective: optional
