@@ -415,6 +415,21 @@ model DelegationRiskSetting {
   createdAt   DateTime @default(now())
 }
 
+/** Réglage global des inscriptions (story 6.1, #274) : une seule ligne, id "global". Sans ligne : ouvertes et sans plafond. */
+model SignupControl {
+  id        String   @id @default("global")
+  open      Boolean  @default(true)
+  dailyCap  Int? // inscriptions acceptées par jour (heure de Paris) ; null = sans plafond
+  updatedBy String
+  updatedAt DateTime @updatedAt
+}
+
+/** Inscriptions acceptées par jour, clé AAAA-MM-JJ en heure de Paris : compteur atomique du plafond. */
+model SignupDay {
+  day   String @id
+  count Int
+}
+
 /**
  * Demande ou objectif d'un dirigeant qu'aucun agent ne couvre. Paul le dit
  * honnêtement, propose ce qui s'en rapproche et note la demande ici, pour

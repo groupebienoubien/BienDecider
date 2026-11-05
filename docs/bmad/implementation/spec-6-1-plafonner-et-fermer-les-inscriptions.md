@@ -2,7 +2,7 @@
 title: 'Story 6.1 : Plafonner et pouvoir fermer les inscriptions'
 type: 'feature'
 created: '2026-11-05'
-status: 'draft'
+status: 'review'
 baseline_commit: '7bea9a2'
 route: 'dispatch'
 review_loop_iteration: 0
@@ -57,11 +57,26 @@ context:
 
 ## Code Map
 
-À renseigner à l'implémentation : `prisma/schema.prisma` et nouvelle migration ; `src/lib/signup-control.ts` (lecture du réglage, réservation et libération d'un emplacement, fenêtre du jour, décision pure testable) ; `src/app/api/auth/signup/route.ts` ; `src/app/api/admin/signup-control/route.ts` ; `src/app/signup/page.tsx` (+ formulaire client) ; `src/app/admin/page.tsx` (+ composant du réglage) ; `tests/delegation.spec.ts` (fonctions pures) ; `tests/security.spec.ts` (route déclarée, refus, concurrence, fermeture, plafond) ; documentation `docs/ci-cd.md` si le déploiement change.
+- `prisma/schema.prisma`, `prisma/migrations/20261105120000_signup_control/` : `SignupControl` (une ligne `global`) et `SignupDay` (compteur par jour, clé AAAA-MM-JJ Paris). Additif.
+- `src/lib/signup-rules.ts` : règles pures (disponibilité, alerte à 80 %, fenêtre du jour, secondes jusqu'au prochain minuit, validation du réglage).
+- `src/lib/signup-control.ts` : lecture et écriture du réglage, compteur du jour, réservation atomique (`INSERT ... ON CONFLICT DO UPDATE ... WHERE count < plafond`) et libération.
+- `src/app/api/auth/signup/route.ts` : refus fermé (403) ou complet (429 + `Retry-After`) avant toute création ; réservation après le contrôle d'e-mail déjà inscrit ; libération si la création échoue.
+- `src/app/api/admin/signup-control/route.ts` : `PATCH`, administrateurs explicites seulement, origine contrôlée.
+- `src/app/signup/page.tsx` (serveur, `force-dynamic`) et `signup-form.tsx` (client) : message à la place du formulaire.
+- `src/app/admin/signup-control-form.tsx` et `page.tsx` : réglage, compteur du jour, alerte.
+- Tests : `tests/delegation.spec.ts` (4 tests des règles pures), `tests/security.spec.ts` (route déclarée ; test d'intégration : fermé, plafond, concurrence sur le dernier emplacement, 409 sans consommation, connexion inchangée, page, administration).
 
 ## Tasks & Acceptance
 
-À détailler à l'approbation de l'intention ; critères d'acceptation = ceux de #274 et la matrice ci-dessus.
+- [x] Schéma, migration additive et règles pures.
+- [x] Route d'inscription : refus côté serveur, réservation atomique, libération.
+- [x] Route et écran d'administration : réglage, compteur, alerte à 80 %.
+- [x] Page d'inscription : message fermé ou complet.
+- [x] Tests : règles pures, intégration (dont concurrence), route déclarée.
+- [ ] CI verte sur la PR, relecture de l'autre développeur (zones CODEOWNERS).
+- [ ] `ADMIN_EMAILS` définie en Production, déploiement, puis recette sur le domaine : fermer, rouvrir, plafonner à 1, vérifier le compteur ; notes dans #274.
+
+Critères d'acceptation : ceux de #274 et la matrice ci-dessus. Validation locale du 2026-11-05 : lint strict, build et TypeScript, 104 tests sans réseau, `test:security` (13) et `test:brand` (8) sur une base PGlite multiplexée (la concurrence réelle sur PostgreSQL est vérifiée par la CI).
 
 ## Décisions du 2026-11-05
 
@@ -69,4 +84,4 @@ context:
 2. Valeur initiale : déploiement ouvert et sans plafond (comportement actuel) ; le plafond (10 par jour proposé) se règle ensuite depuis l'administration, au moment de l'ouverture décidée dans #273.
 3. Prérequis de déploiement : `ADMIN_EMAILS` définie dans les variables Production de Vercel (adresses des deux fondateurs séparées par une virgule), puis redéploiement. Sans elle, personne ne peut modifier le réglage. Même prérequis pour la story 6.2.
 
-Statut : `draft` jusqu'à relecture de l'intention par un fondateur.
+Statut : `review`. Intention validée le 2026-11-05 par un fondateur.
