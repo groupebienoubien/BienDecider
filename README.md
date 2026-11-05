@@ -48,8 +48,13 @@ Prérequis : Node.js, une clé API Anthropic (https://console.anthropic.com/), u
    # META_APP_ID=""
    # META_APP_SECRET=""
 
-   # Optionnel — referme la vue /admin à une liste d'emails (sinon ouverte à tout connecté) :
+   # Obligatoire pour accéder à /admin : liste d'adresses séparées par une virgule (sans elle, personne n'est administrateur) :
    # ADMIN_EMAILS="vous@exemple.com"
+
+   # Optionnel — e-mails du service (confirmation d'adresse, mot de passe oublié) ; sans eux, aucun e-mail n'est envoyé (voir docs/domain-email-setup.md) :
+   # SERVICE_SMTP_URL="smtps://utilisateur:motdepasse@smtp.fournisseur.example:465"
+   # SERVICE_MAIL_FROM="BienDecider <noreply@biendecider.com>"
+   # APP_BASE_URL="http://localhost:3000"
    ```
    `DATABASE_URL` est le nom recommandé. Pour les intégrations Prisma Postgres, le serveur accepte aussi `DATABASE_PRISMA_DATABASE_URL` puis `DATABASE_POSTGRES_URL`, dans cet ordre de repli. Si plusieurs sont définies, `DATABASE_URL` a priorité. Ne pas réutiliser une URL divulguée ; la renouveler chez le fournisseur.
 2. Installer les dépendances : `npm install` (génère aussi le client Prisma via `postinstall`)

@@ -42,6 +42,10 @@ jobs:
       UX_TEST_BASE_URL: http://localhost:3000
       # Closes the admin area to an explicit list, as required before opening to external users.
       ADMIN_EMAILS: ci-admin@example.invalid
+      # E-mails du service (confirmation d'adresse, mot de passe oublié) : envoyés vers un serveur SMTP de test local démarré par les tests, rien ne part à l'extérieur.
+      SERVICE_SMTP_URL: smtp://127.0.0.1:2525
+      SERVICE_MAIL_FROM: "BienDecider <noreply@biendecider.com>"
+      APP_BASE_URL: http://localhost:3000
       # Dummy Meta application, never sent to Meta: lets the Facebook start and callback routes run in tests.
       META_APP_ID: ci-meta-app
       META_APP_SECRET: ci-meta-secret
