@@ -362,6 +362,97 @@ test("V5.2 workspace: four pages, a single next decision, and a mission created,
   } finally { await prisma.$disconnect(); }
 });
 
+test("V5.2 atelier: a mission content is retouched, refused with a motive, restored, checked and validated without sending, then reworked with Paul", async ({ page, company }, testInfo) => {
+  test.setTimeout(90000);
+  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }) });
+  try {
+    await prisma.company.update({ where: { id: company.id }, data: { workspaceV52: true } });
+    const mission = await prisma.mission.create({ data: { companyId: company.id, template: "social_post", channel: "facebook", title: "Publier un chantier", outcome: "Deux demandes de devis", originalOutcome: "Deux demandes de devis", finding: "Aucune publication depuis trois mois", scope: { topic: "Notre chantier de cuisine" }, status: "active", firstLaunchedAt: new Date(), position: 1 } });
+    const content = await prisma.missionContent.create({ data: { companyId: company.id, missionId: mission.id, channel: "facebook", format: "social_post", currentNumber: 1, versions: { create: { number: 1, title: "Nos chantiers de novembre", body: "Votre salle de bains refaite en 5 jours, à partir de 49 € le m². Appelez-nous au 06 12 34 56 78.", author: "paul", note: "Premier brouillon préparé par Paul" } } } });
+
+    // Stratégie : le contenu attend votre accord, l'atelier s'ouvre sur lui.
+    await page.goto(`${baseURL}/strategie`);
+    await expect(page.getByRole("heading", { level: 2, name: "Relire et valider le contenu" })).toBeVisible();
+    await expect(page.getByRole("region", { name: "À valider par vous" }).locator(".decision").first()).toContainText("Publier un chantier · V1 · Page Facebook · prête à relire");
+    await page.locator(".next-step").getByRole("link", { name: "Ouvrir l'atelier" }).click();
+    await page.waitForURL(new RegExp(`/atelier/${content.id}$`));
+    await expect(page.getByRole("heading", { level: 1, name: "L'atelier" })).toBeVisible();
+    const preview = page.getByRole("article", { name: "Aperçu Page Facebook" });
+    await expect(preview).toContainText("Nos chantiers de novembre");
+    await expect(page.locator(".atelier .tags").first()).toHaveText(/V1 · courante\s*Brouillon/);
+    await expect(page.getByRole("link", { name: /V1\s*Premier brouillon préparé par Paul\s*par Paul/ })).toBeVisible();
+
+    // Retouche : gardée dans l'onglet si la page est rechargée, puis enregistrée en V2.
+    await page.getByLabel("Accroche").fill("Une cuisine livrée à Paris");
+    await expect(page.getByRole("status").filter({ hasText: "Retouches non enregistrées." })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Demander à Paul" })).toBeDisabled();
+    await page.reload();
+    await expect(page.getByLabel("Accroche")).toHaveValue("Une cuisine livrée à Paris");
+    await expect(page.getByRole("status").filter({ hasText: "Retouches non enregistrées retrouvées." })).toBeVisible();
+    await page.getByRole("button", { name: "Enregistrer une nouvelle version" }).click();
+    await expect(page.locator(".atelier .tags").first()).toHaveText(/V2 · courante\s*Brouillon/);
+    await expect(preview).toContainText("Une cuisine livrée à Paris");
+    await expect(page.getByRole("link", { name: /V2\s*Retouche directe par vous\s*par vous/ })).toBeVisible();
+
+    // Refus : motif obligatoire, retenu par Paul.
+    await page.getByRole("button", { name: "Je ne veux pas de cette version" }).click();
+    const reject = page.getByRole("dialog", { name: "Je ne veux pas de cette version" });
+    await expect(reject.getByRole("button", { name: "Refuser V2" })).toBeDisabled();
+    await reject.getByLabel("Pourquoi ? (obligatoire)").fill("On ne parle pas de prix en ligne");
+    await reject.getByRole("button", { name: "Refuser V2" }).click();
+    await expect(reject).toBeHidden();
+    await expect(page.getByRole("heading", { level: 2, name: "V2 refusée" })).toBeVisible();
+    await expect(page.locator(".atelier-decision")).toContainText("Votre motif : « On ne parle pas de prix en ligne ». Paul en tiendra compte");
+
+    // Ancienne version en lecture seule ; y revenir crée V3.
+    await page.getByRole("link", { name: /V1\s*Premier brouillon/ }).click();
+    await page.waitForURL(/\?v=1$/);
+    await expect(page.getByRole("heading", { level: 2, name: "V1 · archive en lecture seule" })).toBeVisible();
+    await expect(page.getByLabel("Accroche")).toBeDisabled();
+    await page.getByRole("button", { name: "Revenir à cette version" }).click();
+    await page.waitForURL(new RegExp(`/atelier/${content.id}$`));
+    await expect(page.locator(".atelier .tags").first()).toHaveText(/V3 · courante\s*Brouillon/);
+    await expect(preview).toContainText("Nos chantiers de novembre");
+
+    // Valider : qui le verra, ce qui engage l'entreprise, case « J'ai relu » obligatoire, aucun envoi.
+    await page.getByRole("button", { name: "Valider cette version" }).click();
+    const validate = page.getByRole("dialog", { name: "Valider la version V3" });
+    await expect(validate).toContainText("Les personnes qui suivent votre Page Facebook");
+    await expect(validate.getByRole("listitem").filter({ hasText: "Prix, remises et montants" })).toContainText("« 49 € »");
+    await expect(validate.getByRole("listitem").filter({ hasText: "Numéros de téléphone" })).toContainText("« 06 12 34 56 78 »");
+    await expect(validate).toContainText("Paul repère ces éléments pour vous aider, mais ne peut pas les vérifier");
+    await expect(validate.getByRole("button", { name: "Valider sans diffuser" })).toBeDisabled();
+    await validate.getByLabel("J'ai relu le contenu et vérifié les informations qui engagent mon entreprise").check();
+    await validate.getByRole("button", { name: "Valider sans diffuser" }).click();
+    await expect(validate).toBeHidden();
+    await expect(page.getByRole("heading", { level: 2, name: "V3 validée" })).toBeVisible();
+    await expect(page.locator(".atelier-decision")).toContainText("Aucun envoi effectué.");
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.screenshot({ path: testInfo.outputPath("atelier-1440.png"), fullPage: true });
+
+    // Proposition de Paul : gardée contre 1 crédit, elle devient V4 et retire la validation.
+    await prisma.missionContent.update({ where: { id: content.id }, data: { suggestion: { basedOn: 3, variant: { kind: "shorter", instruction: null }, title: "Cuisine livrée", body: "Une cuisine livrée à Paris. Parlons de votre projet." } } });
+    await page.reload();
+    await expect(page.getByText("Proposition de Paul · plus court")).toBeVisible();
+    await page.getByRole("button", { name: "Garder cette version (1 crédit)" }).click();
+    await expect(page.locator(".atelier .tags").first()).toHaveText(/V4 · courante\s*Brouillon/);
+    await expect(page.getByRole("link", { name: /Mon compte\s*19 crédits/ })).toBeVisible();
+    await expect(page.getByRole("link", { name: /V4\s*Préparée avec Paul : plus court\s*par Paul/ })).toBeVisible();
+
+    const journal = await prisma.journalEntry.findMany({ where: { companyId: company.id, missionId: mission.id }, orderBy: [{ createdAt: "asc" }, { id: "asc" }], select: { code: true } });
+    expect(journal.map((entry) => entry.code)).toEqual(["J-19", "J-27", "J-19", "J-20", "J-19"]);
+
+    // La mission renvoie vers son contenu ; sur téléphone, l'atelier ne déborde pas.
+    await page.goto(`${baseURL}/missions/${mission.id}`);
+    await expect(page.getByRole("link", { name: "Ouvrir le contenu (V4) dans l'atelier" })).toBeVisible();
+    await page.setViewportSize({ width: 390, height: 800 });
+    await page.goto(`${baseURL}/atelier/${content.id}`);
+    await expect(page.getByRole("heading", { level: 1, name: "L'atelier" })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath("atelier-390.png"), fullPage: true });
+  } finally { await prisma.$disconnect(); }
+});
+
 test("Gmail start, refusal and send guards do not contact providers", async ({ page, company }) => {
   expect(company.id).toBeTruthy();
   await page.goto(`${baseURL}/connexions`);

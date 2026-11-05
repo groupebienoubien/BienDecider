@@ -4,7 +4,7 @@ import type { TemplateKey } from "@/lib/missions/templates";
 
 /**
  * Étape d'une mission, suivi en six temps et prochain pas (spécification §3), en fonctions pures.
- * Le contenu principal est fourni par l'atelier (#289) ; tant qu'il n'existe pas, une mission en cours est « en préparation ».
+ * Le contenu principal vient de l'atelier (#289) ; tant qu'il n'a pas de version, une mission en cours est « en préparation ».
  */
 export type MissionStage =
   | "dismissed" | "closed" | "launch" | "preparing" | "scheduled" | "report" | "decide" | "next-round"
@@ -115,7 +115,7 @@ function stepFor(mission: StageMission, stage: MissionStage): NextStep {
     case "launch":
       return { ...base, title: `Examiner « ${mission.title} »`, detail: `${mission.outcome}.`, target: { kind: "link", href: `/missions/${mission.id}`, label: "Examiner cette mission" } };
     case "preparing":
-      return { ...base, title: "Préparer le premier contenu", detail: `« ${mission.title} » est lancée : son premier contenu se prépare dans l'atelier. Rien ne sera diffusé sans votre accord.`, target: { kind: "link", href: `/missions/${mission.id}`, label: "Voir la mission" } };
+      return { ...base, title: "Préparer le premier contenu", detail: `« ${mission.title} » est lancée : Paul prépare son premier contenu dans l'atelier. Rien ne sera diffusé sans votre accord.`, target: { kind: "link", href: atelier, label: "Ouvrir l'atelier" } };
     case "approve":
       return { ...base, title: "Relire et valider le contenu", detail: `${mission.title} · ${version} attend votre accord. Valider n'envoie rien.`, target: { kind: "link", href: atelier, label: "Ouvrir l'atelier" } };
     case "connect":

@@ -35,6 +35,8 @@ const GUARDED_ROUTES: Guarded[] = [
   { method: "POST", path: "/api/missions", denied: 401 },
   { method: "GET", path: "/api/missions/catalogue", denied: 401 },
   { method: "POST", path: "/api/missions/[id]/transition", denied: 401 },
+  { method: "POST", path: "/api/missions/[id]/content", denied: 401 },
+  { method: "POST", path: "/api/contents/[id]", denied: 401 },
   { method: "GET", path: "/api/credits", denied: 401 },
   { method: "POST", path: "/api/feedback", denied: 401 },
   { method: "PATCH", path: "/api/admin/feedback/[id]", denied: 403 },
@@ -1111,6 +1113,67 @@ test("missions and credits belong to the session company: validated, refused acr
     const broke = await transition(b, second.mission.id, { action: "launch", expectedVersion: 1 });
     expect(broke.status()).toBe(422);
     expect(await broke.json()).toMatchObject({ code: "M-15", error: "Crédits insuffisants : il en faut 3, il vous en reste 1." });
+  } finally {
+    await prisma.company.deleteMany({ where: { id: { in: [a.id, b.id] } } });
+    await prisma.$disconnect();
+  }
+});
+
+test("mission contents belong to the session company: versions, validation and refusal decided by the server", async ({ request }) => {
+  const prisma = openDatabase();
+  const marker = randomUUID().slice(0, 8);
+  const a = await prisma.company.create({ data: { ownerEmail: `security-contents-a-${marker}@example.invalid`, name: `Contenus A ${marker}`, trade: "Artisan", servingArea: "Paris" } });
+  const b = await prisma.company.create({ data: { ownerEmail: `security-contents-b-${marker}@example.invalid`, name: `Contenus B ${marker}`, trade: "Artisan", servingArea: "Paris" } });
+  const headers = (company: typeof a) => ({ Cookie: sessionCookie(company.ownerEmail, company.sessionVersion), Origin: baseURL });
+  const mission = await prisma.mission.create({ data: { companyId: a.id, template: "social_post", channel: "facebook", title: "Publier un chantier", outcome: "Des demandes de devis", originalOutcome: "Des demandes de devis", finding: "Aucune publication depuis trois mois", scope: { topic: "Nos chantiers" }, position: 1 } });
+  const content = await prisma.missionContent.create({ data: { companyId: a.id, missionId: mission.id, channel: "facebook", format: "social_post", currentNumber: 1, versions: { create: { number: 1, title: "Nos chantiers de novembre", body: "Une salle de bains refaite à neuf.", author: "paul", note: "Premier brouillon préparé par Paul" } } } });
+  const act = (company: typeof a, data: unknown, extra: Record<string, string> = {}) => request.post(`${baseURL}/api/contents/${content.id}`, { headers: { ...headers(company), ...extra }, data });
+  try {
+    expect((await request.post(`${baseURL}/api/contents/${content.id}`, { headers: { Origin: baseURL }, data: { action: "validate", number: 1 } })).status()).toBe(401);
+    expect((await act(a, { action: "validate", number: 1, reviewed: true }, { Origin: "https://attacker.invalid" })).status()).toBe(403);
+    expect((await act(b, { action: "validate", number: 1, reviewed: true })).status()).toBe(404);
+    expect((await request.post(`${baseURL}/api/missions/${mission.id}/content`, { headers: headers(b) })).status()).toBe(404);
+    expect((await act(a, { action: "publier", number: 1 })).status()).toBe(400);
+    expect((await act(a, { action: "validate" })).status()).toBe(400);
+    expect(await (await act(a, { action: "validate", number: 4, reviewed: true })).json()).toMatchObject({ code: "M-02" });
+
+    // Le premier brouillon existe déjà : il est rendu tel quel, sans appel à Paul.
+    const prepared = await request.post(`${baseURL}/api/missions/${mission.id}/content`, { headers: headers(a) });
+    expect(prepared.status()).toBe(201);
+    expect(await prepared.json()).toMatchObject({ contentId: content.id, currentNumber: 1 });
+
+    // Validation : mission en cours (M-47), case « J'ai relu » (M-77), puis trace « Aucun envoi effectué ».
+    expect(await (await act(a, { action: "validate", number: 1, reviewed: true })).json()).toMatchObject({ code: "M-47" });
+    await prisma.mission.update({ where: { id: mission.id }, data: { status: "active" } });
+    expect(await (await act(a, { action: "validate", number: 1, reviewed: false })).json()).toMatchObject({ code: "M-77" });
+    expect((await act(a, { action: "validate", number: 1, reviewed: true })).status()).toBe(200);
+    expect(await prisma.missionContent.findUnique({ where: { id: content.id } })).toMatchObject({ validatedNumber: 1 });
+    expect(await prisma.journalEntry.findFirst({ where: { companyId: a.id, code: "J-20" } })).toMatchObject({ params: { n: "1", titre: "Nos chantiers de novembre" } });
+
+    // Retouche : nouvelle version, validation retirée ; le corps ne choisit ni l'auteur ni le numéro.
+    const saved = await act(a, { action: "save", number: 1, title: "Nos chantiers", body: "Une salle de bains refaite.", author: "paul", currentNumber: 9 });
+    expect(await saved.json()).toMatchObject({ currentNumber: 2 });
+    expect(await prisma.missionContent.findUnique({ where: { id: content.id } })).toMatchObject({ currentNumber: 2, validatedNumber: null });
+    expect(await prisma.contentVersion.findFirst({ where: { contentId: content.id, number: 2 } })).toMatchObject({ author: "owner", note: "Retouche directe par vous" });
+    expect(await (await act(a, { action: "save", number: 2, title: "", body: "x" })).json()).toMatchObject({ code: "M-16", error: "Accroche doit être compris entre 1 et 100 caractères." });
+
+    // Refus : motif obligatoire, gardé sur la version.
+    expect(await (await act(a, { action: "reject", number: 2, reason: "" })).json()).toMatchObject({ code: "M-16" });
+    expect((await act(a, { action: "reject", number: 2, reason: "Trop commercial" })).status()).toBe(200);
+    expect(await prisma.contentVersion.findFirst({ where: { contentId: content.id, number: 2 } })).toMatchObject({ rejectionReason: "Trop commercial" });
+
+    // Proposition de Paul : rien à garder (M-02), puis gardée contre 1 crédit, une seule fois.
+    expect((await act(a, { action: "accept_variant", number: 2 })).status()).toBe(409);
+    await prisma.missionContent.update({ where: { id: content.id }, data: { suggestion: { basedOn: 2, variant: { kind: "shorter", instruction: null }, title: "Chantier livré", body: "Salle de bains refaite." } } });
+    const kept = await act(a, { action: "accept_variant", number: 2 });
+    expect(await kept.json()).toMatchObject({ currentNumber: 3, balance: 19 });
+    expect((await act(a, { action: "accept_variant", number: 3 })).status()).toBe(409);
+    expect(await prisma.creditLedger.count({ where: { companyId: a.id, kind: "paul_version" } })).toBe(1);
+    expect(await prisma.missionContent.count({ where: { companyId: b.id } })).toBe(0);
+
+    // Mission arrêtée : le contenu reste en lecture seule (M-44).
+    await prisma.mission.update({ where: { id: mission.id }, data: { status: "stopped" } });
+    expect(await (await act(a, { action: "save", number: 3, title: "Autre", body: "Autre texte" })).json()).toMatchObject({ code: "M-44" });
   } finally {
     await prisma.company.deleteMany({ where: { id: { in: [a.id, b.id] } } });
     await prisma.$disconnect();

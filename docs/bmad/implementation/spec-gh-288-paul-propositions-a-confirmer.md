@@ -105,7 +105,7 @@ Clé de contexte en texte (`mission:{id}`) plutôt qu'une table de conversations
 
 ## Implementation Notes
 
-- Migration nommée `20261106120000_paul_contextes` (et non `2026110512xxxx`) : elle doit passer après `20261106110000_bascule_v52`, déjà appliquée.
+- Migration nommée `20261106130000_paul_contextes` : elle passe après `20261106110000_bascule_v52` et `20261106120000_mission_contents` (#328).
 - Une mission créée en acceptant une carte de Paul porte `createdBy: "paul"` ; le plafond de dix missions ouvertes compte celles du dirigeant et celles acceptées depuis Paul.
 - `set_priority` n'est pas exposé sur la route de transition manuelle : il ne passe que par une carte acceptée. Il ne change pas la mission (ni version, ni statut) ; il écrit `Company.priorityMissionId` et J-08.
 - La clé `contenu:{id}` est lue par `parseContextKey` mais refusée par les routes (404) tant que l'atelier (#289) n'existe pas.

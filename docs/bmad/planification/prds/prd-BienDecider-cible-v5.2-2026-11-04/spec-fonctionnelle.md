@@ -620,6 +620,9 @@ Tout dialogue se ferme par Échap ou le bouton de fermeture ; une navigation le 
 | M-74 | Aucune ligne exploitable dans ce fichier. |
 | M-75 | Vous avez déjà 10 missions non arrêtées. Arrêtez-en une avant d'en créer une autre. |
 | M-76 | Ce modèle de mission n'est pas disponible pour le moment. |
+| M-77 | Cochez « J'ai relu le contenu et vérifié les informations qui engagent mon entreprise » avant de valider. |
+| M-78 | Choisissez comment retravailler : plus court, plus humain, un autre angle, ou votre consigne (5 à 300 caractères). |
+| M-79 | Paul n'a pas pu préparer ce contenu. Réessayez dans un instant. |
 
 ## 15. Journal
 

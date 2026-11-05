@@ -5,6 +5,7 @@ import { Icon } from "@/components/icon";
 import { Tag } from "@/components/mockup-ui";
 import { MissionTags, MissionTracker } from "@/components/mission-ui";
 import { MissionActions } from "@/components/mission-actions";
+import { PrepareDraftButton } from "@/components/prepare-draft-button";
 import { getShellProps } from "@/lib/shell-data";
 import { requireWorkspaceCompany } from "@/lib/workspace";
 import { loadMissionView } from "@/lib/missions/view";
@@ -35,10 +36,14 @@ export default async function MissionPage({ params }: { params: Promise<{ id: st
   ];
   const tracker = missionTracker(mission.stage);
   const done = (index: number) => tracker?.[index]?.state === "done";
+  const contentOpen = mission.status !== "stopped" && mission.status !== "dismissed";
+  const contentLink = mission.contentId
+    ? <Link href={`/atelier/${mission.contentId}`}>Ouvrir le contenu (V{mission.content?.number}) dans l&apos;atelier</Link>
+    : contentOpen ? <PrepareDraftButton missionId={mission.id} className="small" /> : null;
   const steps = [
     { title: "Confirmer le périmètre", text: "Vous fixez ce que la mission teste, puis vous la lancez.", done: mission.status !== "proposed" && mission.status !== "dismissed" },
-    { title: "Préparer une première proposition", text: "Paul prépare le premier contenu dans l'atelier.", done: done(1) },
-    { title: "Relire et valider la version", text: "Valider n'envoie rien.", done: done(2) },
+    { title: "Préparer une première proposition", text: "Paul prépare le premier contenu dans l'atelier.", done: mission.contentId !== null, extra: contentLink },
+    { title: "Relire et valider la version", text: "Valider n'envoie rien.", done: mission.content?.validated === true || done(2) },
     { title: mission.channel ? `Diffuser sur ${mission.channelLabel}` : "Diffuser vous-même et le déclarer", text: "Rien ne part sans votre confirmation.", done: done(3) },
     { title: "Faire le bilan, puis décider la suite", text: "Poursuivre, adapter avec Paul ou arrêter.", done: done(5) },
   ];
@@ -91,7 +96,7 @@ export default async function MissionPage({ params }: { params: Promise<{ id: st
               {steps.map((step, index) => (
                 <li key={step.title} className={step.done ? "done" : undefined}>
                   <span className="task-num" aria-hidden="true">{step.done ? <Icon name="check" /> : index + 1}</span>
-                  <div><strong>{step.title}</strong><p className="small muted">{step.text}</p></div>
+                  <div><strong>{step.title}</strong><p className="small muted">{step.text}</p>{"extra" in step && step.extra && <div className="small">{step.extra}</div>}</div>
                   <span className="sr-only">{step.done ? "fait" : "à faire"}</span>
                 </li>
               ))}

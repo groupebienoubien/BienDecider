@@ -43,6 +43,7 @@ import { availableTemplates, enabledChannels, MISSION_TEMPLATES } from "../src/l
 import { missionStage, missionTracker, nextStep, orderMissions, priorityMissionId, type ContentState, type StageMission } from "../src/lib/missions/stage";
 import { scopeSummary } from "../src/lib/missions/scope";
 import { renderJournal } from "../src/lib/journal";
+import { BODY_MAX, checkNewVersion, checkRejection, checkValidation, contentFormat, contentStatus, exposureFor, parseVariant, reviewChecklist, titleLabel, validateDraft, validateRejection, variantLabel, type ContentSnapshot } from "../src/lib/contents/rules";
 import { firstNameOf } from "../src/lib/workspace";
 import { workspacePageLabel } from "../src/components/workspace-nav";
 import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH, passwordPolicyError } from "../src/lib/password-policy";
@@ -1636,7 +1637,7 @@ test("next step: what waits for the owner first, then a launch, then any live mi
   const approve = stageMission({ id: "approve", position: 3, content: content() });
   expect(nextStep([launch, preparing, approve])).toMatchObject({ stage: "approve", missionId: "approve", title: "Relire et valider le contenu", detail: "Publier un chantier · V2 attend votre accord. Valider n'envoie rien.", target: { kind: "link", href: "/atelier?mission=approve", label: "Ouvrir l'atelier" } });
   expect(nextStep([preparing, launch])).toMatchObject({ stage: "launch", missionId: "launch", title: "Examiner « Publier un chantier »", detail: "Deux demandes de devis.", target: { href: "/missions/launch", label: "Examiner cette mission" } });
-  expect(nextStep([preparing])).toMatchObject({ stage: "preparing", target: { label: "Voir la mission" } });
+  expect(nextStep([preparing])).toMatchObject({ stage: "preparing", target: { href: "/atelier?mission=preparing", label: "Ouvrir l'atelier" } });
   expect(nextStep([stageMission({ content: content({ validated: true }) })])).toMatchObject({ title: "Connecter Page Facebook", target: { href: "/connexions" } });
   expect(nextStep([stageMission({ channel: "gmail", template: "custom", content: content({ validated: true, channelConnected: true }) })]).title).toBe("Confirmer l'envoi");
   expect(nextStep([stageMission({ content: content({ validated: true, channelConnected: true }) })]).title).toBe("Confirmer la publication");
@@ -1663,4 +1664,82 @@ test("scope summary, journal texts, first name and breadcrumb of the V5.2 worksp
   expect(workspacePageLabel("/missions/nouvelle")).toBe("Nouvelle mission");
   expect(workspacePageLabel("/connexions")).toBe("Entreprise");
   expect(workspacePageLabel("/studio/x")).toBe("Atelier");
+});
+
+const contentSnapshot = (overrides: Partial<ContentSnapshot> = {}): ContentSnapshot => ({
+  missionStatus: "active", channel: "facebook", format: "social_post", currentNumber: 2, validatedNumber: null, scheduled: false, currentDiffused: false, recipients: null, hasVisual: false, ...overrides,
+});
+
+test("atelier: format by channel, version text bounds, refusal motive and Paul variants", () => {
+  expect(contentFormat("facebook")).toBe("social_post");
+  expect(contentFormat("gmail")).toBe("email");
+  expect(contentFormat("site")).toBe("site_page");
+  expect(contentFormat("google_business_profile")).toBe("google_post");
+  expect(contentFormat(null)).toBe("text");
+  expect(titleLabel("email")).toBe("Objet");
+  expect(titleLabel("social_post")).toBe("Accroche");
+  expect(validateDraft({ title: "  Nos chantiers ", body: "Ligne 1\r\nLigne 2 " }, "social_post")).toEqual({ ok: true, value: { title: "Nos chantiers", body: "Ligne 1\nLigne 2" } });
+  expect(validateDraft({ title: "x".repeat(101), body: "ok" }, "email")).toMatchObject({ ok: false, code: "M-16", params: { element: "Objet", min: 1, max: 100 } });
+  expect(validateDraft({ title: "ok", body: "x".repeat(BODY_MAX + 1) }, "social_post")).toMatchObject({ ok: false, code: "M-16", params: { element: "Le texte", max: 3000 } });
+  expect(renderMissionMessage("M-16", { element: "Le motif", min: 3, max: 300, unite: "caractères" })).toBe("Le motif doit être compris entre 3 et 300 caractères.");
+  expect(validateRejection("  Trop commercial ")).toEqual({ ok: true, value: "Trop commercial" });
+  expect(validateRejection("no")).toMatchObject({ ok: false, code: "M-16" });
+  expect(parseVariant({ variant: "shorter", instruction: "ignorée" })).toEqual({ ok: true, value: { kind: "shorter", instruction: null } });
+  expect(parseVariant({ variant: "custom", instruction: "Parlez des délais" })).toEqual({ ok: true, value: { kind: "custom", instruction: "Parlez des délais" } });
+  expect(parseVariant({ variant: "custom", instruction: "abc" })).toMatchObject({ ok: false, code: "M-78" });
+  expect(parseVariant({ variant: "custom", instruction: "<script>alert(1)</script>" })).toMatchObject({ ok: false, code: "M-78" });
+  expect(parseVariant({ variant: "longer" })).toMatchObject({ ok: false, code: "M-78" });
+  expect(variantLabel({ kind: "human", instruction: null })).toBe("plus humain");
+  expect(variantLabel({ kind: "custom", instruction: "Parlez des délais" })).toBe("« Parlez des délais »");
+});
+
+test("atelier: new version, validation and refusal follow the specification order and messages", () => {
+  // Créer une version (§4.3).
+  expect(checkNewVersion(contentSnapshot())).toBeNull();
+  expect(checkNewVersion(contentSnapshot({ missionStatus: "proposed" }))).toBeNull();
+  expect(checkNewVersion(contentSnapshot({ missionStatus: "stopped" }))).toEqual({ code: "M-44" });
+  expect(checkNewVersion(contentSnapshot({ missionStatus: "dismissed" }))).toEqual({ code: "M-44" });
+  expect(checkNewVersion(contentSnapshot({ scheduled: true }))).toEqual({ code: "M-45" });
+  expect(checkNewVersion(contentSnapshot({ currentDiffused: true }))).toEqual({ code: "M-46", params: { n: 2 } });
+  expect(checkNewVersion(contentSnapshot({ currentDiffused: true }), { fromDiffused: true })).toBeNull();
+
+  // Valider une version (§4.4), dans l'ordre.
+  const version = { number: 2, body: "Un texte court." };
+  expect(checkValidation(contentSnapshot(), version, { number: 2, reviewed: true })).toBeNull();
+  expect(checkValidation(contentSnapshot({ missionStatus: "paused" }), version, { number: 1, reviewed: true })).toEqual({ code: "M-02" });
+  expect(checkValidation(contentSnapshot({ missionStatus: "paused" }), version, { number: 2, reviewed: true })).toEqual({ code: "M-47" });
+  expect(checkValidation(contentSnapshot({ channel: "gmail", format: "email", recipients: 0 }), version, { number: 2, reviewed: true })).toEqual({ code: "M-49" });
+  expect(checkValidation(contentSnapshot({ channel: "gmail", format: "email", recipients: 2 }), version, { number: 2, reviewed: true })).toBeNull();
+  expect(checkValidation(contentSnapshot({ channel: "instagram" }), version, { number: 2, reviewed: true })).toEqual({ code: "M-65", params: { canal: "Instagram" } });
+  expect(checkValidation(contentSnapshot({ channel: "google_business_profile", format: "google_post" }), { number: 2, body: "x".repeat(1501) }, { number: 2, reviewed: true })).toMatchObject({ code: "M-66", params: { n: 1500 } });
+  expect(checkValidation(contentSnapshot({ scheduled: true }), version, { number: 2, reviewed: true })).toEqual({ code: "M-52" });
+  expect(checkValidation(contentSnapshot({ currentDiffused: true }), version, { number: 2, reviewed: true })).toEqual({ code: "M-53" });
+  expect(checkValidation(contentSnapshot(), version, { number: 2, reviewed: false })).toEqual({ code: "M-77" });
+
+  // Refuser une version : la courante, d'une mission ouverte, ni programmée ni diffusée.
+  expect(checkRejection(contentSnapshot(), 2)).toBeNull();
+  expect(checkRejection(contentSnapshot(), 1)).toEqual({ code: "M-02" });
+  expect(checkRejection(contentSnapshot({ missionStatus: "stopped" }), 2)).toEqual({ code: "M-44" });
+
+  expect(contentStatus(contentSnapshot())).toBe("draft");
+  expect(contentStatus(contentSnapshot({ validatedNumber: 2 }))).toBe("validated");
+  expect(contentStatus(contentSnapshot({ validatedNumber: 1 }))).toBe("draft");
+  expect(renderJournal("J-20", { n: "2", titre: "Nos chantiers" })).toBe("V2 validée : Nos chantiers. Aucun envoi effectué.");
+  expect(renderJournal("J-27", { n: "2", motif: "Trop commercial" })).toBe("V2 refusée : Trop commercial.");
+  expect(renderJournal("J-19", { n: "3", origine: "retouchée par vous", mission: "Publier" })).toBe("V3 retouchée par vous · Publier.");
+});
+
+test("atelier review checklist (#179): what commits the company is pointed out, and who will see it", () => {
+  const items = reviewChecklist("Salle de bains à partir de 4 990 € TTC, -10 % jusqu'au 30/11. Devis gratuit et garanti sous 48 heures : 06 12 34 56 78, contact@dupont.fr, https://dupont.fr/devis. Certifié RGE.");
+  const byKind = Object.fromEntries(items.map((item) => [item.kind, item.excerpts]));
+  expect(byKind.price).toEqual(["4 990 €", "10 %"]);
+  expect(byKind.phone).toEqual(["06 12 34 56 78"]);
+  expect(byKind.email).toEqual(["contact@dupont.fr"]);
+  expect(byKind.link).toEqual(["https://dupont.fr/devis"]);
+  expect(byKind.date).toEqual(["30/11", "sous 48 heures"]);
+  expect(byKind.promise).toEqual(["gratuit", "garanti", "Certifié"]);
+  expect(reviewChecklist("Une salle de bains lumineuse, refaite avec soin.")).toEqual([]);
+  expect(exposureFor("facebook")).toBe("Les personnes qui suivent votre Page Facebook, et celles à qui elles la partagent.");
+  expect(exposureFor("gmail")).toBe("Chaque destinataire, depuis votre adresse et sous votre nom.");
+  expect(exposureFor(null)).toBe("Les personnes à qui vous le diffuserez vous-même.");
 });
