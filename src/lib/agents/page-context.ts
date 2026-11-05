@@ -26,6 +26,10 @@ async function loadElement(companyId: string, type: PaulElementType, id: string)
     const finding = await prisma.auditFinding.findFirst({ where: { id, companyId } });
     return finding && { id: finding.id, type: "constat", categorie: finding.category, titre: finding.title, resume: clip(finding.content), ceQuiEstBien: clip(finding.whatWorks), aAmeliorer: clip(finding.toImprove) };
   }
+  if (type === "mission") {
+    const mission = await prisma.mission.findFirst({ where: { id, companyId } });
+    return mission && { id: mission.id, type: "mission", modele: mission.template, canal: mission.channel ?? "hors canal", titre: mission.title, statut: mission.status, resultatRecherche: mission.outcome, constat: clip(mission.finding), perimetre: mission.scope, regleDArretJours: mission.stopRuleDays };
+  }
   const lead = await prisma.lead.findFirst({ where: { id, companyId } });
   return lead && { id: lead.id, type: "prospect", organisation: lead.name, raison: clip(lead.reason), segment: lead.segment, etape: lead.stage, contactPublic: lead.publicContact, source: lead.source };
 }

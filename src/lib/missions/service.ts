@@ -3,8 +3,10 @@ import { prisma } from "@/lib/prisma";
 import { debitCredits } from "@/lib/credits";
 import { MissionError } from "@/lib/missions/messages";
 import { checkTransition, validateNewMission, type MissionAction, type MissionSnapshot } from "@/lib/missions/rules";
-import { isMissionChannel } from "@/lib/missions/channels";
+import { isMissionChannel, channelLabel } from "@/lib/missions/channels";
 import type { TemplateKey } from "@/lib/missions/templates";
+import { scopeSummary } from "@/lib/missions/scope";
+import { writeJournal, type JournalCode } from "@/lib/journal";
 
 export class MissionNotFoundError extends Error {
   constructor() {
@@ -68,6 +70,7 @@ export async function createMission(companyId: string, body: unknown): Promise<M
     if (value.template === "custom") {
       await tx.uncoveredRequest.create({ data: { companyId, request: `${value.title} : ${value.outcome}`.slice(0, 300), source: "mission" } });
     }
+    await writeJournal(tx, { companyId, missionId: mission.id, code: "J-01", params: { titre: mission.title } });
     return mission;
   });
 }
@@ -92,6 +95,33 @@ export async function applyMissionTransition(companyId: string, missionId: strin
     const balance = result.debit > 0
       ? await debitCredits(tx, { companyId, amount: result.debit, kind: "mission_launch", label: `Lancement de la mission « ${mission.title} »`, missionId: mission.id })
       : null;
-    return { mission: await tx.mission.findUniqueOrThrow({ where: { id: mission.id } }), balance };
+    const updated = await tx.mission.findUniqueOrThrow({ where: { id: mission.id } });
+    const entry = journalFor(request, updated);
+    if (entry) await writeJournal(tx, { companyId, missionId: mission.id, ...entry });
+    return { mission: updated, balance };
   });
+}
+
+/** Trace de chaque transition (§15) ; la confirmation des contacts n'a pas de code propre. */
+function journalFor(request: MissionAction, mission: Mission): { code: JournalCode; params: Record<string, string> } | null {
+  const params = { mission: mission.title };
+  switch (request.action) {
+    case "launch":
+    case "resume":
+      return { code: "J-17", params };
+    case "pause":
+      return { code: "J-18", params };
+    case "dismiss":
+      return { code: "J-09", params };
+    case "restore":
+      return { code: "J-10", params };
+    case "set_outcome":
+      return { code: "J-11", params: { ...params, résultat: mission.outcome } };
+    case "set_scope":
+      return { code: "J-12", params: { ...params, résumé: scopeSummary(mission.template as TemplateKey, mission.scope) } };
+    case "set_channel":
+      return { code: "J-29", params: { ...params, canal: isMissionChannel(mission.channel) ? channelLabel(mission.channel) : "hors canal" } };
+    case "confirm_contacts":
+      return null;
+  }
 }

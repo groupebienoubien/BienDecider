@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { redirectToWorkspace } from "@/lib/workspace";
 import { prisma } from "@/lib/prisma";
 import { getSessionEmail } from "@/lib/session";
 import { AppShell } from "@/components/app-shell";
@@ -14,6 +15,7 @@ export default async function EquipePage() {
 
   const company = await prisma.company.findUnique({ where: { ownerEmail } });
   if (!company || !company.name) redirect("/onboarding");
+  redirectToWorkspace(company, "/strategie");
   const initialAgentRuns: AgentRunView[] = (await prisma.agentRun.findMany({
     where: { companyId: company.id },
     orderBy: { createdAt: "desc" },

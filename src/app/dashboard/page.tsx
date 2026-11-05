@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { redirectToWorkspace } from "@/lib/workspace";
 import { prisma } from "@/lib/prisma";
 import { AGENT_RUN_VIEW_SELECT, publicRun } from "@/lib/agent-run-types";
 import { getSessionEmail } from "@/lib/session";
@@ -28,6 +29,7 @@ export default async function DashboardPage({ searchParams }: {
 
   const company = await prisma.company.findUnique({ where: { ownerEmail } });
   if (!company || !company.name) redirect("/onboarding");
+  redirectToWorkspace(company, "/strategie");
 
   const weekStart = startOfRollingWeek();
   const [planItems, recentAgentRuns, proposals, leads, leadStages, diagnosticCount, riskSettings, facebookConnection, week, lastPaulMessage] = await Promise.all([

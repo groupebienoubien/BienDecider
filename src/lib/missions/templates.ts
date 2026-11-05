@@ -19,7 +19,7 @@ export type MissionTemplate = {
   defaultOutcome: string;
   /** Règle d'arrêt en jours ; null pour « Sur mesure », fixée au cadrage (7 à 90). */
   stopRuleDays: number | null;
-  /** Faux tant qu'une condition d'ouverture n'est pas levée (la réactivation attend l'encadrement du fichier, #69). */
+  /** Faux tant que la source de son périmètre ou une condition d'ouverture manque : agences (#316), réalisations (#317), fichier de prospection (#69). */
   open: boolean;
   validateScope: (scope: unknown) => ScopeResult;
 };
@@ -54,7 +54,7 @@ const SOCIAL: readonly MissionChannel[] = ["facebook", "instagram", "linkedin"];
 export const MISSION_TEMPLATES: Record<TemplateKey, MissionTemplate> = {
   agencies: {
     key: "agencies", label: "Partenariats", channels: ["gmail"], contentFormat: "E-mail individuel, sans relance automatique",
-    defaultOutcome: "Une réponse d'une agence de votre zone", stopRuleDays: 30, open: true, validateScope: idsScope("agencyIds", 1, 2, "M-30"),
+    defaultOutcome: "Une réponse d'une agence de votre zone", stopRuleDays: 30, open: false, validateScope: idsScope("agencyIds", 1, 2, "M-30"),
   },
   leads: {
     key: "leads", label: "Réactivation", channels: ["gmail"], contentFormat: "E-mail individuel qui propose de ne plus être recontacté",
@@ -62,7 +62,7 @@ export const MISSION_TEMPLATES: Record<TemplateKey, MissionTemplate> = {
   },
   proof: {
     key: "proof", label: "Réalisation", channels: SOCIAL, contentFormat: "Publication avec visuel",
-    defaultOutcome: "Des demandes qualifiées à partir d'une réalisation", stopRuleDays: 7, open: true,
+    defaultOutcome: "Des demandes qualifiées à partir d'une réalisation", stopRuleDays: 7, open: false,
     validateScope: (scope) => (typeof asObject(scope).proofId === "string" && boundedText(asObject(scope).proofId, 1, 80) ? { ok: true, scope: { proofId: asObject(scope).proofId } } : { ok: false, code: "M-32" }),
   },
   social_post: {

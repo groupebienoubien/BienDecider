@@ -13,15 +13,35 @@ type ShellCompany = {
   ownerEmail: string;
   emailVerifiedAt: Date | null;
   monthlySpendLimitUsd: number;
+  workspaceV52?: boolean;
+  creditBalance?: number;
 };
 
 export async function getShellProps(company: ShellCompany) {
   const now = new Date();
+  if (company.workspaceV52) {
+    const activeMissions = await prisma.mission.count({ where: { companyId: company.id, status: "active" } });
+    return {
+      ...baseShellProps(company),
+      decisionCount: 0,
+      budget: undefined,
+      workspace: { activeMissions, credits: company.creditBalance ?? 0, cap: company.objective?.trim() || null, today: now },
+    };
+  }
   const { monthStart } = parisQuotaWindows(now);
   const [teamState, monthUsage] = await Promise.all([
     getTeamState(company.id, now),
     prisma.usageEvent.aggregate({ where: { companyId: company.id, createdAt: { gte: monthStart } }, _sum: { costUsd: true } }),
   ]);
+  return {
+    ...baseShellProps(company),
+    // Décision du dirigeant (2026-10-22) : seules les productions qui l'attendent comptent, comme sur la page Décisions.
+    decisionCount: teamState.pendingDecisions,
+    budget: { spentUsd: monthUsage._sum.costUsd ?? 0, limitUsd: company.monthlySpendLimitUsd },
+  };
+}
+
+function baseShellProps(company: ShellCompany) {
   return {
     companyName: company.name,
     companyTrade: company.trade,
@@ -32,9 +52,6 @@ export async function getShellProps(company: ShellCompany) {
     isAdmin: isAdminEmail(company.ownerEmail),
     // Story 6.4 : bandeau tant que l'adresse n'est pas confirmée.
     emailVerified: company.emailVerifiedAt !== null,
-    // Décision du dirigeant (2026-10-22) : seules les productions qui l'attendent comptent, comme sur la page Décisions.
-    decisionCount: teamState.pendingDecisions,
-    budget: { spentUsd: monthUsage._sum.costUsd ?? 0, limitUsd: company.monthlySpendLimitUsd },
   };
 }
 

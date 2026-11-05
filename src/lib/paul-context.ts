@@ -1,4 +1,4 @@
-export const PAUL_ELEMENT_TYPES = ["proposal", "finding", "lead"] as const;
+export const PAUL_ELEMENT_TYPES = ["proposal", "finding", "lead", "mission"] as const;
 export type PaulElementType = (typeof PAUL_ELEMENT_TYPES)[number];
 export type PaulElement = { type: PaulElementType; id: string; title: string };
 
@@ -8,9 +8,15 @@ export const PAUL_ELEMENT_LABELS: Record<PaulElementType, string> = {
   proposal: "Production",
   finding: "Constat",
   lead: "Prospect",
+  mission: "Mission",
 };
 
 const PAGE_LABELS: Record<string, string> = {
+  "/strategie": "Stratégie",
+  "/missions": "Missions",
+  "/missions/nouvelle": "Nouvelle mission",
+  "/atelier": "Atelier",
+  "/resultats": "Résultats",
   "/diagnostic": "Diagnostic",
   "/equipe": "Équipe",
   "/prospection": "Prospection",
@@ -26,7 +32,7 @@ export function describePage(path: string, view?: string | null): string {
     if (view === "historique") return "Historique des productions";
     return view === "plan" ? "Plan d'action" : "Mon objectif (accueil)";
   }
-  return PAGE_LABELS[path] ?? (path.startsWith("/studio/") ? "Studio d'une production" : "une page de BienDecider");
+  return PAGE_LABELS[path] ?? (path.startsWith("/studio/") ? "Studio d'une production" : path.startsWith("/missions/") ? "Détail d'une mission" : "une page de BienDecider");
 }
 
 /** Ouvre la discussion avec Paul, éventuellement centrée sur l'élément consulté. */

@@ -7,8 +7,12 @@ import { BrandLogo } from "@/components/brand-logo";
 import { WorkspaceBreadcrumb } from "@/components/workspace-breadcrumb";
 import { EmailVerificationBanner } from "@/components/email-verification-banner";
 import { FeedbackDialog } from "@/components/feedback-dialog";
+import { WorkspaceNav, WorkspaceBreadcrumb as WorkspacePageBreadcrumb } from "@/components/workspace-nav";
 
 const MONEY = new Intl.NumberFormat("fr-FR", { maximumFractionDigits: 2 });
+const TODAY = new Intl.DateTimeFormat("fr-FR", { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "Europe/Paris" });
+
+export type WorkspaceShell = { activeMissions: number; credits: number; cap: string | null; today: Date };
 
 /** Coque commune des pages connectées : parcours en quatre temps (barre latérale, ou barre du bas sur téléphone), bandeau, contenu, pied de page et Paul. */
 export function AppShell({
@@ -22,6 +26,7 @@ export function AppShell({
   paul = Boolean(companyName),
   isAdmin = false,
   emailVerified = true,
+  workspace,
   children,
 }: {
   companyName?: string;
@@ -34,6 +39,7 @@ export function AppShell({
   paul?: boolean;
   isAdmin?: boolean;
   emailVerified?: boolean;
+  workspace?: WorkspaceShell;
   children: React.ReactNode;
 }) {
   const companyInitials = companyName
@@ -43,6 +49,47 @@ export function AppShell({
     .map((part) => part[0].toLocaleUpperCase())
     .join("");
   const companyDescriptor = [companyTrade, companyArea].filter(Boolean).join(" · ");
+
+  if (workspace && companyName) {
+    return (
+      <div className="mq workspace-v52">
+        <a href="#contenu" className="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:z-50 focus:rounded focus:bg-white focus:px-3 focus:py-2 focus:text-sm focus:font-medium focus:text-green-900">Aller au contenu</a>
+        <WorkspaceNav
+          companyName={companyName}
+          companyDescriptor={companyDescriptor}
+          companyInitials={companyInitials ?? ""}
+          activeMissions={workspace.activeMissions}
+          credits={workspace.credits}
+          cap={workspace.cap}
+          ownerInitial={(ownerEmail?.[0] ?? "").toLocaleUpperCase()}
+          isAdmin={isAdmin}
+        />
+        <div className="workspace">
+          <header className="topbar">
+            <WorkspacePageBreadcrumb />
+            <div>
+              <span className="topbar-date">{TODAY.format(workspace.today)}</span>
+              {paul && <Suspense fallback={null}><PaulPanel launchLabel="Discuter avec Paul" /></Suspense>}
+            </div>
+          </header>
+          <main id="contenu" tabIndex={-1}>
+            {!emailVerified && <EmailVerificationBanner email={ownerEmail} />}
+            {children}
+          </main>
+          <footer className="workspace-footer">
+            <span>{companyName}</span>
+            <span className="footer-links">
+              <Link href="/cgu">CGU</Link>
+              <Link href="/confidentialite">Confidentialité</Link>
+              <Link href="/mentions-legales">Mentions légales</Link>
+              <a href="mailto:contact@biendecider.com">Contact</a>
+              <form action="/api/auth/logout" method="post"><button type="submit">Déconnexion</button></form>
+            </span>
+          </footer>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="mq">

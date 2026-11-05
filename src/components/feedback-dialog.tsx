@@ -7,7 +7,7 @@ import { Modal } from "@/components/modal";
 import { FEEDBACK_KINDS, FEEDBACK_KIND_LABELS, FEEDBACK_TEXT_MAX, type FeedbackKind } from "@/lib/feedback";
 
 /** « Signaler un problème » : action secondaire du pied de page de toutes les pages connectées (story 7.4). */
-export function FeedbackDialog() {
+export function FeedbackDialog({ label = "Signaler un problème" }: { label?: string }) {
   const pathname = usePathname();
   // La fenêtre est rendue dans la coque (.mq) pour garder ses styles, hors du pied de page dont les boutons sont des liens.
   const [portalTarget, setPortalTarget] = useState<Element | null>(null);
@@ -49,13 +49,13 @@ export function FeedbackDialog() {
 
   return (
     <>
-      <button ref={anchor} type="button" onClick={show}>Signaler un problème</button>
+      <button ref={anchor} type="button" onClick={show}>{label}</button>
       {portalTarget && createPortal(
         <Modal
           open={open}
           onClose={() => setOpen(false)}
           kicker="Votre avis"
-          title="Signaler un problème"
+          title={label}
           cancelLabel={sent ? "Fermer" : "Annuler"}
           actions={!sent && <button type="submit" form="feedback-form" className="btn primary" disabled={sending || text.trim().length === 0}>{sending ? "Envoi…" : "Envoyer"}</button>}
         >

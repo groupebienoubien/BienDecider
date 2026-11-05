@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { redirectToWorkspace } from "@/lib/workspace";
 import { prisma } from "@/lib/prisma";
 import { getSessionEmail } from "@/lib/session";
 import { AppShell } from "@/components/app-shell";
@@ -29,6 +30,7 @@ export default async function RapportPage() {
   if (!ownerEmail) redirect("/login");
   const company = await prisma.company.findUnique({ where: { ownerEmail } });
   if (!company || !company.name) redirect("/onboarding");
+  redirectToWorkspace(company, "/resultats");
 
   const since = storySince();
   const [executed, leads] = await Promise.all([

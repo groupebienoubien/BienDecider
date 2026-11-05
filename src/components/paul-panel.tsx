@@ -229,7 +229,7 @@ async function readReplyStream(body: ReadableStream<Uint8Array>, onLive: (text: 
   return result;
 }
 
-export function PaulPanel() {
+export function PaulPanel({ launchLabel }: { launchLabel?: string } = {}) {
   const router = useRouter();
   const pathname = usePathname();
   const view = useSearchParams().get("view");
@@ -649,7 +649,7 @@ export function PaulPanel() {
         className="paul-launch"
       >
         <PersonaAvatar agentKey="co_ceo" size={26} />
-        <span>Échanger avec {persona.name}</span>
+        <span>{launchLabel ?? `Échanger avec ${persona.name}`}</span>
         <Icon name="message-circle" />
       </button>
     </>
