@@ -84,6 +84,8 @@ const PUBLIC_ROUTES: Record<string, string> = {
   "/api/auth/login": "point d'entrée de la connexion",
   "/api/auth/logout": "revoque les sessions et efface le cookie de l'appelant (POST même origine)",
   "/api/auth/signup": "inscription publique avec création explicite de compte",
+  "/api/auth/forgot-password": "demande de lien de réinitialisation : réponse identique que le compte existe ou non (POST même origine)",
+  "/api/auth/reset-password": "le jeton à usage unique du lien reçu par e-mail fait foi, sans session (POST même origine)",
   "/api/auth/verify-email": "le jeton à usage unique du lien reçu par e-mail fait foi, sans session (POST même origine)",
   "/api/cron/weekly-review": "protégée par CRON_SECRET, pas par la session",
   "/api/health": "sonde publique sans donnée métier",
@@ -335,6 +337,8 @@ test("malformed or oversized input gets a clear 4xx, never a server error", asyn
       ["POST", "/api/auth/login", false],
       ["POST", "/api/auth/signup", false],
       ["POST", "/api/auth/verify-email", false],
+      ["POST", "/api/auth/forgot-password", false],
+      ["POST", "/api/auth/reset-password", false],
       ["POST", "/api/action-plan"],
       ["PATCH", `/api/action-plan/${planItem.id}`],
       ["POST", "/api/companies"],
@@ -671,6 +675,107 @@ test("an unverified address blocks Paul and every send until the emailed link is
     await page.context().clearCookies();
     await sink.close();
     await prisma.company.deleteMany({ where: { ownerEmail: email } });
+    await prisma.$disconnect();
+  }
+});
+
+test("password recovery: a one-hour single-use link replaces the password, closes sessions and never reveals which accounts exist", async ({ request, page }) => {
+  test.setTimeout(120000);
+  const smtp = process.env.SERVICE_SMTP_URL ? new URL(process.env.SERVICE_SMTP_URL) : null;
+  test.skip(!smtp || smtp.protocol !== "smtp:" || smtp.hostname !== "127.0.0.1", "Requires SERVICE_SMTP_URL=smtp://127.0.0.1:<port> on the server, as configured in CI.");
+  const prisma = openDatabase();
+  const sink = await startSmtpSink(Number(smtp!.port));
+  const email = `security-reset-${randomUUID()}@example.invalid`;
+  const shortEmail = `security-short-${randomUUID()}@example.invalid`;
+  const oldPassword = "ancien-mot-de-passe";
+  const sha = (value: string) => createHash("sha256").update(value).digest("hex");
+  const tokenIn = (mail: { text: string }) => /\/reinitialiser\?token=([A-Za-z0-9_-]{43})/.exec(mail.text)?.[1] ?? "";
+  const ip = () => ({ "x-real-ip": `test-${randomUUID()}` });
+  const forgot = (who: string, headers: Record<string, string> = ip()) => request.post(`${baseURL}/api/auth/forgot-password`, { headers: { Origin: baseURL, ...headers }, data: { email: who } });
+  const reset = (token: string, password: string) => request.post(`${baseURL}/api/auth/reset-password`, { headers: { Origin: baseURL }, data: { token, password } });
+  const login = (who: string, password: string) => request.post(`${baseURL}/api/auth/login`, { headers: ip(), data: { email: who, password } });
+  const company = await prisma.company.create({ data: {
+    ownerEmail: email, passwordHash: await hashPassword(oldPassword), name: "Reset Test", trade: "Artisan", servingArea: "Paris",
+    emailVerifiedAt: null, failedLoginAttempts: 5, lockedUntil: new Date(Date.now() + 600_000),
+  } });
+  const legacy = await prisma.company.create({ data: { ownerEmail: shortEmail, passwordHash: await hashPassword("abc123"), name: "Legacy", trade: "Artisan", servingArea: "Paris" } });
+  const oldSession = sessionCookie(email, company.sessionVersion);
+  try {
+    // Un mot de passe existant de 6 caractères continue de fonctionner à la connexion ; la règle de 8 caractères ne vaut que pour les nouveaux.
+    expect((await login(shortEmail, "abc123")).status()).toBe(200);
+    expect((await request.post(`${baseURL}/api/auth/signup`, { headers: ip(), data: { email: `security-pw-${randomUUID()}@example.invalid`, password: "1234567" } })).status()).toBe(400);
+    const change = await request.post(`${baseURL}/api/auth/password`, { headers: { Cookie: sessionCookie(shortEmail, legacy.sessionVersion), Origin: baseURL }, data: { currentPassword: "abc123", newPassword: "1234567" } });
+    expect(change.status()).toBe(400);
+    expect((await change.json()).error).toBe("Le mot de passe doit contenir au moins 8 caractères.");
+
+    // Même réponse pour un compte connu et inconnu ; rien n'est envoyé à une adresse inconnue.
+    const known = await forgot(email);
+    const unknown = await forgot(`inconnu-${randomUUID()}@example.invalid`);
+    expect(known.status()).toBe(200);
+    expect(unknown.status()).toBe(200);
+    expect(await unknown.json()).toEqual(await known.json());
+    await expect.poll(() => sink.messages.length, { timeout: 15000 }).toBe(1);
+    expect(sink.messages[0]).toMatchObject({ to: [email], subject: "Réinitialisez votre mot de passe BienDecider" });
+    const first = tokenIn(sink.messages[0]);
+    expect(first).toHaveLength(43);
+    expect(await prisma.emailToken.findMany({ where: { companyId: company.id } })).toMatchObject([{ kind: "reset_password", tokenHash: sha(first), usedAt: null }]);
+    expect(await prisma.emailToken.count({ where: { tokenHash: first } })).toBe(0);
+    expect((await forgot(email)).status()).toBe(200);
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    expect(sink.messages).toHaveLength(1);
+
+    // Mot de passe trop court : refusé sans consommer le lien. Un jeton d'un autre type ou expiré est refusé.
+    const tooShort = await reset(first, "1234567");
+    expect(tooShort.status()).toBe(400);
+    expect((await tooShort.json()).error).toBe("Le mot de passe doit contenir au moins 8 caractères.");
+    expect((await prisma.emailToken.findUniqueOrThrow({ where: { tokenHash: sha(first) } })).usedAt).toBeNull();
+    const verifyKind = randomBytes(32).toString("base64url");
+    const expired = randomBytes(32).toString("base64url");
+    await prisma.emailToken.createMany({ data: [
+      { companyId: company.id, kind: "verify_email", tokenHash: sha(verifyKind), expiresAt: new Date(Date.now() + 3_600_000) },
+      { companyId: company.id, kind: "reset_password", tokenHash: sha(expired), expiresAt: new Date(Date.now() - 1000) },
+    ] });
+    for (const token of [verifyKind, expired, "trop-court"]) expect((await reset(token, "un-nouveau-mot-de-passe")).status(), token).toBe(400);
+    expect((await request.post(`${baseURL}/api/auth/reset-password`, { headers: { Origin: "https://attacker.invalid" }, data: { token: first, password: "un-nouveau-mot-de-passe" } })).status()).toBe(403);
+
+    // Le lien remplace le mot de passe, ferme les sessions, lève le verrouillage et confirme l'adresse, une seule fois.
+    expect((await request.get(`${baseURL}/api/companies`, { headers: { Cookie: oldSession } })).status()).toBe(200);
+    expect((await reset(first, "un-nouveau-mot-de-passe")).status()).toBe(200);
+    expect((await request.get(`${baseURL}/api/companies`, { headers: { Cookie: oldSession } })).status()).toBe(401);
+    expect((await login(email, oldPassword)).status()).toBe(401);
+    expect((await login(email, "un-nouveau-mot-de-passe")).status()).toBe(200);
+    expect(await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).toMatchObject({ failedLoginAttempts: 0, lockedUntil: null });
+    expect((await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).emailVerifiedAt).not.toBeNull();
+    expect((await reset(first, "encore-un-autre-mot-de-passe")).status()).toBe(400);
+
+    // Parcours dans l'interface : demande, puis nouveau mot de passe avec confirmation.
+    await prisma.emailToken.updateMany({ where: { companyId: company.id }, data: { createdAt: new Date(Date.now() - 120_000) } });
+    await page.goto(`${baseURL}/mot-de-passe-oublie`);
+    await page.getByLabel("Adresse e-mail").fill(email);
+    await page.getByRole("button", { name: "Envoyer le lien" }).click();
+    await expect(page.getByText("Si un compte existe pour cette adresse, un lien vient d'être envoyé.")).toBeVisible();
+    await expect.poll(() => sink.messages.length, { timeout: 15000 }).toBe(2);
+    const second = tokenIn(sink.messages[1]);
+    await page.goto(`${baseURL}/reinitialiser?token=${second}`);
+    await page.getByLabel("Nouveau mot de passe", { exact: true }).fill("interface-mot-de-passe");
+    await page.getByLabel("Confirmation du mot de passe").fill("interface-autre-chose");
+    await page.getByRole("button", { name: "Changer mon mot de passe" }).click();
+    await expect(page.getByText("Les deux mots de passe ne correspondent pas.")).toBeVisible();
+    expect((await prisma.emailToken.findUniqueOrThrow({ where: { tokenHash: sha(second) } })).usedAt).toBeNull();
+    await page.getByLabel("Confirmation du mot de passe").fill("interface-mot-de-passe");
+    await page.getByRole("button", { name: "Changer mon mot de passe" }).click();
+    await expect(page.getByText("Votre mot de passe a été modifié.")).toBeVisible();
+    expect((await login(email, "interface-mot-de-passe")).status()).toBe(200);
+
+    // Au plus cinq demandes par heure et par adresse IP.
+    const flooder = ip();
+    for (let attempt = 1; attempt <= 5; attempt++) expect((await forgot(`inconnu-${randomUUID()}@example.invalid`, flooder)).status(), `attempt ${attempt}`).toBe(200);
+    const blocked = await forgot(`inconnu-${randomUUID()}@example.invalid`, flooder);
+    expect(blocked.status()).toBe(429);
+    expect(Number(blocked.headers()["retry-after"])).toBeGreaterThan(0);
+  } finally {
+    await sink.close();
+    await prisma.company.deleteMany({ where: { id: { in: [company.id, legacy.id] } } });
     await prisma.$disconnect();
   }
 });

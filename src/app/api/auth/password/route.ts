@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { hashPassword, verifyPassword } from "@/lib/password";
 import { clearSession, getSessionEmail } from "@/lib/session";
+import { passwordPolicyError } from "@/lib/password-policy";
 
 export async function POST(request: NextRequest) {
   if (request.headers.get("origin") !== request.nextUrl.origin) {
@@ -17,11 +18,12 @@ export async function POST(request: NextRequest) {
   } catch {
     return NextResponse.json({ error: "Requête invalide" }, { status: 400 });
   }
-  if (
-    typeof body.currentPassword !== "string" || body.currentPassword.length > 1024 ||
-    typeof body.newPassword !== "string" || body.newPassword.length < 6 || body.newPassword.length > 1024
-  ) {
-    return NextResponse.json({ error: "Mot de passe invalide (6 caractères minimum)" }, { status: 400 });
+  if (typeof body.currentPassword !== "string" || body.currentPassword.length > 1024) {
+    return NextResponse.json({ error: "Mot de passe actuel invalide" }, { status: 400 });
+  }
+  const passwordError = passwordPolicyError(body.newPassword);
+  if (passwordError) {
+    return NextResponse.json({ error: passwordError }, { status: 400 });
   }
 
   const company = await prisma.company.findUnique({ where: { ownerEmail: email } });
@@ -32,7 +34,7 @@ export async function POST(request: NextRequest) {
   const updated = await prisma.company.updateMany({
     where: { id: company.id, passwordHash: company.passwordHash, sessionVersion: company.sessionVersion },
     data: {
-      passwordHash: await hashPassword(body.newPassword),
+      passwordHash: await hashPassword(body.newPassword as string),
       sessionVersion: { increment: 1 },
     },
   });

@@ -49,7 +49,7 @@ export function SignupForm({ availability }: { availability: SignupAvailability 
           <p className="mt-3"><Link className="underline" href="/login">Se connecter</Link></p>
         </div>
       ) : (<>
-      <p className="mt-1 text-sm text-gray-500">Créez un compte avec votre email et un mot de passe d&apos;au moins 6 caractères.</p>
+      <p className="mt-1 text-sm text-gray-500">Créez un compte avec votre email et un mot de passe d&apos;au moins 8 caractères.</p>
       <form onSubmit={handleSubmit} className="mt-6 flex flex-col gap-3">
         <label htmlFor="signup-email" className="text-sm font-medium">Adresse e-mail</label>
         <input
@@ -68,8 +68,9 @@ export function SignupForm({ availability }: { availability: SignupAvailability 
           required
           type={showPassword ? "text" : "password"}
           autoComplete="new-password"
-          minLength={6}
-          placeholder="Mot de passe (6 caractères minimum)"
+          minLength={8}
+          maxLength={128}
+          placeholder="Mot de passe (8 caractères minimum)"
           value={password}
           onChange={(event) => setPassword(event.target.value)}
           className="rounded border px-3 py-2 text-sm"

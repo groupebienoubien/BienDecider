@@ -6,6 +6,7 @@ import { consumeIpAttempt } from "@/lib/auth-throttle";
 import { readJsonObject } from "@/lib/request-body";
 import { readSignupControl, releaseSignupSlot, reserveSignupSlot, todaySignupCount } from "@/lib/signup-control";
 import { sendVerificationEmail } from "@/lib/email-verification";
+import { passwordPolicyError } from "@/lib/password-policy";
 import { SIGNUP_CLOSED_MESSAGE, SIGNUP_FULL_MESSAGE, secondsUntilNextSignupDay, signupAvailability } from "@/lib/signup-rules";
 
 function signupFull() {
@@ -22,8 +23,9 @@ export async function POST(request: NextRequest) {
   if (!email || !email.includes("@") || email.length > 254) {
     return NextResponse.json({ error: "Email invalide" }, { status: 400 });
   }
-  if (typeof password !== "string" || password.length < 6 || password.length > 1024) {
-    return NextResponse.json({ error: "Mot de passe requis (6 caractères minimum)" }, { status: 400 });
+  const passwordError = passwordPolicyError(password);
+  if (passwordError) {
+    return NextResponse.json({ error: passwordError }, { status: 400 });
   }
 
   const control = await readSignupControl();
@@ -53,7 +55,7 @@ export async function POST(request: NextRequest) {
     company = await prisma.company.create({
       data: {
         ownerEmail: email,
-        passwordHash: await hashPassword(password),
+        passwordHash: await hashPassword(password as string),
         name: "",
         trade: "",
         servingArea: "",

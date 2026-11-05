@@ -31,6 +31,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { DEFAULT_SIGNUP_CONTROL, MAX_DAILY_SIGNUP_CAP, parseSignupControlInput, secondsUntilNextSignupDay, signupAvailability, signupCapAlert, signupDayKey } from "../src/lib/signup-rules";
 import { appBaseUrl, isServiceMailConfigured, sendServiceEmail } from "../src/lib/service-mail";
 import { passwordResetEmail, passwordResetLink, verificationEmail, verificationLink } from "../src/lib/service-mail-templates";
+import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH, passwordPolicyError } from "../src/lib/password-policy";
 import { startSmtpSink } from "./support/smtp-sink";
 import { BetaToolRunner } from "@anthropic-ai/sdk/lib/tools/BetaToolRunner";
 
@@ -1410,4 +1411,14 @@ test("service mail: links come from APP_BASE_URL, never from a request, and fall
     expect(content.text).toContain("LIEN");
     expect(content.subject).not.toMatch(/[\r\n]/);
   }
+});
+
+test("password policy: 8 to 128 characters for new passwords, with the message of the functional spec", () => {
+  expect(PASSWORD_MIN_LENGTH).toBe(8);
+  expect(PASSWORD_MAX_LENGTH).toBe(128);
+  expect(passwordPolicyError("1234567")).toBe("Le mot de passe doit contenir au moins 8 caractères.");
+  expect(passwordPolicyError("12345678")).toBeNull();
+  expect(passwordPolicyError("x".repeat(128))).toBeNull();
+  expect(passwordPolicyError("x".repeat(129))).toBe("Le mot de passe ne peut pas dépasser 128 caractères.");
+  for (const value of [undefined, null, 12345678, {}, ["12345678"]]) expect(passwordPolicyError(value), String(value)).toBe("Le mot de passe doit contenir au moins 8 caractères.");
 });
