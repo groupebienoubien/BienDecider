@@ -62,10 +62,19 @@ development_status:
   4-2-aucune-fausse-rectification: done
   epic-4-retrospective: optional
 
-  epic-5: in-progress
-  5-1-un-diagnostic-à-jour: review
-  5-2-du-diagnostic-au-plan-sans-boucle: review
-  5-3-le-plan-montre-d-abord-ce-qu-il-reste-à-faire: review
-  5-4-paul-utilisable-sur-smartphone: review
-  5-5-des-photos-sur-le-site: review
+  epic-5: done
+  5-1-un-diagnostic-à-jour: done
+  5-2-du-diagnostic-au-plan-sans-boucle: done
+  5-3-le-plan-montre-d-abord-ce-qu-il-reste-à-faire: done
+  5-4-paul-utilisable-sur-smartphone: done
+  5-5-des-photos-sur-le-site: done
   epic-5-retrospective: optional
+
+  epic-6: backlog
+  6-1-plafonner-et-pouvoir-fermer-les-inscriptions: backlog
+  6-2-fermer-l-administration-par-defaut: backlog
+  6-3-envoyer-les-e-mails-du-service: backlog
+  6-4-confirmer-mon-e-mail-a-l-inscription: backlog
+  6-5-recuperer-mon-mot-de-passe: backlog
+  6-6-mettre-a-jour-la-charte-pour-la-cible-v5-2: backlog
+  epic-6-retrospective: optional
