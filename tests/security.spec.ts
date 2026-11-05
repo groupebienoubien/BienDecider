@@ -31,6 +31,11 @@ const GUARDED_ROUTES: Guarded[] = [
   { method: "PATCH", path: "/api/admin/companies/[id]/suspension", denied: 403 },
   { method: "PATCH", path: "/api/admin/usage-alerts", denied: 403 },
   { method: "PATCH", path: "/api/admin/llm-credit", denied: 403 },
+  { method: "GET", path: "/api/missions", denied: 401 },
+  { method: "POST", path: "/api/missions", denied: 401 },
+  { method: "GET", path: "/api/missions/catalogue", denied: 401 },
+  { method: "POST", path: "/api/missions/[id]/transition", denied: 401 },
+  { method: "GET", path: "/api/credits", denied: 401 },
   { method: "POST", path: "/api/feedback", denied: 401 },
   { method: "PATCH", path: "/api/admin/feedback/[id]", denied: 403 },
   { method: "GET", path: "/api/admin/delegation-risk", denied: 403 },
@@ -1013,6 +1018,68 @@ test("feedback is listed for administrators only, shown as text, and can be mark
     await page.context().clearCookies();
     await prisma.company.deleteMany({ where: { id: user.id } });
     if (createdAdmin) await prisma.company.delete({ where: { id: adminCompany.id } });
+    await prisma.$disconnect();
+  }
+});
+
+test("missions and credits belong to the session company: validated, refused across companies and origins, one debit", async ({ request }) => {
+  const prisma = openDatabase();
+  const marker = randomUUID().slice(0, 8);
+  const a = await prisma.company.create({ data: { ownerEmail: `security-missions-a-${marker}@example.invalid`, name: `Missions A ${marker}`, trade: "Artisan", servingArea: "Paris" } });
+  const b = await prisma.company.create({ data: { ownerEmail: `security-missions-b-${marker}@example.invalid`, name: `Missions B ${marker}`, trade: "Artisan", servingArea: "Paris" } });
+  const headers = (company: typeof a) => ({ Cookie: sessionCookie(company.ownerEmail, company.sessionVersion), Origin: baseURL });
+  const create = (company: typeof a, data: unknown, extra: Record<string, string> = {}) => request.post(`${baseURL}/api/missions`, { headers: { ...headers(company), ...extra }, data });
+  const transition = (company: typeof a, id: string, data: unknown) => request.post(`${baseURL}/api/missions/${id}/transition`, { headers: headers(company), data });
+  const body = { template: "social_post", title: "Publier un chantier", outcome: "Des demandes de devis", finding: "Aucune publication depuis trois mois", scope: { topic: "Nos chantiers de novembre" } };
+  try {
+    expect((await request.post(`${baseURL}/api/missions`, { headers: { Origin: baseURL }, data: body })).status()).toBe(401);
+    expect((await create(a, body, { Origin: "https://attacker.invalid" })).status()).toBe(403);
+    expect((await create(a, "texte")).status()).toBe(400);
+    const refused = await create(a, { ...body, title: "abc" });
+    expect(refused.status()).toBe(422);
+    expect(await refused.json()).toMatchObject({ code: "M-20" });
+    expect(await (await create(a, { ...body, template: "leads" })).json()).toMatchObject({ code: "M-76" });
+    expect(await (await create(a, { ...body, channel: "instagram" })).json()).toMatchObject({ code: "M-67", error: "Instagram n'est pas disponible pour le moment. Choisissez un autre canal." });
+
+    // Le corps ne choisit jamais l'entreprise : une mission est toujours celle de la session.
+    const made = await create(a, { ...body, companyId: b.id, status: "active", version: 9 });
+    expect(made.status()).toBe(201);
+    const mission = (await made.json()).mission;
+    expect(mission).toMatchObject({ companyId: a.id, status: "proposed", version: 1, createdBy: "owner" });
+    expect(await prisma.mission.count({ where: { companyId: b.id } })).toBe(0);
+    expect((await (await request.get(`${baseURL}/api/missions`, { headers: headers(b) })).json()).missions).toHaveLength(0);
+    expect((await (await request.get(`${baseURL}/api/missions`, { headers: headers(a) })).json()).missions).toHaveLength(1);
+    const catalogue = (await (await request.get(`${baseURL}/api/missions/catalogue`, { headers: headers(a) })).json()).templates as { key: string; channels: { key: string }[] }[];
+    expect(catalogue.map((template) => template.key)).toEqual(["agencies", "proof", "social_post", "site_page", "custom"]);
+    expect(catalogue.flatMap((template) => template.channels.map((channel) => channel.key))).not.toContain("instagram");
+
+    // Transitions : autre entreprise, autre origine, corps illisible, version perimee.
+    expect((await transition(b, mission.id, { action: "launch", expectedVersion: 1 })).status()).toBe(404);
+    expect((await request.post(`${baseURL}/api/missions/${mission.id}/transition`, { headers: { ...headers(a), Origin: "https://attacker.invalid" }, data: { action: "launch", expectedVersion: 1 } })).status()).toBe(403);
+    expect((await transition(a, mission.id, { action: "detruire", expectedVersion: 1 })).status()).toBe(400);
+    expect((await transition(a, mission.id, { action: "launch" })).status()).toBe(400);
+    const stale = await transition(a, mission.id, { action: "launch", expectedVersion: 7 });
+    expect(stale.status()).toBe(409);
+    expect(await stale.json()).toMatchObject({ code: "M-02" });
+
+    // Lancement : un seul debit de 3 credits, solde et historique de l'API.
+    const launched = await transition(a, mission.id, { action: "launch", expectedVersion: 1 });
+    expect(launched.status()).toBe(200);
+    expect(await launched.json()).toMatchObject({ mission: { status: "active", version: 2 }, balance: 17 });
+    const again = await transition(a, mission.id, { action: "launch", expectedVersion: 2 });
+    expect(await again.json()).toMatchObject({ mission: { status: "active", version: 2 }, balance: null });
+    const credits = await (await request.get(`${baseURL}/api/credits`, { headers: headers(a) })).json();
+    expect(credits).toMatchObject({ balance: 17, history: [{ delta: -3, balanceAfter: 17 }, { delta: 20, balanceAfter: 20 }] });
+    expect(await (await request.get(`${baseURL}/api/credits`, { headers: headers(b) })).json()).toMatchObject({ balance: 20, history: [{ delta: 20 }] });
+
+    // Credits insuffisants : refus M-15 avec le besoin et le solde.
+    await prisma.company.update({ where: { id: b.id }, data: { creditBalance: 1 } });
+    const second = await (await create(b, body)).json();
+    const broke = await transition(b, second.mission.id, { action: "launch", expectedVersion: 1 });
+    expect(broke.status()).toBe(422);
+    expect(await broke.json()).toMatchObject({ code: "M-15", error: "Crédits insuffisants : il en faut 3, il vous en reste 1." });
+  } finally {
+    await prisma.company.deleteMany({ where: { id: { in: [a.id, b.id] } } });
     await prisma.$disconnect();
   }
 });

@@ -36,6 +36,9 @@ import { DEFAULT_USAGE_ALERT_THRESHOLDS, alertEmail, companyAlertScope, crossedA
 import { FEEDBACK_TEXT_MAX, cleanFeedbackPage, feedbackEmail, parseFeedbackInput } from "../src/lib/feedback";
 import { cleanErrorMessage, cleanErrorPath, errorAlertEmail, errorFingerprint } from "../src/lib/error-tracking-rules";
 import { computeCredit, creditAlertEmail, parseCreditInput } from "../src/lib/llm-credit-rules";
+import { renderMissionMessage } from "../src/lib/missions/messages";
+import { LAUNCH_COST_CREDITS, checkTransition, validateNewMission, type MissionSnapshot } from "../src/lib/missions/rules";
+import { availableTemplates, enabledChannels, MISSION_TEMPLATES } from "../src/lib/missions/templates";
 import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH, passwordPolicyError } from "../src/lib/password-policy";
 import { startSmtpSink } from "./support/smtp-sink";
 import { BetaToolRunner } from "@anthropic-ai/sdk/lib/tools/BetaToolRunner";
@@ -1522,4 +1525,83 @@ test("llm credit rules: the remaining credit follows the measured spend, days le
   const mail = creditAlertEmail({ remainingUsd: 4.2, alertBelowUsd: 5 }, "https://www.biendecider.com/admin");
   expect(mail.subject).toBe("Crédit du modèle bas : 4.20 $");
   expect(mail.text).toContain("5.00 $");
+});
+
+const mission = (over: Partial<MissionSnapshot> = {}): MissionSnapshot => ({ template: "social_post", channel: "facebook", status: "proposed", previousStatus: null, scope: { topic: "Nos chantiers de novembre" }, contactsConfirmedAt: null, firstLaunchedAt: null, hasValidatedVersion: false, ...over });
+const codeOf = (result: { ok: boolean; code?: string }) => (result.ok ? "ok" : result.code);
+
+test("mission catalogue: only open models with an active channel are offered, plus Sur mesure", () => {
+  expect(availableTemplates().map((template) => template.key)).toEqual(["agencies", "proof", "social_post", "site_page", "custom"]);
+  expect(enabledChannels(MISSION_TEMPLATES.social_post)).toEqual(["facebook"]);
+  expect(enabledChannels(MISSION_TEMPLATES.google_profile)).toEqual([]);
+  expect(MISSION_TEMPLATES.custom.stopRuleDays).toBeNull();
+});
+
+test("mission creation: bounded fields, one permitted and active channel, scope rules per model, ceiling of ten", () => {
+  const base = { template: "social_post", title: "Une publication", outcome: "Des demandes de devis", finding: "Aucune publication depuis trois mois", scope: { topic: "Nos chantiers de novembre" } };
+  expect(validateNewMission(base, 0)).toEqual({ ok: true, value: { template: "social_post", channel: "facebook", title: "Une publication", outcome: "Des demandes de devis", finding: "Aucune publication depuis trois mois", scope: { topic: "Nos chantiers de novembre" }, stopRuleDays: 7 } });
+  expect(codeOf(validateNewMission({ ...base, title: "abc" }, 0))).toBe("M-20");
+  expect(codeOf(validateNewMission({ ...base, finding: "<b>court</b>" }, 0))).toBe("M-20");
+  expect(codeOf(validateNewMission({ ...base, outcome: "x".repeat(121) }, 0))).toBe("M-20");
+  expect(codeOf(validateNewMission({ ...base, template: "inconnu" }, 0))).toBe("M-76");
+  expect(codeOf(validateNewMission({ ...base, template: "leads" }, 0))).toBe("M-76");
+  expect(codeOf(validateNewMission({ ...base, template: "google_profile" }, 0))).toBe("M-76");
+  expect(codeOf(validateNewMission(base, 10))).toBe("M-75");
+  expect(codeOf(validateNewMission({ ...base, channel: "instagram" }, 0))).toBe("M-67");
+  expect(codeOf(validateNewMission({ ...base, channel: "gmail" }, 0))).toBe("M-69");
+  expect(codeOf(validateNewMission({ ...base, scope: { topic: "x" } }, 0))).toBe("M-17");
+  expect(validateNewMission({ ...base, scope: undefined }, 0)).toMatchObject({ ok: true, value: { scope: {} } });
+  expect(validateNewMission({ template: "agencies", title: "Deux agences", outcome: "Une r\u00e9ponse", finding: "Aucune agence partenaire connue" }, 0)).toMatchObject({ ok: true, value: { channel: "gmail", stopRuleDays: 30 } });
+  expect(codeOf(validateNewMission({ template: "agencies", title: "Deux agences", outcome: "Une r\u00e9ponse", finding: "Aucune agence partenaire connue", scope: { agencyIds: ["a", "b", "c"] } }, 0))).toBe("M-30");
+  expect(codeOf(validateNewMission({ template: "proof", title: "Une r\u00e9alisation", outcome: "Des demandes", finding: "Une belle r\u00e9alisation r\u00e9cente", channel: "instagram" }, 0))).toBe("M-67");
+  const custom = { template: "custom", title: "Salon local", outcome: "Dix contacts", finding: "Un salon a lieu dans ma ville", scope: { description: "Tenir un stand au salon de mon quartier" } };
+  expect(validateNewMission({ ...custom, stopRuleDays: 21 }, 0)).toMatchObject({ ok: true, value: { channel: null, stopRuleDays: 21 } });
+  expect(codeOf(validateNewMission(custom, 0))).toBe("M-18");
+  expect(codeOf(validateNewMission({ ...custom, stopRuleDays: 6 }, 0))).toBe("M-18");
+  expect(codeOf(validateNewMission({ ...custom, stopRuleDays: 21, scope: { description: "court" } }, 0))).toBe("M-18");
+  expect(codeOf(validateNewMission({ ...custom, stopRuleDays: 21, channel: "linkedin" }, 0))).toBe("M-67");
+});
+
+test("mission transitions: statuses, launch cost once, idempotence, locks and messages of the specification", () => {
+  const now = new Date("2026-11-06T10:00:00Z");
+  expect(checkTransition(mission(), { action: "launch" }, now)).toEqual({ ok: true, patch: { status: "active", firstLaunchedAt: now }, debit: LAUNCH_COST_CREDITS, noop: false });
+  expect(checkTransition(mission({ status: "paused", firstLaunchedAt: now }), { action: "resume" }, now)).toEqual({ ok: true, patch: { status: "active" }, debit: 0, noop: false });
+  expect(checkTransition(mission({ status: "active", firstLaunchedAt: now }), { action: "launch" })).toMatchObject({ ok: true, noop: true, debit: 0 });
+  expect(codeOf(checkTransition(mission({ status: "stopped" }), { action: "launch" }))).toBe("M-40");
+  expect(codeOf(checkTransition(mission({ status: "dismissed" }), { action: "launch" }))).toBe("M-21");
+  expect(codeOf(checkTransition(mission({ channel: null }), { action: "launch" }))).toBe("M-68");
+  expect(codeOf(checkTransition(mission({ channel: "instagram" }), { action: "launch" }))).toBe("M-67");
+  expect(codeOf(checkTransition(mission({ scope: {} }), { action: "launch" }))).toBe("M-17");
+  expect(codeOf(checkTransition(mission({ template: "leads", channel: "gmail", scope: {} }), { action: "launch" }))).toBe("M-76");
+  expect(checkTransition(mission({ template: "custom", channel: null, scope: { description: "Tenir un stand au salon" } }), { action: "launch" }, now)).toMatchObject({ ok: true, debit: LAUNCH_COST_CREDITS });
+
+  expect(checkTransition(mission({ status: "active" }), { action: "pause" })).toMatchObject({ ok: true, patch: { status: "paused" } });
+  expect(codeOf(checkTransition(mission(), { action: "pause" }))).toBe("M-43");
+
+  expect(checkTransition(mission(), { action: "dismiss" })).toMatchObject({ ok: true, patch: { status: "dismissed", previousStatus: "proposed" } });
+  expect(checkTransition(mission({ status: "paused" }), { action: "dismiss" })).toMatchObject({ ok: true, patch: { status: "dismissed", previousStatus: "paused" } });
+  expect(codeOf(checkTransition(mission({ status: "active" }), { action: "dismiss" }))).toBe("M-22");
+  expect(codeOf(checkTransition(mission({ status: "stopped" }), { action: "dismiss" }))).toBe("M-23");
+  expect(checkTransition(mission({ status: "dismissed", previousStatus: "paused" }), { action: "restore" })).toMatchObject({ ok: true, patch: { status: "paused", previousStatus: null } });
+  expect(checkTransition(mission({ status: "dismissed", previousStatus: "proposed" }), { action: "restore" })).toMatchObject({ ok: true, patch: { status: "proposed" } });
+  expect(codeOf(checkTransition(mission(), { action: "restore" }))).toBe("M-24");
+
+  expect(checkTransition(mission({ channel: null, template: "custom" }), { action: "set_channel", channel: "facebook" })).toMatchObject({ ok: true, patch: { channel: "facebook" } });
+  expect(codeOf(checkTransition(mission({ hasValidatedVersion: true }), { action: "set_channel", channel: "facebook" }))).toBe("M-19");
+  expect(codeOf(checkTransition(mission(), { action: "set_channel", channel: "gmail" }))).toBe("M-69");
+  expect(codeOf(checkTransition(mission(), { action: "set_channel", channel: "instagram" }))).toBe("M-67");
+  expect(codeOf(checkTransition(mission({ status: "dismissed" }), { action: "set_channel", channel: "facebook" }))).toBe("M-21");
+
+  expect(checkTransition(mission({ status: "active" }), { action: "set_outcome", outcome: "  Trois devis sign\u00e9s  " })).toMatchObject({ ok: true, patch: { outcome: "Trois devis sign\u00e9s" } });
+  expect(codeOf(checkTransition(mission(), { action: "set_outcome", outcome: "abc" }))).toBe("M-25");
+  expect(codeOf(checkTransition(mission({ status: "stopped" }), { action: "set_outcome", outcome: "Trois devis sign\u00e9s" }))).toBe("M-26");
+
+  expect(checkTransition(mission(), { action: "set_scope", scope: { topic: "Un autre sujet de publication" } })).toMatchObject({ ok: true, patch: { scope: { topic: "Un autre sujet de publication" } } });
+  expect(codeOf(checkTransition(mission({ status: "stopped" }), { action: "set_scope", scope: { topic: "Un autre sujet de publication" } }))).toBe("M-23");
+  const leads = mission({ template: "leads", channel: "gmail", scope: { contactIds: ["a"] }, contactsConfirmedAt: now });
+  expect(checkTransition(leads, { action: "set_scope", scope: { contactIds: ["a", "b"] } })).toMatchObject({ ok: true, patch: { contactsConfirmedAt: null } });
+  expect(checkTransition(leads, { action: "set_scope", scope: { contactIds: ["a"] } })).toMatchObject({ ok: true, patch: { scope: { contactIds: ["a"] } } });
+  expect(codeOf(checkTransition(mission({ template: "leads", channel: "gmail", scope: {} }), { action: "confirm_contacts" }))).toBe("M-41");
+  expect(renderMissionMessage("M-15", { n: 3, m: 2 })).toBe("Cr\u00e9dits insuffisants : il en faut 3, il vous en reste 2.");
+  expect(renderMissionMessage("M-67", { canal: "Instagram" })).toBe("Instagram n'est pas disponible pour le moment. Choisissez un autre canal.");
 });

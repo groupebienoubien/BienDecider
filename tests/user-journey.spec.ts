@@ -219,6 +219,25 @@ test("a manager reports a problem from any page, on desktop and on a phone, and 
   } finally { await prisma.$disconnect(); }
 });
 
+test("Mon compte shows the credit balance, the scale and the latest movements", async ({ page, company }) => {
+  const created = await page.request.post(`${baseURL}/api/missions`, { headers: { Origin: baseURL }, data: { template: "social_post", title: "Publier un chantier", outcome: "Des demandes de devis", finding: "Aucune publication depuis trois mois", scope: { topic: "Nos chantiers de novembre" } } });
+  expect(created.status()).toBe(201);
+  await page.goto(`${baseURL}/compte`);
+  const credits = page.getByRole("region", { name: "Mes crédits" });
+  await expect(credits).toContainText("20 crédits restants");
+  await expect(credits).toContainText("Lancer une mission");
+  await expect(credits).toContainText("Crédits offerts à l'inscription · +20");
+  const mission = (await created.json()).mission;
+  const launched = await page.request.post(`${baseURL}/api/missions/${mission.id}/transition`, { headers: { Origin: baseURL }, data: { action: "launch", expectedVersion: 1 } });
+  expect(launched.status()).toBe(200);
+  await page.reload();
+  await expect(credits).toContainText("17 crédits restants");
+  await expect(credits.getByRole("list", { name: "Derniers mouvements de crédits" })).toContainText("Lancement de la mission « Publier un chantier » · −3");
+  await page.setViewportSize({ width: 320, height: 720 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  expect(company.id).toBeTruthy();
+});
+
 test("Gmail start, refusal and send guards do not contact providers", async ({ page, company }) => {
   expect(company.id).toBeTruthy();
   await page.goto(`${baseURL}/connexions`);

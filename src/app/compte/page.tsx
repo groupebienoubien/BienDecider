@@ -7,6 +7,8 @@ import { getSessionCompany } from "@/lib/session";
 import { getShellProps } from "@/lib/shell-data";
 import { prisma } from "@/lib/prisma";
 import { parisQuotaWindows } from "@/lib/quota-windows";
+import { PAUL_VERSION_CREDITS, WELCOME_CREDITS, readCredits } from "@/lib/credits";
+import { LAUNCH_COST_CREDITS } from "@/lib/missions/rules";
 
 export const dynamic = "force-dynamic";
 
@@ -25,10 +27,29 @@ export default async function AccountPage() {
       _count: true,
     }),
   ]);
+  const credits = await readCredits(company.id);
   const spent = usage._sum.costUsd ?? 0;
   return <AppShell {...shell}>
     <PageHeading kicker="ESPACE PERSONNEL" title="Mon compte" description={company.ownerEmail} />
     <div className="settings-grid">
+      <section className="setting-section" aria-labelledby="account-credits">
+        <h2 id="account-credits">Mes crédits</h2>
+        <p><strong>{credits.balance} crédits</strong> restants.</p>
+        <dl className="modal-details">
+          <dt>À l&apos;inscription</dt><dd>{WELCOME_CREDITS} crédits offerts</dd>
+          <dt>Lancer une mission</dt><dd>{LAUNCH_COST_CREDITS} crédits, une seule fois par mission</dd>
+          <dt>Préparer une version avec Paul</dt><dd>{PAUL_VERSION_CREDITS} crédit</dd>
+          <dt>Gratuit</dt><dd>Créer une mission, la reprendre, retoucher, valider, diffuser, faire le bilan</dd>
+        </dl>
+        {credits.history.length > 0 && (
+          <ul aria-label="Derniers mouvements de crédits">
+            {credits.history.map((entry) => (
+              <li key={entry.id}>{entry.createdAt.toLocaleDateString("fr-FR", { timeZone: "Europe/Paris" })} · {entry.label} · {entry.delta > 0 ? "+" : "−"}{Math.abs(entry.delta)}</li>
+            ))}
+          </ul>
+        )}
+        <p>Pas de recharge pendant le test. Besoin de crédits : <a href="mailto:contact@biendecider.com">contact@biendecider.com</a>.</p>
+      </section>
       <section className="setting-section" aria-labelledby="account-budget">
         <h2 id="account-budget">Crédits &amp; limites</h2>
         <p>Budget IA : {MONEY.format(spent)} $ consommés sur {MONEY.format(company.monthlySpendLimitUsd)} $ par mois.</p>
