@@ -105,8 +105,15 @@ development_status:
   10-4-lancer-suspendre-reprendre-une-mission: in-progress
   epic-10-retrospective: optional
 
-  epic-11: in-progress
-  11-1-relire-et-faire-evoluer-un-contenu: review
-  11-2-refuser-une-version-avec-un-motif: review
-  11-3-savoir-quoi-verifier-avant-de-valider: review
+  epic-11: done
+  11-1-relire-et-faire-evoluer-un-contenu: done
+  11-2-refuser-une-version-avec-un-motif: done
+  11-3-savoir-quoi-verifier-avant-de-valider: done
   epic-11-retrospective: optional
+
+  epic-12: in-progress
+  12-1-confirmer-une-diffusion: review
+  12-2-diffuser-moi-meme-et-le-declarer: review
+  12-3-choisir-mon-niveau-de-delegation: review
+  12-4-programmer-et-annuler-une-diffusion: backlog
+  epic-12-retrospective: optional

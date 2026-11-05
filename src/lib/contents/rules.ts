@@ -95,6 +95,16 @@ export type ContentSnapshot = {
   /** Destinataires du périmètre pour un e-mail ; null hors e-mail. */
   recipients: number | null;
   hasVisual: boolean;
+  /** Une diffusion de la version courante attend la vérification du dirigeant (§5.5). */
+  uncertain?: boolean;
+};
+
+/** Ce que la diffusion vérifie en plus du contenu (§5.1). */
+export type DiffusionContext = {
+  emailVerified: boolean;
+  delegation: "prepare" | "review" | "bounded";
+  channelEnabled: boolean;
+  channelConnected: boolean;
 };
 
 export type ContentStatus = "draft" | "validated" | "scheduled" | "diffused";
@@ -115,6 +125,7 @@ export function isReadOnly(content: Pick<ContentSnapshot, "missionStatus">): boo
 export function checkNewVersion(content: ContentSnapshot, options: { fromDiffused?: boolean } = {}): Refusal | null {
   if (isReadOnly(content)) return { code: "M-44" };
   if (content.scheduled) return { code: "M-45" };
+  if (content.uncertain) return { code: "M-81" };
   if (content.currentDiffused && !options.fromDiffused) return { code: "M-46", params: { n: content.currentNumber } };
   return null;
 }
@@ -154,8 +165,48 @@ export function checkRejection(content: ContentSnapshot, number: number): Refusa
   if (isReadOnly(content)) return { code: "M-44" };
   if (number !== content.currentNumber) return { code: "M-02" };
   if (content.scheduled) return { code: "M-45" };
+  if (content.uncertain) return { code: "M-81" };
   if (content.currentDiffused) return { code: "M-46", params: { n: content.currentNumber } };
   return null;
+}
+
+/** Diffuser par BienDecider (§5.1), contrôles dans l'ordre de la spécification ; la programmation (contrôle 10) arrive avec #261. */
+export function checkDiffusion(content: ContentSnapshot, context: DiffusionContext, input: { number: number; confirmed: boolean }): Refusal | null {
+  if (input.number !== content.currentNumber) return { code: "M-02" };
+  if (!context.emailVerified) return { code: "M-54" };
+  if (context.delegation === "prepare") return { code: "M-55" };
+  if (content.missionStatus !== "active") return { code: "M-56" };
+  if (!content.channel) return { code: "M-80" };
+  if (!context.channelEnabled) return { code: "M-67", params: { canal: channelLabel(content.channel) } };
+  if (!context.channelConnected) return { code: "M-57" };
+  if (content.validatedNumber !== content.currentNumber) return { code: "M-58" };
+  if (content.scheduled) return { code: "M-59" };
+  if (content.uncertain) return { code: "M-81" };
+  if (content.currentDiffused) return { code: "M-53" };
+  if (content.format === "email" && !content.recipients) return { code: "M-49" };
+  if (!input.confirmed) return { code: "M-82" };
+  return null;
+}
+
+export const DECLARED_CHANNEL_MIN = 2;
+export const DECLARED_CHANNEL_MAX = 60;
+
+/** Déclarer une diffusion faite par le dirigeant (§5.4) : date passée ou du jour, où, et la case de confirmation. */
+export function checkDeclaration(content: ContentSnapshot, input: { number: number; channel: unknown; date: unknown; confirmed: boolean }, now: Date): Checked<{ channel: string; date: Date }> {
+  const refuse = (refusal: Refusal): Checked<{ channel: string; date: Date }> => ({ ok: false, ...refusal });
+  if (input.number !== content.currentNumber) return refuse({ code: "M-02" });
+  if (content.missionStatus !== "active") return refuse({ code: "M-56" });
+  if (content.validatedNumber !== content.currentNumber) return refuse({ code: "M-58" });
+  if (content.scheduled) return refuse({ code: "M-59" });
+  if (content.uncertain) return refuse({ code: "M-81" });
+  if (content.currentDiffused) return refuse({ code: "M-53" });
+  const channel = typeof input.channel === "string" ? input.channel.trim() : "";
+  const date = typeof input.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(input.date) ? new Date(`${input.date}T12:00:00Z`) : null;
+  const latest = new Date(now.getTime() + 14 * 3600 * 1000);
+  const earliest = new Date(now.getTime() - 366 * 24 * 3600 * 1000);
+  if (channel.length < DECLARED_CHANNEL_MIN || channel.length > DECLARED_CHANNEL_MAX || /[<>]/.test(channel) || !date || Number.isNaN(date.getTime()) || date > latest || date < earliest) return refuse({ code: "M-83" });
+  if (!input.confirmed) return refuse({ code: "M-84" });
+  return { ok: true, value: { channel, date } };
 }
 
 /** Qui verra le texte, selon le canal (#179). */

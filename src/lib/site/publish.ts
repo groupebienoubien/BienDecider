@@ -9,6 +9,7 @@ import { keepOnlyCompanyPhotos, sitePhotoPromptLines } from "@/lib/site/photos";
 import { canExecuteAction } from "@/lib/delegation-risk";
 import { reserveUsageBudget } from "@/lib/agent-runs";
 import { decideProposalReview, reviewPublishedSiteHtml } from "@/lib/proposal-review";
+import { slugify } from "@/lib/site/slug";
 
 /**
  * Première exécution réelle de bout en bout du produit : un brief de site
@@ -17,16 +18,6 @@ import { decideProposalReview, reviewPublishedSiteHtml } from "@/lib/proposal-re
  * externe (pas de WordPress, pas d'hébergeur) — cf. docs/archives/backlog.md.
  * Garde-fou inchangé : n'est jamais appelé sur une proposition non validée.
  */
-
-function slugify(name: string): string {
-  return name
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 48) || "site";
-}
 
 /**
  * Défense en profondeur : le HTML est généré par un modèle — on retire tout script/handler, toute image

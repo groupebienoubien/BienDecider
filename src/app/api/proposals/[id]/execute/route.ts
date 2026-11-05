@@ -4,6 +4,7 @@ import { PublishRefusedError } from "@/lib/execution-error";
 import { publishSiteFromProposal } from "@/lib/site/publish";
 import { getSessionCompany } from "@/lib/session";
 import { publishProposalToFacebook } from "@/lib/social/facebook-publish";
+import { prepareOnlyRefusal } from "@/lib/delegation-level";
 import { getConfiguredRiskLevels } from "@/lib/delegation-policy";
 import { AgentRunQuotaError } from "@/lib/agent-runs";
 import { syncPlanItemStatus } from "@/lib/plan-item-status";
@@ -30,6 +31,8 @@ export async function POST(
   if (!company) {
     return NextResponse.json({ error: "Non connecté" }, { status: 401 });
   }
+  const prepareOnly = prepareOnlyRefusal(company);
+  if (prepareOnly) return NextResponse.json(prepareOnly, { status: 403 });
   if (!company.emailVerifiedAt) {
     return NextResponse.json({ error: EMAIL_NOT_VERIFIED_MESSAGE }, { status: 403 });
   }

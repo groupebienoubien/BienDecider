@@ -397,6 +397,79 @@ test("stories 11.1 to 11.3: Paul's first draft, versions, variant kept for one c
   expect(await prisma.contentVersion.findFirstOrThrow({ where: { contentId: offGrid.id, number: 2 } })).toMatchObject({ author: "system", note: "Canal changé : Page Facebook. Texte à adapter" });
 });
 
+test("stories 12.1 to 12.3: a validated version is diffused once, failures and uncertain results are never resent, declared diffusion, delegation", async ({ company }) => {
+  process.env.META_TOKEN_ENCRYPTION_KEY ||= "d".repeat(64);
+  process.env.META_APP_SECRET ||= "ci-meta-secret";
+  process.env.META_APP_ID ||= "ci-meta-app";
+  const { prisma } = await import("../src/lib/prisma");
+  const { declareContentDiffusion, publishContentNow, resolveUncertainDiffusion } = await import("../src/lib/contents/publish");
+  const { applyContentAction } = await import("../src/lib/contents/service");
+  const { setDelegationLevel } = await import("../src/lib/delegation-settings");
+  const { encryptFacebookAccount, FACEBOOK_SCOPES } = await import("../src/lib/oauth/meta");
+  const seed = async (template: string, channel: string | null, title: string, scope: object = {}) => {
+    const mission = await prisma.mission.create({ data: { companyId: company.id, template, channel, title, outcome: "Des demandes de devis", originalOutcome: "Des demandes de devis", finding: "Un constat", scope, status: "active", firstLaunchedAt: new Date(), position: 1 } });
+    const content = await prisma.missionContent.create({ data: { companyId: company.id, missionId: mission.id, channel, format: channel === "site" ? "site_page" : channel === "facebook" ? "social_post" : "text", currentNumber: 1, validatedNumber: 1, validatedAt: new Date(), versions: { create: { number: 1, title, body: "Premier paragraphe.\n\nDeuxième paragraphe.", author: "paul" } } } });
+    return { mission, content };
+  };
+  const answer = (status: number, body: unknown) => (async () => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } })) as unknown as typeof fetch;
+  const codes = async (missionId: string) => (await prisma.journalEntry.findMany({ where: { missionId }, orderBy: [{ createdAt: "asc" }, { id: "asc" }] })).map((entry) => entry.code);
+
+  // Site vitrine : la page validée est mise en ligne telle quelle, une seule fois ; la version ne bouge plus.
+  const site = await seed("site_page", "site", "Nos tarifs", { page: "Nos tarifs" });
+  await expect(publishContentNow(company.id, site.content.id, { number: 1, confirmed: false })).rejects.toMatchObject({ code: "M-82" });
+  const online = await publishContentNow(company.id, site.content.id, { number: 1, confirmed: true });
+  expect(online).toMatchObject({ status: "sent", url: expect.stringMatching(/^\/site\/[a-z0-9-]+\/nos-tarifs$/) });
+  expect(await prisma.sitePage.findUniqueOrThrow({ where: { missionId: site.mission.id } })).toMatchObject({ title: "Nos tarifs", versionNumber: 1, slug: "nos-tarifs" });
+  await expect(publishContentNow(company.id, site.content.id, { number: 1, confirmed: true })).rejects.toMatchObject({ code: "M-53" });
+  await expect(applyContentAction(company.id, site.content.id, { action: "save", number: 1, input: { title: "Autre", body: "Autre" } })).rejects.toMatchObject({ code: "M-46" });
+  expect(await applyContentAction(company.id, site.content.id, { action: "next_version", number: 1, input: {} })).toMatchObject({ currentNumber: 2 });
+  expect(await codes(site.mission.id)).toEqual(["J-22", "J-19"]);
+  await prisma.company.update({ where: { id: company.id }, data: { emailVerifiedAt: null } });
+  await applyContentAction(company.id, site.content.id, { action: "validate", number: 2, input: { reviewed: true } });
+  await expect(publishContentNow(company.id, site.content.id, { number: 2, confirmed: true })).rejects.toMatchObject({ code: "M-54" });
+  await prisma.company.update({ where: { id: company.id }, data: { emailVerifiedAt: new Date() } });
+  await publishContentNow(company.id, site.content.id, { number: 2, confirmed: true });
+  expect(await prisma.sitePage.count({ where: { companyId: company.id } })).toBe(1);
+  expect(await prisma.sitePage.findUniqueOrThrow({ where: { missionId: site.mission.id } })).toMatchObject({ versionNumber: 2 });
+
+  // Facebook : sans Page reliée (M-57) ; résultat incertain jamais renvoyé ; refus explicite journalisé ; puis publiée.
+  const facebook = await seed("social_post", "facebook", "Chantier livré");
+  await expect(publishContentNow(company.id, facebook.content.id, { number: 1, confirmed: true })).rejects.toMatchObject({ code: "M-57" });
+  const account = { userToken: "user-token", userId: "u1", userName: "Rémi", scopes: [...FACEBOOK_SCOPES], pages: [{ id: "p1", name: "Dupont Rénovation", token: "page-token", canPublish: true }], selectedPageId: "p1" };
+  await prisma.channelConnection.create({ data: { companyId: company.id, channel: "facebook", status: "connecte", accessToken: encryptFacebookAccount(account, company.id) } });
+  expect(await publishContentNow(company.id, facebook.content.id, { number: 1, confirmed: true }, { fetchImpl: answer(503, {}) })).toMatchObject({ status: "uncertain" });
+  await expect(publishContentNow(company.id, facebook.content.id, { number: 1, confirmed: true }, { fetchImpl: answer(200, { id: "p1_1" }) })).rejects.toMatchObject({ code: "M-81" });
+  await expect(applyContentAction(company.id, facebook.content.id, { action: "save", number: 1, input: { title: "Autre", body: "Autre" } })).rejects.toMatchObject({ code: "M-81" });
+  expect(await resolveUncertainDiffusion(company.id, facebook.content.id, { number: 1, sent: false })).toMatchObject({ status: "failed" });
+  await expect(resolveUncertainDiffusion(company.id, facebook.content.id, { number: 1, sent: true })).rejects.toMatchObject({ code: "M-86" });
+  expect(await publishContentNow(company.id, facebook.content.id, { number: 1, confirmed: true }, { fetchImpl: answer(400, { error: { code: 100 } }) })).toMatchObject({ status: "failed" });
+  const published = await publishContentNow(company.id, facebook.content.id, { number: 1, confirmed: true }, { fetchImpl: answer(200, { id: "p1_42" }) });
+  expect(published).toMatchObject({ status: "sent", message: "V1 publiée sur Page Facebook « Dupont Rénovation »." });
+  expect((await prisma.publication.findMany({ where: { contentId: facebook.content.id }, orderBy: { createdAt: "asc" } })).map((publication) => [publication.status, publication.idempotencyKey.split(":").pop()])).toEqual([["failed", "1"], ["failed", "2"], ["sent", "3"]]);
+  expect(await codes(facebook.mission.id)).toEqual(["J-25", "J-28", "J-22"]);
+
+  // Hors canal : déclarée par vous, une seule fois, date passée ou du jour.
+  const offGrid = await seed("custom", null, "Stand au salon");
+  await expect(publishContentNow(company.id, offGrid.content.id, { number: 1, confirmed: true })).rejects.toMatchObject({ code: "M-80" });
+  await expect(declareContentDiffusion(company.id, offGrid.content.id, { number: 1, channel: "Salon du quartier", date: "2026-11-01", confirmed: false }, new Date("2026-11-05T10:00:00Z"))).rejects.toMatchObject({ code: "M-84" });
+  await expect(declareContentDiffusion(company.id, offGrid.content.id, { number: 1, channel: "Salon du quartier", date: "2026-11-09", confirmed: true }, new Date("2026-11-05T10:00:00Z"))).rejects.toMatchObject({ code: "M-83" });
+  await declareContentDiffusion(company.id, offGrid.content.id, { number: 1, channel: "Salon du quartier", date: "2026-11-01", confirmed: true }, new Date("2026-11-05T10:00:00Z"));
+  expect(await prisma.publication.findFirstOrThrow({ where: { contentId: offGrid.content.id } })).toMatchObject({ mode: "declared", status: "sent", channelLabel: "Salon du quartier" });
+  await expect(declareContentDiffusion(company.id, offGrid.content.id, { number: 1, channel: "Salon", date: "2026-11-02", confirmed: true }, new Date("2026-11-05T10:00:00Z"))).rejects.toMatchObject({ code: "M-53" });
+  expect(await prisma.journalEntry.findFirstOrThrow({ where: { missionId: offGrid.mission.id, code: "J-24" } })).toMatchObject({ params: { n: "1", canal: "Salon du quartier", date: "1 novembre 2026" } });
+
+  // « Préparer seulement » : journalisé, annule les programmations, et BienDecider ne diffuse plus rien.
+  await expect(setDelegationLevel(company.id, "tout")).rejects.toMatchObject({ code: "M-85" });
+  const later = await seed("site_page", "site", "Nos horaires", { page: "Nos horaires" });
+  await prisma.publication.create({ data: { companyId: company.id, missionId: later.mission.id, contentId: later.content.id, versionNumber: 1, title: "Nos horaires", channel: "site", channelLabel: "Votre site vitrine", mode: "confirmed", status: "scheduled", scheduledAt: new Date(Date.now() + 86400000), idempotencyKey: `${later.content.id}:v1:1` } });
+  expect(await setDelegationLevel(company.id, "prepare")).toEqual({ level: "prepare", cancelled: 1 });
+  expect(await prisma.publication.findFirstOrThrow({ where: { contentId: later.content.id } })).toMatchObject({ status: "cancelled", cancelReason: "passage en « Préparer seulement »" });
+  expect(await prisma.journalEntry.findFirstOrThrow({ where: { companyId: company.id, code: "J-26" } })).toMatchObject({ params: { niveau: "Préparer seulement", suite: " Programmations annulées." } });
+  await expect(publishContentNow(company.id, later.content.id, { number: 1, confirmed: true })).rejects.toMatchObject({ code: "M-55" });
+  expect(await setDelegationLevel(company.id, "prepare")).toEqual({ level: "prepare", cancelled: 0 });
+  expect(await prisma.journalEntry.count({ where: { companyId: company.id, code: "J-26" } })).toBe(1);
+});
+
 test("story 9.1 to 9.3: missions and credits follow the transitions of the specification, in one transaction each", async ({ company }) => {
   const { prisma } = await import("../src/lib/prisma");
   const { readCredits } = await import("../src/lib/credits");

@@ -5,6 +5,7 @@ import { PublishRefusedError } from "@/lib/execution-error";
 import { readJsonObject } from "@/lib/request-body";
 import { getSessionCompany } from "@/lib/session";
 import { SiteReviewRequiredError, republishSite } from "@/lib/site/publish";
+import { prepareOnlyRefusal } from "@/lib/delegation-level";
 
 export const maxDuration = 60;
 
@@ -18,6 +19,8 @@ export async function POST(request: NextRequest) {
   }
   const company = await getSessionCompany();
   if (!company) return NextResponse.json({ error: "Non connecté" }, { status: 401 });
+  const prepareOnly = prepareOnlyRefusal(company);
+  if (prepareOnly) return NextResponse.json(prepareOnly, { status: 403 });
   const body = await readJsonObject(request);
   const acknowledged = body?.acknowledgedReviewIds;
   const acknowledgedReviewIds = Array.isArray(acknowledged) && acknowledged.every((value) => typeof value === "string") ? acknowledged as string[] : [];

@@ -6,6 +6,7 @@ import { Tag } from "@/components/mockup-ui";
 import { MissionTags, MissionTracker } from "@/components/mission-ui";
 import { MissionActions } from "@/components/mission-actions";
 import { PrepareDraftButton } from "@/components/prepare-draft-button";
+import { DELEGATION_LABELS, asDelegationLevel } from "@/lib/delegation-level";
 import { getShellProps } from "@/lib/shell-data";
 import { requireWorkspaceCompany } from "@/lib/workspace";
 import { loadMissionView } from "@/lib/missions/view";
@@ -111,7 +112,7 @@ export default async function MissionPage({ params }: { params: Promise<{ id: st
             <dt>Coût</dt><dd>{mission.actions.launched ? "Lancée : crédits déjà réglés" : `${LAUNCH_COST_CREDITS} crédits au lancement`}</dd>
             <dt>Dépenses externes</dt><dd>0 € engagé</dd>
             <dt>Règle d&apos;arrêt</dt><dd>{mission.stopRuleDays ? `Bilan à ${mission.stopRuleDays} jours` : "—"}</dd>
-            <dt>Délégation</dt><dd>Vous validez chaque contenu ; rien n&apos;est diffusé sans votre confirmation.</dd>
+            <dt>Délégation</dt><dd>{DELEGATION_LABELS[asDelegationLevel(company.delegationLevel)]} : vous validez chaque contenu ; {asDelegationLevel(company.delegationLevel) === "prepare" ? "vous le diffusez vous-même, puis le déclarez" : "rien n'est diffusé sans votre confirmation"}.</dd>
           </dl>
           <h3>Comment Paul vous accompagne</h3>
           <ol className="small">
