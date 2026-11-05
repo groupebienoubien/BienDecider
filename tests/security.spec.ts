@@ -30,6 +30,8 @@ const GUARDED_ROUTES: Guarded[] = [
   { method: "PATCH", path: "/api/admin/companies/[id]/limits", denied: 403 },
   { method: "PATCH", path: "/api/admin/companies/[id]/suspension", denied: 403 },
   { method: "PATCH", path: "/api/admin/usage-alerts", denied: 403 },
+  { method: "POST", path: "/api/feedback", denied: 401 },
+  { method: "PATCH", path: "/api/admin/feedback/[id]", denied: 403 },
   { method: "GET", path: "/api/admin/delegation-risk", denied: 403 },
   { method: "PATCH", path: "/api/admin/delegation-risk", denied: 403 },
   { method: "PATCH", path: "/api/admin/signup-control", denied: 403 },
@@ -913,6 +915,102 @@ test("the activity page of a company is for administrators only, scoped to that 
   } finally {
     await page.context().clearCookies();
     await prisma.company.deleteMany({ where: { id: { in: [target.id, other.id, empty.id] } } });
+    if (createdAdmin) await prisma.company.delete({ where: { id: adminCompany.id } });
+    await prisma.$disconnect();
+  }
+});
+
+test("feedback is attached to the session company, validated, rate limited and mailed to the administrators", async ({ request }) => {
+  test.setTimeout(60000);
+  const prisma = openDatabase();
+  const marker = randomUUID().slice(0, 8);
+  const a = await prisma.company.create({ data: { ownerEmail: `security-feedback-a-${marker}@example.invalid`, name: `Feedback A ${marker}`, trade: "Artisan", servingArea: "Paris" } });
+  const b = await prisma.company.create({ data: { ownerEmail: `security-feedback-b-${marker}@example.invalid`, name: `Feedback B ${marker}`, trade: "Artisan", servingArea: "Paris" } });
+  const headers = (company: typeof a) => ({ Cookie: sessionCookie(company.ownerEmail, company.sessionVersion), Origin: baseURL });
+  const post = (company: typeof a, data: unknown, extra: Record<string, string> = {}) => request.post(`${baseURL}/api/feedback`, { headers: { ...headers(company), ...extra }, data });
+  const smtp = process.env.SERVICE_SMTP_URL ? new URL(process.env.SERVICE_SMTP_URL) : null;
+  const admins = (process.env.ADMIN_EMAILS ?? "").split(",").map((email) => email.trim()).filter(Boolean);
+  const sink = smtp && smtp.protocol === "smtp:" && smtp.hostname === "127.0.0.1" && admins.length > 0 ? await startSmtpSink(Number(smtp.port)) : null;
+  try {
+    expect((await request.post(`${baseURL}/api/feedback`, { headers: { Origin: baseURL }, data: { kind: "problem", text: "Sans session" } })).status()).toBe(401);
+    expect((await request.post(`${baseURL}/api/feedback`, { headers: { Cookie: headers(a).Cookie, Origin: "https://attacker.invalid" }, data: { kind: "problem", text: "Autre origine" } })).status()).toBe(403);
+    for (const data of [{}, { kind: "autre", text: "x" }, { kind: "problem", text: "   " }, { kind: "problem", text: "x".repeat(1001) }, "texte"]) {
+      expect((await post(a, data)).status(), JSON.stringify(data)).toBe(400);
+    }
+    expect(await prisma.feedback.count({ where: { companyId: a.id } })).toBe(0);
+
+    // Le texte hostile est conservé tel quel ; l'identifiant d'entreprise du corps est ignoré ; seul le chemin de la page est gardé.
+    const hostile = `<script>alert("${marker}")</script>`;
+    const sent = await post(a, { kind: "confusion", text: hostile, page: "/equipe?token=secret#frag", companyId: b.id });
+    expect(sent.status()).toBe(201);
+    expect(await prisma.feedback.findMany({ where: { companyId: b.id } })).toHaveLength(0);
+    expect(await prisma.feedback.findMany({ where: { companyId: a.id } })).toMatchObject([{ kind: "confusion", text: hostile, page: "/equipe", handledAt: null }]);
+
+    if (sink) {
+      await expect.poll(() => sink.messages.length, { timeout: 15000 }).toBe(admins.length);
+      expect(sink.messages.flatMap((message) => message.to).sort()).toEqual([...admins].sort());
+      expect(sink.messages[0].subject).toContain(`Feedback A ${marker}`);
+      expect(sink.messages[0].text).toContain("Page : /equipe");
+      expect(sink.messages[0].text).toContain(hostile);
+    }
+
+    // Limite : 10 par heure et par entreprise, au-delà 429 avec Retry-After ; l'autre entreprise n'est pas touchée.
+    for (let index = 1; index < 10; index++) expect((await post(a, { kind: "problem", text: `Signalement ${index}` })).status()).toBe(201);
+    const limited = await post(a, { kind: "problem", text: "Le onzième" });
+    expect(limited.status()).toBe(429);
+    expect(Number(limited.headers()["retry-after"])).toBeGreaterThan(0);
+    expect(await prisma.feedback.count({ where: { companyId: a.id } })).toBe(10);
+    expect((await post(b, { kind: "idea", text: "Une idée" })).status()).toBe(201);
+  } finally {
+    await sink?.close();
+    await prisma.company.deleteMany({ where: { id: { in: [a.id, b.id] } } });
+    await prisma.$disconnect();
+  }
+});
+
+test("feedback is listed for administrators only, shown as text, and can be marked handled", async ({ request, page }) => {
+  const admins = (process.env.ADMIN_EMAILS ?? "").split(",").map((email) => email.trim()).filter(Boolean);
+  test.skip(admins.length === 0, "Requires ADMIN_EMAILS on the server, as configured in CI.");
+  const prisma = openDatabase();
+  const adminEmail = admins[0];
+  const marker = randomUUID().slice(0, 8);
+  let createdAdmin = false;
+  let adminCompany = await prisma.company.findUnique({ where: { ownerEmail: adminEmail } });
+  if (!adminCompany) {
+    adminCompany = await prisma.company.create({ data: { ownerEmail: adminEmail, name: "Admin feedback test", trade: "Artisan", servingArea: "Paris" } });
+    createdAdmin = true;
+  }
+  const user = await prisma.company.create({ data: { ownerEmail: `security-feedback-list-${marker}@example.invalid`, name: `Dirigeant ${marker}`, trade: "Artisan", servingArea: "Paris" } });
+  const hostile = `<b id="hostile-${marker}">gras</b> & <script>window.__feedback${marker}=1</script>`;
+  const item = await prisma.feedback.create({ data: { companyId: user.id, kind: "problem", page: "/plan", text: hostile } });
+  const adminCookie = sessionCookie(adminEmail, adminCompany.sessionVersion);
+  const patch = (headers: Record<string, string>, data: unknown) => request.patch(`${baseURL}/api/admin/feedback/${item.id}`, { headers, data });
+  try {
+    expect((await patch({ Cookie: sessionCookie(user.ownerEmail, user.sessionVersion), Origin: baseURL }, { handled: true })).status()).toBe(403);
+    expect((await patch({ Cookie: adminCookie, Origin: "https://attacker.invalid" }, { handled: true })).status()).toBe(403);
+    expect((await patch({ Cookie: adminCookie, Origin: baseURL }, { handled: "oui" })).status()).toBe(400);
+    expect((await request.patch(`${baseURL}/api/admin/feedback/inexistant`, { headers: { Cookie: adminCookie, Origin: baseURL }, data: { handled: true } })).status()).toBe(404);
+    expect((await prisma.feedback.findUniqueOrThrow({ where: { id: item.id } })).handledAt).toBeNull();
+
+    await page.context().clearCookies();
+    await page.context().addCookies([{ name: "pepito_session", value: adminCookie.slice(adminCookie.indexOf("=") + 1), url: baseURL }]);
+    await page.goto(`${baseURL}/admin`);
+    const row = page.locator(`tr[data-feedback-id="${item.id}"]`);
+    await expect(row).toContainText(hostile);
+    await expect(row).toContainText(`Dirigeant ${marker}`);
+    await expect(row).toContainText("/plan");
+    await expect(row).toContainText("À traiter");
+    expect(await page.locator(`#hostile-${marker}`).count()).toBe(0);
+    expect(await page.evaluate((name) => (window as unknown as Record<string, unknown>)[name], `__feedback${marker}`)).toBeUndefined();
+    await row.getByRole("button", { name: "Marquer traité" }).click();
+    await expect(row).toContainText("Traité");
+    expect((await prisma.feedback.findUniqueOrThrow({ where: { id: item.id } })).handledAt).not.toBeNull();
+    await row.getByRole("button", { name: "Remettre à traiter" }).click();
+    await expect(row).toContainText("À traiter");
+    expect((await prisma.feedback.findUniqueOrThrow({ where: { id: item.id } })).handledAt).toBeNull();
+  } finally {
+    await page.context().clearCookies();
+    await prisma.company.deleteMany({ where: { id: user.id } });
     if (createdAdmin) await prisma.company.delete({ where: { id: adminCompany.id } });
     await prisma.$disconnect();
   }

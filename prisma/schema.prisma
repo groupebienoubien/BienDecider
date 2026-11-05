@@ -70,6 +70,7 @@ model Company {
   chatMessages    ChatMessage[]
   planItems       ActionPlanItem[]
   usageEvents     UsageEvent[]
+  feedbacks       Feedback[]
   agentRuns       AgentRun[]
   agentRunAttempts AgentRunAttempt[]
   usageReservations UsageReservation[]
@@ -482,5 +483,20 @@ model UsageAlert {
   createdAt    DateTime @default(now())
 
   @@unique([day, scope])
+  @@index([createdAt])
+}
+
+/// Signalement laisse par un dirigeant depuis n'importe quelle page connectee (story 7.4, #275).
+model Feedback {
+  id        String    @id @default(cuid())
+  companyId String
+  kind      String // problem | confusion | idea
+  page      String // chemin seul, sans parametres ni fragment
+  text      String
+  handledAt DateTime? // null = a traiter
+  createdAt DateTime  @default(now())
+  company   Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, createdAt])
   @@index([createdAt])
 }

@@ -6,6 +6,7 @@ import { PaulPanel } from "@/components/paul-panel";
 import { BrandLogo } from "@/components/brand-logo";
 import { WorkspaceBreadcrumb } from "@/components/workspace-breadcrumb";
 import { EmailVerificationBanner } from "@/components/email-verification-banner";
+import { FeedbackDialog } from "@/components/feedback-dialog";
 
 const MONEY = new Intl.NumberFormat("fr-FR", { maximumFractionDigits: 2 });
 
@@ -90,6 +91,7 @@ export function AppShell({
             <Link href="/confidentialite">Confidentialité</Link>
             <Link href="/mentions-legales">Mentions légales</Link>
             <a href="mailto:contact@biendecider.com">Contact</a>
+            {(companyName || ownerEmail) && <FeedbackDialog />}
             {(companyName || ownerEmail) && <form action="/api/auth/logout" method="post"><button type="submit">Déconnexion</button></form>}
           </span>
         </footer>

@@ -33,6 +33,7 @@ import { appBaseUrl, isServiceMailConfigured, sendServiceEmail } from "../src/li
 import { passwordResetEmail, passwordResetLink, verificationEmail, verificationLink } from "../src/lib/service-mail-templates";
 import { ERROR_MESSAGE_MAX_LENGTH, redactSecrets } from "../src/lib/redact-secrets";
 import { DEFAULT_USAGE_ALERT_THRESHOLDS, alertEmail, companyAlertScope, crossedAlerts, parseUsageAlertInput, safeAlertLabel } from "../src/lib/usage-alert-rules";
+import { FEEDBACK_TEXT_MAX, cleanFeedbackPage, feedbackEmail, parseFeedbackInput } from "../src/lib/feedback";
 import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH, passwordPolicyError } from "../src/lib/password-policy";
 import { startSmtpSink } from "./support/smtp-sink";
 import { BetaToolRunner } from "@anthropic-ai/sdk/lib/tools/BetaToolRunner";
@@ -1464,4 +1465,22 @@ test("usage alerts: thresholds are accepted only as numbers from 0.01 to 100000 
   for (const body of [null, [], "x", {}, { companyDailyUsd: 0, totalDailyUsd: 10 }, { companyDailyUsd: -1, totalDailyUsd: 10 }, { companyDailyUsd: "3", totalDailyUsd: 10 }, { companyDailyUsd: 3, totalDailyUsd: 100001 }, { companyDailyUsd: 3, totalDailyUsd: Number.NaN }, { companyDailyUsd: 3 }]) {
     expect(parseUsageAlertInput(body).ok, JSON.stringify(body)).toBe(false);
   }
+});
+
+test("feedback rules: a kind from the list, 1 to 1000 trimmed characters, and the path of the page only", () => {
+  expect(parseFeedbackInput({ kind: "idea", text: "  Un bouton ici  ", page: "/dashboard?x=1#top" })).toEqual({ ok: true, value: { kind: "idea", text: "Un bouton ici", page: "/dashboard" } });
+  expect(parseFeedbackInput({ kind: "problem", text: "x".repeat(FEEDBACK_TEXT_MAX) }).ok).toBe(true);
+  for (const body of [null, [], "x", {}, { kind: "autre", text: "a" }, { kind: "problem", text: "   " }, { kind: "problem", text: 12 }, { kind: "problem", text: "x".repeat(FEEDBACK_TEXT_MAX + 1) }]) {
+    expect(parseFeedbackInput(body).ok, JSON.stringify(body)).toBe(false);
+  }
+  expect(cleanFeedbackPage("/equipe?token=secret#frag")).toBe("/equipe");
+  expect(cleanFeedbackPage("https://www.biendecider.com/site?a=b")).toBe("/site");
+  expect(cleanFeedbackPage("/" + "a".repeat(500))).toHaveLength(200);
+  expect(cleanFeedbackPage(undefined)).toBe("/");
+  expect(cleanFeedbackPage("   ")).toBe("/");
+  const mail = feedbackEmail({ kind: "confusion", page: "/plan", text: "Je ne comprends pas\nce bouton", companyLabel: "Atelier\nBcc: x@y.z" }, "https://www.biendecider.com/admin");
+  expect(mail.subject).toBe("Signalement (une confusion) : Atelier Bcc: x@y.z");
+  expect(mail.text).toContain("Page : /plan");
+  expect(mail.text).toContain("Je ne comprends pas\nce bouton");
+  expect(mail.text).toContain("https://www.biendecider.com/admin");
 });

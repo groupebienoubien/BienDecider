@@ -190,6 +190,35 @@ test("Gmail compose requires confirmation and handles uncertain sends", async ({
   } finally { await prisma.$disconnect(); }
 });
 
+test("a manager reports a problem from any page, on desktop and on a phone, and gets an acknowledgement", async ({ page, company }) => {
+  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }) });
+  try {
+    await page.goto(`${baseURL}/dashboard`);
+    const footer = page.locator("footer.workspace-footer");
+    await footer.getByRole("button", { name: "Signaler un problème" }).click();
+    const dialog = page.getByRole("dialog", { name: "Signaler un problème" });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "Envoyer" })).toBeDisabled();
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden();
+
+    await page.setViewportSize({ width: 320, height: 720 });
+    await footer.getByRole("button", { name: "Signaler un problème" }).click();
+    await expect(dialog).toBeVisible();
+    await dialog.getByLabel("Type de signalement").selectOption("idea");
+    await dialog.getByLabel("Votre message").fill("Un raccourci vers mes devis serait utile.");
+    const box = await dialog.boundingBox();
+    expect(box && box.x >= 0 && box.x + box.width <= 320).toBe(true);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await dialog.getByRole("button", { name: "Envoyer" }).click();
+    await expect(dialog.getByRole("status")).toContainText("bien transmis");
+    await dialog.getByRole("button", { name: "Fermer" }).first().click();
+    await expect(dialog).toBeHidden();
+    const saved = await prisma.feedback.findMany({ where: { companyId: company.id } });
+    expect(saved).toMatchObject([{ kind: "idea", page: "/dashboard", text: "Un raccourci vers mes devis serait utile.", handledAt: null }]);
+  } finally { await prisma.$disconnect(); }
+});
+
 test("Gmail start, refusal and send guards do not contact providers", async ({ page, company }) => {
   expect(company.id).toBeTruthy();
   await page.goto(`${baseURL}/connexions`);

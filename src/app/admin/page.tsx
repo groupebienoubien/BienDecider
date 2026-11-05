@@ -14,6 +14,7 @@ import { CompanyQuotaForm } from "./company-quota-form";
 import { SignupControlForm } from "./signup-control-form";
 import { readSignupControl, todaySignupCount } from "@/lib/signup-control";
 import { UsageAlertsPanel } from "./usage-alerts-panel";
+import { FeedbackList } from "./feedback-list";
 import { readUsageAlertThresholds } from "@/lib/usage-alerts";
 import { parisDateKey } from "@/lib/agents/personas";
 import { CHAT_USAGE_PURPOSES, parisQuotaWindows } from "@/lib/quota-windows";
@@ -137,6 +138,8 @@ export default async function AdminPage() {
           alerts={recentAlerts.map((alert) => ({ id: alert.id, day: alert.day, label: alert.label, scope: alert.scope, thresholdUsd: alert.thresholdUsd, costUsd: alert.costUsd }))}
           today={alertDay}
         />
+
+        <FeedbackList />
 
         {isExplicitAdminEmail(ownerEmail) && (
           <section className="setting-section">
