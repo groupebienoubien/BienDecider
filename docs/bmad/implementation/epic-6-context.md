@@ -53,3 +53,9 @@ Hors epic mais dans la vague 0 : terminer #79 et #81 (déjà en relecture), puis
 - Mot de passe : 8 à 128 caractères pour les nouveaux mots de passe (cahier des charges FR-10 et #24) ; les existants restent valables.
 - Prérequis de déploiement : `ADMIN_EMAILS` (6.1, 6.2), puis `SERVICE_SMTP_URL`, `SERVICE_MAIL_FROM`, `APP_BASE_URL` et les enregistrements DNS du fournisseur (6.3 à 6.5).
 
+## Validation locale du lot (2026-11-05)
+
+- Lint strict, build et TypeScript ; 108 tests sans réseau (dont ceux de l'envoi, de la règle de mot de passe et de l'administration fermée) ; `test:security` (16, dont confirmation d'adresse et récupération de mot de passe de bout en bout contre un serveur SMTP de test) ; `test:brand` (8) ; `test:gmail` (3) ; `test:ux` (45, 2 ignorés d'origine) ; test moteur du refus des lancements pour adresse non confirmée.
+- Base locale PGlite multiplexée : la CI rejoue le tout sur un vrai PostgreSQL.
+- Reste à faire hors code : `ADMIN_EMAILS`, fournisseur SMTP et DNS (SPF, DKIM, DMARC), variables Vercel, puis recette sur le domaine et notes dans #47, #63, #64, #24.
+

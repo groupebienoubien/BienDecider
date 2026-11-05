@@ -2,7 +2,7 @@
 title: 'Story 6.5 : Récupérer mon mot de passe'
 type: 'feature'
 created: '2026-11-05'
-status: 'ready-for-dev'
+status: 'review'
 baseline_commit: '7e7db51'
 route: 'dispatch'
 review_loop_iteration: 0
@@ -52,7 +52,7 @@ context:
 
 ## Tasks & Acceptance
 
-- [ ] Règle de mot de passe commune et textes alignés.
-- [ ] Demande et réinitialisation, limites, sessions fermées, réponse générique.
-- [ ] Pages et lien de connexion.
-- [ ] Tests : jeton unique et expiré, mot de passe invalide sans consommation, sessions fermées, réponse identique compte connu ou inconnu, limite IP, déverrouillage.
+- [x] Règle de mot de passe commune et textes alignés.
+- [x] Demande et réinitialisation, limites, sessions fermées, réponse générique.
+- [x] Pages et lien de connexion.
+- [x] Tests : jeton unique et expiré, mot de passe invalide sans consommation, sessions fermées, réponse identique compte connu ou inconnu, limite IP, déverrouillage.

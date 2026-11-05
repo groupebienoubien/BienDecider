@@ -2,7 +2,7 @@
 title: 'Story 6.2 : Fermer l''administration par défaut'
 type: 'security'
 created: '2026-11-05'
-status: 'ready-for-dev'
+status: 'review'
 baseline_commit: '7e7db51'
 route: 'dispatch'
 review_loop_iteration: 0
@@ -48,8 +48,8 @@ context:
 
 ## Tasks & Acceptance
 
-- [ ] Règle unique dans `admin.ts` ; test unitaire mis à jour.
-- [ ] Lien masqué ; test navigateur page refusée et lien absent.
-- [ ] Documentation : `ADMIN_EMAILS` obligatoire pour accéder à l'administration (README, `.env.example` s'il existe).
+- [x] Règle unique dans `admin.ts` ; test unitaire mis à jour.
+- [x] Lien masqué ; test navigateur page refusée et lien absent.
+- [x] Documentation : `ADMIN_EMAILS` obligatoire pour accéder à l'administration (README, `.env.example` s'il existe).
 
 Prérequis de déploiement : `ADMIN_EMAILS` définie en Production avant de livrer, sinon plus personne n'accède à l'administration.

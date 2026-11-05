@@ -2,7 +2,7 @@
 title: 'Story 6.4 : Confirmer mon e-mail à l''inscription'
 type: 'security'
 created: '2026-11-05'
-status: 'ready-for-dev'
+status: 'review'
 baseline_commit: '7e7db51'
 route: 'dispatch'
 review_loop_iteration: 0
@@ -52,7 +52,7 @@ context:
 
 ## Tasks & Acceptance
 
-- [ ] Schéma, migration, jetons.
-- [ ] Envoi à l'inscription, confirmation, renvoi.
-- [ ] Refus côté serveur des lancements, messages, mise en ligne, envois ; bandeau.
-- [ ] Tests : jeton unique et expiré, empreinte seule en base, refus par motif, confirmation puis accès, renvoi limité.
+- [x] Schéma, migration, jetons.
+- [x] Envoi à l'inscription, confirmation, renvoi.
+- [x] Refus côté serveur des lancements, messages, mise en ligne, envois ; bandeau.
+- [x] Tests : jeton unique et expiré, empreinte seule en base, refus par motif, confirmation puis accès, renvoi limité.

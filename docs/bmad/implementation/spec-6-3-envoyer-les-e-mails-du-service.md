@@ -2,7 +2,7 @@
 title: 'Story 6.3 : Envoyer les e-mails du service'
 type: 'feature'
 created: '2026-11-05'
-status: 'ready-for-dev'
+status: 'review'
 baseline_commit: '7e7db51'
 route: 'dispatch'
 review_loop_iteration: 0
@@ -49,7 +49,7 @@ context:
 
 ## Tasks & Acceptance
 
-- [ ] Envoi SMTP et modèles ; validation des entrées.
-- [ ] Puits SMTP de test et test d'envoi (contenu, expéditeur, refus d'une adresse piégée).
-- [ ] Variables de la CI ; documentation DNS.
+- [x] Envoi SMTP et modèles ; validation des entrées.
+- [x] Puits SMTP de test et test d'envoi (contenu, expéditeur, refus d'une adresse piégée).
+- [x] Variables de la CI ; documentation DNS.
 - [ ] Déploiement : choisir le fournisseur, créer l'expéditeur, publier SPF/DKIM/DMARC, saisir `SERVICE_SMTP_URL`, `SERVICE_MAIL_FROM`, `APP_BASE_URL` dans Vercel, redéployer, envoyer un message de test et le contrôler (boîte de réception, pas les indésirables) ; notes dans #47.
