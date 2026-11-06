@@ -39,6 +39,8 @@ const GUARDED_ROUTES: Guarded[] = [
   { method: "GET", path: "/api/missions/catalogue", denied: 401 },
   { method: "POST", path: "/api/missions/[id]/transition", denied: 401 },
   { method: "POST", path: "/api/missions/[id]/content", denied: 401 },
+  { method: "POST", path: "/api/missions/[id]/report", denied: 401 },
+  { method: "POST", path: "/api/missions/[id]/decision", denied: 401 },
   { method: "POST", path: "/api/contents/[id]", denied: 401 },
   { method: "POST", path: "/api/contents/[id]/diffusion", denied: 401 },
   { method: "POST", path: "/api/delegation", denied: 401 },
@@ -1543,6 +1545,34 @@ test("Partenariats: the agency list belongs to its company, the scope names one 
     expect((await prisma.mission.findUniqueOrThrow({ where: { id: mission.id } })).scope).toEqual({ agencyIds: [parc.id] });
   } finally {
     await page.context().clearCookies();
+    await prisma.company.deleteMany({ where: { id: { in: [a.id, b.id] } } });
+    await prisma.$disconnect();
+  }
+});
+
+test("a mission report and its decision belong to the session company, are validated by the server and refused from another origin", async ({ request }) => {
+  const prisma = openDatabase();
+  const marker = randomUUID().slice(0, 8);
+  const a = await prisma.company.create({ data: { ownerEmail: `security-report-a-${marker}@example.invalid`, name: `Bilan A ${marker}`, trade: "Artisan", servingArea: "Paris" } });
+  const b = await prisma.company.create({ data: { ownerEmail: `security-report-b-${marker}@example.invalid`, name: `Bilan B ${marker}`, trade: "Artisan", servingArea: "Paris" } });
+  const headers = (company: typeof a, origin = baseURL) => ({ Cookie: sessionCookie(company.ownerEmail, company.sessionVersion), Origin: origin });
+  const mission = await prisma.mission.create({ data: { companyId: a.id, template: "site_page", channel: "site", title: "Page tarifs", outcome: "Deux demandes", originalOutcome: "Deux demandes", finding: "Pas de page tarifs", scope: { page: "Nos tarifs" }, status: "active", firstLaunchedAt: new Date(), position: 1 } });
+  const content = await prisma.missionContent.create({ data: { companyId: a.id, missionId: mission.id, channel: "site", format: "site_page", currentNumber: 1, validatedNumber: 1, versions: { create: { number: 1, title: "Nos tarifs", body: "Sur devis.", author: "paul" } } } });
+  const report = (company: typeof a, data: unknown, origin?: string) => request.post(`${baseURL}/api/missions/${mission.id}/report`, { headers: headers(company, origin), data });
+  const decide = (company: typeof a, data: unknown) => request.post(`${baseURL}/api/missions/${mission.id}/decision`, { headers: headers(company), data });
+  try {
+    expect((await report(a, { qualifiedLeads: 1, meetings: 0 }, "https://attacker.invalid")).status()).toBe(403);
+    expect(await (await report(a, { qualifiedLeads: 1, meetings: 0 })).json()).toMatchObject({ code: "M-37" });
+    await prisma.publication.create({ data: { companyId: a.id, missionId: mission.id, contentId: content.id, versionNumber: 1, title: "Nos tarifs", channel: "site", channelLabel: "Votre site vitrine", mode: "confirmed", status: "sent", sentAt: new Date(), idempotencyKey: `${content.id}:v1:1` } });
+    expect((await report(b, { qualifiedLeads: 1, meetings: 0 })).status()).toBe(404);
+    expect(await (await report(a, { qualifiedLeads: "<b>1</b>", meetings: 0 })).json()).toMatchObject({ code: "M-39" });
+    expect((await report(a, { qualifiedLeads: 2, meetings: 1, signedRevenue: 1500, note: "<script>x</script>" })).status()).toBe(201);
+    expect((await decide(a, { choice: "élargir", expectedVersion: mission.version })).status()).toBe(400);
+    expect((await decide(b, { choice: "stop", expectedVersion: mission.version })).status()).toBe(404);
+    expect(await (await decide(a, { choice: "stop", expectedVersion: mission.version + 5 })).json()).toMatchObject({ code: "M-02" });
+    expect(await (await decide(a, { choice: "continue", expectedVersion: mission.version })).json()).toEqual({ choice: "continue" });
+    expect(await prisma.missionReport.count({ where: { missionId: mission.id } })).toBe(1);
+  } finally {
     await prisma.company.deleteMany({ where: { id: { in: [a.id, b.id] } } });
     await prisma.$disconnect();
   }

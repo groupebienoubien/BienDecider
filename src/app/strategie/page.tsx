@@ -8,6 +8,7 @@ import { getShellProps } from "@/lib/shell-data";
 import { prisma } from "@/lib/prisma";
 import { firstNameOf, requireWorkspaceCompany } from "@/lib/workspace";
 import { loadMissionViews, priorityOf } from "@/lib/missions/view";
+import { learningsOf } from "@/lib/missions/results-view";
 import { loadCancelledSchedules } from "@/lib/contents/view";
 import { nextStep } from "@/lib/missions/stage";
 import { LAUNCH_COST_CREDITS } from "@/lib/missions/rules";
@@ -27,6 +28,7 @@ export default async function StrategiePage() {
   const cancelledSchedules = await loadCancelledSchedules(company.id);
   const STAGE_LINE: Partial<Record<string, [string, string]>> = { verify: ["diffusion à vérifier", "Vérifier"], scheduled: ["diffusion programmée", "Voir la programmation"] };
   const firstName = firstNameOf(company.ownerName);
+  const learnings = learningsOf(missions);
 
   return (
     <AppShell {...shell}>
@@ -60,6 +62,30 @@ export default async function StrategiePage() {
         </div>
         <small>Rien ne sera lancé ou diffusé sans votre accord.</small>
       </section>
+
+      {learnings.length > 0 && (
+        <section className="section-space" aria-labelledby="learnings-title">
+          <div className="section-title">
+            <h2 id="learnings-title">Ce que Paul apprend</h2>
+            <p>Vos bilans comparés au résultat recherché de chaque mission. Rien n&apos;est appliqué sans votre confirmation.</p>
+          </div>
+          {learnings.map(({ mission, reading }) => (
+            <article key={mission.id} className="stack" aria-label={`Ce que Paul apprend : ${mission.title}`}>
+              <h3>{mission.title}</h3>
+              <dl className="learning-grid">
+                <div><dt>Observé</dt><dd>{reading.observed}</dd></div>
+                <div><dt>Ce que cela suggère</dt><dd>{reading.suggests}</dd></div>
+                <div><dt>Ce que cela ne prouve pas</dt><dd>{reading.notProven}</dd></div>
+                <div><dt>Impact sur le plan</dt><dd>{reading.impact}</dd></div>
+              </dl>
+              <div className="heading-actions">
+                {mission.status === "active" && <Link className="btn" href={`/resultats?mission=${mission.id}`}>Décider la suite</Link>}
+                <PaulButton label="En parler avec Paul" mission={mission} />
+              </div>
+            </article>
+          ))}
+        </section>
+      )}
 
       <section className="section-space" aria-labelledby="to-validate-title">
         <div className="section-title"><h2 id="to-validate-title">À valider par vous</h2></div>

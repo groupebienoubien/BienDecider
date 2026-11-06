@@ -572,8 +572,40 @@ model Mission {
   credits             CreditLedger[]
   content             MissionContent?
   sitePage            SitePage?
+  reports             MissionReport[]
+  decisions           MissionDecision[]
 
   @@index([companyId, status])
+}
+
+/// Bilan déclaré d'une mission (§7.1, #294) : le dernier fait foi ; « à jour » tant que le nombre de diffusions n'a pas changé.
+model MissionReport {
+  id               String            @id @default(cuid())
+  missionId        String
+  qualifiedLeads   Int
+  meetings         Int // <= qualifiedLeads (contrainte CHECK dans la migration)
+  signedRevenue    Int? // null : non déclaré, jamais zéro
+  note             String? // 600 caractères au plus
+  publicationCount Int // diffusions de la mission au moment de la saisie
+  createdAt        DateTime          @default(now())
+  mission          Mission           @relation(fields: [missionId], references: [id], onDelete: Cascade)
+  decisions        MissionDecision[]
+
+  @@index([missionId, createdAt])
+}
+
+/// Décision de suite (§7.2, #52) : poursuivre ou arrêter ; la dernière fait foi.
+model MissionDecision {
+  id               String         @id @default(cuid())
+  missionId        String
+  choice           String // continue | stop
+  publicationCount Int
+  reportId         String?
+  createdAt        DateTime       @default(now())
+  mission          Mission        @relation(fields: [missionId], references: [id], onDelete: Cascade)
+  report           MissionReport? @relation(fields: [reportId], references: [id], onDelete: SetNull)
+
+  @@index([missionId, createdAt])
 }
 
 /// Registre des credits en ajout seul (story 9.3, #56) : chaque mouvement, avec le solde apres.

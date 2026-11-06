@@ -29,6 +29,7 @@ import { LAUNCH_COST_CREDITS, checkTransition, validateNewMission, type MissionA
 import { missionSnapshot } from "@/lib/missions/service";
 import { loadMissionViews, priorityOf } from "@/lib/missions/view";
 import { listAgencies } from "@/lib/agencies/service";
+import { learningOf } from "@/lib/missions/results-view";
 import { STAGE_LABELS, nextStep } from "@/lib/missions/stage";
 import { MISSION_CHANNELS, channelLabel, isChannelEnabled } from "@/lib/missions/channels";
 import { TEMPLATE_KEYS, availableTemplates, enabledChannels } from "@/lib/missions/templates";
@@ -99,24 +100,32 @@ export async function buildCurrentStatus(companyId: string, now = new Date(), co
     priorite: priorityMission
       ? { missionId: priorityMission.id, titre: priorityMission.title, choisieAvecPaul: company.priorityMissionId === priorityMission.id }
       : null,
-    missions: missions.map((mission) => ({
-      id: mission.id,
-      titre: mission.title,
-      modele: mission.templateLabel,
-      canal: mission.channelLabel,
-      statut: STATUS_WORDS[mission.status],
-      etape: STAGE_LABELS[mission.stage],
-      resultatRecherche: mission.outcome,
-      constat: mission.finding,
-      perimetre: mission.scopeSummary,
-      ...(mission.template === "agencies" ? { agencesChoisies: mission.scope.agencyIds ?? [] } : {}),
-      regleDArretJours: mission.stopRuleDays,
-      priorite: mission.priority,
-      dejaLancee: Boolean(updated.get(mission.id)?.firstLaunchedAt),
-      misAJour: formatParisTime(updated.get(mission.id)?.updatedAt, now),
-      // Story 4.2 : la mission a-t-elle changé depuis ton message précédent dans cette conversation ?
-      aChangeDepuisMonMessagePrecedent: Boolean(previousReply && (updated.get(mission.id)?.updatedAt.getTime() ?? 0) > previousReply.createdAt.getTime()),
-    })),
+    missions: missions.map((mission) => {
+      const reading = learningOf(mission, now);
+      return {
+        id: mission.id,
+        titre: mission.title,
+        modele: mission.templateLabel,
+        canal: mission.channelLabel,
+        statut: STATUS_WORDS[mission.status],
+        etape: STAGE_LABELS[mission.stage],
+        resultatRecherche: mission.outcome,
+        constat: mission.finding,
+        perimetre: mission.scopeSummary,
+        ...(mission.template === "agencies" ? { agencesChoisies: mission.scope.agencyIds ?? [] } : {}),
+        diffusions: mission.diffusions,
+        bilan: mission.report ? { demandesQualifiees: mission.report.qualifiedLeads, rendezVous: mission.report.meetings, caSigne: mission.report.signedRevenue ?? "non déclaré", aJour: mission.report.upToDate, attribution: "déclarative, non vérifiée" } : null,
+        lectureDuBilan: reading && { suggere: reading.suggests, impact: reading.impact },
+        decision: mission.decision ? { choix: mission.decision.choice === "stop" ? "arrêt" : "poursuite", aJour: mission.decision.upToDate } : null,
+        regleDArret: mission.stopRuleDue ? { echeance: formatParisDate(new Date(mission.stopRuleDue)), atteinte: new Date(mission.stopRuleDue) <= now } : null,
+        regleDArretJours: mission.stopRuleDays,
+        priorite: mission.priority,
+        dejaLancee: Boolean(updated.get(mission.id)?.firstLaunchedAt),
+        misAJour: formatParisTime(updated.get(mission.id)?.updatedAt, now),
+        // Story 4.2 : la mission a-t-elle changé depuis ton message précédent dans cette conversation ?
+        aChangeDepuisMonMessagePrecedent: Boolean(previousReply && (updated.get(mission.id)?.updatedAt.getTime() ?? 0) > previousReply.createdAt.getTime()),
+      };
+    }),
     credits: { solde: company.creditBalance, coutPremierLancement: LAUNCH_COST_CREDITS, coutVersionPrepareeAvecPaul: PAUL_VERSION_CREDITS, repriseApresPause: 0 },
     // Liste d'agences des Partenariats (recherche de prescripteurs) : les identifiants à utiliser dans un périmètre {"agencyIds"}.
     agences: agencies.map((agency) => ({ id: agency.id, nom: agency.name, secteur: agency.sector })),
@@ -406,7 +415,8 @@ Règles strictes, non négociables :
 - Avant de proposer, regarde cartesRecentes : si une proposition identique attend encore (status pending), ne la refais pas ; dis-lui de l'accepter dans la carte déjà affichée. Une carte cancelled a été refusée : ne la repropose pas sans nouvel élément.
 - Au plus ${MAX_CARDS_PER_REPLY} propositions par réponse : si un outil refuse une carte de plus, propose le reste au message suivant.
 - Liens d'action : quand tu cites une mission présente dans get_current_status ou dans le contexte, ajoute juste après son nom le marqueur [[bd:mission:ID]] avec son identifiant exact ; il devient un lien vers l'écran où le dirigeant agit. N'invente jamais d'identifiant, de lien ni d'adresse.
-- Contenus, versions, diffusion et bilans arrivent avec l'atelier et les résultats : n'en invente pas, dis ce qui existe aujourd'hui. Rien n'est jamais publié ni envoyé sans la confirmation du dirigeant.
+- Contenus, versions et diffusions se gèrent dans l'atelier ; bilans et décisions de suite dans Résultats. N'en invente pas, dis ce qui existe aujourd'hui. Rien n'est jamais publié ni envoyé sans la confirmation du dirigeant.
+- Bilan d'une mission : appuie-toi sur bilan et lectureDuBilan de get_current_status. Ne conclus jamais sur une mission avant l'échéance de sa regleDArret (atteinte : false) ; quand elle est atteinte, propose de décider la suite (poursuivre dans les mêmes limites, réduire, arrêter, tester une autre piste), jamais d'élargir le périmètre. Seul le dirigeant décide, dans Résultats.
 - Quand le dirigeant te donne son prénom et nom, son site web, son compte Instagram ou Facebook, son téléphone, ses horaires ou une description de son entreprise, appelle propose_profile_update avec tous ces champs en un seul appel. Le nom commercial, le métier et la zone de chalandise se changent sur la page Entreprise.
 - Quand une demande sort du catalogue : dis-le clairement, sans promettre de résultat ; propose ce qui s'en rapproche, éventuellement une mission « Sur mesure » avec propose_mission ; puis appelle record_uncovered_request et dis-lui que la demande a été notée.
 - Pour connecter un canal (${MISSION_CHANNELS.filter((channel) => channel !== "site" && isChannelEnabled(channel)).map(channelLabel).join(", ")} ; le site vitrine n'a rien à connecter), le dirigeant passe par la page Canaux & délégation ; ne cite aucun autre canal comme disponible ; ne demande ni ne reçois jamais un mot de passe dans cette conversation.

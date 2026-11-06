@@ -43,6 +43,7 @@ import { availableTemplates, enabledChannels, MISSION_TEMPLATES } from "../src/l
 import { missionStage, missionTracker, nextStep, orderMissions, priorityMissionId, type ContentState, type StageMission } from "../src/lib/missions/stage";
 import { scopeSummary } from "../src/lib/missions/scope";
 import { AGENCY_SEARCH_MAX, newAgencies, readFoundAgency } from "../src/lib/agencies/rules";
+import { REPORT_NOTE_MAX, checkDecision, isUpToDate, readOutcomeTarget, readReport, stopRuleDue, validateReport } from "../src/lib/missions/report";
 import { renderJournal } from "../src/lib/journal";
 import { DELEGATION_LABELS, asDelegationLevel, prepareOnlyRefusal } from "../src/lib/delegation-level";
 import { slugify } from "../src/lib/site/slug";
@@ -1852,4 +1853,49 @@ test("story 14.1: an agency found by Paul is kept with a name, a sector, a profe
   expect(newAgencies([parc, { ...parc, email: "autre@parc.fr" }, { ...parc, name: "Autre nom" }], [])).toEqual([parc]);
   expect(newAgencies([parc, ...others], [{ name: "AGENCE DU B PARC /B", email: null }]).map((item) => item.name)).toEqual(["Agence 0", "Agence 1", "Agence 2", "Agence 3", "Agence 4", "Agence 5"]);
   expect(newAgencies(others, [{ name: "Ailleurs", email: "contact@agence0.fr" }])).toHaveLength(AGENCY_SEARCH_MAX);
+});
+
+test("story 15.1: a report needs whole leads and meetings, meetings at most leads, an optional revenue where empty is not zero", () => {
+  expect(validateReport({ qualifiedLeads: "3", meetings: 1, signedRevenue: "", note: "  Bouche-à-oreille\u0007 du syndic  " })).toEqual({ ok: true, value: { qualifiedLeads: 3, meetings: 1, signedRevenue: null, note: "Bouche-à-oreille  du syndic" } });
+  expect(validateReport({ qualifiedLeads: 0, meetings: 0, signedRevenue: 0 })).toEqual({ ok: true, value: { qualifiedLeads: 0, meetings: 0, signedRevenue: 0, note: null } });
+  expect(validateReport({ qualifiedLeads: 2 })).toEqual({ ok: false, code: "M-38" });
+  expect(validateReport({ qualifiedLeads: "", meetings: 0 })).toEqual({ ok: false, code: "M-38" });
+  expect(validateReport({ qualifiedLeads: 2.5, meetings: 0 })).toEqual({ ok: false, code: "M-39" });
+  expect(validateReport({ qualifiedLeads: -1, meetings: 0 })).toEqual({ ok: false, code: "M-39" });
+  expect(validateReport({ qualifiedLeads: 100_000_001, meetings: 0 })).toEqual({ ok: false, code: "M-39" });
+  expect(validateReport({ qualifiedLeads: 2, meetings: 0, signedRevenue: "mille" })).toEqual({ ok: false, code: "M-39" });
+  expect(validateReport({ qualifiedLeads: 1, meetings: 2 })).toEqual({ ok: false, code: "M-33" });
+  expect((validateReport({ qualifiedLeads: 1, meetings: 0, note: "x".repeat(700) }) as { value: { note: string } }).value.note).toHaveLength(REPORT_NOTE_MAX);
+  expect(isUpToDate(2, 2)).toBe(true);
+  expect(isUpToDate(1, 2)).toBe(false);
+  expect(isUpToDate(null, 0)).toBe(false);
+});
+
+test("story 15.2: deciding needs a live mission with a diffusion; continuing needs an up-to-date report", () => {
+  expect(checkDecision({ status: "paused", diffusions: 1, reportAt: 1 }, "stop")).toBe("M-34");
+  expect(checkDecision({ status: "active", diffusions: 0, reportAt: null }, "stop")).toBe("M-35");
+  expect(checkDecision({ status: "active", diffusions: 1, reportAt: null }, "stop")).toBeNull();
+  expect(checkDecision({ status: "active", diffusions: 2, reportAt: 1 }, "continue")).toBe("M-36");
+  expect(checkDecision({ status: "active", diffusions: 2, reportAt: 2 }, "continue")).toBeNull();
+  expect(stopRuleDue(new Date("2026-11-01T10:00:00Z"), 30)).toEqual(new Date("2026-12-01T10:00:00Z"));
+  expect(stopRuleDue(null, 30)).toBeNull();
+  expect(renderJournal("J-15", { mission: "Agences", n: "2", m: "1", ca: ", 1 500 € signés" })).toBe("Bilan déclaré · Agences : 2 demande(s), 1 rendez-vous, 1 500 € signés. Attribution déclarative, non vérifiée.");
+});
+
+test("story 15.3: Paul reads a report against the outcome, never concludes before the stop rule and never proposes to widen", () => {
+  expect(readOutcomeTarget("Un rendez-vous qualifié en 30 jours")).toEqual({ kind: "meetings", target: 1 });
+  expect(readOutcomeTarget("Une réponse d'une agence de votre zone")).toEqual({ kind: "leads", target: 1 });
+  expect(readOutcomeTarget("Trois demandes de devis")).toEqual({ kind: "leads", target: 3 });
+  expect(readOutcomeTarget("2 RDV avec des syndics")).toEqual({ kind: "meetings", target: 2 });
+  expect(readOutcomeTarget("Des demandes de devis")).toBeNull();
+  const after = { due: new Date("2026-11-01T00:00:00Z"), now: new Date("2026-11-06T00:00:00Z") };
+  const reached = readReport("Deux demandes de devis", { qualifiedLeads: 3, meetings: 1, signedRevenue: null }, after);
+  expect(reached).toMatchObject({ verdict: "reached", observed: "3 demandes qualifiées, 1 rendez-vous, chiffre d'affaires non déclaré.", suggests: "Résultat recherché atteint : 3 demande(s) pour 2 visés.", impact: "Proposition à confirmer : poursuivre dans les mêmes limites." });
+  expect(reached.notProven).toContain("déclarative");
+  expect(readReport("Deux demandes de devis", { qualifiedLeads: 1, meetings: 0, signedRevenue: 1500 }, after)).toMatchObject({ verdict: "partial", observed: "1 demande qualifiée, 0 rendez-vous, 1\u202f500 € signés." });
+  expect(readReport("Un rendez-vous qualifié", { qualifiedLeads: 2, meetings: 0, signedRevenue: null }, after)).toMatchObject({ verdict: "missed", impact: "Proposition à confirmer : arrêter cette mission, ou tester une autre piste." });
+  expect(readReport("Des demandes de devis", { qualifiedLeads: 0, meetings: 0, signedRevenue: null }, after)).toMatchObject({ verdict: "unknown", impact: "Proposition à confirmer : préciser le résultat recherché, puis décider de la suite." });
+  const early = readReport("Un rendez-vous qualifié", { qualifiedLeads: 0, meetings: 0, signedRevenue: null }, { due: new Date("2026-12-01T10:00:00Z"), now: new Date("2026-11-06T00:00:00Z") });
+  expect(early.impact).toBe("Attendre la fin du test, le 1 décembre, avant de conclure ; d'ici là, mêmes limites.");
+  for (const reading of [reached, early]) expect(`${reading.suggests} ${reading.impact}`).not.toMatch(/élargi|augmente/i);
 });

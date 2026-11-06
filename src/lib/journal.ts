@@ -8,6 +8,8 @@ export const JOURNAL_TEXTS = {
   "J-10": "Mission remise au plan : {mission}.",
   "J-11": "Objectif modifié · {mission} : « {résultat} ».",
   "J-12": "Périmètre modifié · {mission} : {résumé}.",
+  "J-14": "Décision de fin de test · {mission} : {décision}.",
+  "J-15": "Bilan déclaré · {mission} : {n} demande(s), {m} rendez-vous{ca}. Attribution déclarative, non vérifiée.",
   "J-17": "Mission lancée (ou reprise) : {mission}. Paul prépare le premier contenu.",
   "J-18": "Mission suspendue : {mission}. Programmations annulées.",
   "J-19": "V{n} {origine} · {mission}.",
