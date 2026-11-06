@@ -89,6 +89,7 @@ model Company {
   uncoveredRequests UncoveredRequest[]
   linkedinAuthorizations LinkedInAuthorization[]
   paulPendingActions PaulPendingAction[]
+  ideas           Idea[]
   sitePhotos      SitePhoto[]
   sourceReads     SourceRead[]
   emailTokens     EmailToken[]
@@ -271,7 +272,7 @@ model PaulPendingAction {
   company       Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
   chatMessageId String? // message de Paul qui porte la carte, rattaché à la fin du tour
   chatMessage   ChatMessage? @relation(fields: [chatMessageId], references: [id], onDelete: SetNull)
-  type          String // update_profile, mission_priority, mission_scope, mission_pause, mission_dismiss, mission_restore, mission_create, mission_launch (#288)
+  type          String // update_profile, mission_priority, mission_scope, mission_pause, mission_dismiss, mission_restore, mission_create, mission_launch (#288), idea_note (#312)
   payload       Json
   status        String       @default("pending") // pending, confirmed, cancelled, expired, superseded (remplacée par une plus récente)
   createdAt     DateTime     @default(now())
@@ -568,6 +569,19 @@ model Mission {
   sitePage            SitePage?
 
   @@index([companyId, status])
+}
+
+/// Idee notee avec Paul (US #312, addendum §4.5) : pas encore une mission. Ouverte tant que convertedMissionId est nul ;
+/// retiree = supprimee, cadree = convertedMissionId pose dans la transaction de creation de la mission.
+model Idea {
+  id                 String   @id @default(cuid())
+  companyId          String
+  text               String // 1 a 200 caracteres, sans < ni > (M-62)
+  createdAt          DateTime @default(now())
+  convertedMissionId String? // mission creee depuis cette idee
+  company            Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, createdAt])
 }
 
 /// Registre des credits en ajout seul (story 9.3, #56) : chaque mouvement, avec le solde apres.

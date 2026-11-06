@@ -34,6 +34,7 @@ const GUARDED_ROUTES: Guarded[] = [
   { method: "GET", path: "/api/missions", denied: 401 },
   { method: "POST", path: "/api/missions", denied: 401 },
   { method: "GET", path: "/api/missions/catalogue", denied: 401 },
+  { method: "DELETE", path: "/api/ideas/[id]", denied: 401 },
   { method: "POST", path: "/api/missions/[id]/transition", denied: 401 },
   { method: "POST", path: "/api/missions/[id]/content", denied: 401 },
   { method: "POST", path: "/api/contents/[id]", denied: 401 },

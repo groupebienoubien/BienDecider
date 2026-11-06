@@ -1904,6 +1904,74 @@ test("GH-288: a priority card is accepted in one click, another proposal is decl
   }
 });
 
+test("GH-312: « Noter l'idée » opens the prefilled frame, the mission created retires the idea; « Retirer l'idée » removes another", async ({ page, company }) => {
+  test.setTimeout(90000);
+  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }) });
+  try {
+    await prisma.company.update({ where: { id: company.id }, data: { workspaceV52: true } });
+
+    // Sans mission, une idée ouverte s'affiche dans Stratégie à la place de l'état vide, puis se retire.
+    const other = await prisma.idea.create({ data: { companyId: company.id, text: "Une vitrine de Noël" } });
+    await page.goto(`${baseURL}/strategie`);
+    const row = page.getByRole("article", { name: "Idée : Une vitrine de Noël" });
+    await expect(row).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Aucune mission pour le moment" })).toHaveCount(0);
+    await expect(row).toContainText("Idée notée avec Paul");
+    await expect(row).toContainText("À cadrer");
+    await expect(row.getByRole("link", { name: "Cadrer avec Paul" })).toHaveAttribute("href", `/missions/nouvelle?idee=${other.id}`);
+    await expect(row.getByRole("button", { name: "Retirer l'idée" })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await row.getByRole("button", { name: "Retirer l'idée" }).click();
+    await expect(row).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "Aucune mission pour le moment" })).toBeVisible();
+    expect(await prisma.idea.count({ where: { id: other.id } })).toBe(0);
+
+    const { createPendingAction, toPendingActionView } = await import("../src/lib/agents/pending-actions");
+    const text = "Tenir un stand au salon de mai du quartier";
+    const card = toPendingActionView(await createPendingAction(company.id, "idea_note", { text }))!;
+    await page.route("**/api/co-ceo/message", (route) => route.fulfill({
+      status: 200,
+      contentType: "application/x-ndjson; charset=utf-8",
+      body: `${JSON.stringify({ type: "done", reply: "Je vous propose de la noter, pour la cadrer ensuite.", references: [], actions: [card] })}\n`,
+    }));
+
+    await page.goto(`${baseURL}/strategie`);
+    await page.getByRole("button", { name: "Discuter avec Paul", exact: true }).click();
+    const panel = page.getByRole("dialog", { name: "Discussion avec Paul" });
+    const input = panel.getByLabel("Message à Paul");
+    await input.fill("J'ai envie de faire un salon");
+    await input.press("Enter");
+    const proposal = panel.getByRole("group", { name: "Proposition de Paul à confirmer" });
+    await expect(proposal).toContainText("Noter cette idée");
+    expect(await prisma.idea.count({ where: { companyId: company.id } })).toBe(0);
+    await proposal.getByRole("button", { name: "Noter l'idée" }).click();
+    await expect(page).toHaveURL(/\/missions\/nouvelle\?idee=[A-Za-z0-9_-]+$/);
+    const idea = await prisma.idea.findFirstOrThrow({ where: { companyId: company.id } });
+    await panel.getByRole("button", { name: "Replier" }).click();
+
+    await expect(page.getByRole("heading", { level: 1, name: "Cadrons votre nouvelle mission." })).toBeVisible();
+    await expect(page.getByLabel("Le constat de départ")).toHaveValue(text);
+    await expect(page.getByRole("button", { name: "En discuter avec Paul" })).toBeVisible();
+    await page.getByLabel("Nom de la mission").fill("Salon du quartier");
+    await page.getByLabel("Type d'action").selectOption("custom");
+    await page.getByLabel("Canal").selectOption("");
+    await page.getByLabel("Ce que vous voulez faire").fill("Tenir un stand au salon de printemps du quartier");
+    await page.getByLabel("Résultat recherché").fill("Dix contacts utiles");
+    await page.getByRole("button", { name: "Créer la mission" }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "Salon du quartier" })).toBeVisible();
+    expect((await prisma.idea.findUniqueOrThrow({ where: { id: idea.id } })).convertedMissionId).not.toBeNull();
+    expect(await prisma.uncoveredRequest.count({ where: { companyId: company.id, source: "mission" } })).toBe(1);
+    await page.goto(`${baseURL}/strategie`);
+    await expect(page.getByRole("article", { name: "Salon du quartier" })).toBeVisible();
+    await expect(page.getByRole("article", { name: `Idée : ${text}` })).toHaveCount(0);
+    // Une adresse obsolète donne le formulaire vide.
+    await page.goto(`${baseURL}/missions/nouvelle?idee=${idea.id}`);
+    await expect(page.getByLabel("Le constat de départ")).toHaveValue("");
+  } finally {
+    await prisma.$disconnect();
+  }
+});
+
 test("an expired profile card shows its expired message instead of the buttons", async ({ page, company }) => {
   const { expiredMessage, toPendingActionView } = await import("../src/lib/agents/pending-action-view");
   const view = toPendingActionView({ id: `expired-profile-${company.id}`, type: "update_profile", status: "expired", payload: { socialHandles: "@atelierlumen.nantes" }, expiresAt: new Date(Date.now() - 1000) })!;

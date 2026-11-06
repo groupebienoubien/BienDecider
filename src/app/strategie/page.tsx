@@ -11,6 +11,8 @@ import { loadMissionViews, priorityOf } from "@/lib/missions/view";
 import { nextStep } from "@/lib/missions/stage";
 import { LAUNCH_COST_CREDITS } from "@/lib/missions/rules";
 import { asDelegationLevel } from "@/lib/delegation-level";
+import { listOpenIdeas } from "@/lib/ideas";
+import { IdeaActions } from "./idea-actions";
 
 export const dynamic = "force-dynamic";
 
@@ -18,7 +20,7 @@ export const dynamic = "force-dynamic";
 export default async function StrategiePage() {
   const company = await requireWorkspaceCompany();
   const shell = await getShellProps(company);
-  const missions = await loadMissionViews(company.id);
+  const [missions, ideas] = await Promise.all([loadMissionViews(company.id), listOpenIdeas(company.id)]);
   const connected = await prisma.channelConnection.count({ where: { companyId: company.id, status: "connecte" } });
   const step = nextStep(missions, asDelegationLevel(company.delegationLevel), priorityOf(missions));
   const stepMission = missions.find((mission) => mission.id === step.missionId) ?? null;
@@ -85,7 +87,7 @@ export default async function StrategiePage() {
           <h2 id="grouped-title">Vos missions regroupées</h2>
           <p>Chaque mission part d&apos;un constat et le teste dans un cadre limité.</p>
         </div>
-        {missions.length === 0 ? (
+        {missions.length === 0 && ideas.length === 0 ? (
           <div className="empty">
             <Icon name="flag" />
             <h3>Aucune mission pour le moment</h3>
@@ -115,6 +117,23 @@ export default async function StrategiePage() {
                   <p className="target"><Icon name="target" />{mission.outcome}</p>
                   <p className="small muted">{mission.templateLabel} · {mission.scopeSummary}</p>
                   <MissionActions mission={mission.actions} credits={company.creditBalance} launchCost={LAUNCH_COST_CREDITS} variant="row" />
+                </div>
+              </article>
+            ))}
+            {/* Idées notées avec Paul (US #312) : après les missions, à cadrer avant tout lancement. */}
+            {ideas.map((idea) => (
+              <article key={idea.id} className="finding-row idea-row" aria-label={`Idée : ${idea.text}`}>
+                <div>
+                  <p>{idea.text}</p>
+                  <Tag color="gray">Idée notée avec Paul</Tag>
+                </div>
+                <Icon name="arrow-right" className="finding-arrow" />
+                <div><p>Pas encore une mission : il faut un constat, un périmètre et un résultat attendu.</p></div>
+                <Icon name="arrow-right" className="finding-arrow" />
+                <div>
+                  <Tag color="orange">À cadrer</Tag>
+                  <p className="small muted">Confirmez le constat, le type d&apos;action et le résultat avant de créer la mission.</p>
+                  <IdeaActions idea={{ id: idea.id, text: idea.text }} />
                 </div>
               </article>
             ))}

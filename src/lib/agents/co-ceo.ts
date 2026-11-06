@@ -33,6 +33,7 @@ import { MISSION_CHANNELS, channelLabel } from "@/lib/missions/channels";
 import { TEMPLATE_KEYS, availableTemplates, enabledChannels } from "@/lib/missions/templates";
 import { scopeSummary } from "@/lib/missions/scope";
 import { PAUL_VERSION_CREDITS } from "@/lib/credits";
+import { IDEA_MAX, countOpenIdeas, findOpenIdea, listOpenIdeas, validateIdeaText } from "@/lib/ideas";
 
 const PERSONA = PERSONAS.co_ceo;
 
@@ -73,7 +74,7 @@ function catalogueLines(): string {
  * Chaque état porte son heure (Europe/Paris), avec l'heure courante et celle de son message précédent.
  */
 export async function buildCurrentStatus(companyId: string, now = new Date(), contextKey: string = DEFAULT_CONTEXT_KEY) {
-  const [missions, company, cards, previousReply, rawMissions] = await Promise.all([
+  const [missions, company, cards, previousReply, rawMissions, ideas] = await Promise.all([
     loadMissionViews(companyId),
     prisma.company.findUniqueOrThrow({ where: { id: companyId }, select: { creditBalance: true, priorityMissionId: true, delegationLevel: true } }),
     recentPendingActions(companyId),
@@ -84,6 +85,7 @@ export async function buildCurrentStatus(companyId: string, now = new Date(), co
       select: { createdAt: true },
     }),
     prisma.mission.findMany({ where: { companyId }, select: { id: true, updatedAt: true, firstLaunchedAt: true } }),
+    listOpenIdeas(companyId),
   ]);
   const updated = new Map(rawMissions.map((mission) => [mission.id, mission]));
   const priority = priorityOf(missions);
@@ -114,6 +116,8 @@ export async function buildCurrentStatus(companyId: string, now = new Date(), co
       // Story 4.2 : la mission a-t-elle changé depuis ton message précédent dans cette conversation ?
       aChangeDepuisMonMessagePrecedent: Boolean(previousReply && (updated.get(mission.id)?.updatedAt.getTime() ?? 0) > previousReply.createdAt.getTime()),
     })),
+    // Idées notées avec toi, pas encore des missions (US #312) : à cadrer avec propose_mission et leur ideaId.
+    idees: { maximum: IDEA_MAX, ouvertes: ideas.map((idea) => ({ id: idea.id, texte: idea.text, noteeLe: formatParisDate(idea.createdAt) })) },
     credits: { solde: company.creditBalance, coutPremierLancement: LAUNCH_COST_CREDITS, coutVersionPrepareeAvecPaul: PAUL_VERSION_CREDITS, repriseApresPause: 0 },
     // Règle de collaboration choisie par le dirigeant (spécification §9, #36).
     delegation: `${DELEGATION_LABELS[delegationLevel]} : ${DELEGATION_DETAILS[delegationLevel]}`,
@@ -174,7 +178,7 @@ async function runCoCeoTurnImpl(
   const getCurrentStatus = betaZodTool({
     name: "get_current_status",
     description:
-      "Récupère l'état réel actuel : missions (statut, étape, résultat recherché, périmètre, priorité), prochain pas, priorité (choisie avec toi ou calculée), solde et coûts en crédits, délégation, programmations et ce que sont devenues tes dernières propositions (cartesRecentes). À utiliser systématiquement avant de répondre sur l'état, les missions, la priorité, le prochain pas ou les crédits, et avant toute proposition — ne jamais deviner ni se fier à un tour précédent.",
+      "Récupère l'état réel actuel : missions (statut, étape, résultat recherché, périmètre, priorité), idées notées à cadrer, prochain pas, priorité (choisie avec toi ou calculée), solde et coûts en crédits, délégation, programmations et ce que sont devenues tes dernières propositions (cartesRecentes). À utiliser systématiquement avant de répondre sur l'état, les missions, la priorité, le prochain pas ou les crédits, et avant toute proposition — ne jamais deviner ni se fier à un tour précédent.",
     inputSchema: z.object({}),
     run: async () => JSON.stringify(await buildCurrentStatus(companyId, new Date(), contextKey)),
   });
@@ -306,16 +310,38 @@ async function runCoCeoTurnImpl(
       finding: z.string().describe("Constat de départ qui justifie le test, 10 à 300 caractères ; ce que le dirigeant a dit ou ce que tu as relevé, jamais inventé"),
       scope: z.record(z.string(), z.unknown()).optional().describe("Périmètre dans la forme du modèle (voir propose_scope) ; obligatoire pour « Sur mesure » : {\"description\": …}"),
       stopRuleDays: z.number().int().optional().describe("Règle d'arrêt en jours (7 à 90), seulement pour « Sur mesure »"),
+      ideaId: z.string().optional().describe("Identifiant de l'idée notée que cette mission cadre (get_current_status, idees.ouvertes[].id) ; l'idée sera retirée à l'acceptation ; le constat (finding) reprend alors le texte de l'idée, complété seulement s'il fait moins de 10 caractères. Omettre sinon."),
     }),
     run: async (input) => {
+      const { ideaId, ...mission } = input;
+      if (ideaId !== undefined && !(await findOpenIdea(companyId, ideaId))) {
+        return "Aucune carte créée : cette idée n'est plus à cadrer (absente, retirée ou déjà cadrée). Relis idees avec get_current_status.";
+      }
       const open = await prisma.mission.count({ where: { companyId, createdBy: { in: ["owner", "paul"] }, status: { not: "stopped" } } });
-      const checked = validateNewMission({ ...input, scope: input.scope ?? {} }, open);
+      const checked = validateNewMission({ ...mission, scope: mission.scope ?? {} }, open);
       if (!checked.ok) return `Aucune carte créée : ${renderMissionMessage(checked.code, checked.params)} Reformule avec le dirigeant.`;
       const { value } = checked;
       return withCard("mission_create", {
         template: value.template, channel: value.channel, title: value.title, outcome: value.outcome, finding: value.finding, scope: value.scope,
         ...(value.template === "custom" ? { stopRuleDays: value.stopRuleDays } : {}),
-      }, `Carte « Créer la mission « ${value.title} » » affichée sous ta réponse. Acceptée, la mission sera À décider : rien n'est lancé.`);
+        ...(ideaId !== undefined ? { ideaId } : {}),
+      }, `Carte « Créer la mission « ${value.title} » » affichée sous ta réponse. Acceptée, la mission sera À décider : rien n'est lancé.${ideaId !== undefined ? " L'idée qu'elle cadre sera retirée de la liste." : ""}`);
+    },
+  });
+
+  const proposeIdea = betaZodTool({
+    name: "propose_idea",
+    description: `Propose de noter une envie du dirigeant qui n'est pas encore une mission : carte « Noter l'idée ». Acceptée, l'idée est listée dans Stratégie et le formulaire « Cadrons votre nouvelle mission » s'ouvre, prérempli. Une phrase de 1 à 200 caractères, sans balise ; ${IDEA_MAX} idées ouvertes au plus.`,
+    inputSchema: z.object({
+      text: z.string().describe("L'idée en une phrase, avec les mots du dirigeant, 1 à 200 caractères, sans balise"),
+    }),
+    run: async (input) => {
+      const checked = validateIdeaText(input.text);
+      if (!checked.ok) return `Aucune carte créée : ${renderMissionMessage(checked.code)} Reformule avec le dirigeant.`;
+      if (await countOpenIdeas(prisma, companyId) >= IDEA_MAX) {
+        return `Aucune carte créée : ${renderMissionMessage("M-63")} Invite le dirigeant à retirer une idée dans Stratégie (« Retirer l'idée »).`;
+      }
+      return withCard("idea_note", { text: checked.text }, `Carte « Noter l'idée » affichée sous ta réponse. Acceptée, l'idée sera listée dans Stratégie, à cadrer : rien n'est lancé.`);
     },
   });
 
@@ -375,7 +401,7 @@ async function runCoCeoTurnImpl(
     model: AGENT_MODEL,
     max_tokens: 2000,
     max_iterations: AGENT_RUN_MAX_TURNS,
-    tools: bindAgentTools([getCurrentStatus, proposePriority, proposeScope, proposePause, proposeDismiss, proposeRestore, proposeMission, proposeMissionLaunch, proposeProfileUpdate, recordUncovered]),
+    tools: bindAgentTools([getCurrentStatus, proposePriority, proposeScope, proposePause, proposeDismiss, proposeRestore, proposeMission, proposeMissionLaunch, proposeIdea, proposeProfileUpdate, recordUncovered]),
     system: [
       {
         type: "text",
@@ -395,7 +421,7 @@ Règles strictes, non négociables :
 - Chaque état de get_current_status porte son heure, avec l'heure de ton message précédent (monMessagePrecedent). Une mission dont aChangeDepuisMonMessagePrecedent vaut true a changé APRÈS ton message : annonce-le comme une nouvelle (« depuis mon dernier message, … »), ce n'est pas une erreur de ta part. Ne dis « je me suis trompé » que si l'état au moment de ton message contredisait ce que tu as écrit.
 - Chaque conversation porte sur un contexte (stratégie, une mission, les résultats, l'ambition, le positionnement, la concurrence, les sources ou une idée), indiqué avec le dernier message : réponds dans ce contexte. Dans la conversation d'une mission, « cette mission » est celle-là.
 - Tu ne changes rien toi-même. Tes outils propose_* créent une proposition à confirmer sous ta réponse ; rien ne change avant que le dirigeant clique sur le bouton d'acceptation, et « Garder le cap actuel » la retire. Ne dis jamais « c'est fait », « c'est lancé », « c'est en pause » ou « c'est écarté » après une proposition : dis qu'il peut l'accepter d'un clic.
-- Choisir l'outil : priorité → propose_priority (ne lance ni ne suspend rien) ; périmètre → propose_scope ; pause d'une mission En cours → propose_pause ; écarter une mission À décider ou En pause → propose_dismiss (une mission En cours se met d'abord en pause) ; remettre au plan une mission écartée → propose_restore ; nouvelle mission → propose_mission (elle sera À décider, jamais lancée) ; lancer ou reprendre → propose_mission_launch : sa carte ouvre le dialogue « Confirmer le cadre de la mission », où le dirigeant confirme lui-même. Tu ne lances jamais une mission.
+- Choisir l'outil : priorité → propose_priority (ne lance ni ne suspend rien) ; périmètre → propose_scope ; pause d'une mission En cours → propose_pause ; écarter une mission À décider ou En pause → propose_dismiss (une mission En cours se met d'abord en pause) ; remettre au plan une mission écartée → propose_restore ; nouvelle mission → propose_mission (elle sera À décider, jamais lancée) ; lancer ou reprendre → propose_mission_launch : sa carte ouvre le dialogue « Confirmer le cadre de la mission », où le dirigeant confirme lui-même. Tu ne lances jamais une mission. Une envie encore floue (pas de constat, de modèle ni de résultat clairs) → propose_idea, qui la note pour la cadrer plus tard ; pour cadrer une idée notée (idees dans get_current_status) → propose_mission avec son ideaId, et pour constat le texte de l'idée, complété seulement s'il fait moins de 10 caractères. Si les ${IDEA_MAX} idées sont atteintes, n'insiste pas : invite le dirigeant à en retirer une dans Stratégie.
 - Coûts : le premier lancement d'une mission coûte ${LAUNCH_COST_CREDITS} crédits, débités quand le dirigeant confirme le cadre ; une reprise après pause est gratuite ; une version préparée avec toi coûtera ${PAUL_VERSION_CREDITS} crédit, créée et débitée seulement à l'acceptation. Dis-le une seule fois, au moment où c'est utile, pas à chaque message.
 - Si un outil refuse une proposition avec un message de règle, redis ce message simplement au dirigeant, sans le contourner par une autre proposition.
 - Avant de proposer, regarde cartesRecentes : si une proposition identique attend encore (status pending), ne la refais pas ; dis-lui de l'accepter dans la carte déjà affichée. Une carte cancelled a été refusée : ne la repropose pas sans nouvel élément.

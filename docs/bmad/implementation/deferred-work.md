@@ -119,3 +119,9 @@
 - source_spec: `docs/bmad/implementation/spec-gh-288-paul-propositions-a-confirmer.md`
   summary: Tester ce que `get_current_status` expose des cartes récentes (`cartesRecentes`, `missionId`) et du message précédent de Paul dans le contexte courant.
   evidence: non vérifié ; un test qui affirme qu'une carte `mission_pause` en attente apparaît avec sa mission, qu'une ancienne carte `launch_plan_item` est écartée et qu'un message d'un autre contexte est ignoré le trancherait.
+- source_spec: `docs/bmad/implementation/spec-gh-312-noter-une-idee.md`
+  summary: Une carte devenue inexécutable (idée retirée ou déjà cadrée, comme une mission disparue depuis #288) passe en « cancelled » : le dirigeant lit « Proposition écartée » et Paul la prend pour un refus ; retirer une idée ne retire pas non plus les cartes « Créer la mission » qui la visent.
+  evidence: decidePendingAction (src/lib/agents/pending-actions.ts:226-229) marque cancelled tout exécuteur qui renvoie false ; il faudrait un statut ou un texte « n'est plus possible » distinct du refus, commun à toutes les cartes.
+- source_spec: `docs/bmad/implementation/spec-gh-312-noter-une-idee.md`
+  summary: « Votre prochaine décision » de Stratégie ignore les idées notées : sans mission, elle propose encore « Explorer une idée » au lieu de cadrer une idée déjà notée.
+  evidence: nextStep(missions, …) dans src/app/strategie/page.tsx ne reçoit pas les idées ; la spec §13.1 ne définit pas ce cas.

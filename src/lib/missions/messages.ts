@@ -35,6 +35,8 @@ export const MISSION_MESSAGES = {
   "M-58": "Validez la version courante avant de poursuivre.",
   "M-59": "Une programmation existe déjà pour cette version.",
   "M-60": "Enregistrez vos retouches dans une nouvelle version avant cette décision.",
+  "M-62": "Décrivez votre idée en une phrase.",
+  "M-63": "10 idées au maximum : retirez-en une avant d'en noter une autre.",
   "M-64": "Choisissez de 1 à 5 avis sans réponse.",
   "M-65": "Ajoutez un visuel : {canal} ne publie pas sans image.",
   "M-66": "Ce texte dépasse {n} caractères, la limite de {canal}. Raccourcissez-le dans une nouvelle version.",
