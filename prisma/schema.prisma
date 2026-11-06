@@ -81,6 +81,7 @@ model Company {
   missionContents MissionContent[]
   publications    Publication[]
   sitePages       SitePage[]
+  channelAccesses ChannelAccess[]
   delegationLevel String    @default("review") // prepare | review | bounded (spécification §9) ; « Valider avant chaque action » par défaut
   agentRuns       AgentRun[]
   agentRunAttempts AgentRunAttempt[]
@@ -686,4 +687,26 @@ model SitePage {
   mission       Mission  @relation(fields: [missionId], references: [id], onDelete: Cascade)
 
   @@unique([companyId, slug])
+}
+
+/// Ouverture d'un canal actif (#301) : tant que le fournisseur n'a pas approuve l'application, l'administrateur peut le reserver aux entreprises autorisees. Sans ligne : ouvert a tous.
+model ChannelRollout {
+  channel   String   @id
+  openToAll Boolean  @default(true)
+  updatedBy String?
+  updatedAt DateTime @updatedAt
+}
+
+/// Acces d'une entreprise a un canal reserve (#301) : demande par le dirigeant, accordee par un administrateur.
+model ChannelAccess {
+  id          String    @id @default(cuid())
+  companyId   String
+  channel     String
+  status      String // requested | granted
+  requestedAt DateTime?
+  grantedAt   DateTime?
+  grantedBy   String?
+  company     Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, channel])
 }

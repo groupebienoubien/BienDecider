@@ -608,39 +608,67 @@ test("risk policy API rejects non-admin sessions", async ({ page }) => {
   expect(patch.status()).toBe(403);
 });
 
-test("OAuth authorization is not advertised as a verified business connection", async ({ page, company }, testInfo) => {
+test("Canaux & délégation: only active channels, honest states, scheduled diffusions listed before disconnecting, access requested for a reserved channel", async ({ page, company }, testInfo) => {
   const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }) });
+  const previous = await prisma.channelRollout.findUnique({ where: { channel: "gmail" } });
   try {
+    await prisma.company.update({ where: { id: company.id }, data: { workspaceV52: true } });
     await prisma.channelConnection.createMany({ data: [
       { companyId: company.id, channel: "google_business_profile", status: "connecte", accessToken: "test-token-never-visible", expiresAt: new Date(Date.now() - 60000) },
       { companyId: company.id, channel: "facebook", status: "connecte", accessToken: "test-token-never-visible", expiresAt: new Date(Date.now() + 3600000) },
     ] });
+    const mission = await prisma.mission.create({ data: { companyId: company.id, template: "social_post", channel: "facebook", title: "Chantier livré", outcome: "Des demandes", originalOutcome: "Des demandes", finding: "Un constat", scope: { topic: "Un chantier" }, status: "active", position: 1 } });
+    const content = await prisma.missionContent.create({ data: { companyId: company.id, missionId: mission.id, channel: "facebook", format: "social_post", currentNumber: 1, validatedNumber: 1, versions: { create: { number: 1, title: "Chantier livré", body: "Texte.", author: "paul" } } } });
+    await prisma.publication.create({ data: { companyId: company.id, missionId: mission.id, contentId: content.id, versionNumber: 1, title: "Chantier livré", channel: "facebook", channelLabel: "Page Facebook", mode: "confirmed", status: "scheduled", scheduledAt: new Date("2030-01-07T08:00:00Z"), timezone: "Europe/Paris", idempotencyKey: `${content.id}:v1:1` } });
+
     for (const width of [320, 1440]) {
       await page.setViewportSize({ width, height: 900 });
-      await page.goto(`${baseURL}/connexions`);
-      await expect(page.getByText("Connexion expirée · reliez de nouveau le compte", { exact: true })).toBeVisible();
+      await page.goto(`${baseURL}/connexions?retour=/atelier/${content.id}`);
+      await expect(page.getByRole("heading", { level: 1, name: "Canaux & délégation" })).toBeVisible();
       // Jeton en clair de l'ancien flux Facebook : jamais présenté comme une connexion, à refaire.
       await expect(page.getByText("Autorisation à refaire · reconnectez votre Page", { exact: true })).toBeVisible();
       await expect(page.getByText("Page vérifiée", { exact: true })).toHaveCount(0);
       await expect(page.locator("main")).not.toContainText("test-token-never-visible");
-      await expect(page.getByText("Connecté", { exact: true })).toHaveCount(0);
+      // Canaux désactivés (§5.6) : ni affichés ni connectables.
+      await expect(page.getByRole("region", { name: "Google Business Profile" })).toHaveCount(0);
+      await expect(page.getByRole("region", { name: "LinkedIn · profil personnel" })).toHaveCount(0);
+      await expect(page.getByRole("region", { name: "Site vitrine · adresse publique" })).toContainText("Aucune page en ligne pour le moment");
+      await expect(page.getByRole("link", { name: "Revenir au contenu" })).toHaveAttribute("href", `/atelier/${content.id}`);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-      await page.screenshot({ path: testInfo.outputPath(`oauth-${width}.png`), fullPage: true });
+      await page.screenshot({ path: testInfo.outputPath(`canaux-${width}.png`), fullPage: true });
     }
-    await prisma.channelConnection.deleteMany({ where: { companyId: company.id } });
-    await page.reload();
-    await expect(page.locator("main").getByText("Compte non relié", { exact: true })).toHaveCount(1);
-    await expect(page.getByRole("region", { name: "Facebook · Page" }).getByText("Non autorisé", { exact: true })).toBeVisible();
 
-    // Google révoqué ou expiré (invalid_grant) : jetons effacés, la page demande de relier le compte.
-    await prisma.channelConnection.create({ data: { companyId: company.id, channel: "google_business_profile", status: "erreur" } });
-    await page.goto(`${baseURL}/connexions`);
-    await expect(page.getByText("Connexion à renouveler", { exact: true })).toBeVisible();
+    // Déconnexion : les programmations qui seront annulées sont dites avant de confirmer.
+    const facebook = page.getByRole("region", { name: "Facebook · Page" });
+    await expect(facebook).toContainText("1 programmation en cours");
+    await facebook.getByText("Déconnecter Facebook", { exact: true }).click();
+    await expect(facebook).toContainText("Ces programmations seront annulées :");
+    await expect(facebook).toContainText("Chantier livré · V1 · le 7 janvier vers 09:00");
+    await facebook.getByLabel("Je confirme le retrait de ma Page Facebook.").check();
+    await facebook.getByRole("button", { name: "Confirmer le retrait Facebook" }).click();
+    await expect(facebook.getByText("Non autorisé", { exact: true })).toBeVisible();
+    expect(await prisma.publication.findFirstOrThrow({ where: { contentId: content.id } })).toMatchObject({ status: "cancelled", cancelReason: "Page Facebook déconnectée" });
+
+    // Canal réservé aux entreprises autorisées (#301) : pas de flux fournisseur, une demande d'accès.
+    await prisma.channelRollout.upsert({ where: { channel: "gmail" }, create: { channel: "gmail", openToAll: false }, update: { openToAll: false } });
+    await page.reload();
+    const gmail = page.getByRole("region", { name: "Gmail · envoi de messages" });
+    if (await gmail.getByText("L'envoi Gmail n'est pas disponible sur cette version.").count() === 0) {
+      await expect(gmail.getByRole("link", { name: /Relier/ })).toHaveCount(0);
+      await expect(gmail).toContainText("Pas encore disponible pour votre compte.");
+      await gmail.getByRole("button", { name: "Demander l'accès" }).click();
+      await expect(gmail.getByRole("status")).toContainText("Demande envoyée.");
+      expect(await prisma.channelAccess.findUniqueOrThrow({ where: { companyId_channel: { companyId: company.id, channel: "gmail" } } })).toMatchObject({ status: "requested" });
+    }
+    await page.goto(`${baseURL}/connexions?error=channel_unavailable`);
+    await expect(page.getByText("Ce canal n'est pas disponible pour votre compte.", { exact: false })).toBeVisible();
     await page.goto(`${baseURL}/connexions?error=google_denied`);
     await expect(page.getByText("L'autorisation Google a été refusée ou annulée.", { exact: false })).toBeVisible();
-    await page.goto(`${baseURL}/connexions?error=oauth_exchange`);
-    await expect(page.getByText("Google n'a pas pu confirmer l'autorisation.", { exact: false })).toBeVisible();
-  } finally { await prisma.$disconnect(); }
+  } finally {
+    if (previous) await prisma.channelRollout.update({ where: { channel: "gmail" }, data: { openToAll: previous.openToAll } });
+    else await prisma.channelRollout.deleteMany({ where: { channel: "gmail" } });
+    await prisma.$disconnect();
+  }
 });
 
 test("growth journey shows progress, the current step and can be hidden and restored", async ({ page, company }) => {

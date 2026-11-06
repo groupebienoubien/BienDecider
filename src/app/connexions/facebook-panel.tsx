@@ -4,8 +4,11 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import type { FacebookConnectionView } from "@/lib/oauth/meta";
 import { CHANNEL_CAPABILITIES } from "@/lib/channel-capabilities";
+import type { AccessState } from "@/lib/channel-access";
+import { AccessRequest } from "./access-request";
+import { ScheduledList } from "./scheduled-list";
 
-export function FacebookPanel({ configured, view }: { configured: boolean; view: FacebookConnectionView }) {
+export function FacebookPanel({ configured, view, access = "open", scheduled = [] }: { configured: boolean; view: FacebookConnectionView; access?: AccessState; scheduled?: string[] }) {
   const router = useRouter();
   const selectablePages = view.status === "selection" ? view.pages.filter((page) => page.canPublish) : [];
   const [pageId, setPageId] = useState("");
@@ -66,9 +69,11 @@ export function FacebookPanel({ configured, view }: { configured: boolean; view:
           {(view.status === "connected" || view.status === "selection") && <p className="mt-1 break-words text-xs text-slate-500">Autorisé par {view.userName}</p>}
           <p className="mt-2 text-xs text-slate-600">{CHANNEL_CAPABILITIES.facebook.nextStep} {CHANNEL_CAPABILITIES.instagram.label} : {CHANNEL_CAPABILITIES.instagram.availability.charAt(0).toLowerCase() + CHANNEL_CAPABILITIES.instagram.availability.slice(1)}</p>
           {!configured && <p className="mt-2 text-xs text-amber-700">La liaison Facebook n&apos;est pas disponible sur cette version.</p>}
+          {scheduled.length > 0 && <p className="mt-1 text-xs">{scheduled.length} programmation{scheduled.length > 1 ? "s" : ""} en cours</p>}
         </div>
-        {configured && <a href="/api/oauth/meta/start" className="btn primary">{view.status === "disconnected" ? "Autoriser Facebook" : "Réautoriser Facebook"}</a>}
+        {configured && (access === "open" || access === "granted") && <a href="/api/oauth/meta/start" className="btn primary">{view.status === "disconnected" ? "Autoriser Facebook" : "Réautoriser Facebook"}</a>}
       </div>
+      {configured && (access === "none" || access === "requested") && <AccessRequest channel="facebook" state={access} />}
 
       {view.status === "selection" && (
         <form onSubmit={choosePage} className="mt-4 space-y-3">
@@ -97,7 +102,8 @@ export function FacebookPanel({ configured, view }: { configured: boolean; view:
       {view.status !== "disconnected" && <details className="mt-3">
         <summary className="cursor-pointer text-sm text-slate-600">Déconnecter Facebook</summary>
         <form onSubmit={disconnect} className="mt-3 space-y-3">
-          <p className="text-xs text-slate-600">Le retrait efface l&apos;autorisation de BienDecider et demande à Facebook de la révoquer.</p>
+          <p className="text-xs text-slate-600">Le retrait efface l&apos;autorisation de BienDecider et demande à Facebook de la révoquer. Vos contenus et leurs validations restent.</p>
+          <ScheduledList items={scheduled} />
           <label className="flex items-start gap-2 text-sm">
             <input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} disabled={busy} className="mt-1" />
             Je confirme le retrait de ma Page Facebook.

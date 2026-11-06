@@ -166,14 +166,13 @@ test("LinkedIn routes reject invalid state, preserve prior identity on cancellat
     for (const company of [owner, other]) await prisma.channelConnection.create({ data: {
       companyId: company.id, channel: "linkedin", status: "connecte", accessToken: encryptLinkedInAccount(account, company.id), expiresAt: new Date(Date.now() + 3600000),
     } });
+    // Canal désactivé (#301) : aucun flux fournisseur ne démarre ; le retour du fournisseur reste contrôlé.
     const start = await request.get(`${baseURL}/api/oauth/linkedin/start`, { headers, maxRedirects: 0 });
     expect(start.status()).toBe(307);
-    const authUrl = new URL(start.headers().location);
-    expect(authUrl.origin).toBe("https://www.linkedin.com");
-    expect(authUrl.searchParams.get("redirect_uri")).toBe(redirectUri);
-    const state = authUrl.searchParams.get("state")!;
-    expect(authUrl.searchParams.has("nonce")).toBe(false);
-    expect((await prisma.linkedInAuthorization.findUniqueOrThrow({ where: { stateHash: hashLinkedInState(state) } })).nonce).toBe("");
+    expect(start.headers().location).toContain("/connexions?error=channel_unavailable");
+    expect(await prisma.linkedInAuthorization.count({ where: { companyId: owner.id } })).toBe(0);
+    const state = randomUUID();
+    await prisma.linkedInAuthorization.create({ data: { stateHash: hashLinkedInState(state), companyId: owner.id, sessionHash: hashLinkedInState(session), nonce: "", redirectUri, expiresAt: new Date(Date.now() + 600000) } });
     const callbackHeaders = { Cookie: `${headers.Cookie}; ${LINKEDIN_STATE_COOKIE}=${state}` };
     const callback = (stateValue: string, cookie = callbackHeaders.Cookie) => request.get(`${redirectUri}?state=${encodeURIComponent(stateValue)}&error=user_cancelled_authorize`, { headers: { Cookie: cookie }, maxRedirects: 0 });
     expect((await callback("wrong-state")).headers().location).toContain("linkedin_state");
@@ -186,24 +185,14 @@ test("LinkedIn routes reject invalid state, preserve prior identity on cancellat
     expect((await callback(state)).headers().location).toContain("linkedin_state");
     await page.context().addCookies([{ name: "pepito_session", value: session, url: baseURL, httpOnly: true }]);
     await page.goto(`${baseURL}/connexions`);
-    const panel = page.getByRole("region", { name: "LinkedIn · profil personnel" });
-    await expect(panel.getByText("Profil autorisé", { exact: true })).toBeVisible();
-    await expect(panel.getByText(account.name, { exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Canaux & délégation" })).toBeVisible();
+    await expect(page.getByRole("region", { name: "LinkedIn · profil personnel" })).toHaveCount(0);
     expect(await page.content()).not.toContain(account.token);
     await page.screenshot({ path: testInfo.outputPath("linkedin-desktop.png"), fullPage: true });
-    await page.setViewportSize({ width: 390, height: 844 });
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-    await page.screenshot({ path: testInfo.outputPath("linkedin-mobile.png"), fullPage: true });
-    await prisma.channelConnection.update({ where: { companyId_channel: { companyId: owner.id, channel: "linkedin" } }, data: { expiresAt: new Date(Date.now() - 1000) } });
-    await page.reload();
-    await expect(panel.getByText("Autorisation expirée · reconnectez votre profil", { exact: true })).toBeVisible();
+    // Une connexion LinkedIn existante se retire toujours, isolée par entreprise.
     expect((await request.post(`${baseURL}/api/linkedin/disconnect`, { headers: { ...headers, Origin: "https://attacker.invalid" }, data: { confirmed: true } })).status()).toBe(403);
     expect((await request.post(`${baseURL}/api/linkedin/disconnect`, { headers, data: { confirmed: false } })).status()).toBe(400);
-    await panel.getByText("Déconnecter LinkedIn", { exact: true }).click();
-    await panel.getByLabel("Je confirme le retrait de mon profil LinkedIn.").check();
-    await panel.getByRole("button", { name: "Confirmer le retrait LinkedIn" }).click();
-    await expect(panel.getByText("Non autorisé", { exact: true })).toBeVisible();
-    await expect(panel.getByRole("status")).toContainText("Retirez aussi BienDecider dans LinkedIn");
+    expect((await request.post(`${baseURL}/api/linkedin/disconnect`, { headers, data: { confirmed: true } })).status()).toBe(200);
     expect(await prisma.channelConnection.count({ where: { companyId: owner.id, channel: "linkedin" } })).toBe(0);
     expect(await prisma.linkedInAuthorization.count({ where: { companyId: owner.id } })).toBe(0);
     expect(await prisma.channelConnection.count({ where: { companyId: other.id, channel: "linkedin" } })).toBe(1);

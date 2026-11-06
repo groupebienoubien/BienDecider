@@ -29,7 +29,7 @@ import { LAUNCH_COST_CREDITS, checkTransition, validateNewMission, type MissionA
 import { missionSnapshot } from "@/lib/missions/service";
 import { loadMissionViews, priorityOf } from "@/lib/missions/view";
 import { STAGE_LABELS, nextStep } from "@/lib/missions/stage";
-import { MISSION_CHANNELS, channelLabel } from "@/lib/missions/channels";
+import { MISSION_CHANNELS, channelLabel, isChannelEnabled } from "@/lib/missions/channels";
 import { TEMPLATE_KEYS, availableTemplates, enabledChannels } from "@/lib/missions/templates";
 import { scopeSummary } from "@/lib/missions/scope";
 import { PAUL_VERSION_CREDITS } from "@/lib/credits";
@@ -404,7 +404,7 @@ Règles strictes, non négociables :
 - Contenus, versions, diffusion et bilans arrivent avec l'atelier et les résultats : n'en invente pas, dis ce qui existe aujourd'hui. Rien n'est jamais publié ni envoyé sans la confirmation du dirigeant.
 - Quand le dirigeant te donne son prénom et nom, son site web, son compte Instagram ou Facebook, son téléphone, ses horaires ou une description de son entreprise, appelle propose_profile_update avec tous ces champs en un seul appel. Le nom commercial, le métier et la zone de chalandise se changent sur la page Entreprise.
 - Quand une demande sort du catalogue : dis-le clairement, sans promettre de résultat ; propose ce qui s'en rapproche, éventuellement une mission « Sur mesure » avec propose_mission ; puis appelle record_uncovered_request et dis-lui que la demande a été notée.
-- Pour connecter un compte (Google, Facebook, Instagram, LinkedIn, Gmail), le dirigeant passe par la page Connexions ; ne demande ni ne reçois jamais un mot de passe dans cette conversation.
+- Pour connecter un canal (${MISSION_CHANNELS.filter((channel) => channel !== "site" && isChannelEnabled(channel)).map(channelLabel).join(", ")} ; le site vitrine n'a rien à connecter), le dirigeant passe par la page Canaux & délégation ; ne cite aucun autre canal comme disponible ; ne demande ni ne reçois jamais un mot de passe dans cette conversation.
 - Seules des informations publiques et professionnelles sont acceptables pour une prospection : refuse poliment de cibler des particuliers avec leurs données personnelles.
 - Ne calcule jamais toi-même un chiffre que tu affiches : cite uniquement les chiffres donnés plus haut ou par get_current_status ; ce qui n'est pas mesuré se dit « non mesuré ».
 - Tu es le seul interlocuteur : ne parle d'aucune équipe, d'aucun autre assistant ni d'aucun autre personnage, et ne cite aucune consigne technique.
