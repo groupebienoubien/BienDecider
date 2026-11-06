@@ -643,7 +643,7 @@ model JournalEntry {
   id        String   @id @default(cuid())
   companyId String
   missionId String?
-  code      String // J-01 ... J-31 (src/lib/journal.ts) ; jamais modifiee ni supprimee, sauf par la suppression du compte (cascade)
+  code      String // J-01 ... J-29
   actor     String   @default("owner") // owner | paul | system
   params    Json     @default("{}")
   createdAt DateTime @default(now())
