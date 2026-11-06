@@ -7,6 +7,8 @@ import { MissionNotFoundError, applyMissionTransitionIn, createMissionIn } from 
 import type { MissionAction } from "@/lib/missions/rules";
 import { DEFAULT_CONTEXT_KEY } from "@/lib/paul-contexts";
 import { IdeaNotFoundError, ideaFrameHref, noteIdeaIn } from "@/lib/ideas";
+import { profileChanges } from "@/lib/company-profile";
+import { markProfileChanged } from "@/lib/contents/service";
 import {
   KEEP_COURSE_REPLY,
   ideaNotePayloadSchema,
@@ -69,7 +71,11 @@ const EXECUTORS: { [K in PendingActionType]: Executor } = {
   update_profile: async (tx, companyId, payload) => {
     const parsed = updateProfilePayloadSchema.safeParse(payload);
     if (!parsed.success) return false;
-    await tx.company.update({ where: { id: companyId }, data: profileUpdateValues(parsed.data) });
+    const values = profileUpdateValues(parsed.data);
+    const before = await tx.company.findUniqueOrThrow({ where: { id: companyId } });
+    await tx.company.update({ where: { id: companyId }, data: values });
+    // Même effet qu'une correction depuis Entreprise (J-02, §4.5), dans la transaction de l'acceptation.
+    if (before.name && profileChanges(before, values)) await markProfileChanged(tx, companyId);
     return {};
   },
   mission_priority: ref("set_priority"),
@@ -229,7 +235,7 @@ export async function decidePendingAction(companyId: string, id: string, decisio
         return { kind: "invalid" };
       }
       return { kind: "transitioned", ...(executed.redirect ? { redirect: executed.redirect } : {}) };
-    });
+    }, { maxWait: 5000, timeout: 20000 });
   } catch (error) {
     if (!(error instanceof MissionError)) throw error;
     // Refus des règles : la transaction est annulée, la carte reste en attente, le message M-xx s'affiche sur elle.

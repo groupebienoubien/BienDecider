@@ -125,3 +125,12 @@
 - source_spec: `docs/bmad/implementation/spec-gh-312-noter-une-idee.md`
   summary: « Votre prochaine décision » de Stratégie ignore les idées notées : sans mission, elle propose encore « Explorer une idée » au lieu de cadrer une idée déjà notée.
   evidence: nextStep(missions, …) dans src/app/strategie/page.tsx ne reçoit pas les idées ; la spec §13.1 ne définit pas ce cas.
+- source_spec: `docs/bmad/implementation/spec-gh-41-journal-decisions-tracabilite.md`
+  summary: Écrire J-04 « Profil et ambition confirmés. Aucune mission lancée. » à la création du compte (étape 5 du parcours d'entrée V5.2).
+  evidence: L'étape 5 et l'ambition n'existent pas encore (#168, #279) ; décision de Samir du 2026-11-06 de le reporter au parcours d'entrée.
+- source_spec: `docs/bmad/implementation/spec-gh-41-journal-decisions-tracabilite.md`
+  summary: Tester l'écriture de J-07 « connecté » sur les retours OAuth Gmail et LinkedIn et sur le choix de la page Facebook (y compris le 409 d'un choix concurrent).
+  evidence: Ces chemins dépendent d'échanges externes (exchangeLinkedInCode, jetons Google, verifyFacebookPage) sans point d'injection ; seul persistGoogleBusinessProfileConnection est testé.
+- source_spec: `docs/bmad/implementation/spec-gh-41-journal-decisions-tracabilite.md`
+  summary: Journaliser la perte implicite de la connexion Google (jeton refusé, statut « erreur ») avec un J-07 système.
+  evidence: src/lib/oauth/google-access.ts efface les jetons et passe le statut à « erreur » sans écrire au journal ; seule la déconnexion par le dirigeant est couverte par #41.

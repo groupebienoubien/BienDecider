@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionCompany } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
+import { channelJournalParams, writeJournal } from "@/lib/journal";
 import { encryptLinkedInAccount, exchangeLinkedInCode, hashLinkedInState, LinkedInOAuthError, LINKEDIN_CALLBACK, LINKEDIN_STATE_COOKIE } from "@/lib/oauth/linkedin";
 
 export async function GET(request: NextRequest) {
@@ -33,11 +34,13 @@ export async function GET(request: NextRequest) {
     const accepted = await prisma.$transaction(async (transaction) => {
       const consumed = await transaction.linkedInAuthorization.deleteMany({ where: { ...where, expiresAt: { gt: new Date() } } });
       if (consumed.count !== 1) return false;
+      const previous = await transaction.channelConnection.findUnique({ where: { companyId_channel: { companyId: company.id, channel: "linkedin" } }, select: { status: true } });
       await transaction.channelConnection.upsert({
         where: { companyId_channel: { companyId: company.id, channel: "linkedin" } },
         create: { companyId: company.id, channel: "linkedin", status: "connecte", accessToken, expiresAt },
         update: { status: "connecte", accessToken, refreshToken: null, expiresAt },
       });
+      if (previous?.status !== "connecte") await writeJournal(transaction, { companyId: company.id, code: "J-07", params: channelJournalParams("linkedin") });
       return true;
     });
     return accepted ? NextResponse.redirect(new URL("/connexions?connected=linkedin", request.url)) : fail("linkedin_state");

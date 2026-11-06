@@ -6,7 +6,8 @@ import { z } from "zod";
 import { readJsonObject } from "@/lib/request-body";
 import { startOnboardingAudit } from "@/lib/agents/onboarding-audit";
 import { AgentRunConflictError, AgentRunQuotaError } from "@/lib/agents/agent-errors";
-import { PROFILE_TEXT_LIMITS, clearableText, cleanProfileText, profileTextIssue, type ProfileTextField } from "@/lib/company-profile";
+import { PROFILE_TEXT_LIMITS, clearableText, cleanProfileText, profileChanges, profileTextIssue, type ProfileTextField } from "@/lib/company-profile";
+import { markProfileChanged } from "@/lib/contents/service";
 
 // Les montants sont des entiers 32 bits en base : au-delà, la requête échouerait en erreur serveur.
 const MAX_AMOUNT = 1_000_000_000;
@@ -29,7 +30,13 @@ export async function PATCH(request: NextRequest) {
   const parsed = profileDetailsSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "Compléments de profil invalides" }, { status: 400 });
   const data = Object.fromEntries(Object.entries(parsed.data).map(([key, value]) => [key, cleanProfileText(key as ProfileTextField, value) ?? null]));
-  const updated = await prisma.company.update({ where: { id: company.id }, data });
+  // Profil corrigé après sa création (J-02, §4.5) : la correction, ses effets sur les contenus et la trace, ensemble ou rien.
+  const updated = await prisma.$transaction(async (tx) => {
+    const before = await tx.company.findUniqueOrThrow({ where: { id: company.id } });
+    const saved = await tx.company.update({ where: { id: company.id }, data });
+    if (before.name && profileChanges(before, data)) await markProfileChanged(tx, company.id);
+    return saved;
+  }, { maxWait: 5000, timeout: 20000 });
   return NextResponse.json(omitPasswordHash(updated));
 }
 
@@ -130,13 +137,18 @@ export async function POST(request: NextRequest) {
   };
 
   // L'inscription crée la ligne sans profil (nom vide) : la première création du profil est ce passage-là.
-  const existing = await prisma.company.findUnique({ where: { ownerEmail }, select: { name: true } });
-  const isFirstCreation = !existing?.name;
-  const company = await prisma.company.upsert({
-    where: { ownerEmail },
-    create: { ownerEmail, ...data },
-    update: data,
-  });
+  // Une correction (hors première création) qui change réellement un champ annule les programmations et met les contenus à relire (J-02).
+  const { company, isFirstCreation } = await prisma.$transaction(async (tx) => {
+    const existing = await tx.company.findUnique({ where: { ownerEmail } });
+    const firstCreation = !existing?.name;
+    const saved = await tx.company.upsert({
+      where: { ownerEmail },
+      create: { ownerEmail, ...data },
+      update: data,
+    });
+    if (existing && !firstCreation && profileChanges(existing, data)) await markProfileChanged(tx, saved.id);
+    return { company: saved, isFirstCreation: firstCreation };
+  }, { maxWait: 5000, timeout: 20000 });
   if (isFirstCreation) {
     // Un lancement refusé (quota, budget, conflit) ne bloque pas l'onboarding : l'action reste « à lancer ».
     try {

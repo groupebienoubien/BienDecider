@@ -1,4 +1,6 @@
 import { expect, test } from "@playwright/test";
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { assessActionRisk, canExecuteAction, effectiveRiskLevel, requiresHumanApproval } from "../src/lib/delegation-risk";
 import { isAdminEmail, isExplicitAdminEmail } from "../src/lib/admin";
 import { describeProgress, isActionDone, summarizeProposals } from "../src/lib/proposal-progress";
@@ -22,7 +24,7 @@ import { CONTEXT_DISPLAYED_MESSAGES, CONTEXT_HISTORY_MESSAGES, DEFAULT_CONTEXT_K
 import { chatWindow, lastMessageBefore, latestOf, paulMessageTimes } from "../src/lib/agents/paul-message-times";
 import { WEEKLY_REVIEW_MARKER } from "../src/lib/weekly-review";
 import { RUN_CAPS, capGroup, runCapReachedMessage, withRunCap } from "../src/lib/agents/run-caps";
-import { PROFILE_TEXT_LIMITS, clearableText, profileTextIssue } from "../src/lib/company-profile";
+import { PROFILE_TEXT_LIMITS, clearableText, profileChanges, profileTextIssue } from "../src/lib/company-profile";
 import { parisQuotaWindows, usageCounterFor } from "../src/lib/quota-windows";
 import { SITE_PHOTO_BAD_TYPE, SITE_PHOTO_MAX_BYTES, SITE_PHOTO_TOO_LARGE, SITE_PHOTO_TOO_WIDE, checkSitePhoto, cleanSitePhotoAlt, detectSitePhotoType, keepOnlyCompanyPhotos, sitePhotoPathname, sitePhotoPromptLines } from "../src/lib/site/photos";
 import { runStreamingToolLoop, runToolLoop, type ToolLoopOptions, type UsageTotal } from "../src/lib/usage";
@@ -45,7 +47,7 @@ import { missionStage, missionTracker, nextStep, orderMissions, priorityMissionI
 import { scopeSummary } from "../src/lib/missions/scope";
 import { AGENCY_SEARCH_MAX, newAgencies, readFoundAgency } from "../src/lib/agencies/rules";
 import { REPORT_NOTE_MAX, checkDecision, isUpToDate, readOutcomeTarget, readReport, stopRuleDue, validateReport } from "../src/lib/missions/report";
-import { renderJournal } from "../src/lib/journal";
+import { JOURNAL_ACTOR_LABELS, channelJournalParams, csvCell, journalActorLabel, journalCsv, journalRows, renderJournal } from "../src/lib/journal";
 import { DELEGATION_LABELS, asDelegationLevel, prepareOnlyRefusal } from "../src/lib/delegation-level";
 import { slugify } from "../src/lib/site/slug";
 import { canonicalOAuthStart } from "../src/lib/oauth/canonical-host";
@@ -1923,4 +1925,74 @@ test("story 15.3: Paul reads a report against the outcome, never concludes befor
   const early = readReport("Un rendez-vous qualifié", { qualifiedLeads: 0, meetings: 0, signedRevenue: null }, { due: new Date("2026-12-01T10:00:00Z"), now: new Date("2026-11-06T00:00:00Z") });
   expect(early.impact).toBe("Attendre la fin du test, le 1 décembre, avant de conclure ; d'ici là, mêmes limites.");
   for (const reading of [reached, early]) expect(`${reading.suggests} ${reading.impact}`).not.toMatch(/élargi|augmente/i);
+});
+
+test("GH-41: the journal shows only you, Paul or the automatic update, never a raw placeholder, and exports a safe CSV", () => {
+  expect(JOURNAL_ACTOR_LABELS).toEqual({ owner: "vous", paul: "Paul", system: "mise à jour automatique" });
+  expect(journalActorLabel("system")).toBe("mise à jour automatique");
+  expect(journalActorLabel("martine")).toBe("vous");
+  expect(renderJournal("J-20", { n: "2" })).toBe("V2 validée : —. Aucun envoi effectué.");
+  expect(renderJournal("J-23", { n: { x: 1 }, raison: 3 })).toBe("Programmation de V— annulée : 3. La version reste validée.");
+  expect(renderJournal("J-02", {})).toBe("Profil corrigé. Les contenus doivent être relus et les programmations ont été annulées.");
+  expect(renderJournal("J-07", channelJournalParams("gmail"))).toBe("Email avec Gmail connecté.");
+  expect(renderJournal("J-07", channelJournalParams("facebook", 2))).toBe("Page Facebook déconnectée : 2 programmation(s) annulée(s).");
+  expect(renderJournal("J-07", channelJournalParams("linkedin", 0))).toBe("Profil LinkedIn déconnecté : 0 programmation(s) annulée(s).");
+
+  const at = (iso: string) => new Date(iso);
+  const rows = journalRows([
+    { id: "a", createdAt: at("2026-11-01T09:00:00Z"), code: "J-17", actor: "owner", params: { mission: "Publier" }, missionId: "m1" },
+    { id: "b", createdAt: at("2026-11-03T09:00:00Z"), code: "J-19", actor: "paul", params: { n: "2", origine: "préparée avec Paul" }, missionId: "gone" },
+    { id: "c", createdAt: at("2026-11-02T09:00:00Z"), code: "J-99", actor: "system", params: [], missionId: null },
+  ], new Map([["m1", "Publier"]]));
+  expect(rows.map((row) => [row.id, row.author, row.mission, row.text])).toEqual([
+    ["b", "Paul", null, "V2 préparée avec Paul · —."],
+    ["c", "mise à jour automatique", null, "—"],
+    ["a", "vous", "Publier", "Mission lancée (ou reprise) : Publier. Paul prépare le premier contenu."],
+  ]);
+
+  expect(csvCell('Dit "oui"; puis non')).toBe('"Dit ""oui""; puis non"');
+  for (const formula of ["=SOMME(A1)", "+33 6", "-2", "@cmd", "\t=1+1", "\rcmd", "  =1+1", "\n@cmd"]) expect(csvCell(formula)).toBe(`"'${formula}"`);
+  expect(csvCell("Mission — suite")).toBe('"Mission — suite"');
+  // Même instant : l'identifiant départage, quel que soit l'ordre reçu.
+  const same = at("2026-11-05T09:00:00Z");
+  const tied = journalCsv([{ id: "y", createdAt: same, author: "vous", mission: null, text: "Deuxième" }, { id: "x", createdAt: same, author: "vous", mission: null, text: "Première" }]).split("\r\n");
+  expect([tied[1], tied[2]].map((line) => line.split(";")[3])).toEqual(['"Première"', '"Deuxième"']);
+  const csv = journalCsv([...rows, { id: "z", createdAt: at("2026-10-31T23:30:00Z"), author: "vous", mission: "=HYPERLINK()", text: "Ligne\nsuivante" }]);
+  expect(csv.startsWith("﻿")).toBe(true);
+  const lines = csv.slice(1).split("\r\n");
+  expect(lines[0]).toBe('"Date";"Auteur";"Mission";"Décision"');
+  expect(lines[1]).toBe(`"01/11/2026 00:30";"vous";"'=HYPERLINK()";"Ligne\nsuivante"`);
+  expect(lines[2]).toContain('"vous";"Publier";"Mission lancée');
+  expect(lines[4]).toContain('"Paul";"—";"V2 préparée avec Paul');
+  expect(lines.at(-1)).toBe("");
+});
+
+test("GH-41: the application code only ever creates journal entries, never updates or deletes them", () => {
+  const files: string[] = [];
+  const walk = (dir: string) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) walk(path);
+      else if (/\.(ts|tsx|js|mjs)$/.test(entry.name)) files.push(path);
+    }
+  };
+  walk(join(process.cwd(), "src"));
+  expect(files.length).toBeGreaterThan(50);
+  const offenders = files.filter((file) => {
+    const source = readFileSync(file, "utf8");
+    return /journalEntry\s*\.\s*(update|updateMany|upsert|delete|deleteMany)\b/.test(source)
+      || /(UPDATE|DELETE\s+FROM)\s+"?JournalEntry"?/i.test(source);
+  });
+  expect(offenders).toEqual([]);
+});
+
+test("GH-41: a profile correction counts only the fields that really change", () => {
+  const before = { name: "Atelier", website: null, targetDate: new Date("2027-01-01T00:00:00Z"), monthlyRevenue: 1000 };
+  expect(profileChanges(before, { name: "Atelier", website: undefined, targetDate: new Date("2027-01-01T00:00:00Z"), monthlyRevenue: 1000 })).toBe(false);
+  expect(profileChanges(before, { website: null })).toBe(false);
+  expect(profileChanges(before, { phone: null })).toBe(false);
+  expect(profileChanges(before, { name: "Atelier Lumen" })).toBe(true);
+  expect(profileChanges(before, { targetDate: null })).toBe(true);
+  expect(profileChanges(before, { targetDate: new Date("2027-02-01T00:00:00Z") })).toBe(true);
+  expect(profileChanges(before, { monthlyRevenue: 2000 })).toBe(true);
 });

@@ -45,6 +45,22 @@ export function cleanProfileText(field: ProfileTextField, value: unknown): strin
   return cleanOwnerName(text) || null;
 }
 
+/**
+ * Vrai si au moins un champ demandé change réellement (J-02, §4.5) : un champ absent (undefined) est inchangé,
+ * les dates sont comparées par leur instant, et une valeur renvoyée à l'identique ne compte pas.
+ */
+export function profileChanges(before: Record<string, unknown>, after: Record<string, unknown>): boolean {
+  return Object.entries(after).some(([field, value]) => {
+    if (value === undefined) return false;
+    const previous = before[field] ?? null;
+    if (value instanceof Date || previous instanceof Date) {
+      const time = (date: unknown) => (date instanceof Date ? date.getTime() : date);
+      return time(value) !== time(previous);
+    }
+    return value !== previous;
+  });
+}
+
 /** Champs que Paul peut proposer de modifier ; nom commercial, métier et zone restent sur la page Entreprise. */
 export const PAUL_PROFILE_FIELDS = ["ownerName", "website", "socialHandles", "phone", "openingHours", "description"] as const;
 export type PaulProfileField = (typeof PAUL_PROFILE_FIELDS)[number];

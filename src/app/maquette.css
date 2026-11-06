@@ -790,6 +790,21 @@
 .mq.workspace-v52 .delegation-option input{width:auto;margin-top:3px}
 .mq.workspace-v52 .delegation-option strong,.mq.workspace-v52 .delegation-option small{display:block}
 .mq.workspace-v52 .delegation-option small{color:var(--muted);font-size:12px;margin-top:2px}
+.mq.workspace-v52 .journal-table td{overflow-wrap:anywhere}
+.mq.workspace-v52 .journal-table td:first-child{white-space:nowrap}
+.mq.workspace-v52 .journal-more{margin-top:12px}
+.mq.workspace-v52 .journal-more>summary{cursor:pointer;width:max-content;max-width:100%;min-height:44px;display:flex;align-items:center;font-size:13px;font-weight:600}
+.mq.workspace-v52 .journal-more>.table-wrap{margin-top:8px}
+.mq.workspace-v52 .journal-export{margin-top:12px}
+@media(max-width:760px){
+.mq.workspace-v52 .journal-table{min-width:0}
+.mq.workspace-v52 .journal-table thead{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap}
+.mq.workspace-v52 .journal-table tr,.mq.workspace-v52 .journal-table td{display:block}
+.mq.workspace-v52 .journal-table tr{border-bottom:1px solid var(--line);padding:10px 0}
+.mq.workspace-v52 .journal-table td{border:0;padding:3px 11px}
+.mq.workspace-v52 .journal-table td:first-child{white-space:normal}
+.mq.workspace-v52 .journal-table td[data-label]::before{content:attr(data-label) " : ";color:var(--muted);font-size:11px}
+}
 @media(max-width:1000px){
 .mq.workspace-v52 .atelier-layout{grid-template-columns:1fr}
 .mq.workspace-v52 .preview-stage{padding:14px;min-height:0}

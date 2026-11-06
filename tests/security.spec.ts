@@ -75,6 +75,7 @@ const GUARDED_ROUTES: Guarded[] = [
   { method: "GET", path: "/api/google-place", denied: 401 },
   { method: "POST", path: "/api/google-place", denied: 401 },
   { method: "POST", path: "/api/linkedin/disconnect", denied: 401 },
+  { method: "GET", path: "/api/journal/export", denied: 401 },
   { method: "PATCH", path: "/api/leads/[id]", denied: 401 },
   { method: "GET", path: "/api/oauth/gmail/callback", denied: "login" },
   { method: "GET", path: "/api/oauth/gmail/start", denied: "login" },
