@@ -1,33 +1,40 @@
-import { Suspense, cache, type CSSProperties } from "react";
+import { Suspense, cache } from "react";
 import Link from "next/link";
-import { PERSONAS, type AgentKey } from "@/lib/agents/personas";
+import { PERSONAS } from "@/lib/agents/personas";
 import { PersonaAvatar } from "@/components/persona-avatar";
 import { PublicShell, SECONDARY_LINK } from "@/components/public-shell";
 import { getSessionEmail } from "@/lib/session";
 
 /**
- * Accueil public (#86, charte section 7) : un seul récit, dans l'ordre du parcours.
- * Promesse → l'équipe → un exemple concret → vous gardez la main → créer son compte.
- * Le détail par canal est sur /canaux (#224).
+ * Page de découverte (#310, FR-1, charte §7) : un seul récit, dans l'ordre du parcours.
+ * Promesse → Paul → un exemple concret → vous gardez la main → six étapes → commencer.
+ * Paul est le seul personnage présenté (D3). Le détail par canal est sur /canaux (#224).
  */
-const TEAM: { key: AgentKey; does: string }[] = [
-  { key: "co_ceo", does: "fixe l’objectif avec vous et décide des priorités" },
-  { key: "marketing", does: "analyse votre présence en ligne et vos concurrents" },
-  { key: "contenu", does: "écrit vos posts et votre site" },
-  { key: "demarchage", does: "trouve des clients à contacter" },
-];
 
-// Exemple de démonstration : données inventées, aucune entreprise cliente (#86, #88).
-const EXAMPLE_PLAN: { agent: AgentKey; title: string; detail: string }[] = [
-  { agent: "contenu", title: "Créer un site d'une page", detail: "Zone d'intervention, dépannage urgent et numéro direct." },
-  { agent: "contenu", title: "Publier deux posts par semaine", detail: "Chantiers récents et conseils d'entretien sur la Page Facebook." },
-  { agent: "demarchage", title: "Contacter 15 syndics du secteur", detail: "Liste de prospects et message de présentation préparés." },
+// Parcours d'entrée : l'inscription actuelle, en attendant /bienvenue (#279).
+const START_HREF = "/signup";
+const SPACE_HREF = "/strategie";
+
+// Exemple d'illustration : données inventées, aucune entreprise cliente (#88).
+const EXAMPLE_PLAN: { title: string; detail: string }[] = [
+  { title: "Faire parler vos réalisations", detail: "Un chantier documenté, publié sur votre Page Facebook." },
+  { title: "Ouvrir la porte des agences locales", detail: "Un message individuel à deux agences, sans relance automatique." },
+  { title: "Renouer avec d'anciens prospects", detail: "Huit contacts recontactables, vérifiés avant tout envoi." },
 ];
 
 const CONTROL = [
-  { title: "Vous fixez l’objectif", text: "« 10 demandes de devis par mois » : Paul construit le plan à partir de votre but, pas d’une liste de conseils." },
-  { title: "Vous relisez chaque production", text: "Une production à la fois : vous approuvez, modifiez ou refusez. Vos refus servent à la suivante." },
-  { title: "Rien ne part sans vous", text: "Chaque publication ou envoi attend votre confirmation explicite. Une connexion à un compte ne déclenche jamais rien." },
+  { title: "Vous fixez l’objectif", text: "« +20 % de chiffre d’affaires en 12 mois, sans embaucher » : Paul construit le plan à partir de votre but, pas d’une liste de conseils." },
+  { title: "Vous relisez chaque contenu", text: "Un contenu à la fois : vous validez, vous modifiez ou vous refusez. Une fois diffusé, il ne bouge plus : toute retouche crée une nouvelle version." },
+  { title: "Rien ne part sans vous", text: "Chaque publication ou envoi attend votre confirmation explicite. Connecter un compte ne déclenche jamais rien." },
+];
+
+const LOOP = [
+  "Vous présentez votre entreprise et votre cap",
+  "Paul propose trois missions ; vous choisissez celles que vous lancez",
+  "Un contenu est préparé dans l’atelier",
+  "Vous le relisez, le validez, puis confirmez la diffusion",
+  "Vous notez les résultats obtenus",
+  "Vous décidez : poursuivre, adapter ou arrêter",
 ];
 
 // Une seule vérification par requête, partagée par l'en-tête et les appels à l'action.
@@ -42,14 +49,24 @@ const isSignedIn = cache(async (): Promise<boolean> => {
 
 const PRIMARY_BUTTON =
   "inline-flex min-h-11 items-center rounded-lg bg-indigo-600 px-6 text-base font-medium text-white hover:bg-indigo-700";
-const OUTLINE_BUTTON =
-  "inline-flex min-h-11 items-center rounded-lg border border-slate-300 bg-white px-6 text-base font-medium text-slate-800 hover:bg-slate-100";
 
-function SignedOutActions() {
+function StartAction({ withAccountLink }: { withAccountLink: boolean }) {
   return (
-    <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
-      <Link href="/signup" className={PRIMARY_BUTTON}>Créer mon compte</Link>
-      <Link href="/login" className={OUTLINE_BUTTON}>J&apos;ai déjà un compte</Link>
+    <div className="mt-6 flex flex-col items-center gap-3">
+      <Link href={START_HREF} className={PRIMARY_BUTTON}>C&apos;est parti</Link>
+      {withAccountLink && (
+        <p className="text-sm text-slate-700">
+          Vous avez déjà un compte ? <Link href="/login" className="font-medium text-slate-900 underline">Retrouver mon compte</Link>
+        </p>
+      )}
+    </div>
+  );
+}
+
+function SpaceAction() {
+  return (
+    <div className="mt-6 flex justify-center">
+      <Link href={SPACE_HREF} className={PRIMARY_BUTTON}>Retourner à mon espace</Link>
     </div>
   );
 }
@@ -57,91 +74,77 @@ function SignedOutActions() {
 // Seuls ces blocs dépendent de la session : le reste de l'accueil s'affiche sans attendre.
 async function HeaderAction() {
   return (await isSignedIn()) ? (
-    <Link href="/dashboard" className={SECONDARY_LINK}>Mon espace</Link>
+    <Link href={SPACE_HREF} className={SECONDARY_LINK}>Mon espace</Link>
   ) : (
-    <Link href="/login" className={SECONDARY_LINK}>Se connecter</Link>
+    <Link href="/login" className={SECONDARY_LINK}>Retrouver mon compte</Link>
   );
 }
 
-async function CallToAction() {
-  if (!(await isSignedIn())) return <SignedOutActions />;
-  return (
-    <div className="mt-6">
-      <Link href="/dashboard" className={PRIMARY_BUTTON}>Accéder à mon espace</Link>
-    </div>
-  );
+async function CallToAction({ withAccountLink }: { withAccountLink: boolean }) {
+  return (await isSignedIn()) ? <SpaceAction /> : <StartAction withAccountLink={withAccountLink} />;
 }
 
 export default function LandingPage() {
+  const paul = PERSONAS.co_ceo;
   return (
-    <PublicShell headerAction={<Suspense fallback={<Link href="/login" className={SECONDARY_LINK}>Se connecter</Link>}><HeaderAction /></Suspense>}>
+    <PublicShell headerAction={<Suspense fallback={<Link href="/login" className={SECONDARY_LINK}>Retrouver mon compte</Link>}><HeaderAction /></Suspense>}>
       {/* 1. La promesse */}
       <section className="landing-hero" aria-labelledby="promesse">
-        <p className="text-xs font-semibold uppercase text-indigo-700">L&apos;équipe IA des indépendants et des TPE</p>
-        <h1 id="promesse" className="mt-3 text-4xl font-semibold leading-tight sm:text-5xl">Vous décidez. Votre activité avance.</h1>
+        <h1 id="promesse" className="text-4xl font-semibold leading-tight sm:text-5xl">Vous décidez. Votre activité avance.</h1>
         <p className="mx-auto mt-4 max-w-2xl text-lg text-slate-700">
-          Paul et son équipe préparent le travail pour atteindre votre objectif : plan, site, posts, prospection. Vous gardez le dernier mot.
+          Paul prépare le travail pour atteindre votre objectif : plan, messages, visuels, prospection. Vous gardez le dernier mot.
         </p>
-        <Suspense fallback={<SignedOutActions />}>
-          <CallToAction />
+        <Suspense fallback={<StartAction withAccountLink />}>
+          <CallToAction withAccountLink />
         </Suspense>
       </section>
 
-      {/* 2. L'équipe, dès le haut de page */}
-      <section className="landing-team" aria-labelledby="equipe">
-        <h2 id="equipe" className="sr-only">L&apos;équipe qui prépare le travail</h2>
-        <ul className="landing-team-grid">
-          {TEAM.map(({ key, does }) => (
-            <li key={key} className="landing-agent" style={{ "--agent": `var(--bd-agent-${key})` } as CSSProperties}>
-              <PersonaAvatar agentKey={key} size={64} />
-              <span className="landing-agent-name">{PERSONAS[key].name}</span>
-              <span className="text-sm text-slate-700">{does}</span>
-            </li>
-          ))}
-        </ul>
+      {/* 2. Paul, seul copilote */}
+      <section className="landing-team" aria-labelledby="copilote">
+        <h2 id="copilote" className="sr-only">Votre copilote</h2>
+        <div className="landing-paul">
+          <PersonaAvatar agentKey="co_ceo" size={64} />
+          <p>
+            <span className="landing-agent-name">{paul.name}</span>
+            <span className="block text-base text-slate-700">votre copilote unique : il comprend, recommande, prépare et apprend avec vous.</span>
+          </p>
+        </div>
       </section>
 
       {/* 3. Un exemple concret */}
       <section className="landing-band" aria-labelledby="exemple">
         <p className="text-xs font-semibold uppercase text-indigo-700">Un exemple concret</p>
-        <h2 id="exemple" className="mt-3 text-2xl font-semibold">Un plombier qui veut plus de demandes de devis</h2>
-        <p className="mt-1 text-base text-slate-600">
-          Objectif : <strong className="font-medium text-slate-900">10 demandes de devis par mois</strong>.
+        <h2 id="exemple" className="mt-3 text-2xl font-semibold">Une entreprise de rénovation qui veut plus de projets</h2>
+        <p className="mt-1 text-base text-slate-700">
+          Objectif : <strong className="font-medium text-slate-900">+20 % de chiffre d&apos;affaires en 12 mois</strong>.
         </p>
         <div className="mt-6 grid gap-6 sm:grid-cols-2">
           <div>
-            <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-600">Le plan proposé par Paul</h3>
+            <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-700">Le plan proposé par Paul</h3>
             <ol className="mt-3 space-y-4">
               {EXAMPLE_PLAN.map((step, i) => (
                 <li key={step.title} className="flex gap-3">
                   <span aria-hidden="true" className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-indigo-100 text-sm font-semibold text-indigo-700">{i + 1}</span>
                   <span>
                     <span className="block font-medium">{step.title}</span>
-                    <span className="block text-sm text-slate-600">{step.detail} <strong style={{ color: `var(--bd-agent-${step.agent})` }}>· {PERSONAS[step.agent].name}</strong></span>
+                    <span className="block text-sm text-slate-700">{step.detail}</span>
                   </span>
                 </li>
               ))}
             </ol>
           </div>
           <div>
-            <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-600">Ce que Camille vous propose</h3>
+            <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-700">Un contenu prêt à relire</h3>
             <div className="landing-production mt-3">
-              <p className="flex items-center gap-2 text-sm text-slate-700"><PersonaAvatar agentKey="contenu" size={24} /><span><strong style={{ color: "var(--bd-agent-contenu)" }}>Camille</strong> vous propose un post Facebook</span></p>
+              <p className="flex items-center gap-2 text-sm text-slate-700"><PersonaAvatar agentKey="co_ceo" size={24} /><span><strong className="text-slate-900">Paul</strong> prépare un post Facebook</span></p>
               <p className="mt-3 text-base">
-                Fuite sous l&apos;évier un dimanche ? Nous intervenons sur toute l&apos;agglomération, 7 jours sur 7. Devis gratuit avant chaque intervention.
+                Un projet de rénovation commence par une maison que l&apos;on connaît et des priorités bien définies. Parlons de votre projet.
               </p>
-              <p className="mt-3 text-sm text-slate-700">Vous approuvez le texte, puis confirmez sa publication sur votre Page.</p>
+              <p className="mt-3 text-sm text-slate-700">Vous validez le texte, puis confirmez sa publication sur votre Page.</p>
             </div>
           </div>
         </div>
-        <figure className="landing-capture mt-8">
-          <picture>
-            <source media="(max-width: 640px)" srcSet="/brand/workspace-preview-mobile.png" />
-            {/* Capture du produit : l'image s'adapte à l'écran au lieu d'être rognée. */}
-            <img src="/brand/workspace-preview.png" alt="Aperçu BienDecider : l’objectif d’une entreprise fictive et ce que l’équipe lui a préparé" width={1920} height={1200} loading="lazy" />
-          </picture>
-          <figcaption className="mt-2 text-xs text-slate-600">Exemple fictif, aucune donnée client</figcaption>
-        </figure>
+        <p className="mt-4 text-xs text-slate-700">Exemple d&apos;illustration, aucune donnée client</p>
       </section>
 
       {/* 4. Vous gardez la main */}
@@ -162,12 +165,26 @@ export default function LandingPage() {
         </p>
       </section>
 
-      {/* 5. Créer son compte */}
+      {/* 5. Six étapes, une seule boucle */}
+      <section className="landing-band" aria-labelledby="parcours">
+        <p className="text-xs font-semibold uppercase text-indigo-700">De bout en bout</p>
+        <h2 id="parcours" className="mt-3 text-2xl font-semibold">Six étapes, une seule boucle</h2>
+        <ol className="mt-6 grid gap-3 sm:grid-cols-2">
+          {LOOP.map((text, i) => (
+            <li key={text} className="flex items-start gap-3">
+              <span aria-hidden="true" className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-indigo-100 text-sm font-semibold text-indigo-700">{i + 1}</span>
+              <span className="text-base">{text}</span>
+            </li>
+          ))}
+        </ol>
+      </section>
+
+      {/* 6. Commencer */}
       <section className="landing-final" aria-labelledby="commencer">
         <h2 id="commencer" className="text-2xl font-semibold">Quel est votre objectif ?</h2>
-        <p className="mt-2 text-base text-slate-700">Dites-le à Paul en une phrase. L&apos;équipe s&apos;occupe du reste, vous décidez.</p>
-        <Suspense fallback={<SignedOutActions />}>
-          <CallToAction />
+        <p className="mt-2 text-base text-slate-700">Dites-le à Paul : il s&apos;occupe du reste, vous décidez.</p>
+        <Suspense fallback={<StartAction withAccountLink={false} />}>
+          <CallToAction withAccountLink={false} />
         </Suspense>
       </section>
     </PublicShell>
