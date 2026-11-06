@@ -36,14 +36,14 @@ tracking_system: file-system
 story_location: docs/bmad/implementation
 development_status:
   epic-1: done
-  1-1-une-seule-lecture-de-l-état-de-l-équipe: done
-  1-2-motifs-d-échec-typés-et-dits-en-clair: done
-  1-3-le-premier-audit-naît-dans-le-plan: done
-  1-4-une-action-terminée-renvoie-vers-ses-productions: done
+  1-1-une-seule-lecture-de-l-Ã©tat-de-l-Ã©quipe: done
+  1-2-motifs-d-Ã©chec-typÃ©s-et-dits-en-clair: done
+  1-3-le-premier-audit-naÃ®t-dans-le-plan: done
+  1-4-une-action-terminÃ©e-renvoie-vers-ses-productions: done
   epic-1-retrospective: optional
 
   epic-2: done
-  2-1-dire-son-objectif-à-paul-et-le-confirmer-en-un-clic: done
+  2-1-dire-son-objectif-Ã -paul-et-le-confirmer-en-un-clic: done
   2-2-faire-enregistrer-son-profil-par-paul: done
   2-3-paul-propose-le-lancement-le-dirigeant-lance: done
   2-4-pas-d-action-en-double: done
@@ -51,21 +51,21 @@ development_status:
 
   epic-3: done
   3-1-date-du-jour-et-nom-du-dirigeant-pour-tous-les-agents: done
-  3-2-des-exécutions-plafonnées: done
-  3-3-faire-réviser-une-production-par-paul: done
-  3-4-recette-du-scénario-atelier-lumen: done
-  3-5-paul-situe-chaque-état-dans-le-temps: done
+  3-2-des-exÃ©cutions-plafonnÃ©es: done
+  3-3-faire-rÃ©viser-une-production-par-paul: done
+  3-4-recette-du-scÃ©nario-atelier-lumen: done
+  3-5-paul-situe-chaque-Ã©tat-dans-le-temps: done
   epic-3-retrospective: optional
 
   epic-4: done
-  4-1-parler-à-paul-ne-consomme-pas-les-lancements: done
+  4-1-parler-Ã -paul-ne-consomme-pas-les-lancements: done
   4-2-aucune-fausse-rectification: done
   epic-4-retrospective: optional
 
   epic-5: done
-  5-1-un-diagnostic-à-jour: done
+  5-1-un-diagnostic-Ã -jour: done
   5-2-du-diagnostic-au-plan-sans-boucle: done
-  5-3-le-plan-montre-d-abord-ce-qu-il-reste-à-faire: done
+  5-3-le-plan-montre-d-abord-ce-qu-il-reste-Ã -faire: done
   5-4-paul-utilisable-sur-smartphone: done
   5-5-des-photos-sur-le-site: done
   epic-5-retrospective: optional
@@ -111,9 +111,26 @@ development_status:
   11-3-savoir-quoi-verifier-avant-de-valider: done
   epic-11-retrospective: optional
 
-  epic-12: in-progress
-  12-1-confirmer-une-diffusion: review
-  12-2-diffuser-moi-meme-et-le-declarer: review
-  12-3-choisir-mon-niveau-de-delegation: review
-  12-4-programmer-et-annuler-une-diffusion: backlog
+  epic-12: done
+  12-1-confirmer-une-diffusion: done
+  12-2-diffuser-moi-meme-et-le-declarer: done
+  12-3-choisir-mon-niveau-de-delegation: done
+  12-4-programmer-et-annuler-une-diffusion: done
   epic-12-retrospective: optional
+
+  epic-13: done
+  13-1-gerer-mes-canaux-et-ma-delegation: done
+  13-2-ne-proposer-que-les-canaux-disponibles: done
+  epic-13-retrospective: optional
+
+  epic-14: done
+  14-1-trouver-des-agences-de-ma-zone: done
+  14-2-choisir-une-ou-deux-agences: done
+  14-3-envoyer-un-email-par-agence: done
+  epic-14-retrospective: optional
+
+  epic-15: in-progress
+  15-1-renseigner-le-bilan: review
+  15-2-decider-la-suite: review
+  15-3-ce-que-paul-apprend: review
+  epic-15-retrospective: optional

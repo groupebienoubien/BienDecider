@@ -4,12 +4,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSessionCompany } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
 import { buildLinkedInAuthUrl, hashLinkedInState, isLinkedInConfigured, LINKEDIN_CALLBACK, LINKEDIN_STATE_COOKIE } from "@/lib/oauth/linkedin";
+import { canUseChannel, readChannelAccess } from "@/lib/channel-access";
 
 export async function GET(request: NextRequest) {
   const company = await getSessionCompany();
   if (!company) return NextResponse.redirect(new URL("/login", request.url));
   if (request.headers.get("sec-fetch-site") === "cross-site") return NextResponse.json({ error: "Origine refusée." }, { status: 403 });
   if (!isLinkedInConfigured()) return NextResponse.redirect(new URL("/connexions?error=linkedin_config", request.url));
+  if (!canUseChannel(await readChannelAccess(company.id, "linkedin"))) return NextResponse.redirect(new URL("/connexions?error=channel_unavailable", request.url));
   const store = await cookies();
   const session = store.get("pepito_session")?.value;
   if (!session) return NextResponse.redirect(new URL("/login", request.url));

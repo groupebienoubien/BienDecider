@@ -11,7 +11,8 @@ Faire partir une version validée, une seule fois, sur la destination confirmée
 - Story 12.1 : Confirmer une diffusion, contrôlée côté serveur et enregistrée (#315 ; site vitrine #172, tranche V5.2)
 - Story 12.2 : Diffuser moi-même et le déclarer (#295)
 - Story 12.3 : Choisir mon niveau de délégation (#36)
-- Hors de cette PR : programmer et annuler (#261), avec l'ordonnanceur GitHub Actions toutes les 5 minutes (décision des fondateurs du 2026-11-05) ; déconnexion avec programmations (#293).
+- Story 12.4 : Programmer la diffusion d'une version validée et pouvoir l'annuler (#261), PR suivante : ordonnanceur GitHub Actions toutes les 5 minutes (décision des fondateurs du 2026-11-05), route `/api/cron/publications` protégée par `CRON_SECRET`.
+- Hors de l'epic : déconnexion avec liste des programmations dans Canaux & délégation (#293).
 
 ## Requirements & Constraints
 

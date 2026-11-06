@@ -8,6 +8,8 @@ import { getShellProps } from "@/lib/shell-data";
 import { prisma } from "@/lib/prisma";
 import { firstNameOf, requireWorkspaceCompany } from "@/lib/workspace";
 import { loadMissionViews, priorityOf } from "@/lib/missions/view";
+import { learningsOf } from "@/lib/missions/results-view";
+import { loadCancelledSchedules } from "@/lib/contents/view";
 import { nextStep } from "@/lib/missions/stage";
 import { LAUNCH_COST_CREDITS } from "@/lib/missions/rules";
 import { asDelegationLevel } from "@/lib/delegation-level";
@@ -24,8 +26,11 @@ export default async function StrategiePage() {
   const connected = await prisma.channelConnection.count({ where: { companyId: company.id, status: "connecte" } });
   const step = nextStep(missions, asDelegationLevel(company.delegationLevel), priorityOf(missions));
   const stepMission = missions.find((mission) => mission.id === step.missionId) ?? null;
-  const toValidate = missions.filter((mission) => (mission.stage === "approve" || mission.stage === "verify") && mission.contentId);
+  const toValidate = missions.filter((mission) => (mission.stage === "approve" || mission.stage === "verify" || mission.stage === "scheduled") && mission.contentId);
+  const cancelledSchedules = await loadCancelledSchedules(company.id);
+  const STAGE_LINE: Partial<Record<string, [string, string]>> = { verify: ["diffusion à vérifier", "Vérifier"], scheduled: ["diffusion programmée", "Voir la programmation"] };
   const firstName = firstNameOf(company.ownerName);
+  const learnings = learningsOf(missions);
 
   return (
     <AppShell {...shell}>
@@ -60,9 +65,33 @@ export default async function StrategiePage() {
         <small>Rien ne sera lancé ou diffusé sans votre accord.</small>
       </section>
 
+      {learnings.length > 0 && (
+        <section className="section-space" aria-labelledby="learnings-title">
+          <div className="section-title">
+            <h2 id="learnings-title">Ce que Paul apprend</h2>
+            <p>Vos bilans comparés au résultat recherché de chaque mission. Rien n&apos;est appliqué sans votre confirmation.</p>
+          </div>
+          {learnings.map(({ mission, reading }) => (
+            <article key={mission.id} className="stack" aria-label={`Ce que Paul apprend : ${mission.title}`}>
+              <h3>{mission.title}</h3>
+              <dl className="learning-grid">
+                <div><dt>Observé</dt><dd>{reading.observed}</dd></div>
+                <div><dt>Ce que cela suggère</dt><dd>{reading.suggests}</dd></div>
+                <div><dt>Ce que cela ne prouve pas</dt><dd>{reading.notProven}</dd></div>
+                <div><dt>Impact sur le plan</dt><dd>{reading.impact}</dd></div>
+              </dl>
+              <div className="heading-actions">
+                {mission.status === "active" && <Link className="btn" href={`/resultats?mission=${mission.id}`}>Décider la suite</Link>}
+                <PaulButton label="En parler avec Paul" mission={mission} />
+              </div>
+            </article>
+          ))}
+        </section>
+      )}
+
       <section className="section-space" aria-labelledby="to-validate-title">
         <div className="section-title"><h2 id="to-validate-title">À valider par vous</h2></div>
-        {toValidate.length === 0 ? (
+        {toValidate.length === 0 && cancelledSchedules.length === 0 ? (
           <div className="decision">
             <Icon name="panels-top-left" />
             <span>Aucun contenu à valider pour le moment. Les contenus de vos missions en cours arriveront dans l&apos;atelier.</span>
@@ -70,8 +99,15 @@ export default async function StrategiePage() {
         ) : toValidate.map((mission) => (
           <div key={mission.id} className="decision">
             <Icon name="panels-top-left" />
-            <span><strong>{mission.title}</strong> · V{mission.content?.number} · {mission.channelLabel} · {mission.stage === "verify" ? "diffusion à vérifier" : "prête à relire"}</span>
-            <Link href={`/atelier/${mission.contentId}`}>{mission.stage === "verify" ? "Vérifier" : "Relire et valider"}</Link>
+            <span><strong>{mission.title}</strong> · V{mission.content?.number} · {mission.channelLabel} · {STAGE_LINE[mission.stage]?.[0] ?? "prête à relire"}</span>
+            <Link href={`/atelier/${mission.contentId}`}>{STAGE_LINE[mission.stage]?.[1] ?? "Relire et valider"}</Link>
+          </div>
+        ))}
+        {cancelledSchedules.map((item) => (
+          <div key={item.contentId} className="decision">
+            <Icon name="refresh-cw" />
+            <span><strong>{item.missionTitle}</strong> · V{item.versionNumber} · programmation annulée : {item.reason}</span>
+            <Link href={`/atelier/${item.contentId}`}>Voir le contenu</Link>
           </div>
         ))}
         <div className="decision">

@@ -31,12 +31,17 @@ const GUARDED_ROUTES: Guarded[] = [
   { method: "PATCH", path: "/api/admin/companies/[id]/suspension", denied: 403 },
   { method: "PATCH", path: "/api/admin/usage-alerts", denied: 403 },
   { method: "PATCH", path: "/api/admin/llm-credit", denied: 403 },
+  { method: "PATCH", path: "/api/admin/channel-access", denied: 403 },
+  { method: "POST", path: "/api/channel-access", denied: 401 },
+  { method: "POST", path: "/api/agencies/search", denied: 401 },
   { method: "GET", path: "/api/missions", denied: 401 },
   { method: "POST", path: "/api/missions", denied: 401 },
   { method: "GET", path: "/api/missions/catalogue", denied: 401 },
   { method: "DELETE", path: "/api/ideas/[id]", denied: 401 },
   { method: "POST", path: "/api/missions/[id]/transition", denied: 401 },
   { method: "POST", path: "/api/missions/[id]/content", denied: 401 },
+  { method: "POST", path: "/api/missions/[id]/report", denied: 401 },
+  { method: "POST", path: "/api/missions/[id]/decision", denied: 401 },
   { method: "POST", path: "/api/contents/[id]", denied: 401 },
   { method: "POST", path: "/api/contents/[id]/diffusion", denied: 401 },
   { method: "POST", path: "/api/delegation", denied: 401 },
@@ -103,6 +108,7 @@ const PUBLIC_ROUTES: Record<string, string> = {
   "/api/auth/reset-password": "le jeton à usage unique du lien reçu par e-mail fait foi, sans session (POST même origine)",
   "/api/auth/verify-email": "le jeton à usage unique du lien reçu par e-mail fait foi, sans session (POST même origine)",
   "/api/cron/weekly-review": "protégée par CRON_SECRET, pas par la session",
+  "/api/cron/publications": "protégée par CRON_SECRET, pas par la session (programmations, #261)",
   "/api/health": "sonde publique sans donnée métier",
 };
 
@@ -192,6 +198,10 @@ test("missing, unsigned and forged session cookies are refused everywhere", asyn
   }
   const cron = await request.get(`${baseURL}/api/cron/weekly-review`, { headers: { Authorization: "Bearer wrong-secret" } });
   expect([401, 500]).toContain(cron.status());
+  for (const authorization of [undefined, "Bearer wrong-secret"]) {
+    const publications = await request.get(`${baseURL}/api/cron/publications`, { headers: authorization ? { Authorization: authorization } : {} });
+    expect([401, 500]).toContain(publications.status());
+  }
 });
 
 test("login does not create unknown accounts; signup is explicit", async ({ request }) => {
@@ -1088,7 +1098,7 @@ test("missions and credits belong to the session company: validated, refused acr
     expect((await (await request.get(`${baseURL}/api/missions`, { headers: headers(b) })).json()).missions).toHaveLength(0);
     expect((await (await request.get(`${baseURL}/api/missions`, { headers: headers(a) })).json()).missions).toHaveLength(1);
     const catalogue = (await (await request.get(`${baseURL}/api/missions/catalogue`, { headers: headers(a) })).json()).templates as { key: string; channels: { key: string }[] }[];
-    expect(catalogue.map((template) => template.key)).toEqual(["social_post", "site_page", "custom"]);
+    expect(catalogue.map((template) => template.key)).toEqual(["agencies", "social_post", "site_page", "custom"]);
     expect(catalogue.flatMap((template) => template.channels.map((channel) => channel.key))).not.toContain("instagram");
 
     // Transitions : autre entreprise, autre origine, corps illisible, version perimee.
@@ -1199,6 +1209,9 @@ test("diffusion is decided by the server for the session company, and « Prépar
     expect((await diffuse(a, { action: "envoyer", number: 1 })).status()).toBe(400);
     expect((await diffuse(a, { action: "resolve", number: 1 })).status()).toBe(400);
     expect(await (await diffuse(a, { action: "publish", number: 1 })).json()).toMatchObject({ code: "M-82" });
+    expect(await (await diffuse(a, { action: "publish", number: 1, confirmed: true, scheduledAt: "demain 9h" })).json()).toMatchObject({ code: "M-61" });
+    expect(await (await diffuse(a, { action: "publish", number: 1, confirmed: true, scheduledAt: "2020-01-01T09:00:00.000Z" })).json()).toMatchObject({ code: "M-61" });
+    expect(await (await diffuse(a, { action: "cancel", number: 1 })).json()).toMatchObject({ code: "M-87" });
 
     // Mise en ligne : la page publique sert exactement la version validée, en texte.
     const published = await diffuse(a, { action: "publish", number: 1, confirmed: true, status: "sent" });
@@ -1226,6 +1239,70 @@ test("diffusion is decided by the server for the session company, and « Prépar
     }
   } finally {
     await prisma.company.deleteMany({ where: { id: { in: [a.id, b.id] } } });
+    await prisma.$disconnect();
+  }
+});
+
+test("a channel reserved to authorized companies is requested, granted by an administrator, and refused before any provider flow otherwise", async ({ request, page }) => {
+  const admins = (process.env.ADMIN_EMAILS ?? "").split(",").map((email) => email.trim()).filter(Boolean);
+  test.skip(admins.length === 0, "Requires ADMIN_EMAILS on the server, as configured in CI.");
+  const prisma = openDatabase();
+  const adminEmail = admins[0];
+  const marker = randomUUID().slice(0, 8);
+  let createdAdmin = false;
+  let adminCompany = await prisma.company.findUnique({ where: { ownerEmail: adminEmail } });
+  if (!adminCompany) {
+    adminCompany = await prisma.company.create({ data: { ownerEmail: adminEmail, name: "Admin canaux", trade: "Artisan", servingArea: "Paris" } });
+    createdAdmin = true;
+  }
+  const a = await prisma.company.create({ data: { ownerEmail: `security-access-a-${marker}@example.invalid`, name: `Accès A ${marker}`, trade: "Artisan", servingArea: "Paris" } });
+  const b = await prisma.company.create({ data: { ownerEmail: `security-access-b-${marker}@example.invalid`, name: `Accès B ${marker}`, trade: "Artisan", servingArea: "Paris" } });
+  const headers = (company: typeof a) => ({ Cookie: sessionCookie(company.ownerEmail, company.sessionVersion), Origin: baseURL });
+  const admin = { Cookie: sessionCookie(adminEmail, adminCompany.sessionVersion), Origin: baseURL };
+  const path = `${baseURL}/api/admin/channel-access`;
+  const previous = await prisma.channelRollout.findUnique({ where: { channel: "gmail" } });
+  try {
+    // Ouvert à tous par défaut : la demande ne change rien.
+    expect(await (await request.post(`${baseURL}/api/channel-access`, { headers: headers(a), data: { channel: "gmail" } })).json()).toEqual({ state: "open" });
+    expect((await request.post(`${baseURL}/api/channel-access`, { headers: headers(a), data: { channel: "site" } })).status()).toBe(400);
+    expect((await request.post(`${baseURL}/api/channel-access`, { headers: { ...headers(a), Origin: "https://attacker.invalid" }, data: { channel: "gmail" } })).status()).toBe(403);
+
+    // Réservé par un administrateur seulement.
+    expect((await request.patch(path, { headers: headers(a), data: { channel: "gmail", openToAll: false } })).status()).toBe(403);
+    expect((await request.patch(path, { headers: { ...admin, Origin: "https://attacker.invalid" }, data: { channel: "gmail", openToAll: false } })).status()).toBe(403);
+    expect((await request.patch(path, { headers: admin, data: { channel: "site", openToAll: false } })).status()).toBe(400);
+    expect((await request.patch(path, { headers: admin, data: { channel: "gmail", openToAll: false } })).status()).toBe(200);
+
+    // Non autorisée : aucun flux fournisseur, une demande visible en administration.
+    const start = await request.get(`${baseURL}/api/oauth/gmail/start`, { headers: { Cookie: headers(a).Cookie }, maxRedirects: 0 });
+    expect(start.status()).toBe(307);
+    expect(start.headers().location).toMatch(/\/connexions\?error=(channel_unavailable|gmail_config)$/);
+    expect(await (await request.post(`${baseURL}/api/channel-access`, { headers: headers(a), data: { channel: "gmail" } })).json()).toEqual({ state: "requested" });
+    expect(await prisma.channelAccess.findUniqueOrThrow({ where: { companyId_channel: { companyId: a.id, channel: "gmail" } } })).toMatchObject({ status: "requested" });
+    expect(await prisma.channelAccess.count({ where: { companyId: b.id } })).toBe(0);
+    expect((await request.patch(path, { headers: admin, data: { channel: "gmail", companyId: "inconnue", granted: true } })).status()).toBe(404);
+    expect((await request.patch(path, { headers: admin, data: { channel: "gmail", companyId: a.id, granted: true } })).status()).toBe(200);
+    expect(await (await request.post(`${baseURL}/api/channel-access`, { headers: headers(a), data: { channel: "gmail" } })).json()).toEqual({ state: "granted" });
+    expect(await (await request.post(`${baseURL}/api/channel-access`, { headers: headers(b), data: { channel: "gmail" } })).json()).toEqual({ state: "requested" });
+
+    // Canaux désactivés : aucun démarrage, quelle que soit l'entreprise.
+    const linkedin = await request.get(`${baseURL}/api/oauth/linkedin/start`, { headers: { Cookie: headers(a).Cookie }, maxRedirects: 0 });
+    expect(linkedin.headers().location).toMatch(/\/connexions\?error=(channel_unavailable|linkedin_config)$/);
+
+    // Administration : la demande apparaît et s'accorde en un clic.
+    await page.context().addCookies([{ name: "pepito_session", value: admin.Cookie.slice(admin.Cookie.indexOf("=") + 1), url: baseURL }]);
+    await page.goto(`${baseURL}/admin`);
+    const panel = page.getByRole("region", { name: "Accès aux canaux" });
+    await expect(panel).toContainText("Email avec Gmail · entreprises autorisées seulement");
+    await panel.getByRole("button", { name: `Autoriser Accès B ${marker} sur Email avec Gmail` }).click();
+    await expect(panel.getByRole("button", { name: `Retirer Accès B ${marker} sur Email avec Gmail` })).toBeVisible();
+    expect(await prisma.channelAccess.findUniqueOrThrow({ where: { companyId_channel: { companyId: b.id, channel: "gmail" } } })).toMatchObject({ status: "granted", grantedBy: adminEmail });
+  } finally {
+    await page.context().clearCookies();
+    if (previous) await prisma.channelRollout.update({ where: { channel: "gmail" }, data: { openToAll: previous.openToAll } });
+    else await prisma.channelRollout.deleteMany({ where: { channel: "gmail" } });
+    await prisma.company.deleteMany({ where: { id: { in: [a.id, b.id] } } });
+    if (createdAdmin) await prisma.company.delete({ where: { id: adminCompany.id } });
     await prisma.$disconnect();
   }
 });
@@ -1425,6 +1502,79 @@ test("story 5.5: site photo and republish routes refuse another origin, even wit
     expect((await request.patch(`${baseURL}/api/site/photos/identifiant-inexistant`, { headers: sameOrigin, data: { alt: "Photo" } })).status()).toBe(404);
   } finally {
     await prisma.company.deleteMany({ where: { id: company.id } });
+    await prisma.$disconnect();
+  }
+});
+
+test("Partenariats: the agency list belongs to its company, the scope names one or two of them, and the e-mail preview shows each address", async ({ request, page }) => {
+  const prisma = openDatabase();
+  const marker = randomUUID().slice(0, 8);
+  const a = await prisma.company.create({ data: { ownerEmail: `security-agencies-a-${marker}@example.invalid`, name: `Agences A ${marker}`, trade: "Artisan", servingArea: "Paris", emailVerifiedAt: new Date() } });
+  const b = await prisma.company.create({ data: { ownerEmail: `security-agencies-b-${marker}@example.invalid`, name: `Agences B ${marker}`, trade: "Artisan", servingArea: "Lyon" } });
+  const headers = (company: typeof a) => ({ Cookie: sessionCookie(company.ownerEmail, company.sessionVersion), Origin: baseURL });
+  const agency = (company: typeof a, name: string, email: string) => prisma.lead.create({ data: { companyId: company.id, segment: "agence", name, sector: "Agence immobilière", email, source: "https://exemple.invalid/agence", reason: "Elle vend des maisons à rénover." } });
+  try {
+    // Recherche : même origine seulement ; sans modèle configuré, refus en clair (M-91).
+    expect((await request.post(`${baseURL}/api/agencies/search`, { headers: { ...headers(a), Origin: "https://attacker.invalid" } })).status()).toBe(403);
+    const search = await request.post(`${baseURL}/api/agencies/search`, { headers: headers(a) });
+    if (search.status() === 503) expect(await search.json()).toMatchObject({ code: "M-91" });
+
+    const parc = await agency(a, "Agence du Parc", `parc-${marker}@example.invalid`);
+    await agency(a, "Syndic Horizon", `horizon-${marker}@example.invalid`);
+    const foreign = await agency(b, "Agence voisine", `voisine-${marker}@example.invalid`);
+    const created = await request.post(`${baseURL}/api/missions`, { headers: headers(a), data: { template: "agencies", title: "Deux agences de ma zone", outcome: "Un rendez-vous qualifié", finding: "Aucune agence ne me recommande" } });
+    expect(created.status()).toBe(201);
+    const { mission } = await created.json();
+    const transition = (data: unknown) => request.post(`${baseURL}/api/missions/${mission.id}/transition`, { headers: headers(a), data });
+    expect(await (await transition({ action: "set_scope", scope: { agencyIds: [foreign.id] }, expectedVersion: mission.version })).json()).toMatchObject({ code: "M-30" });
+
+    // Choix dans la page de la mission : 2 agences au plus, résumé nommé.
+    await page.context().addCookies([{ name: "pepito_session", value: headers(a).Cookie.slice(headers(a).Cookie.indexOf("=") + 1), url: baseURL }]);
+    await page.goto(`${baseURL}/missions/${mission.id}`);
+    const choice = page.getByRole("group", { name: "Agences à contacter (1 ou 2)" });
+    await expect(choice).toContainText(`parc-${marker}@example.invalid`);
+    await expect(choice).not.toContainText("Agence voisine");
+    await choice.getByRole("checkbox", { name: /Agence du Parc/ }).check();
+    await page.getByRole("button", { name: "Enregistrer le périmètre" }).click();
+    await expect(page.getByText("Périmètre enregistré.")).toBeVisible();
+    await expect(page.locator(".mission-status")).toContainText("Agence du Parc");
+
+    // Aperçu e-mail : chaque adresse, envois séparés.
+    const content = await prisma.missionContent.create({ data: { companyId: a.id, missionId: mission.id, channel: "gmail", format: "email", currentNumber: 1, versions: { create: { number: 1, title: "Travailler ensemble ?", body: "Bonjour,", author: "paul" } } } });
+    await page.goto(`${baseURL}/atelier/${content.id}`);
+    await expect(page.getByRole("article", { name: "Aperçu destinataire" })).toContainText(`Agence du Parc <parc-${marker}@example.invalid> · envois séparés`);
+    expect((await prisma.mission.findUniqueOrThrow({ where: { id: mission.id } })).scope).toEqual({ agencyIds: [parc.id] });
+  } finally {
+    await page.context().clearCookies();
+    await prisma.company.deleteMany({ where: { id: { in: [a.id, b.id] } } });
+    await prisma.$disconnect();
+  }
+});
+
+test("a mission report and its decision belong to the session company, are validated by the server and refused from another origin", async ({ request }) => {
+  const prisma = openDatabase();
+  const marker = randomUUID().slice(0, 8);
+  const a = await prisma.company.create({ data: { ownerEmail: `security-report-a-${marker}@example.invalid`, name: `Bilan A ${marker}`, trade: "Artisan", servingArea: "Paris" } });
+  const b = await prisma.company.create({ data: { ownerEmail: `security-report-b-${marker}@example.invalid`, name: `Bilan B ${marker}`, trade: "Artisan", servingArea: "Paris" } });
+  const headers = (company: typeof a, origin = baseURL) => ({ Cookie: sessionCookie(company.ownerEmail, company.sessionVersion), Origin: origin });
+  const mission = await prisma.mission.create({ data: { companyId: a.id, template: "site_page", channel: "site", title: "Page tarifs", outcome: "Deux demandes", originalOutcome: "Deux demandes", finding: "Pas de page tarifs", scope: { page: "Nos tarifs" }, status: "active", firstLaunchedAt: new Date(), position: 1 } });
+  const content = await prisma.missionContent.create({ data: { companyId: a.id, missionId: mission.id, channel: "site", format: "site_page", currentNumber: 1, validatedNumber: 1, versions: { create: { number: 1, title: "Nos tarifs", body: "Sur devis.", author: "paul" } } } });
+  const report = (company: typeof a, data: unknown, origin?: string) => request.post(`${baseURL}/api/missions/${mission.id}/report`, { headers: headers(company, origin), data });
+  const decide = (company: typeof a, data: unknown) => request.post(`${baseURL}/api/missions/${mission.id}/decision`, { headers: headers(company), data });
+  try {
+    expect((await report(a, { qualifiedLeads: 1, meetings: 0 }, "https://attacker.invalid")).status()).toBe(403);
+    expect(await (await report(a, { qualifiedLeads: 1, meetings: 0 })).json()).toMatchObject({ code: "M-37" });
+    await prisma.publication.create({ data: { companyId: a.id, missionId: mission.id, contentId: content.id, versionNumber: 1, title: "Nos tarifs", channel: "site", channelLabel: "Votre site vitrine", mode: "confirmed", status: "sent", sentAt: new Date(), idempotencyKey: `${content.id}:v1:1` } });
+    expect((await report(b, { qualifiedLeads: 1, meetings: 0 })).status()).toBe(404);
+    expect(await (await report(a, { qualifiedLeads: "<b>1</b>", meetings: 0 })).json()).toMatchObject({ code: "M-39" });
+    expect((await report(a, { qualifiedLeads: 2, meetings: 1, signedRevenue: 1500, note: "<script>x</script>" })).status()).toBe(201);
+    expect((await decide(a, { choice: "élargir", expectedVersion: mission.version })).status()).toBe(400);
+    expect((await decide(b, { choice: "stop", expectedVersion: mission.version })).status()).toBe(404);
+    expect(await (await decide(a, { choice: "stop", expectedVersion: mission.version + 5 })).json()).toMatchObject({ code: "M-02" });
+    expect(await (await decide(a, { choice: "continue", expectedVersion: mission.version })).json()).toEqual({ choice: "continue" });
+    expect(await prisma.missionReport.count({ where: { missionId: mission.id } })).toBe(1);
+  } finally {
+    await prisma.company.deleteMany({ where: { id: { in: [a.id, b.id] } } });
     await prisma.$disconnect();
   }
 });

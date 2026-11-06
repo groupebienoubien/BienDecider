@@ -43,10 +43,14 @@ import { LAUNCH_COST_CREDITS, checkTransition, validateNewMission, type MissionS
 import { availableTemplates, enabledChannels, MISSION_TEMPLATES } from "../src/lib/missions/templates";
 import { missionStage, missionTracker, nextStep, orderMissions, priorityMissionId, type ContentState, type StageMission } from "../src/lib/missions/stage";
 import { scopeSummary } from "../src/lib/missions/scope";
+import { AGENCY_SEARCH_MAX, newAgencies, readFoundAgency } from "../src/lib/agencies/rules";
+import { REPORT_NOTE_MAX, checkDecision, isUpToDate, readOutcomeTarget, readReport, stopRuleDue, validateReport } from "../src/lib/missions/report";
 import { renderJournal } from "../src/lib/journal";
 import { DELEGATION_LABELS, asDelegationLevel, prepareOnlyRefusal } from "../src/lib/delegation-level";
 import { slugify } from "../src/lib/site/slug";
-import { BODY_MAX, checkDeclaration, checkDiffusion, checkNewVersion, checkRejection, checkValidation, contentFormat, contentStatus, exposureFor, parseVariant, reviewChecklist, titleLabel, validateDraft, validateRejection, variantLabel, type ContentSnapshot } from "../src/lib/contents/rules";
+import { canonicalOAuthStart } from "../src/lib/oauth/canonical-host";
+import { NextRequest } from "next/server";
+import { BODY_MAX, checkDeclaration, checkDiffusion, checkNewVersion, isSchedulable, parseSchedule, checkRejection, checkValidation, contentFormat, contentStatus, exposureFor, parseVariant, reviewChecklist, titleLabel, validateDraft, validateRejection, variantLabel, type ContentSnapshot } from "../src/lib/contents/rules";
 import { firstNameOf } from "../src/lib/workspace";
 import { workspacePageLabel } from "../src/components/workspace-nav";
 import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH, passwordPolicyError } from "../src/lib/password-policy";
@@ -1552,7 +1556,8 @@ const mission = (over: Partial<MissionSnapshot> = {}): MissionSnapshot => ({ tem
 const codeOf = (result: { ok: boolean; code?: string }) => (result.ok ? "ok" : result.code);
 
 test("mission catalogue: only open models with an active channel are offered, plus Sur mesure", () => {
-  expect(availableTemplates().map((template) => template.key)).toEqual(["social_post", "site_page", "custom"]);
+  expect(availableTemplates().map((template) => template.key)).toEqual(["agencies", "social_post", "site_page", "custom"]);
+  expect(enabledChannels(MISSION_TEMPLATES.agencies)).toEqual(["gmail"]);
   expect(enabledChannels(MISSION_TEMPLATES.social_post)).toEqual(["facebook"]);
   expect(enabledChannels(MISSION_TEMPLATES.google_profile)).toEqual([]);
   expect(MISSION_TEMPLATES.custom.stopRuleDays).toBeNull();
@@ -1572,8 +1577,9 @@ test("mission creation: bounded fields, one permitted and active channel, scope 
   expect(codeOf(validateNewMission({ ...base, channel: "gmail" }, 0))).toBe("M-69");
   expect(codeOf(validateNewMission({ ...base, scope: { topic: "x" } }, 0))).toBe("M-17");
   expect(validateNewMission({ ...base, scope: undefined }, 0)).toMatchObject({ ok: true, value: { scope: {} } });
-  expect(codeOf(validateNewMission({ template: "agencies", title: "Deux agences", outcome: "Une r\u00e9ponse", finding: "Aucune agence partenaire connue" }, 0))).toBe("M-76");
+  expect(validateNewMission({ template: "agencies", title: "Deux agences", outcome: "Une r\u00e9ponse", finding: "Aucune agence partenaire connue" }, 0)).toMatchObject({ ok: true, value: { channel: "gmail", scope: {}, stopRuleDays: 30 } });
   expect(MISSION_TEMPLATES.agencies.validateScope({ agencyIds: ["a", "b", "c"] })).toEqual({ ok: false, code: "M-30" });
+  expect(MISSION_TEMPLATES.agencies.validateScope({ agencyIds: ["a", "a"] })).toEqual({ ok: false, code: "M-30" });
   expect(codeOf(validateNewMission({ template: "proof", title: "Une r\u00e9alisation", outcome: "Des demandes", finding: "Une belle r\u00e9alisation r\u00e9cente", channel: "facebook" }, 0))).toBe("M-76");
   const custom = { template: "custom", title: "Salon local", outcome: "Dix contacts", finding: "Un salon a lieu dans ma ville", scope: { description: "Tenir un stand au salon de mon quartier" } };
   expect(validateNewMission({ ...custom, stopRuleDays: 21 }, 0)).toMatchObject({ ok: true, value: { channel: null, stopRuleDays: 21 } });
@@ -1681,6 +1687,9 @@ test("scope summary, journal texts, first name and breadcrumb of the V5.2 worksp
   expect(scopeSummary("social_post", {})).toBe("À préciser");
   expect(scopeSummary("site_page", {})).toBe("Une page du site");
   expect(scopeSummary("agencies", { agencyIds: ["a", "b"] })).toBe("2 agences");
+  expect(scopeSummary("agencies", { agencyIds: ["a", "b"] }, { a: "Agence du Parc", b: "Syndic Horizon" })).toBe("Agence du Parc et Syndic Horizon");
+  expect(scopeSummary("agencies", { agencyIds: ["a"] }, { a: "Agence du Parc" })).toBe("Agence du Parc");
+  expect(scopeSummary("agencies", { agencyIds: ["a", "gone"] }, { a: "Agence du Parc" })).toBe("2 agences");
   expect(scopeSummary("custom", { description: "Un stand au salon" })).toBe("Un stand au salon");
   expect(renderJournal("J-11", { mission: "Publier", résultat: "Trois devis" })).toBe("Objectif modifié · Publier : « Trois devis ».");
   expect(renderJournal("J-17", { mission: "Publier" })).toBe("Mission lancée (ou reprise) : Publier. Paul prépare le premier contenu.");
@@ -1789,6 +1798,17 @@ test("diffusion (§5.1, §5.4): server checks in the specification order, declar
   expect(checkDiffusion(contentSnapshot({ validatedNumber: 2, currentDiffused: true }), context, confirm)).toEqual({ code: "M-53" });
   expect(checkDiffusion(contentSnapshot({ validatedNumber: 2, channel: "gmail", format: "email", recipients: 0 }), context, confirm)).toEqual({ code: "M-49" });
   expect(checkDiffusion(ready, context, { number: 2, confirmed: false })).toEqual({ code: "M-82" });
+  const at = new Date("2026-11-05T10:00:00Z");
+  expect(checkDiffusion(ready, context, { number: 2, confirmed: true, scheduledAt: new Date("2026-11-05T10:02:00Z"), now: at })).toEqual({ code: "M-61" });
+  expect(checkDiffusion(ready, context, { number: 2, confirmed: false, scheduledAt: new Date("2026-11-05T09:00:00Z"), now: at })).toEqual({ code: "M-61" });
+  expect(checkDiffusion(ready, context, { number: 2, confirmed: true, scheduledAt: new Date("2026-11-06T08:00:00Z"), now: at })).toBeNull();
+  expect(isSchedulable(new Date("2026-11-05T10:05:00Z"), at)).toBe(true);
+  expect(isSchedulable(new Date("2027-11-06T10:00:00Z"), at)).toBe(false);
+  expect(parseSchedule(undefined, "Europe/Paris")).toBeNull();
+  expect(parseSchedule("2026-11-06T08:00:00.000Z", "America/Martinique")).toEqual({ at: new Date("2026-11-06T08:00:00Z"), timezone: "America/Martinique" });
+  expect(parseSchedule("2026-11-06T08:00:00.000Z", "Lune/Mer")).toEqual({ at: new Date("2026-11-06T08:00:00Z"), timezone: "Europe/Paris" });
+  expect(parseSchedule("demain 9h", "Europe/Paris")).toBeUndefined();
+  expect(renderJournal("J-21", { n: "2", canal: "Page Facebook « Dupont »", date: "7 novembre vers 09:05" })).toBe("V2 programmée sur Page Facebook « Dupont » le 7 novembre vers 09:05.");
   expect(checkNewVersion(contentSnapshot({ uncertain: true }))).toEqual({ code: "M-81" });
 
   const now = new Date("2026-11-05T10:00:00Z");
@@ -1824,4 +1844,83 @@ test("mission stage with diffusion: uncertain result to verify, self-publishing 
   expect(missionStage(uncertain)).toBe("verify");
   expect(missionTracker("verify")?.find((step) => step.state === "current")?.label).toBe("Diffuser");
   expect(nextStep([uncertain])).toMatchObject({ stage: "verify", title: "Vérifier la diffusion", target: { href: "/atelier?mission=m1", label: "Ouvrir l'atelier" } });
+});
+
+test("an OAuth flow started from a Vercel alias restarts from the public address registered with the providers", () => {
+  const previous = process.env.APP_BASE_URL;
+  try {
+    process.env.APP_BASE_URL = "https://www.biendecider.com";
+    const alias = canonicalOAuthStart(new NextRequest("https://bien-decider-git-main-groupe-bienou-bien.vercel.app/api/oauth/gmail/start"));
+    expect(alias?.headers.get("location")).toBe("https://www.biendecider.com/api/oauth/gmail/start");
+    const apex = canonicalOAuthStart(new NextRequest("https://biendecider.com/api/oauth/gmail/start"));
+    expect(apex?.headers.get("location")).toBe("https://www.biendecider.com/api/oauth/gmail/start");
+    expect(canonicalOAuthStart(new NextRequest("https://www.biendecider.com/api/oauth/gmail/start"))).toBeNull();
+    expect(canonicalOAuthStart(new NextRequest("http://localhost:3000/api/oauth/meta/start"))).toBeNull();
+    expect(canonicalOAuthStart(new NextRequest("http://192.168.1.67:3000/api/oauth/meta/start"))).toBeNull();
+    delete process.env.APP_BASE_URL;
+    expect(canonicalOAuthStart(new NextRequest("https://bien-decider-git-main-groupe-bienou-bien.vercel.app/api/oauth/meta/start"))).toBeNull();
+  } finally {
+    if (previous === undefined) delete process.env.APP_BASE_URL;
+    else process.env.APP_BASE_URL = previous;
+  }
+});
+
+test("story 14.1: an agency found by Paul is kept with a name, a sector, a professional address and a web source, once", () => {
+  const agency = { name: "  Agence du <b>Parc</b> ", sector: "Agence immobilière", email: " Contact@AgenceDuParc.fr ", source: "https://agenceduparc.fr/contact", reason: "Elle vend\ndes maisons à rénover." };
+  expect(readFoundAgency(agency)).toEqual({ name: "Agence du b Parc /b", sector: "Agence immobilière", email: "contact@agenceduparc.fr", source: "https://agenceduparc.fr/contact", reason: "Elle vend des maisons à rénover." });
+  expect(readFoundAgency({ ...agency, email: "pas-un-email" })).toBeNull();
+  expect(readFoundAgency({ ...agency, source: "javascript:alert(1)" })).toBeNull();
+  expect(readFoundAgency({ ...agency, source: undefined })).toBeNull();
+  expect(readFoundAgency({ ...agency, sector: "" })).toBeNull();
+  expect(readFoundAgency("Agence du Parc")).toBeNull();
+  const parc = readFoundAgency(agency)!;
+  const others = Array.from({ length: 8 }, (_, index) => ({ ...parc, name: `Agence ${index}`, email: `contact@agence${index}.fr` }));
+  expect(newAgencies([parc, { ...parc, email: "autre@parc.fr" }, { ...parc, name: "Autre nom" }], [])).toEqual([parc]);
+  expect(newAgencies([parc, ...others], [{ name: "AGENCE DU B PARC /B", email: null }]).map((item) => item.name)).toEqual(["Agence 0", "Agence 1", "Agence 2", "Agence 3", "Agence 4", "Agence 5"]);
+  expect(newAgencies(others, [{ name: "Ailleurs", email: "contact@agence0.fr" }])).toHaveLength(AGENCY_SEARCH_MAX);
+});
+
+test("story 15.1: a report needs whole leads and meetings, meetings at most leads, an optional revenue where empty is not zero", () => {
+  expect(validateReport({ qualifiedLeads: "3", meetings: 1, signedRevenue: "", note: "  Bouche-à-oreille\u0007 du syndic  " })).toEqual({ ok: true, value: { qualifiedLeads: 3, meetings: 1, signedRevenue: null, note: "Bouche-à-oreille  du syndic" } });
+  expect(validateReport({ qualifiedLeads: 0, meetings: 0, signedRevenue: 0 })).toEqual({ ok: true, value: { qualifiedLeads: 0, meetings: 0, signedRevenue: 0, note: null } });
+  expect(validateReport({ qualifiedLeads: 2 })).toEqual({ ok: false, code: "M-38" });
+  expect(validateReport({ qualifiedLeads: "", meetings: 0 })).toEqual({ ok: false, code: "M-38" });
+  expect(validateReport({ qualifiedLeads: 2.5, meetings: 0 })).toEqual({ ok: false, code: "M-39" });
+  expect(validateReport({ qualifiedLeads: -1, meetings: 0 })).toEqual({ ok: false, code: "M-39" });
+  expect(validateReport({ qualifiedLeads: 100_000_001, meetings: 0 })).toEqual({ ok: false, code: "M-39" });
+  expect(validateReport({ qualifiedLeads: 2, meetings: 0, signedRevenue: "mille" })).toEqual({ ok: false, code: "M-39" });
+  expect(validateReport({ qualifiedLeads: 1, meetings: 2 })).toEqual({ ok: false, code: "M-33" });
+  expect((validateReport({ qualifiedLeads: 1, meetings: 0, note: "x".repeat(700) }) as { value: { note: string } }).value.note).toHaveLength(REPORT_NOTE_MAX);
+  expect(isUpToDate(2, 2)).toBe(true);
+  expect(isUpToDate(1, 2)).toBe(false);
+  expect(isUpToDate(null, 0)).toBe(false);
+});
+
+test("story 15.2: deciding needs a live mission with a diffusion; continuing needs an up-to-date report", () => {
+  expect(checkDecision({ status: "paused", diffusions: 1, reportAt: 1 }, "stop")).toBe("M-34");
+  expect(checkDecision({ status: "active", diffusions: 0, reportAt: null }, "stop")).toBe("M-35");
+  expect(checkDecision({ status: "active", diffusions: 1, reportAt: null }, "stop")).toBeNull();
+  expect(checkDecision({ status: "active", diffusions: 2, reportAt: 1 }, "continue")).toBe("M-36");
+  expect(checkDecision({ status: "active", diffusions: 2, reportAt: 2 }, "continue")).toBeNull();
+  expect(stopRuleDue(new Date("2026-11-01T10:00:00Z"), 30)).toEqual(new Date("2026-12-01T10:00:00Z"));
+  expect(stopRuleDue(null, 30)).toBeNull();
+  expect(renderJournal("J-15", { mission: "Agences", n: "2", m: "1", ca: ", 1 500 € signés" })).toBe("Bilan déclaré · Agences : 2 demande(s), 1 rendez-vous, 1 500 € signés. Attribution déclarative, non vérifiée.");
+});
+
+test("story 15.3: Paul reads a report against the outcome, never concludes before the stop rule and never proposes to widen", () => {
+  expect(readOutcomeTarget("Un rendez-vous qualifié en 30 jours")).toEqual({ kind: "meetings", target: 1 });
+  expect(readOutcomeTarget("Une réponse d'une agence de votre zone")).toEqual({ kind: "leads", target: 1 });
+  expect(readOutcomeTarget("Trois demandes de devis")).toEqual({ kind: "leads", target: 3 });
+  expect(readOutcomeTarget("2 RDV avec des syndics")).toEqual({ kind: "meetings", target: 2 });
+  expect(readOutcomeTarget("Des demandes de devis")).toBeNull();
+  const after = { due: new Date("2026-11-01T00:00:00Z"), now: new Date("2026-11-06T00:00:00Z") };
+  const reached = readReport("Deux demandes de devis", { qualifiedLeads: 3, meetings: 1, signedRevenue: null }, after);
+  expect(reached).toMatchObject({ verdict: "reached", observed: "3 demandes qualifiées, 1 rendez-vous, chiffre d'affaires non déclaré.", suggests: "Résultat recherché atteint : 3 demande(s) pour 2 visés.", impact: "Proposition à confirmer : poursuivre dans les mêmes limites." });
+  expect(reached.notProven).toContain("déclarative");
+  expect(readReport("Deux demandes de devis", { qualifiedLeads: 1, meetings: 0, signedRevenue: 1500 }, after)).toMatchObject({ verdict: "partial", observed: "1 demande qualifiée, 0 rendez-vous, 1\u202f500 € signés." });
+  expect(readReport("Un rendez-vous qualifié", { qualifiedLeads: 2, meetings: 0, signedRevenue: null }, after)).toMatchObject({ verdict: "missed", impact: "Proposition à confirmer : arrêter cette mission, ou tester une autre piste." });
+  expect(readReport("Des demandes de devis", { qualifiedLeads: 0, meetings: 0, signedRevenue: null }, after)).toMatchObject({ verdict: "unknown", impact: "Proposition à confirmer : préciser le résultat recherché, puis décider de la suite." });
+  const early = readReport("Un rendez-vous qualifié", { qualifiedLeads: 0, meetings: 0, signedRevenue: null }, { due: new Date("2026-12-01T10:00:00Z"), now: new Date("2026-11-06T00:00:00Z") });
+  expect(early.impact).toBe("Attendre la fin du test, le 1 décembre, avant de conclure ; d'ici là, mêmes limites.");
+  for (const reading of [reached, early]) expect(`${reading.suggests} ${reading.impact}`).not.toMatch(/élargi|augmente/i);
 });

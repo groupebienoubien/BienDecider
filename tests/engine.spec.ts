@@ -427,6 +427,242 @@ test("stories 12.1 to 12.3: a validated version is diffused once, failures and u
   expect(await prisma.journalEntry.count({ where: { companyId: company.id, code: "J-26" } })).toBe(1);
 });
 
+test("story 12.4: a scheduled diffusion leaves once at its time after the checks are replayed, and every cancellation is journaled", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { cancelContentSchedule, publishContentNow, runDuePublications } = await import("../src/lib/contents/publish");
+  const { applyContentAction } = await import("../src/lib/contents/service");
+  const { applyMissionTransition } = await import("../src/lib/missions/service");
+  const seed = async (title: string) => {
+    const mission = await prisma.mission.create({ data: { companyId: company.id, template: "site_page", channel: "site", title, outcome: "Des demandes", originalOutcome: "Des demandes", finding: "Un constat", scope: { page: title }, status: "active", firstLaunchedAt: new Date(), position: 1 } });
+    const content = await prisma.missionContent.create({ data: { companyId: company.id, missionId: mission.id, channel: "site", format: "site_page", currentNumber: 1, validatedNumber: 1, validatedAt: new Date(), versions: { create: { number: 1, title, body: "Sur devis.", author: "paul" } } } });
+    return { mission, content };
+  };
+  const now = new Date();
+  const inOneHour = new Date(now.getTime() + 3600_000);
+  const journal = async (missionId: string) => (await prisma.journalEntry.findMany({ where: { missionId }, orderBy: [{ createdAt: "asc" }, { id: "asc" }] })).map((entry) => `${entry.code}:${entry.actor}`);
+
+  // Programmer : date future (M-61), version verrouillée tant que la programmation existe (M-45), annulation par vous.
+  const tarifs = await seed("Nos tarifs");
+  await expect(publishContentNow(company.id, tarifs.content.id, { number: 1, confirmed: true, scheduledAt: new Date(now.getTime() - 60_000), timezone: "Europe/Paris" })).rejects.toMatchObject({ code: "M-61" });
+  expect(await publishContentNow(company.id, tarifs.content.id, { number: 1, confirmed: true, scheduledAt: inOneHour, timezone: "Europe/Paris" })).toMatchObject({ status: "scheduled" });
+  await expect(publishContentNow(company.id, tarifs.content.id, { number: 1, confirmed: true })).rejects.toMatchObject({ code: "M-59" });
+  await expect(applyContentAction(company.id, tarifs.content.id, { action: "save", number: 1, input: { title: "Autre", body: "Autre" } })).rejects.toMatchObject({ code: "M-45" });
+  await cancelContentSchedule(company.id, tarifs.content.id, { number: 1 });
+  await expect(cancelContentSchedule(company.id, tarifs.content.id, { number: 1 })).rejects.toMatchObject({ code: "M-87" });
+  expect(await prisma.publication.findFirstOrThrow({ where: { contentId: tarifs.content.id } })).toMatchObject({ status: "cancelled", cancelReason: "annulée par vous", cancelledBy: "owner" });
+
+  // À l'heure : rien avant, une seule diffusion après, même si l'ordonnanceur passe deux fois.
+  await publishContentNow(company.id, tarifs.content.id, { number: 1, confirmed: true, scheduledAt: inOneHour, timezone: "Europe/Paris" });
+  expect(await runDuePublications({ now })).toMatchObject({ sent: 0, cancelled: 0 });
+  const later = new Date(inOneHour.getTime() + 60_000);
+  const [first, second] = await Promise.all([runDuePublications({ now: later }), runDuePublications({ now: later })]);
+  expect(first.sent + second.sent).toBe(1);
+  expect(await prisma.sitePage.findUniqueOrThrow({ where: { missionId: tarifs.mission.id } })).toMatchObject({ versionNumber: 1 });
+  expect(await journal(tarifs.mission.id)).toEqual(["J-21:owner", "J-23:owner", "J-21:owner", "J-22:owner"]);
+
+  // Pause de la mission : sa programmation est annulée avec elle.
+  const horaires = await seed("Nos horaires");
+  await publishContentNow(company.id, horaires.content.id, { number: 1, confirmed: true, scheduledAt: inOneHour, timezone: "Europe/Paris" });
+  await applyMissionTransition(company.id, horaires.mission.id, { action: "pause" }, horaires.mission.version);
+  expect(await prisma.publication.findFirstOrThrow({ where: { contentId: horaires.content.id } })).toMatchObject({ status: "cancelled", cancelReason: "mission mise en pause", cancelledBy: "owner" });
+
+  // Contrôle échoué à l'heure prévue : annulée par l'ordonnanceur, en clair, rien n'est diffusé.
+  const contact = await seed("Nous contacter");
+  await publishContentNow(company.id, contact.content.id, { number: 1, confirmed: true, scheduledAt: inOneHour, timezone: "Europe/Paris" });
+  await prisma.company.update({ where: { id: company.id }, data: { emailVerifiedAt: null } });
+  expect(await runDuePublications({ now: later })).toMatchObject({ sent: 0, cancelled: 1 });
+  await prisma.company.update({ where: { id: company.id }, data: { emailVerifiedAt: new Date() } });
+  expect(await prisma.publication.findFirstOrThrow({ where: { contentId: contact.content.id } })).toMatchObject({ status: "cancelled", cancelledBy: "system", cancelReason: "Confirmez votre adresse e-mail avant toute diffusion" });
+  expect(await prisma.sitePage.count({ where: { missionId: contact.mission.id } })).toBe(0);
+  expect(await journal(contact.mission.id)).toEqual(["J-21:owner", "J-23:system"]);
+
+  // Une diffusion restée « en cours » plus de 15 minutes devient incertaine, jamais relancée.
+  const stuck = await seed("Nos garanties");
+  await prisma.publication.create({ data: { companyId: company.id, missionId: stuck.mission.id, contentId: stuck.content.id, versionNumber: 1, title: "Nos garanties", channel: "site", channelLabel: "Votre site vitrine", mode: "confirmed", status: "sending", idempotencyKey: `${stuck.content.id}:v1:1` } });
+  expect((await runDuePublications({ now: new Date(Date.now() + 16 * 60_000) })).stale).toBeGreaterThanOrEqual(1);
+  expect(await prisma.publication.findFirstOrThrow({ where: { contentId: stuck.content.id } })).toMatchObject({ status: "uncertain" });
+});
+
+test("story 13.2: a channel reserved by an administrator is usable only by authorized companies, at connection and at diffusion", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { readChannelAccess, requestChannelAccess, setChannelRollout, setCompanyChannelAccess } = await import("../src/lib/channel-access");
+  const { readDestination } = await import("../src/lib/contents/publish");
+  const previous = await prisma.channelRollout.findUnique({ where: { channel: "facebook" } });
+  try {
+    await prisma.channelRollout.deleteMany({ where: { channel: "facebook" } });
+    expect(await readChannelAccess(company.id, "facebook")).toBe("open");
+    expect(await readChannelAccess(company.id, "linkedin")).toBe("disabled");
+    expect(await readChannelAccess(company.id, "site")).toBe("open");
+    await setChannelRollout("facebook", false, "admin@example.invalid");
+    expect(await readChannelAccess(company.id, "facebook")).toBe("none");
+    expect(await readDestination(company.id, "facebook")).toMatchObject({ enabled: false });
+    expect(await requestChannelAccess(company.id, "facebook")).toBe("requested");
+    expect(await requestChannelAccess(company.id, "facebook")).toBe("requested");
+    await setCompanyChannelAccess(company.id, "facebook", true, "admin@example.invalid");
+    expect(await readChannelAccess(company.id, "facebook")).toBe("granted");
+    expect(await readDestination(company.id, "facebook")).toMatchObject({ enabled: true });
+    await setCompanyChannelAccess(company.id, "facebook", false, "admin@example.invalid");
+    expect(await readChannelAccess(company.id, "facebook")).toBe("none");
+  } finally {
+    if (previous) await prisma.channelRollout.update({ where: { channel: "facebook" }, data: { openToAll: previous.openToAll } });
+    else await prisma.channelRollout.deleteMany({ where: { channel: "facebook" } });
+  }
+});
+
+test("stories 14.1 to 14.3: Paul's agency list, a scope of one or two listed agencies locked by §6.2, one Gmail message per agency, never sent twice", async ({ company }) => {
+  process.env.OAUTH_TOKEN_ENCRYPTION_KEY ||= "e".repeat(64);
+  const { prisma } = await import("../src/lib/prisma");
+  const { listAgencies, searchAgencies } = await import("../src/lib/agencies/service");
+  const { applyMissionTransition, createMission } = await import("../src/lib/missions/service");
+  const { publishContentNow, resolveUncertainDiffusion } = await import("../src/lib/contents/publish");
+  const { applyContentAction } = await import("../src/lib/contents/service");
+  const { encryptGmailToken } = await import("../src/lib/oauth/gmail");
+  await prisma.company.update({ where: { id: company.id }, data: { emailVerifiedAt: new Date() } });
+
+  // Recherche de prescripteurs : seules les agences complètes (nom, secteur, e-mail, source web) et nouvelles entrent dans la liste.
+  const found = [
+    { name: "Agence du Parc", sector: "Agence immobilière", email: "contact@agenceduparc.fr", source: "https://agenceduparc.fr/contact", reason: "Elle vend des maisons anciennes à rénover." },
+    { name: "Syndic Horizon", sector: "Syndic", email: "Bonjour@Syndic-Horizon.fr", source: "https://syndic-horizon.fr", reason: "Elle gère des copropriétés." },
+    { name: "Sans adresse", sector: "Architecte", email: "pas-un-email", source: "https://exemple.fr", reason: "" },
+    { name: "Sans source", sector: "Architecte", email: "contact@archi.fr", source: "javascript:alert(1)", reason: "" },
+    { name: "agence du parc", sector: "Agence immobilière", email: "autre@agenceduparc.fr", source: "https://agenceduparc.fr", reason: "Doublon" },
+  ];
+  const requests: { known: string[]; company: { name: string } }[] = [];
+  const finder = async (request: { known: string[]; company: { name: string } }) => { requests.push(request); return found; };
+  expect(await searchAgencies(company.id, finder)).toEqual({ added: 2, total: 2 });
+  expect(requests[0]).toMatchObject({ company: { name: "Atelier Test Moteur" }, known: [] });
+  const agencies = (await listAgencies(company.id)).sort((a, b) => a.name.localeCompare(b.name));
+  expect(agencies.map((agency) => [agency.name, agency.sector, agency.email])).toEqual([["Agence du Parc", "Agence immobilière", "contact@agenceduparc.fr"], ["Syndic Horizon", "Syndic", "bonjour@syndic-horizon.fr"]]);
+  await expect(searchAgencies(company.id, finder)).rejects.toMatchObject({ code: "M-90" });
+  expect(requests[1].known.sort()).toEqual(["Agence du Parc", "Syndic Horizon"]);
+  await expect(searchAgencies(company.id, async () => { throw new Error("modèle indisponible"); })).rejects.toMatchObject({ code: "M-91", status: 503 });
+  const [parc, horizon] = agencies;
+  const { buildCurrentStatus } = await import("../src/lib/agents/co-ceo");
+  expect((await buildCurrentStatus(company.id)).agences).toEqual([
+    { id: expect.any(String), nom: expect.any(String), secteur: expect.any(String) },
+    { id: expect.any(String), nom: expect.any(String), secteur: expect.any(String) },
+  ]);
+
+  // Périmètre : 1 ou 2 agences de la liste de l'entreprise, jamais une autre ; le résumé les nomme.
+  const foreign = await prisma.lead.create({ data: { companyId: company.id, segment: "associations", name: "Club local", reason: "Prospect" } });
+  const frame = { template: "agencies", title: "Deux agences de ma zone", outcome: "Un rendez-vous qualifié", finding: "Aucune agence ne me recommande" };
+  await expect(createMission(company.id, { ...frame, scope: { agencyIds: [foreign.id] } })).rejects.toMatchObject({ code: "M-30" });
+  let mission = await createMission(company.id, frame);
+  expect(mission).toMatchObject({ channel: "gmail", stopRuleDays: 30 });
+  await expect(applyMissionTransition(company.id, mission.id, { action: "set_scope", scope: { agencyIds: [parc.id, foreign.id] } }, mission.version)).rejects.toMatchObject({ code: "M-30" });
+  mission = (await applyMissionTransition(company.id, mission.id, { action: "set_scope", scope: { agencyIds: [parc.id] } }, mission.version)).mission;
+  mission = (await applyMissionTransition(company.id, mission.id, { action: "launch" }, mission.version)).mission;
+  expect(await prisma.journalEntry.findFirstOrThrow({ where: { missionId: mission.id, code: "J-12" } })).toMatchObject({ params: { résumé: "Agence du Parc" } });
+
+  // Agences changées sur une mission En cours au contenu validé : nouvelle version « Destinataires modifiés », validation retirée.
+  const content = await prisma.missionContent.create({ data: { companyId: company.id, missionId: mission.id, channel: "gmail", format: "email", currentNumber: 1, validatedNumber: 1, validatedAt: new Date(), versions: { create: { number: 1, title: "Travailler ensemble ?", body: "Bonjour,\n\nNous rénovons des maisons anciennes près de chez vous.", author: "paul" } } } });
+  mission = (await applyMissionTransition(company.id, mission.id, { action: "set_scope", scope: { agencyIds: [parc.id, horizon.id] } }, mission.version)).mission;
+  expect(await prisma.missionContent.findUniqueOrThrow({ where: { id: content.id } })).toMatchObject({ currentNumber: 2, validatedNumber: null });
+  expect(await prisma.contentVersion.findFirstOrThrow({ where: { contentId: content.id, number: 2 } })).toMatchObject({ author: "system", note: "Destinataires modifiés" });
+  expect(await prisma.journalEntry.findFirstOrThrow({ where: { missionId: mission.id, code: "J-12" }, orderBy: { createdAt: "desc" } })).toMatchObject({ params: { résumé: "Agence du Parc et Syndic Horizon" } });
+  await applyContentAction(company.id, content.id, { action: "validate", number: 2, input: { reviewed: true } });
+
+  // Gmail : sans compte relié (M-57) ; puis un message par agence, depuis l'adresse du dirigeant, chacun tracé.
+  await expect(publishContentNow(company.id, content.id, { number: 2, confirmed: true })).rejects.toMatchObject({ code: "M-57" });
+  await prisma.channelConnection.create({ data: {
+    companyId: company.id, channel: "gmail", status: "connecte", expiresAt: new Date(Date.now() + 3600_000),
+    accessToken: encryptGmailToken("access-token", company.id), refreshToken: encryptGmailToken(JSON.stringify({ token: "refresh-token", email: "dirigeant@example.invalid" }), company.id),
+  } });
+  const sent: { to: string; from: string; auth: string }[] = [];
+  const gmail = (statuses: number[]) => (async (_url: string, init: RequestInit) => {
+    const mime = Buffer.from(JSON.parse(String(init.body)).raw, "base64url").toString("utf8");
+    sent.push({ to: /^To: (.+)$/m.exec(mime)?.[1].trim() ?? "", from: /^From: (.+)$/m.exec(mime)?.[1].trim() ?? "", auth: String((init.headers as Record<string, string>).Authorization) });
+    const status = statuses.shift() ?? 200;
+    return new Response(JSON.stringify(status === 200 ? { id: `msg-${sent.length}` } : {}), { status, headers: { "Content-Type": "application/json" } });
+  }) as unknown as typeof fetch;
+  expect(await publishContentNow(company.id, content.id, { number: 2, confirmed: true }, { fetchImpl: gmail([200, 503]) })).toMatchObject({ status: "uncertain" });
+  expect(sent).toEqual([
+    { to: "contact@agenceduparc.fr", from: "dirigeant@example.invalid", auth: "Bearer access-token" },
+    { to: "bonjour@syndic-horizon.fr", from: "dirigeant@example.invalid", auth: "Bearer access-token" },
+  ]);
+  const recipients = async () => (await prisma.publicationRecipient.findMany({ where: { publication: { contentId: content.id } }, orderBy: { createdAt: "asc" } })).map((recipient) => `${recipient.email}:${recipient.status}`);
+  expect(await recipients()).toEqual(["contact@agenceduparc.fr:sent", "bonjour@syndic-horizon.fr:uncertain"]);
+  await expect(applyMissionTransition(company.id, mission.id, { action: "set_scope", scope: { agencyIds: [parc.id] } }, mission.version)).rejects.toMatchObject({ code: "M-81" });
+
+  // « Ce n'est pas parti », puis nouvelle diffusion : seule l'agence qui n'a rien reçu est servie.
+  await resolveUncertainDiffusion(company.id, content.id, { number: 2, sent: false });
+  sent.length = 0;
+  const done = await publishContentNow(company.id, content.id, { number: 2, confirmed: true }, { fetchImpl: gmail([200]) });
+  expect(done).toMatchObject({ status: "sent", message: "V2 envoyée depuis Gmail (dirigeant@example.invalid) à 1 destinataire, un e-mail chacun." });
+  expect(sent.map((item) => item.to)).toEqual(["bonjour@syndic-horizon.fr"]);
+  expect(await recipients()).toEqual(["contact@agenceduparc.fr:sent", "bonjour@syndic-horizon.fr:failed", "bonjour@syndic-horizon.fr:sent"]);
+  expect(await prisma.journalEntry.findFirstOrThrow({ where: { missionId: mission.id, code: "J-22" } })).toMatchObject({ params: { canal: "Gmail (dirigeant@example.invalid)", destinataires: " · 1 destinataire" } });
+
+  // Verrouillage §6.2 : version diffusée, puis programmation de la version suivante.
+  await expect(applyMissionTransition(company.id, mission.id, { action: "set_scope", scope: { agencyIds: [parc.id] } }, mission.version)).rejects.toMatchObject({ code: "M-89" });
+  await applyContentAction(company.id, content.id, { action: "next_version", number: 2, input: {} });
+  await prisma.publication.create({ data: { companyId: company.id, missionId: mission.id, contentId: content.id, versionNumber: 3, title: "Travailler ensemble ?", channel: "gmail", channelLabel: "Gmail", mode: "confirmed", status: "scheduled", scheduledAt: new Date(Date.now() + 86400_000), idempotencyKey: `${content.id}:v3:1` } });
+  await expect(applyMissionTransition(company.id, mission.id, { action: "set_scope", scope: { agencyIds: [parc.id] } }, mission.version)).rejects.toMatchObject({ code: "M-88" });
+});
+
+test("stories 15.1 to 15.3: a report after a diffusion, a decision that continues or stops, the stage that follows, and what Paul reads", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { decideMission, saveMissionReport } = await import("../src/lib/missions/results");
+  const { loadMissionView } = await import("../src/lib/missions/view");
+  const { buildCurrentStatus } = await import("../src/lib/agents/co-ceo");
+  const seed = async (title: string, outcome: string) => {
+    const mission = await prisma.mission.create({ data: { companyId: company.id, template: "site_page", channel: "site", title, outcome, originalOutcome: outcome, finding: "Un constat", scope: { page: title }, status: "active", firstLaunchedAt: new Date(), stopRuleDays: 30, position: 1 } });
+    const content = await prisma.missionContent.create({ data: { companyId: company.id, missionId: mission.id, channel: "site", format: "site_page", currentNumber: 1, validatedNumber: 1, validatedAt: new Date(), versions: { create: { number: 1, title, body: "Sur devis.", author: "paul" } } } });
+    return { mission, content };
+  };
+  const diffuse = (target: { mission: { id: string }; content: { id: string } }, versionNumber: number, sentAt: Date, status = "sent") => prisma.publication.create({ data: {
+    companyId: company.id, missionId: target.mission.id, contentId: target.content.id, versionNumber, title: "Page", channel: "site", channelLabel: "Votre site vitrine", mode: "confirmed", status, sentAt: status === "sent" ? sentAt : null,
+    scheduledAt: status === "scheduled" ? new Date(Date.now() + 86_400_000) : null, idempotencyKey: `${target.content.id}:v${versionNumber}:${status}:${sentAt.getTime()}`,
+  } });
+  const version = async (id: string) => (await prisma.mission.findUniqueOrThrow({ where: { id } })).version;
+
+  // Bilan : jamais avant une diffusion (M-37) ; puis enregistré avec le nombre de diffusions, J-15 « attribution déclarative ».
+  const tarifs = await seed("Nos tarifs", "Deux demandes de devis");
+  await expect(saveMissionReport(company.id, tarifs.mission.id, { qualifiedLeads: 1, meetings: 0 })).rejects.toMatchObject({ code: "M-37" });
+  await expect(decideMission(company.id, tarifs.mission.id, "stop", await version(tarifs.mission.id))).rejects.toMatchObject({ code: "M-35" });
+  const firstSent = new Date(Date.now() - 40 * 86_400_000);
+  await diffuse(tarifs, 1, firstSent);
+  expect((await loadMissionView(company.id, tarifs.mission.id))?.stage).toBe("report");
+  await expect(saveMissionReport(company.id, tarifs.mission.id, { qualifiedLeads: 1, meetings: 2 })).rejects.toMatchObject({ code: "M-33" });
+  await expect(decideMission(company.id, tarifs.mission.id, "continue", await version(tarifs.mission.id))).rejects.toMatchObject({ code: "M-36" });
+  await saveMissionReport(company.id, tarifs.mission.id, { qualifiedLeads: 3, meetings: 1, signedRevenue: "", note: "Deux appels du syndic" });
+  expect(await prisma.journalEntry.findFirstOrThrow({ where: { missionId: tarifs.mission.id, code: "J-15" } })).toMatchObject({ params: { n: "3", m: "1", ca: "" } });
+  let view = await loadMissionView(company.id, tarifs.mission.id);
+  expect(view).toMatchObject({ stage: "decide", diffusions: 1, report: { qualifiedLeads: 3, meetings: 1, signedRevenue: null, upToDate: true }, stopRuleDue: new Date(firstSent.getTime() + 30 * 86_400_000).toISOString() });
+
+  // Paul lit le bilan : échéance passée, résultat atteint, proposition à confirmer.
+  const status = await buildCurrentStatus(company.id);
+  expect(status.missions.find((item) => item.id === tarifs.mission.id)).toMatchObject({
+    bilan: { demandesQualifiees: 3, rendezVous: 1, caSigne: "non déclaré", aJour: true },
+    lectureDuBilan: { impact: "Proposition à confirmer : poursuivre dans les mêmes limites." },
+    regleDArret: { atteinte: true },
+  });
+
+  // Poursuivre : décision enregistrée, mission En cours, série suivante ; une nouvelle diffusion rend bilan et décision à mettre à jour.
+  await expect(decideMission(company.id, tarifs.mission.id, "continue", (await version(tarifs.mission.id)) - 1)).rejects.toMatchObject({ code: "M-02" });
+  await decideMission(company.id, tarifs.mission.id, "continue", await version(tarifs.mission.id));
+  view = await loadMissionView(company.id, tarifs.mission.id);
+  expect(view).toMatchObject({ status: "active", stage: "next-round", decision: { choice: "continue", upToDate: true }, stopRuleDue: null });
+  expect(await prisma.journalEntry.findFirstOrThrow({ where: { missionId: tarifs.mission.id, code: "J-14" } })).toMatchObject({ params: { décision: "poursuite, mêmes limites" } });
+  await prisma.missionContent.update({ where: { id: tarifs.content.id }, data: { currentNumber: 2, validatedNumber: 2, versions: { create: { number: 2, title: "Nos tarifs", body: "Sur devis, sous 48 h.", author: "owner" } } } });
+  const secondSent = new Date();
+  await diffuse(tarifs, 2, secondSent);
+  view = await loadMissionView(company.id, tarifs.mission.id);
+  expect(view).toMatchObject({ stage: "report", diffusions: 2, report: { upToDate: false }, decision: { upToDate: false }, stopRuleDue: new Date(secondSent.getTime() + 30 * 86_400_000).toISOString() });
+  await expect(decideMission(company.id, tarifs.mission.id, "continue", await version(tarifs.mission.id))).rejects.toMatchObject({ code: "M-36" });
+
+  // Arrêter : mission close, programmations annulées, plus de décision possible (M-34).
+  const horaires = await seed("Nos horaires", "Un rendez-vous qualifié");
+  await diffuse(horaires, 1, new Date());
+  await diffuse(horaires, 1, new Date(Date.now() + 1), "scheduled");
+  await decideMission(company.id, horaires.mission.id, "stop", await version(horaires.mission.id));
+  expect(await prisma.mission.findUniqueOrThrow({ where: { id: horaires.mission.id } })).toMatchObject({ status: "stopped" });
+  expect(await prisma.publication.findFirstOrThrow({ where: { missionId: horaires.mission.id, status: { not: "sent" } } })).toMatchObject({ status: "cancelled", cancelReason: "mission arrêtée" });
+  expect((await loadMissionView(company.id, horaires.mission.id))?.stage).toBe("closed");
+  await expect(decideMission(company.id, horaires.mission.id, "stop", await version(horaires.mission.id))).rejects.toMatchObject({ code: "M-34" });
+  expect((await prisma.journalEntry.findMany({ where: { missionId: horaires.mission.id }, orderBy: [{ createdAt: "asc" }, { id: "asc" }] })).map((entry) => entry.code)).toEqual(["J-23", "J-14"]);
+});
+
 test("story 9.1 to 9.3: missions and credits follow the transitions of the specification, in one transaction each", async ({ company }) => {
   const { prisma } = await import("../src/lib/prisma");
   const { readCredits } = await import("../src/lib/credits");

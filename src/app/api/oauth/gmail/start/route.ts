@@ -3,11 +3,16 @@ import { createHash, randomBytes } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionCompany } from "@/lib/session";
 import { buildGmailAuthUrl, GMAIL_CALLBACK, isGmailConfigured } from "@/lib/oauth/gmail";
+import { canUseChannel, readChannelAccess } from "@/lib/channel-access";
+import { canonicalOAuthStart } from "@/lib/oauth/canonical-host";
 
 export async function GET(request: NextRequest) {
+  const canonical = canonicalOAuthStart(request);
+  if (canonical) return canonical;
   const company = await getSessionCompany();
   if (!company) return NextResponse.redirect(new URL("/login", request.url));
   if (!isGmailConfigured()) return NextResponse.redirect(new URL("/connexions?error=gmail_config", request.url));
+  if (!canUseChannel(await readChannelAccess(company.id, "gmail"))) return NextResponse.redirect(new URL("/connexions?error=channel_unavailable", request.url));
   const state = randomBytes(32).toString("base64url");
   const verifier = randomBytes(32).toString("base64url");
   const store = await cookies();

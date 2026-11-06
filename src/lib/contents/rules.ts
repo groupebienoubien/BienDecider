@@ -170,8 +170,8 @@ export function checkRejection(content: ContentSnapshot, number: number): Refusa
   return null;
 }
 
-/** Diffuser par BienDecider (§5.1), contrôles dans l'ordre de la spécification ; la programmation (contrôle 10) arrive avec #261. */
-export function checkDiffusion(content: ContentSnapshot, context: DiffusionContext, input: { number: number; confirmed: boolean }): Refusal | null {
+/** Diffuser par BienDecider (§5.1), contrôles dans l'ordre de la spécification ; `scheduledAt` programme au lieu de diffuser maintenant. */
+export function checkDiffusion(content: ContentSnapshot, context: DiffusionContext, input: { number: number; confirmed: boolean; scheduledAt?: Date | null; now?: Date }): Refusal | null {
   if (input.number !== content.currentNumber) return { code: "M-02" };
   if (!context.emailVerified) return { code: "M-54" };
   if (context.delegation === "prepare") return { code: "M-55" };
@@ -184,8 +184,37 @@ export function checkDiffusion(content: ContentSnapshot, context: DiffusionConte
   if (content.uncertain) return { code: "M-81" };
   if (content.currentDiffused) return { code: "M-53" };
   if (content.format === "email" && !content.recipients) return { code: "M-49" };
+  if (input.scheduledAt && !isSchedulable(input.scheduledAt, input.now ?? new Date())) return { code: "M-61" };
   if (!input.confirmed) return { code: "M-82" };
   return null;
+}
+
+/** Une programmation part au moins 5 minutes plus tard (le passage de l'ordonnanceur) et au plus dans un an. */
+export const SCHEDULE_MIN_MS = 5 * 60 * 1000;
+export const SCHEDULE_MAX_MS = 365 * 24 * 3600 * 1000;
+
+export function isSchedulable(at: Date, now: Date): boolean {
+  const delay = at.getTime() - now.getTime();
+  return Number.isFinite(delay) && delay >= SCHEDULE_MIN_MS && delay <= SCHEDULE_MAX_MS;
+}
+
+/** Moment demandé : un instant ISO (UTC) et le fuseau de l'appareil, gardé pour l'affichage ; null pour « Maintenant », undefined si illisible. */
+export function parseSchedule(at: unknown, timezone: unknown): { at: Date; timezone: string } | null | undefined {
+  if (at === undefined || at === null) return null;
+  if (typeof at !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?Z$/.test(at)) return undefined;
+  const date = new Date(at);
+  if (Number.isNaN(date.getTime())) return undefined;
+  const zone = typeof timezone === "string" && timezone.length <= 64 && isTimeZone(timezone) ? timezone : "Europe/Paris";
+  return { at: date, timezone: zone };
+}
+
+function isTimeZone(value: string): boolean {
+  try {
+    new Intl.DateTimeFormat("fr-FR", { timeZone: value });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export const DECLARED_CHANNEL_MIN = 2;

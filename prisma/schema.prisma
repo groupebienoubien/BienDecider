@@ -81,6 +81,7 @@ model Company {
   missionContents MissionContent[]
   publications    Publication[]
   sitePages       SitePage[]
+  channelAccesses ChannelAccess[]
   delegationLevel String    @default("review") // prepare | review | bounded (spécification §9) ; « Valider avant chaque action » par défaut
   agentRuns       AgentRun[]
   agentRunAttempts AgentRunAttempt[]
@@ -126,7 +127,9 @@ model Lead {
   reason        String // pourquoi elle correspond à la cible / à l'objectif
   publicContact String? // canal professionnel public (site, téléphone pro, formulaire) — jamais de donnée personnelle
   source        String? // URL ayant permis de l'identifier
-  segment       String? // type de cible (ex: "associations", "copropriétés") — base de la boucle d'apprentissage
+  segment       String? // type de cible (ex: "associations", "copropriétés") — base de la boucle d'apprentissage ; "agence" : liste des Partenariats (D6)
+  email         String? // agence : e-mail professionnel public, destinataire d'une mission Partenariats
+  sector        String? // agence : secteur (immobilier, architecture, syndic…)
   stage         String    @default("propose") // propose, a_contacter, contacte, repondu, rdv, gagne, perdu, ecarte
   contactedAt   DateTime?
   repliedAt     DateTime?
@@ -136,6 +139,9 @@ model Lead {
   deferredUntil DateTime? // prospect différé : exclu du "prochain prospect" jusqu'à cette date
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
+  deliveries    PublicationRecipient[]
+
+  @@unique([companyId, email])
 }
 
 /**
@@ -567,6 +573,8 @@ model Mission {
   credits             CreditLedger[]
   content             MissionContent?
   sitePage            SitePage?
+  reports             MissionReport[]
+  decisions           MissionDecision[]
 
   @@index([companyId, status])
 }
@@ -582,6 +590,36 @@ model Idea {
   company            Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
   @@index([companyId, createdAt])
+}
+
+/// Bilan déclaré d'une mission (§7.1, #294) : le dernier fait foi ; « à jour » tant que le nombre de diffusions n'a pas changé.
+model MissionReport {
+  id               String            @id @default(cuid())
+  missionId        String
+  qualifiedLeads   Int
+  meetings         Int // <= qualifiedLeads (contrainte CHECK dans la migration)
+  signedRevenue    Int? // null : non déclaré, jamais zéro
+  note             String? // 600 caractères au plus
+  publicationCount Int // diffusions de la mission au moment de la saisie
+  createdAt        DateTime          @default(now())
+  mission          Mission           @relation(fields: [missionId], references: [id], onDelete: Cascade)
+  decisions        MissionDecision[]
+
+  @@index([missionId, createdAt])
+}
+
+/// Décision de suite (§7.2, #52) : poursuivre ou arrêter ; la dernière fait foi.
+model MissionDecision {
+  id               String         @id @default(cuid())
+  missionId        String
+  choice           String // continue | stop
+  publicationCount Int
+  reportId         String?
+  createdAt        DateTime       @default(now())
+  mission          Mission        @relation(fields: [missionId], references: [id], onDelete: Cascade)
+  report           MissionReport? @relation(fields: [reportId], references: [id], onDelete: SetNull)
+
+  @@index([missionId, createdAt])
 }
 
 /// Registre des credits en ajout seul (story 9.3, #56) : chaque mouvement, avec le solde apres.
@@ -675,14 +713,35 @@ model Publication {
   url            String? // adresse publique, si le canal en donne une
   failureReason  String? // en clair (J-28)
   cancelReason   String? // J-23
+  cancelledBy    String? // owner | system : une annulation par le système remonte dans « À valider par vous »
   idempotencyKey String         @unique // contenu, version et rang de la tentative : deux confirmations simultanees n'en font qu'une
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
   company        Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
   content        MissionContent @relation(fields: [contentId], references: [id], onDelete: Cascade)
+  recipients     PublicationRecipient[]
 
   @@index([status, scheduledAt])
   @@index([contentId])
+}
+
+/// E-mail : un envoi par destinataire (addendum §4.3), chacun avec son résultat ; une adresse n'est servie qu'une fois par diffusion.
+model PublicationRecipient {
+  id            String      @id @default(cuid())
+  publicationId String
+  leadId        String?
+  name          String
+  email         String
+  status        String // sending | sent | failed | uncertain
+  externalId    String? // identifiant du message renvoyé par Gmail
+  failureReason String?
+  sentAt        DateTime?
+  createdAt     DateTime    @default(now())
+  publication   Publication @relation(fields: [publicationId], references: [id], onDelete: Cascade)
+  lead          Lead?       @relation(fields: [leadId], references: [id], onDelete: SetNull)
+
+  @@unique([publicationId, email])
+  @@index([leadId])
 }
 
 /// Page du site vitrine mise en ligne par une diffusion (#172) : exactement la version validee et confirmee, servie sous /site/{siteSlug}/{slug}.
@@ -699,4 +758,26 @@ model SitePage {
   mission       Mission  @relation(fields: [missionId], references: [id], onDelete: Cascade)
 
   @@unique([companyId, slug])
+}
+
+/// Ouverture d'un canal actif (#301) : tant que le fournisseur n'a pas approuve l'application, l'administrateur peut le reserver aux entreprises autorisees. Sans ligne : ouvert a tous.
+model ChannelRollout {
+  channel   String   @id
+  openToAll Boolean  @default(true)
+  updatedBy String?
+  updatedAt DateTime @updatedAt
+}
+
+/// Acces d'une entreprise a un canal reserve (#301) : demande par le dirigeant, accordee par un administrateur.
+model ChannelAccess {
+  id          String    @id @default(cuid())
+  companyId   String
+  channel     String
+  status      String // requested | granted
+  requestedAt DateTime?
+  grantedAt   DateTime?
+  grantedBy   String?
+  company     Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, channel])
 }

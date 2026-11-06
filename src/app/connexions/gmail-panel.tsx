@@ -3,8 +3,11 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { CHANNEL_CAPABILITIES } from "@/lib/channel-capabilities";
+import type { AccessState } from "@/lib/channel-access";
+import { AccessRequest } from "./access-request";
+import { ScheduledList } from "./scheduled-list";
 
-export function GmailPanel({ configured, authorized, failed, senderEmail }: { configured: boolean; authorized: boolean; failed: boolean; senderEmail: string | null }) {
+export function GmailPanel({ configured, authorized, failed, senderEmail, access = "open", scheduled = [] }: { configured: boolean; authorized: boolean; failed: boolean; senderEmail: string | null; access?: AccessState; scheduled?: string[] }) {
   const router = useRouter();
   const [to, setTo] = useState("");
   const [subject, setSubject] = useState("");
@@ -69,8 +72,10 @@ export function GmailPanel({ configured, authorized, failed, senderEmail }: { co
           {senderEmail && <p className="mt-1 break-all text-sm font-medium">{senderEmail}</p>}
           <p className="mt-2 text-sm text-slate-600">{CHANNEL_CAPABILITIES.gmail.nextStep} BienDecider ne lit pas votre boîte de réception.</p>
         </div>
-        {configured ? <a href="/api/oauth/gmail/start" className="btn primary">{authorized || failed ? "Relier de nouveau Gmail" : "Relier Gmail"}</a> : <span className="text-sm text-amber-700">L&apos;envoi Gmail n&apos;est pas disponible sur cette version.</span>}
+        {!configured ? <span className="text-sm text-amber-700">L&apos;envoi Gmail n&apos;est pas disponible sur cette version.</span> : (access === "open" || access === "granted") && <a href="/api/oauth/gmail/start" className="btn primary">{authorized || failed ? "Relier de nouveau Gmail" : "Relier Gmail"}</a>}
       </div>
+      {configured && (access === "none" || access === "requested") && <AccessRequest channel="gmail" state={access} />}
+      {scheduled.length > 0 && <p className="mt-1 text-xs">{scheduled.length} programmation{scheduled.length > 1 ? "s" : ""} en cours</p>}
       {notice && <p role="status" className="notice">{notice}</p>}
       {error && <p role="alert" className="warning">{error}</p>}
       {authorized && configured && (
@@ -90,7 +95,8 @@ export function GmailPanel({ configured, authorized, failed, senderEmail }: { co
       )}
       {(authorized || failed) && <details className="mt-4">
         <summary className="cursor-pointer text-xs text-slate-500">Déconnecter Gmail</summary>
-        <p className="mt-2 text-xs text-slate-600">La révocation Google peut retirer les autres autorisations du même projet Google. Les jetons Gmail seront supprimés de BienDecider.</p>
+        <p className="mt-2 text-xs text-slate-600">La révocation Google peut retirer les autres autorisations du même projet Google. Les jetons Gmail seront supprimés de BienDecider ; vos contenus et leurs validations restent.</p>
+        <ScheduledList items={scheduled} />
         <label className="mt-3 flex items-start gap-2 text-sm"><input type="checkbox" checked={disconnectConfirmed} onChange={(event) => setDisconnectConfirmed(event.target.checked)} /><span>Je confirme le retrait de l&apos;autorisation.</span></label>
         <button onClick={disconnect} disabled={busy || !disconnectConfirmed}>Déconnecter</button>
       </details>}

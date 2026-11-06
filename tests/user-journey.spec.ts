@@ -336,7 +336,8 @@ test("V5.2 workspace: four pages, a single next decision, and a mission created,
     // Anciennes adresses et pages encore vides, honnêtes.
     await page.goto(`${baseURL}/rapport`);
     await expect(page).toHaveURL(/\/resultats$/);
-    await expect(page.getByText("Rien n'a encore été diffusé")).toBeVisible();
+    await expect(page.getByText("Rien n'a encore été diffusé.")).toBeVisible();
+    await expect(page.getByText("Faites d'abord une première diffusion de cette mission : sans envoi, il n'y a rien à mesurer.")).toBeVisible();
 
     // Téléphone : menu repliable, page derrière inerte, Échap ferme.
     await page.setViewportSize({ width: 390, height: 800 });
@@ -537,6 +538,40 @@ test("V5.2 diffusion: a validated page goes online once, an uncertain result is 
   } finally { await prisma.$disconnect(); }
 });
 
+test("V5.2 programmation: a validated page is scheduled for a future time, shown in the Strategy, then cancelled and stays validated", async ({ page, company }) => {
+  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }) });
+  try {
+    await prisma.company.update({ where: { id: company.id }, data: { workspaceV52: true } });
+    const mission = await prisma.mission.create({ data: { companyId: company.id, template: "site_page", channel: "site", title: "Nos horaires", outcome: "Des visites", originalOutcome: "Des visites", finding: "Horaires introuvables", scope: { page: "Nos horaires" }, status: "active", firstLaunchedAt: new Date(), position: 1 } });
+    const content = await prisma.missionContent.create({ data: { companyId: company.id, missionId: mission.id, channel: "site", format: "site_page", currentNumber: 1, validatedNumber: 1, validatedAt: new Date(), versions: { create: { number: 1, title: "Nos horaires", body: "Du lundi au vendredi.", author: "paul" } } } });
+    await page.goto(`${baseURL}/atelier/${content.id}`);
+    await page.getByRole("button", { name: "Préparer la publication" }).click();
+    const dialog = page.getByRole("dialog", { name: "Confirmer la diffusion" });
+    await dialog.getByLabel("Programmer").check();
+    const tomorrow = new Date(Date.now() + 24 * 3600_000);
+    const local = `${tomorrow.getFullYear()}-${String(tomorrow.getMonth() + 1).padStart(2, "0")}-${String(tomorrow.getDate()).padStart(2, "0")}T09:00`;
+    await dialog.getByLabel("Date et heure (heure de cet appareil)").fill(local);
+    await dialog.getByLabel("Je confirme cette version, cette destination et ce moment").check();
+    await dialog.getByRole("button", { name: "Programmer la diffusion" }).click();
+    await expect(dialog).toBeHidden();
+    await expect(page.getByRole("heading", { level: 2, name: "V1 programmée" })).toBeVisible();
+    await expect(page.locator(".atelier-decision")).toContainText("vers 09:00 sur Votre site vitrine, à quelques minutes près");
+    await expect(page.getByLabel("Titre de la page")).toBeDisabled();
+
+    await page.goto(`${baseURL}/strategie`);
+    await expect(page.getByRole("region", { name: "À valider par vous" })).toContainText("Nos horaires · V1 · Site vitrine · diffusion programmée");
+    await page.getByRole("region", { name: "À valider par vous" }).getByRole("link", { name: "Voir la programmation" }).click();
+    await page.waitForURL(new RegExp(`/atelier/${content.id}$`));
+    await page.getByRole("button", { name: "Annuler la programmation" }).click();
+    const cancel = page.getByRole("dialog", { name: "Annuler cette programmation ?" });
+    await expect(cancel).toContainText("Le contenu restera validé.");
+    await cancel.getByRole("button", { name: "Annuler la programmation" }).click();
+    await expect(cancel).toBeHidden();
+    await expect(page.getByRole("heading", { level: 2, name: "V1 validée" })).toBeVisible();
+    expect((await prisma.journalEntry.findMany({ where: { missionId: mission.id }, orderBy: [{ createdAt: "asc" }, { id: "asc" }] })).map((entry) => entry.code)).toEqual(["J-21", "J-23"]);
+  } finally { await prisma.$disconnect(); }
+});
+
 test("Gmail start, refusal and send guards do not contact providers", async ({ page, company }) => {
   expect(company.id).toBeTruthy();
   await page.goto(`${baseURL}/connexions`);
@@ -574,39 +609,143 @@ test("risk policy API rejects non-admin sessions", async ({ page }) => {
   expect(patch.status()).toBe(403);
 });
 
-test("OAuth authorization is not advertised as a verified business connection", async ({ page, company }, testInfo) => {
-  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }) });
+test("V5.2 bilan: a report after a diffusion, a decision to continue or stop, and what Paul learns on the Strategy, at 1440 and 390 px", async ({ page, company }, testInfo) => {
+  test.setTimeout(90000);
+  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }) });
   try {
+    await prisma.company.update({ where: { id: company.id }, data: { workspaceV52: true } });
+    const seed = async (title: string, outcome: string, position: number) => {
+      const mission = await prisma.mission.create({ data: { companyId: company.id, template: "site_page", channel: "site", title, outcome, originalOutcome: outcome, finding: "Un constat", scope: { page: title }, status: "active", firstLaunchedAt: new Date(), stopRuleDays: 30, position } });
+      const content = await prisma.missionContent.create({ data: { companyId: company.id, missionId: mission.id, channel: "site", format: "site_page", currentNumber: 1, validatedNumber: 1, validatedAt: new Date(), versions: { create: { number: 1, title, body: "Sur devis.", author: "paul" } } } });
+      await prisma.publication.create({ data: { companyId: company.id, missionId: mission.id, contentId: content.id, versionNumber: 1, title, channel: "site", channelLabel: "Votre site vitrine", mode: "confirmed", status: "sent", sentAt: new Date(Date.now() - 40 * 86_400_000), idempotencyKey: `${content.id}:v1:1` } });
+      return { mission, content };
+    };
+    const tarifs = await seed("Nos tarifs", "Deux demandes de devis", 1);
+    const horaires = await seed("Nos horaires", "Un rendez-vous qualifié", 2);
+
+    // Résultats : la diffusion est listée ; « Poursuivre » reste indisponible sans bilan.
+    await page.goto(`${baseURL}/resultats`);
+    await expect(page.getByRole("heading", { level: 1, name: "L'activité n'est pas le résultat." })).toBeVisible();
+    await expect(page.getByRole("region", { name: "La diffusion et son suivi" })).toContainText("Nos tarifs · V1 · Votre site vitrine");
+    await page.getByRole("row", { name: /Nos tarifs/ }).getByRole("button", { name: "Décider la suite" }).click();
+    const decide = page.getByRole("dialog", { name: "Décider la suite de la mission" });
+    await expect(decide.getByRole("button", { name: "Poursuivre" })).toBeDisabled();
+    await expect(decide).toContainText("Sans bilan, Paul ne peut pas comparer au résultat recherché");
+    await decide.getByRole("button", { name: "Annuler" }).click();
+
+    // Bilan : le contrôle des rendez-vous s'affiche en direct ; changer de mission recharge ses chiffres.
+    const form = page.getByRole("region", { name: "Renseigner mon bilan" });
+    await expect(form.getByLabel("Mission")).toHaveValue(tarifs.mission.id);
+    await form.getByLabel("Demandes qualifiées").fill("1");
+    await form.getByLabel("Rendez-vous").fill("2");
+    await expect(form.getByRole("alert")).toHaveText("Vous ne pouvez pas avoir plus de rendez-vous que de demandes qualifiées. Vérifiez vos chiffres.");
+    await form.getByLabel("Demandes qualifiées").fill("3");
+    await form.getByLabel("Rendez-vous").fill("1");
+    await form.getByLabel("Origine des demandes et contexte").fill("Deux appels du syndic");
+    await form.getByRole("button", { name: "Enregistrer le bilan" }).click();
+    await expect(form.getByRole("status")).toHaveText("Bilan enregistré. Attribution déclarative, non vérifiée.");
+    const metric = (label: string) => page.locator(".metrics div", { hasText: label }).locator("dd");
+    await expect(metric("Demandes qualifiées")).toHaveText("3");
+    await expect(metric("CA signé")).toHaveText("—");
+    await form.getByLabel("Mission").selectOption({ label: "Nos horaires" });
+    await expect(page).toHaveURL(new RegExp(`mission=${horaires.mission.id}`));
+    await expect(form.getByLabel("Demandes qualifiées")).toHaveValue("");
+    await form.getByLabel("Mission").selectOption({ label: "Nos tarifs" });
+    await expect(form.getByLabel("Demandes qualifiées")).toHaveValue("3");
+
+    // Stratégie : ce que Paul apprend, comparé au résultat recherché, sans élargir.
+    await page.goto(`${baseURL}/strategie`);
+    const learning = page.getByRole("article", { name: "Ce que Paul apprend : Nos tarifs" });
+    await expect(learning).toContainText("3 demandes qualifiées, 1 rendez-vous, chiffre d'affaires non déclaré.");
+    await expect(learning).toContainText("Résultat recherché atteint");
+    await expect(learning).toContainText("Proposition à confirmer : poursuivre dans les mêmes limites.");
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.screenshot({ path: testInfo.outputPath("strategie-bilan-1440.png"), fullPage: true });
+
+    // Poursuivre ouvre l'atelier pour la série suivante ; arrêter clôt la mission.
+    await page.goto(`${baseURL}/resultats`);
+    await page.getByRole("row", { name: /Nos tarifs/ }).getByRole("button", { name: "Décider la suite" }).click();
+    await page.getByRole("dialog", { name: "Décider la suite de la mission" }).getByRole("button", { name: "Poursuivre" }).click();
+    await expect(page).toHaveURL(new RegExp(`/atelier/${tarifs.content.id}$`));
+    await page.goto(`${baseURL}/resultats`);
+    await expect(page.getByRole("row", { name: /Nos tarifs/ })).toContainText("Poursuivie, mêmes limites");
+    await page.getByRole("row", { name: /Nos horaires/ }).getByRole("button", { name: "Décider la suite" }).click();
+    await page.getByRole("dialog", { name: "Décider la suite de la mission" }).getByRole("button", { name: "Arrêter la mission" }).click();
+    await expect(page.getByRole("row", { name: /Nos horaires/ })).toContainText("Arrêtée");
+    await expect(page.getByRole("row", { name: /Nos horaires/ }).getByRole("button", { name: "Décider la suite" })).toHaveCount(0);
+    expect(await prisma.mission.findUniqueOrThrow({ where: { id: horaires.mission.id } })).toMatchObject({ status: "stopped" });
+    await page.screenshot({ path: testInfo.outputPath("resultats-1440.png"), fullPage: true });
+    await page.setViewportSize({ width: 390, height: 800 });
+    await page.goto(`${baseURL}/resultats`);
+    await expect(page.getByRole("heading", { level: 1, name: "L'activité n'est pas le résultat." })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath("resultats-390.png"), fullPage: true });
+  } finally { await prisma.$disconnect(); }
+});
+
+test("Canaux & délégation: only active channels, honest states, scheduled diffusions listed before disconnecting, access requested for a reserved channel", async ({ page, company }, testInfo) => {
+  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }) });
+  const previous = await prisma.channelRollout.findUnique({ where: { channel: "gmail" } });
+  try {
+    await prisma.company.update({ where: { id: company.id }, data: { workspaceV52: true } });
     await prisma.channelConnection.createMany({ data: [
       { companyId: company.id, channel: "google_business_profile", status: "connecte", accessToken: "test-token-never-visible", expiresAt: new Date(Date.now() - 60000) },
       { companyId: company.id, channel: "facebook", status: "connecte", accessToken: "test-token-never-visible", expiresAt: new Date(Date.now() + 3600000) },
     ] });
+    const mission = await prisma.mission.create({ data: { companyId: company.id, template: "social_post", channel: "facebook", title: "Chantier livré", outcome: "Des demandes", originalOutcome: "Des demandes", finding: "Un constat", scope: { topic: "Un chantier" }, status: "active", position: 1 } });
+    const content = await prisma.missionContent.create({ data: { companyId: company.id, missionId: mission.id, channel: "facebook", format: "social_post", currentNumber: 1, validatedNumber: 1, versions: { create: { number: 1, title: "Chantier livré", body: "Texte.", author: "paul" } } } });
+    await prisma.publication.create({ data: { companyId: company.id, missionId: mission.id, contentId: content.id, versionNumber: 1, title: "Chantier livré", channel: "facebook", channelLabel: "Page Facebook", mode: "confirmed", status: "scheduled", scheduledAt: new Date("2030-01-07T08:00:00Z"), timezone: "Europe/Paris", idempotencyKey: `${content.id}:v1:1` } });
+
     for (const width of [320, 1440]) {
       await page.setViewportSize({ width, height: 900 });
-      await page.goto(`${baseURL}/connexions`);
-      await expect(page.getByText("Connexion expirée · reliez de nouveau le compte", { exact: true })).toBeVisible();
+      await page.goto(`${baseURL}/connexions?retour=/atelier/${content.id}`);
+      await expect(page.getByRole("heading", { level: 1, name: "Canaux & délégation" })).toBeVisible();
       // Jeton en clair de l'ancien flux Facebook : jamais présenté comme une connexion, à refaire.
       await expect(page.getByText("Autorisation à refaire · reconnectez votre Page", { exact: true })).toBeVisible();
       await expect(page.getByText("Page vérifiée", { exact: true })).toHaveCount(0);
       await expect(page.locator("main")).not.toContainText("test-token-never-visible");
-      await expect(page.getByText("Connecté", { exact: true })).toHaveCount(0);
+      // Canaux désactivés (§5.6) : ni affichés ni connectables.
+      await expect(page.getByRole("region", { name: "Google Business Profile" })).toHaveCount(0);
+      await expect(page.getByRole("region", { name: "LinkedIn · profil personnel" })).toHaveCount(0);
+      await expect(page.getByRole("region", { name: "Site vitrine · adresse publique" })).toContainText("Aucune page en ligne pour le moment");
+      await expect(page.getByRole("link", { name: "Revenir au contenu" })).toHaveAttribute("href", `/atelier/${content.id}`);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-      await page.screenshot({ path: testInfo.outputPath(`oauth-${width}.png`), fullPage: true });
+      await page.screenshot({ path: testInfo.outputPath(`canaux-${width}.png`), fullPage: true });
     }
-    await prisma.channelConnection.deleteMany({ where: { companyId: company.id } });
-    await page.reload();
-    await expect(page.locator("main").getByText("Compte non relié", { exact: true })).toHaveCount(1);
-    await expect(page.getByRole("region", { name: "Facebook · Page" }).getByText("Non autorisé", { exact: true })).toBeVisible();
 
-    // Google révoqué ou expiré (invalid_grant) : jetons effacés, la page demande de relier le compte.
-    await prisma.channelConnection.create({ data: { companyId: company.id, channel: "google_business_profile", status: "erreur" } });
-    await page.goto(`${baseURL}/connexions`);
-    await expect(page.getByText("Connexion à renouveler", { exact: true })).toBeVisible();
+    // Déconnexion : les programmations qui seront annulées sont dites avant de confirmer.
+    const facebook = page.getByRole("region", { name: "Facebook · Page" });
+    await expect(facebook).toContainText("1 programmation en cours");
+    await facebook.getByText("Déconnecter Facebook", { exact: true }).click();
+    await expect(facebook).toContainText("Ces programmations seront annulées :");
+    await expect(facebook).toContainText("Chantier livré · V1 · le 7 janvier vers 09:00");
+    await facebook.getByLabel("Je confirme le retrait de ma Page Facebook.").check();
+    await facebook.getByRole("button", { name: "Confirmer le retrait Facebook" }).click();
+    await expect(facebook.getByText("Non autorisé", { exact: true })).toBeVisible();
+    expect(await prisma.publication.findFirstOrThrow({ where: { contentId: content.id } })).toMatchObject({ status: "cancelled", cancelReason: "Page Facebook déconnectée" });
+
+    // Canal réservé aux entreprises autorisées (#301) : pas de flux fournisseur, une demande d'accès.
+    await prisma.channelRollout.upsert({ where: { channel: "gmail" }, create: { channel: "gmail", openToAll: false }, update: { openToAll: false } });
+    await page.reload();
+    const gmail = page.getByRole("region", { name: "Gmail · envoi de messages" });
+    // La page arrive en flux : on attend le bloc avant de savoir si Gmail est configuré sur ce serveur.
+    await expect(gmail.getByRole("heading", { name: "Gmail · envoi de messages" })).toBeVisible();
+    if (await gmail.getByText("L'envoi Gmail n'est pas disponible sur cette version.").count() === 0) {
+      await expect(gmail.getByRole("link", { name: /Relier/ })).toHaveCount(0);
+      await expect(gmail).toContainText("Pas encore disponible pour votre compte.");
+      await gmail.getByRole("button", { name: "Demander l'accès" }).click();
+      await expect(gmail.getByRole("status")).toContainText("Demande envoyée.");
+      expect(await prisma.channelAccess.findUniqueOrThrow({ where: { companyId_channel: { companyId: company.id, channel: "gmail" } } })).toMatchObject({ status: "requested" });
+    }
+    await page.goto(`${baseURL}/connexions?error=channel_unavailable`);
+    await expect(page.getByText("Ce canal n'est pas disponible pour votre compte.", { exact: false })).toBeVisible();
     await page.goto(`${baseURL}/connexions?error=google_denied`);
     await expect(page.getByText("L'autorisation Google a été refusée ou annulée.", { exact: false })).toBeVisible();
-    await page.goto(`${baseURL}/connexions?error=oauth_exchange`);
-    await expect(page.getByText("Google n'a pas pu confirmer l'autorisation.", { exact: false })).toBeVisible();
-  } finally { await prisma.$disconnect(); }
+  } finally {
+    if (previous) await prisma.channelRollout.update({ where: { channel: "gmail" }, data: { openToAll: previous.openToAll } });
+    else await prisma.channelRollout.deleteMany({ where: { channel: "gmail" } });
+    await prisma.$disconnect();
+  }
 });
 
 test("growth journey shows progress, the current step and can be hidden and restored", async ({ page, company }) => {

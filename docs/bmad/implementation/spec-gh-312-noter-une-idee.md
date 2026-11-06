@@ -84,7 +84,7 @@ context:
 ## Implementation Notes
 
 - Règles pures (`IDEA_MAX`, `validateIdeaText`, `ideaFrameHref`, `isIdeaId`) dans `src/lib/idea-text.ts`, réexportées par `src/lib/ideas.ts` : `pending-action-view.ts` est importé par le panneau (client) et ne doit pas tirer Prisma.
-- Migration `20261106150000_idees` (après `20261106140000_paul_contextes`). `convertedMissionId` sans clé étrangère : une idée cadrée ne redevient jamais ouverte.
+- Migration `20261107130000_idees` (après `20261106140000_paul_contextes`). `convertedMissionId` sans clé étrangère : une idée cadrée ne redevient jamais ouverte.
 - Plafond M-63 : `noteIdeaIn` verrouille la ligne `Company` (`FOR UPDATE`) avant de compter. Cadrage : `lockOpenIdeaIn` verrouille l'idée (`FOR UPDATE`) avant la création, un double envoi attend puis reçoit 404.
 - Une carte `mission_create` peut porter `ideaId` (via `propose_mission`) ; idée devenue absente à l'acceptation → carte retirée (`inactive`), aucune mission.
 - Le second clic sur une carte `idea_note` déjà acceptée répond `ok` sans redirection.

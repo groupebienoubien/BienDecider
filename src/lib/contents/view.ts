@@ -9,8 +9,9 @@ import { readSuggestion, snapshotOf, type ContentSuggestion } from "@/lib/conten
 import { PAUL_VERSION_CREDITS } from "@/lib/credits";
 import { renderMissionMessage } from "@/lib/missions/messages";
 import { DELEGATION_LABELS, asDelegationLevel, type DelegationLevel } from "@/lib/delegation-level";
-import { SENDING_STALE_MS, readDestination } from "@/lib/contents/publish";
+import { SENDING_STALE_MS, formatMoment, readDestination } from "@/lib/contents/publish";
 import { checkDiffusion } from "@/lib/contents/rules";
+import { scopeAgencies } from "@/lib/agencies/service";
 
 export type AtelierItem = { contentId: string; missionId: string; label: string };
 
@@ -55,9 +56,13 @@ export type ContentDetail = {
   publication: PublicationView | null;
   /** La version courante attend une vérification qu'on peut déjà faire (incertaine, ou envoi sans réponse depuis 15 minutes). */
   resolvable: boolean;
+  /** Dernière programmation de la version courante annulée par l'ordonnanceur : le dirigeant doit le savoir. */
+  systemCancel: string | null;
+  /** E-mail : les destinataires du périmètre, un envoi chacun. */
+  recipients: { name: string; email: string }[];
 };
 
-export type PublicationView = { status: string; mode: string; channelLabel: string; sentAt: string | null; url: string | null; failureReason: string | null };
+export type PublicationView = { status: string; mode: string; channelLabel: string; sentAt: string | null; url: string | null; failureReason: string | null; scheduledLabel: string | null; recipients: { name: string; status: string; failureReason: string | null }[] };
 
 const FORMAT_LABELS: Record<ContentFormat, string> = {
   social_post: "Publication",
@@ -76,7 +81,7 @@ export async function loadAtelierItems(companyId: string): Promise<AtelierItem[]
 export async function loadContentDetail(companyId: string, contentId: string): Promise<ContentDetail | null> {
   const content = await prisma.missionContent.findFirst({
     where: { id: contentId, companyId, currentNumber: { gt: 0 } },
-    include: { mission: true, company: { select: { name: true, emailVerifiedAt: true, delegationLevel: true } }, versions: { orderBy: { number: "desc" } }, publications: { orderBy: { createdAt: "desc" } } },
+    include: { mission: true, company: { select: { name: true, emailVerifiedAt: true, delegationLevel: true } }, versions: { orderBy: { number: "desc" } }, publications: { orderBy: { createdAt: "desc" }, include: { recipients: { orderBy: { createdAt: "asc" } } } } },
   });
   if (!content) return null;
   const missions = await loadMissionViews(companyId);
@@ -89,6 +94,7 @@ export async function loadContentDetail(companyId: string, contentId: string): P
   const destination = await readDestination(companyId, snapshot.channel);
   const publishRefusal = checkDiffusion(snapshot, { emailVerified: content.company.emailVerifiedAt !== null, delegation, channelEnabled: destination.enabled, channelConnected: destination.connected }, { number: content.currentNumber, confirmed: true });
   const latest = content.publications.find((publication) => publication.versionNumber === content.currentNumber && publication.status !== "cancelled") ?? null;
+  const newest = content.publications.find((publication) => publication.versionNumber === content.currentNumber) ?? null;
   const sentVersions = new Set(content.publications.filter((publication) => publication.status === "sent").map((publication) => publication.versionNumber));
   const now = Date.now();
   return {
@@ -126,9 +132,26 @@ export async function loadContentDetail(companyId: string, contentId: string): P
     delegationLabel: DELEGATION_LABELS[delegation],
     destination: { label: destination.label, enabled: destination.enabled, connected: destination.connected },
     publishRefusal: publishRefusal ? renderMissionMessage(publishRefusal.code, publishRefusal.params) : null,
-    publication: latest && { status: latest.status, mode: latest.mode, channelLabel: latest.channelLabel, sentAt: latest.sentAt?.toISOString() ?? null, url: latest.url, failureReason: latest.failureReason },
+    publication: latest && { status: latest.status, mode: latest.mode, channelLabel: latest.channelLabel, sentAt: latest.sentAt?.toISOString() ?? null, url: latest.url, failureReason: latest.failureReason, scheduledLabel: latest.scheduledAt ? formatMoment(latest.scheduledAt, latest.timezone ?? "Europe/Paris") : null, recipients: latest.recipients.map((recipient) => ({ name: recipient.name, status: recipient.status, failureReason: recipient.failureReason })) },
     resolvable: latest !== null && (latest.status === "uncertain" || (latest.status === "sending" && now - latest.createdAt.getTime() > SENDING_STALE_MS)),
+    systemCancel: newest?.status === "cancelled" && newest.cancelledBy === "system" ? newest.cancelReason : null,
+    recipients: content.mission.template === "agencies" ? (await scopeAgencies(companyId, content.mission.scope)).map((agency) => ({ name: agency.name, email: agency.email })) : [],
   };
+}
+
+/** Programmations annulées par l'ordonnanceur (contrôle échoué à l'heure prévue), tant que rien d'autre n'a suivi sur la version courante. */
+export async function loadCancelledSchedules(companyId: string): Promise<{ contentId: string; missionTitle: string; versionNumber: number; reason: string }[]> {
+  const contents = await prisma.missionContent.findMany({
+    where: { companyId, publications: { some: { status: "cancelled", cancelledBy: "system" } } },
+    select: { id: true, currentNumber: true, mission: { select: { title: true, status: true } }, publications: { orderBy: { updatedAt: "desc" }, take: 1 } },
+  });
+  return contents.flatMap((content) => {
+    const last = content.publications[0];
+    const open = content.mission.status !== "stopped" && content.mission.status !== "dismissed";
+    return last && open && last.status === "cancelled" && last.cancelledBy === "system" && last.versionNumber === content.currentNumber
+      ? [{ contentId: content.id, missionTitle: content.mission.title, versionNumber: last.versionNumber, reason: last.cancelReason ?? "contrôle échoué" }]
+      : [];
+  });
 }
 
 /** Points à vérifier pour une version (#179), calculés une fois côté serveur. */

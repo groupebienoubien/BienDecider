@@ -16,6 +16,13 @@ export const MISSION_MESSAGES = {
   "M-30": "Choisissez 1 ou 2 agences.",
   "M-31": "Choisissez de 1 à 8 contacts recontactables.",
   "M-32": "Réalisation inconnue.",
+  "M-33": "Vous ne pouvez pas avoir plus de rendez-vous que de demandes qualifiées. Vérifiez vos chiffres.",
+  "M-34": "Seule une mission en cours peut être soldée.",
+  "M-35": "Faites d'abord une première diffusion : sans retour, il n'y a rien à juger.",
+  "M-36": "Renseignez d'abord le bilan de cette mission : poursuivre sans chiffres n'a pas de sens.",
+  "M-37": "Faites d'abord une première diffusion de cette mission : sans envoi, il n'y a rien à mesurer.",
+  "M-38": "Renseignez les demandes qualifiées et les rendez-vous (0 s'il n'y en a aucun).",
+  "M-39": "Utilisez des nombres entiers positifs, sans décimale.",
   "M-40": "Cette mission est arrêtée. Proposez un nouveau test à Paul.",
   "M-41": "Choisissez d'abord au moins un contact recontactable.",
   "M-42": "Confirmez la pertinence et le droit de recontact des destinataires.",
@@ -35,6 +42,7 @@ export const MISSION_MESSAGES = {
   "M-58": "Validez la version courante avant de poursuivre.",
   "M-59": "Une programmation existe déjà pour cette version.",
   "M-60": "Enregistrez vos retouches dans une nouvelle version avant cette décision.",
+  "M-61": "Choisissez une date et une heure futures.",
   "M-62": "Décrivez votre idée en une phrase.",
   "M-63": "10 idées au maximum : retirez-en une avant d'en noter une autre.",
   "M-64": "Choisissez de 1 à 5 avis sans réponse.",
@@ -55,6 +63,11 @@ export const MISSION_MESSAGES = {
   "M-84": "Cochez « Je confirme avoir diffusé cette version » avant de déclarer.",
   "M-85": "Choisissez l'un des trois niveaux de délégation.",
   "M-86": "Aucun résultat incertain à vérifier pour cette version.",
+  "M-87": "Aucune programmation à annuler pour cette version.",
+  "M-88": "Une diffusion est programmée : annulez-la avant de modifier le périmètre.",
+  "M-89": "Ce contenu a déjà été diffusé : le périmètre est figé. Créez une nouvelle version dans l'atelier pour repartir sur un autre périmètre.",
+  "M-90": "Paul n'a trouvé aucune nouvelle agence avec un e-mail professionnel public dans votre zone. Réessayez plus tard.",
+  "M-91": "La recherche d'agences n'est pas disponible pour le moment. Réessayez dans un instant.",
 } as const;
 
 export type MissionMessageCode = keyof typeof MISSION_MESSAGES;
@@ -68,7 +81,7 @@ export class MissionError extends Error {
     super(renderMissionMessage(code, params));
     this.name = "MissionError";
     this.code = code;
-    this.status = code === "M-02" ? 409 : code === "M-79" ? 503 : 422;
+    this.status = code === "M-02" ? 409 : code === "M-79" || code === "M-91" ? 503 : 422;
   }
 }
 

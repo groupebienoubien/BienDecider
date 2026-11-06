@@ -12,6 +12,7 @@ import {
   type ContentFormat, type ContentSnapshot, type Refusal, type VariantRequest,
 } from "@/lib/contents/rules";
 import { anthropicDraftWriter, type DraftRequest, type DraftWriter } from "@/lib/contents/writer";
+import { agencyNames } from "@/lib/agencies/service";
 
 export class ContentNotFoundError extends Error {
   constructor() {
@@ -76,10 +77,11 @@ async function rejectionsOf(client: Tx | typeof prisma, contentId: string): Prom
 
 async function draftRequest(companyId: string, mission: Mission, channel: MissionChannel | null, format: ContentFormat, base: DraftRequest["base"], variant: VariantRequest | null, rejections: string[]): Promise<DraftRequest> {
   const company = await prisma.company.findUniqueOrThrow({ where: { id: companyId }, select: { name: true, trade: true, servingArea: true, ownerName: true, website: true } });
+  const names = mission.template === "agencies" ? await agencyNames(companyId, mission.scope) : {};
   return {
     companyId,
     company,
-    mission: { title: mission.title, outcome: mission.outcome, finding: mission.finding, scopeSummary: scopeSummary(mission.template as TemplateKey, mission.scope) },
+    mission: { title: mission.title, outcome: mission.outcome, finding: mission.finding, scopeSummary: scopeSummary(mission.template as TemplateKey, mission.scope, names) },
     channel,
     format,
     base,
@@ -156,6 +158,25 @@ export async function adaptContentToChannel(tx: Tx, mission: Mission): Promise<v
     { origine: `reprise pour ${label}`, actor: "system" },
     { channel, format: contentFormat(channel) },
   );
+}
+
+/** Verrouillage du périmètre (§6.2) d'après le contenu de la mission : programmation, version courante diffusée ou résultat à vérifier. */
+export async function checkScopeLock(tx: Tx, missionId: string): Promise<void> {
+  const content = await tx.missionContent.findUnique({ where: { missionId }, include: { mission: true, publications: { select: { versionNumber: true, status: true } } } });
+  if (!content || content.currentNumber === 0) return;
+  const snapshot = snapshotOf(content);
+  if (snapshot.scheduled) throw new MissionError("M-88");
+  if (snapshot.uncertain) throw new MissionError("M-81");
+  if (snapshot.currentDiffused) throw new MissionError("M-89");
+}
+
+/** Agences ou contacts changés sur une mission En cours ou un contenu validé (§4.5) : nouvelle version « Destinataires modifiés », validation retirée. */
+export async function markRecipientsChanged(tx: Tx, mission: Mission): Promise<void> {
+  const content = await tx.missionContent.findUnique({ where: { missionId: mission.id } });
+  if (!content || content.currentNumber === 0) return;
+  if (mission.status !== "active" && content.validatedNumber === null) return;
+  const current = await tx.contentVersion.findUniqueOrThrow({ where: { contentId_number: { contentId: content.id, number: content.currentNumber } } });
+  await addVersion(tx, { ...content, mission }, { title: current.title, body: current.body, author: "system", note: "Destinataires modifiés" }, { origine: "destinataires modifiés", actor: "system" });
 }
 
 const ACTIONS = ["save", "restore", "variant", "accept_variant", "dismiss_variant", "validate", "reject", "next_version"] as const;
