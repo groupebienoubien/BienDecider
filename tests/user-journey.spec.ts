@@ -712,6 +712,22 @@ test("V5.2 bilan: a report after a diffusion, a decision to continue or stop, an
   } finally { await prisma.$disconnect(); }
 });
 
+test("GH-310: with a session, the discovery page only offers to go back to the workspace", async ({ page, company }) => {
+  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }) });
+  try {
+    await prisma.company.update({ where: { id: company.id }, data: { workspaceV52: true } });
+  } finally { await prisma.$disconnect(); }
+  await page.goto(`${baseURL}/`);
+  const back = page.getByRole("link", { name: "Retourner à mon espace", exact: true });
+  await expect(back).toHaveCount(2);
+  for (const link of await back.all()) await expect(link).toHaveAttribute("href", "/strategie");
+  await expect(page.getByRole("link", { name: "Mon espace", exact: true })).toHaveAttribute("href", "/strategie");
+  await expect(page.getByRole("link", { name: "C'est parti", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Retrouver mon compte", exact: true })).toHaveCount(0);
+  await back.first().click();
+  await expect(page).toHaveURL(`${baseURL}/strategie`);
+});
+
 test("GH-41: an empty journal says so on Résultats and offers no export", async ({ page, company }) => {
   const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }) });
   try {

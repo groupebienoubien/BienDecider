@@ -55,13 +55,23 @@ test("BienDecider public identity, metadata, contact and responsive pages", asyn
   await expect(page.getByText("Vous décidez. Votre activité avance.", { exact: true })).toBeVisible();
   // La marque est portée par le logo ; le titre principal est la promesse (#86).
   await expect(page.getByRole("link", { name: "BienDecider, accueil" })).toBeVisible();
-  // Un appel à l'action en haut et en bas de l'accueil (#86).
-  const signups = page.getByRole("link", { name: "Créer mon compte", exact: true });
-  await expect(signups).toHaveCount(2);
-  for (const link of await signups.all()) await expect(link).toHaveAttribute("href", "/signup");
-  await expect(page.getByRole("link", { name: "J'ai déjà un compte", exact: true }).first()).toHaveAttribute("href", "/login");
-  await expect(page.getByText("Exemple fictif, aucune donnée client")).toBeVisible();
-  await expect(page.getByRole("img", { name: /Aperçu BienDecider/ })).toBeVisible();
+  // Page de découverte (#310, FR-1) : « C'est parti » en haut et en bas, « Retrouver mon compte » en accès secondaire.
+  const starts = page.getByRole("link", { name: "C'est parti", exact: true });
+  await expect(starts).toHaveCount(2);
+  for (const link of await starts.all()) await expect(link).toHaveAttribute("href", "/signup");
+  const accounts = page.getByRole("link", { name: "Retrouver mon compte", exact: true });
+  await expect(accounts).toHaveCount(2);
+  for (const link of await accounts.all()) await expect(link).toHaveAttribute("href", "/login");
+  const main = page.locator("main");
+  // Paul seul copilote (D3), l'exemple concret, les engagements et la boucle en six étapes.
+  await expect(main).toContainText("votre copilote unique : il comprend, recommande, prépare et apprend avec vous");
+  for (const other of ["Martine", "Camille", "Jean-Claude"]) await expect(main).not.toContainText(other);
+  await expect(page.getByRole("heading", { level: 2, name: "Une entreprise de rénovation qui veut plus de projets" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 2, name: "Vous gardez la main" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 2, name: "Six étapes, une seule boucle" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Six étapes, une seule boucle" }).getByRole("listitem")).toHaveCount(6);
+  await expect(page.getByText("Exemple d'illustration, aucune donnée client")).toBeVisible();
+  await expect(main).not.toContainText(/démonstration|simul|en préparation/i);
   await expect(page.locator('link[rel="icon"][href="/brand/symbol.svg"]')).toHaveCount(1);
   await expect(page.locator("body")).not.toContainText(/gratuit pendant le pilote/i);
   await expect(page.locator('meta[property="og:site_name"]')).toHaveAttribute("content", "BienDecider");

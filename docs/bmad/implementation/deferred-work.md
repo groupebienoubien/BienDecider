@@ -143,3 +143,12 @@
 - source_spec: `docs/bmad/implementation/spec-gh-168-provenance-des-missions.md`
   summary: Aligner « Preuve utilisée » (Votre prochaine décision dans Stratégie, détail de mission) sur la provenance reliée : titre et certitude du constat au lieu de « Constat relevé par Paul ».
   evidence: src/app/strategie/page.tsx:56 et src/app/missions/[id]/page.tsx:79 affichent encore « Constat relevé par Paul » pour toute mission de Paul ; la spec #168 laissait le reste de la page inchangé.
+- source_spec: none
+  summary: #279 Parcours d'entrée en cinq étapes, compte créé en dernier, à faire juste après #310.
+  evidence: Découpage décidé par Samir le 2026-11-06 : #310 d'abord. Décisions déjà prises pour #279 : étapes 1 à 4 en version minimale (saisies, confirmation du profil, ambition en texte libre, trois missions tirées des modèles ; l'analyse et Paul arrivent avec #280, #281, #282 et #284), l'ancien parcours /signup et /onboarding est remplacé ; adresse déjà utilisée → message neutre qui renvoie vers « Retrouver mon compte » sans révéler que le compte existe (FR-9 prévaut sur M-14). Reste à trancher : la vérification de l'e-mail, qui bloque aujourd'hui tous les agents (agent-runs.ts:440), alors que l'addendum §6 ne l'exige qu'avant une diffusion.
+- source_spec: `docs/bmad/implementation/spec-gh-310-page-decouverte.md`
+  summary: Supprimer `public/brand/workspace-preview.png` et `workspace-preview-mobile.png`, que l'accueil n'utilise plus.
+  evidence: La capture de l'ancien espace a été retirée de `src/app/page.tsx` par #310 ; aucune autre page ne référence ces fichiers.
+- source_spec: `docs/bmad/implementation/spec-gh-310-page-decouverte.md`
+  summary: Aligner /canaux sur Paul copilote unique (« Préparé par l'équipe, publié par vous ») et mettre à jour son test.
+  evidence: L'accueil présente Paul seul depuis #310 ; tests/brand.spec.ts vérifie encore le texte « l'équipe » de /canaux.
