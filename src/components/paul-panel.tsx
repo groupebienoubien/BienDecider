@@ -6,7 +6,9 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { PersonaAvatar } from "@/components/persona-avatar";
 import { Icon } from "@/components/icon";
 import { PERSONAS } from "@/lib/agents/personas";
-import { describePage, PAUL_ELEMENT_LABELS, PAUL_OPEN_EVENT, type PaulElement } from "@/lib/paul-context";
+import { describePage, NEW_IDEA_CONTEXT, PAUL_ELEMENT_LABELS, PAUL_OPEN_EVENT, type PaulElement, type PaulOpenDetail } from "@/lib/paul-context";
+import { DEFAULT_CONTEXT_KEY, contextIntro, contextSuggestions, contextTitle, defaultContextKey, nextIdeaKey, parseContextKey } from "@/lib/paul-contexts";
+import type { TemplateKey } from "@/lib/missions/templates";
 import type { PaulReference } from "@/lib/paul-references";
 import { DictationButton, ReadAloudButton } from "@/components/voice-controls";
 import { ArrowUpIcon, CheckIcon, ChevronDownIcon, CollapseIcon, CopyIcon, ExpandIcon, StopIcon, WaveIcon } from "@/components/chat-icons";
@@ -14,15 +16,18 @@ import { appendDictation, spokenText } from "@/lib/voice";
 import { dayKey, dayLabel, parseMessage, plainMessage, timeLabel, type Inline } from "@/lib/chat-format";
 import { NDJSON_CONTENT_TYPE, splitStreamEvents, streamPreview } from "@/lib/chat-stream";
 import { createVoiceConversation, supportsVoiceConversation, type VoicePhase } from "@/lib/speech";
-import { decidedText, launchesRun, type PendingActionView } from "@/lib/agents/pending-action-view";
+import { decidedText, type PendingActionView } from "@/lib/agents/pending-action-view";
 
 type PanelState = { open: boolean; draft: string };
 type ChatEntry = { id: string; role: string; content: string; createdAt: string; references?: PaulReference[]; actions?: PendingActionView[]; pending?: boolean; stopped?: boolean };
 type Reply = { content: string; references: PaulReference[]; actions: PendingActionView[] };
 type Decision = "confirm" | "cancel";
+type Conversation = { key: string; title: string; lastAt: string };
+type Thread = { key: string; title: string; template: string | null; conversations: Conversation[]; messages: ChatEntry[] };
+/** Conversation choisie par le dirigeant (sélecteur, bouton Paul), valable tant qu'il reste sur la même page. */
+type Chosen = { path: string; key: string };
 
 const subscribeNothing = () => () => undefined;
-const SUGGESTIONS = ["Où en est mon plan d'action ?", "Que dois-je décider aujourd'hui ?", "Quelle est ma priorité cette semaine ?"];
 const ICON_BUTTON = "inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-slate-600 hover:bg-slate-100";
 const VOICE_STATUS: Record<Exclude<VoicePhase, "off">, string> = {
   listening: "Échange vocal : je vous écoute… L'audio est traité par le service vocal de votre navigateur.",
@@ -162,29 +167,28 @@ function DaySeparator({ iso }: { iso: string }) {
 /** Carte de confirmation rendue depuis l'intention enregistrée, jamais depuis le texte de Paul. */
 function PendingActionCard({ action, busy, error, onDecide }: { action: PendingActionView; busy: boolean; error: string | null; onDecide: (decision: Decision) => void }) {
   const decided = action.status !== "pending";
-  // Une carte de lancement confirmée n'est un succès que si le lancement a eu lieu ; sans résultat connu, texte neutre.
-  const succeeded = action.status === "confirmed" && (!launchesRun(action.type) || action.result?.ok === true);
+  const succeeded = action.status === "confirmed";
   const statusRef = useRef<HTMLParagraphElement>(null);
   const clickedRef = useRef(false);
-  // Après « Lancer » ou « Plus tard », les boutons disparaissent : le focus passe au résultat affiché sur la carte.
+  // Après l'acceptation, les boutons disparaissent : le focus passe au résultat affiché sur la carte.
+  // « Garder le cap actuel » rend le focus au champ de saisie.
   useEffect(() => {
-    // Une révision annulée rend le focus au champ de saisie (comme objectif et profil) ; seul son résultat confirmé le prend.
-    const keepsFocus = action.type === "launch_plan_item" || (action.type === "revise_proposal" && action.status === "confirmed");
-    if (decided && clickedRef.current && keepsFocus) statusRef.current?.focus();
-  }, [decided, action.type, action.status]);
+    if (decided && clickedRef.current && action.status === "confirmed") statusRef.current?.focus();
+  }, [decided, action.status]);
   const click = (decision: Decision) => {
     clickedRef.current = true;
     onDecide(decision);
   };
   return (
     <div className={`mt-3 rounded-2xl border p-3 text-sm ${decided ? "border-slate-200 bg-slate-50 text-slate-700" : "border-emerald-200 bg-white text-slate-800"}`} aria-label="Proposition de Paul à confirmer" role="group">
-      <p className="font-semibold text-slate-900">{action.title}</p>
+      <p className="text-xs font-medium text-slate-600">Paul · proposition à confirmer</p>
+      <p className="mt-1 font-semibold text-slate-900">{action.title}</p>
       <ul className="mt-2 list-disc space-y-0.5 pl-5">
         {action.lines.map((line) => <li key={line}>{line}</li>)}
       </ul>
       {decided ? (
         <p ref={statusRef} tabIndex={-1} role="status" className={`mt-3 flex items-center gap-1.5 ${succeeded ? "text-emerald-700" : "text-slate-600"}`}>
-          {succeeded && <CheckIcon className="h-4 w-4 shrink-0" />}{decidedText(action.status, action.type, action.result)}
+          {succeeded && <CheckIcon className="h-4 w-4 shrink-0" />}{decidedText(action.status, action.type)}
         </p>
       ) : (
         <div className="mt-3 flex flex-wrap items-center gap-3">
@@ -235,7 +239,23 @@ export function PaulPanel({ launchLabel }: { launchLabel?: string } = {}) {
   const view = useSearchParams().get("view");
   const panel = useSyncExternalStore(subscribePanel, readPanel, () => CLOSED);
   const [messages, setMessages] = useState<ChatEntry[]>([]);
+  // Une conversation par contexte (§16.1) : celle de la page par défaut, ou celle choisie sur cette page.
+  const [chosen, setChosen] = useState<Chosen | null>(null);
+  const contextKey = chosen && chosen.path === pathname ? chosen.key : defaultContextKey(pathname);
+  const [thread, setThread] = useState<Omit<Thread, "messages"> | null>(null);
+  // Changer de conversation vide le fil affiché avant que le nouveau arrive : jamais les messages d'un autre contexte.
+  const [shownKey, setShownKey] = useState(contextKey);
+  if (shownKey !== contextKey) {
+    setShownKey(contextKey);
+    setMessages([]);
+  }
   const [element, setElement] = useState<PaulElement | null>(null);
+  // Changer de conversation retire l'élément mis en avant s'il n'appartient pas à la nouvelle : jamais les données
+  // d'une mission envoyées dans une autre conversation.
+  function chooseContext(key: string) {
+    setElement((current) => (current?.type === "mission" && key === `mission:${current.id}` ? current : null));
+    setChosen({ path: pathname, key });
+  }
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [voicePhase, setVoicePhase] = useState<VoicePhase>("off");
@@ -256,16 +276,48 @@ export function PaulPanel({ launchLabel }: { launchLabel?: string } = {}) {
   const abortRef = useRef<AbortController | null>(null);
   const followRef = useRef(true);
   const sendingRef = useRef(false);
+  // Échanges ajoutés au fil depuis le navigateur : un chargement parti avant eux ne doit pas les effacer.
+  const localEditsRef = useRef(0);
   const submitRef = useRef<(text: string) => Promise<string | null>>(async () => null);
   const conversationRef = useRef<ReturnType<typeof createVoiceConversation> | null>(null);
   const wasOpen = useRef(false);
   const persona = PERSONAS.co_ceo;
   const panelId = "paul-panel";
+  const currentThread = thread?.key === contextKey ? thread : null;
+  const context = parseContextKey(contextKey) ?? { kind: "strategie" as const };
+  const elementName = element?.type === "mission" && context.kind === "mission" && element.id === context.id ? element.title : null;
+  const contextLabel = currentThread?.title ?? contextTitle(context, elementName ?? (context.kind === "mission" ? "…" : null));
+  const suggestions = contextSuggestions(context, (currentThread?.template ?? null) as TemplateKey | null);
+  // Sélecteur : dès qu'il y a au moins deux conversations à choisir, la conversation ouverte (même vide) comprise.
+  const conversations = thread?.conversations ?? [];
+  const selectable = conversations.some((conversation) => conversation.key === contextKey)
+    ? conversations
+    : [{ key: contextKey, title: contextLabel, lastAt: "" }, ...conversations];
 
   useEffect(() => {
+    // « Explorer une idée » : une nouvelle conversation, au premier numéro libre parmi les conversations existantes.
+    async function openNewIdea(path: string) {
+      const data = await fetch("/api/co-ceo/messages").then((response) => (response.ok ? response.json() : null)).catch(() => null);
+      const keys = Array.isArray(data?.conversations) ? (data.conversations as Conversation[]).map((conversation) => conversation.key) : [];
+      setChosen({ path, key: nextIdeaKey(keys) });
+    }
     function onOpen(event: Event) {
-      const target = (event as CustomEvent<PaulElement | null>).detail;
-      if (target) setElement(target);
+      const detail = (event as CustomEvent<PaulOpenDetail | null>).detail;
+      const path = window.location.pathname;
+      if (detail?.element) setElement(detail.element);
+      if (detail?.context === NEW_IDEA_CONTEXT) {
+        setElement(null);
+        void openNewIdea(path);
+      } else if (detail?.context) {
+        const key = detail.context;
+        // L'élément reste seulement s'il appartient à la conversation ouverte (mission:{id}).
+        const next = detail.element ?? null;
+        setElement((current) => {
+          const candidate = next ?? current;
+          return candidate?.type === "mission" && key === `mission:${candidate.id}` ? candidate : null;
+        });
+        setChosen({ path, key });
+      }
       writePanel({ open: true });
     }
     window.addEventListener(PAUL_OPEN_EVENT, onOpen);
@@ -275,12 +327,24 @@ export function PaulPanel({ launchLabel }: { launchLabel?: string } = {}) {
   useEffect(() => {
     if (!panel.open) return;
     const controller = new AbortController();
-    fetch("/api/co-ceo/messages", { signal: controller.signal })
-      .then((response) => (response.ok ? response.json() : null))
-      .then((data: ChatEntry[] | null) => { if (data && !sendingRef.current) setMessages(data); })
+    const editsAtStart = localEditsRef.current;
+    fetch(`/api/co-ceo/messages?context=${encodeURIComponent(contextKey)}`, { signal: controller.signal })
+      .then(async (response) => {
+        // Conversation introuvable (mission retirée…) : retour à la conversation « stratégie ».
+        if (response.status === 404 && contextKey !== DEFAULT_CONTEXT_KEY) {
+          setElement(null);
+          setChosen({ path: pathname, key: DEFAULT_CONTEXT_KEY });
+          return;
+        }
+        const data = response.ok ? await response.json() : null;
+        if (!data?.context || !Array.isArray(data.messages)) return;
+        setThread({ key: data.context.key, title: data.context.title, template: data.context.template ?? null, conversations: Array.isArray(data.conversations) ? data.conversations : [] });
+        // Un message envoyé pendant le chargement est déjà dans le fil : ne pas le remplacer par l'état antérieur du serveur.
+        if (!sendingRef.current && localEditsRef.current === editsAtStart) setMessages(data.messages);
+      })
       .catch(() => undefined);
     return () => controller.abort();
-  }, [panel.open, pathname]);
+  }, [panel.open, pathname, contextKey]);
 
   useEffect(() => {
     // Sur téléphone, le focus ouvrirait le clavier sur la moitié de l'écran avant toute lecture.
@@ -367,6 +431,7 @@ export function PaulPanel({ launchLabel }: { launchLabel?: string } = {}) {
   async function submit(text: string): Promise<string | null> {
     if (!text || sendingRef.current) return null;
     sendingRef.current = true;
+    localEditsRef.current += 1;
     setSending(true);
     setError(null);
     followRef.current = true;
@@ -390,6 +455,7 @@ export function PaulPanel({ launchLabel }: { launchLabel?: string } = {}) {
         headers: { "Content-Type": "application/json", Accept: `${NDJSON_CONTENT_TYPE}, application/json` },
         body: JSON.stringify({
           message: text,
+          contextKey,
           context: { path: pathname, ...(view ? { view } : {}), ...(element ? { element: { type: element.type, id: element.id } } : {}) },
         }),
       });
@@ -423,7 +489,8 @@ export function PaulPanel({ launchLabel }: { launchLabel?: string } = {}) {
 
   useEffect(() => { submitRef.current = submit; });
 
-  // Clic sur une carte : « Confirmer » / « Lancer » exécute côté serveur ; « Corriger » annule et rend la main à la saisie, « Plus tard » annule seulement.
+  // Clic sur une carte : l'acceptation exécute côté serveur avec les règles de l'action à la main (« Lancer » ouvre le
+  // cadre de la mission) ; « Garder le cap actuel » retire la proposition et Paul le confirme dans la conversation.
   async function decide(actionId: string, decision: Decision) {
     if (deciding) return;
     setDeciding(actionId);
@@ -445,10 +512,20 @@ export function PaulPanel({ launchLabel }: { launchLabel?: string } = {}) {
       });
       const data = await response.json().catch(() => null);
       if (data?.action) replaceAction(data.action as PendingActionView);
-      // Un refus qui renvoie la carte (expirée, remplacée…) se lit sur la carte elle-même.
-      if (!response.ok && !data?.action) throw new Error(data?.error ?? "La décision n'a pas pu être enregistrée. Réessayez.");
-      if (response.ok && decision === "confirm") router.refresh();
-      if (decision === "cancel" && data?.action?.type !== "launch_plan_item") inputRef.current?.focus();
+      // Refus d'une règle (M-xx) : la carte reste à confirmer et affiche le message. Une carte expirée ou remplacée se lit sur la carte elle-même.
+      if (!response.ok && (!data?.action || data.reason === "refused")) throw new Error(data?.error ?? "La décision n'a pas pu être enregistrée. Réessayez.");
+      // « Garder le cap actuel » : la route renvoie le message de Paul enregistré dans le fil de la carte.
+      const keep = data?.reply as { id?: unknown; content?: unknown; createdAt?: unknown } | undefined;
+      if (response.ok && keep && typeof keep.content === "string") {
+        const createdAt = typeof keep.createdAt === "string" ? keep.createdAt : new Date().toISOString();
+        const id = typeof keep.id === "string" ? keep.id : `local-${createdAt}-keep`;
+        const content = keep.content;
+        localEditsRef.current += 1;
+        setMessages((previous) => (previous.some((entry) => entry.id === id) ? previous : [...previous, { id, role: "assistant", content, createdAt }]));
+      }
+      if (response.ok && typeof data?.redirect === "string" && data.redirect.startsWith("/")) router.push(data.redirect);
+      else if (response.ok && decision === "confirm") router.refresh();
+      if (decision === "cancel" && !window.matchMedia(PHONE_QUERY).matches) inputRef.current?.focus();
     } catch (decideError) {
       setActionErrors((previous) => ({ ...previous, [actionId]: decideError instanceof Error ? decideError.message : "La décision n'a pas pu être enregistrée. Réessayez." }));
     } finally {
@@ -487,9 +564,21 @@ export function PaulPanel({ launchLabel }: { launchLabel?: string } = {}) {
         >
           <header>
             <PersonaAvatar agentKey="co_ceo" size={32} />
-            <div>
-              <strong>{persona.name}</strong>
-              <small>{persona.role}</small>
+            <div className="min-w-0">
+              <strong>{persona.name} à propos de</strong>
+              {selectable.length >= 2 ? (
+                <select
+                  aria-label="Changer de conversation"
+                  value={contextKey}
+                  disabled={sending}
+                  onChange={(event) => chooseContext(event.target.value)}
+                  className="block max-w-full truncate rounded-md border border-slate-300 bg-white px-1 py-0.5 text-sm text-slate-700"
+                >
+                  {selectable.map((conversation) => <option key={conversation.key} value={conversation.key}>{conversation.title}</option>)}
+                </select>
+              ) : (
+                <small>{contextLabel}</small>
+              )}
             </div>
             <div className="panel-controls">
               {voiceSupported && (
@@ -540,15 +629,14 @@ export function PaulPanel({ launchLabel }: { launchLabel?: string } = {}) {
             >
               <div className="chat-messages">
                 {messages.length === 0 && (
-                  <div className="my-auto flex flex-col items-center gap-4 py-4 text-center">
-                    <PersonaAvatar agentKey="co_ceo" size={56} />
-                    <div>
-                      <h3 className="text-xl font-semibold text-slate-900">Comment puis-je vous aider ?</h3>
-                      <p className="mt-1 text-sm text-slate-600">Posez une question sur votre plan, une production ou un prospect.</p>
+                  <div className="my-auto flex flex-col gap-4 py-4">
+                    <div className="flex gap-3">
+                      <div className="mt-0.5 shrink-0"><PersonaAvatar agentKey="co_ceo" size={28} /></div>
+                      <p className="chat-message min-w-0 flex-1"><span className="sr-only">{persona.name} : </span>{contextIntro(context)}</p>
                     </div>
-                    <div className="flex w-full flex-col gap-2">
-                      {[...(element ? [`Explique-moi « ${element.title} »`] : []), ...SUGGESTIONS].slice(0, 3).map((suggestion) => (
-                        <button key={suggestion} type="button" disabled={sending} onClick={() => void submit(suggestion)} className="min-h-11 rounded-2xl border border-slate-200 px-4 py-2 text-left text-sm text-slate-800 hover:bg-slate-50 disabled:opacity-50">
+                    <div className="flex w-full flex-wrap gap-2" role="group" aria-label="Suggestions">
+                      {[...(element && context.kind !== "mission" ? [`Explique-moi « ${element.title} »`] : []), ...suggestions].slice(0, 5).map((suggestion) => (
+                        <button key={suggestion} type="button" disabled={sending} onClick={() => void submit(suggestion)} className="min-h-11 rounded-full border border-slate-200 px-4 py-2 text-left text-sm text-slate-800 hover:bg-slate-50 disabled:opacity-50">
                           {suggestion}
                         </button>
                       ))}

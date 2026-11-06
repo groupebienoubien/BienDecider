@@ -1849,45 +1849,56 @@ test("story 5.3: the plan opens on the actions to do, the running and executed o
   }
 });
 
-test("Paul's objective card is confirmed in one click and stays confirmed in the history", async ({ page, company }) => {
+/** Mission « Publication » créée comme à la main, par l'API de la session du dirigeant. */
+async function createMissionThroughApi(page: Page, title: string) {
+  const created = await page.request.post(`${baseURL}/api/missions`, { headers: { Origin: baseURL }, data: { template: "social_post", title, outcome: "Des demandes de devis", finding: "Aucune publication depuis trois mois", scope: { topic: "Nos chantiers de novembre" } } });
+  expect(created.status()).toBe(201);
+  return (await created.json()).mission as { id: string; title: string };
+}
+
+test("GH-288: a priority card is accepted in one click, another proposal is declined with « Garder le cap actuel »", async ({ page, company }) => {
   const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }) });
   try {
-    const { attachPendingActions, createPendingAction, toPendingActionView } = await import("../src/lib/agents/pending-actions");
-    // L'entreprise de test a déjà un objectif chiffré : la carte doit le laisser intact jusqu'au clic.
-    const before = (await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).revenueTarget;
-    const card = await createPendingAction(company.id, "update_objective", {
-      revenueTarget: 200000, targetPeriod: "year", currentRevenue: 140000, currentPeriod: "year", averageClientValue: 18000, newClients: 6, newClientsPeriod: "year",
-    });
-    const view = toPendingActionView(card)!;
+    await prisma.company.update({ where: { id: company.id }, data: { workspaceV52: true } });
+    const { createPendingAction, toPendingActionView } = await import("../src/lib/agents/pending-actions");
+    const first = await createMissionThroughApi(page, "Première publication");
+    const second = await createMissionThroughApi(page, "Seconde publication");
+    const priority = toPendingActionView(await createPendingAction(company.id, "mission_priority", { missionId: second.id, title: second.title }))!;
+    const dismiss = toPendingActionView(await createPendingAction(company.id, "mission_dismiss", { missionId: first.id, title: first.title }))!;
     await page.route("**/api/co-ceo/message", (route) => route.fulfill({
       status: 200,
       contentType: "application/x-ndjson; charset=utf-8",
-      body: `${JSON.stringify({ type: "done", reply: "Voici votre objectif, à confirmer.", references: [], actions: [view] })}\n`,
+      body: `${JSON.stringify({ type: "done", reply: "Je vous propose deux changements, à accepter ou non.", references: [], actions: [priority, dismiss] })}\n`,
     }));
 
-    await page.goto(`${baseURL}/dashboard`);
-    await page.getByRole("button", { name: "Échanger avec Paul", exact: true }).click();
+    await page.goto(`${baseURL}/strategie`);
+    await page.getByRole("button", { name: "Discuter avec Paul", exact: true }).click();
     const panel = page.getByRole("dialog", { name: "Discussion avec Paul" });
+    await expect(panel.locator("header")).toContainText("Paul à propos de");
+    await expect(panel.locator("header")).toContainText("Votre stratégie");
+    await expect(panel.getByRole("button", { name: "Que faire maintenant ?" })).toBeVisible();
+    for (const name of ["Martine", "Camille", "Jean-Claude", "Partenaire de croissance"]) await expect(panel).not.toContainText(name);
     const input = panel.getByLabel("Message à Paul");
-    await input.fill("Je veux passer de 140 000 à 200 000 € par an.");
+    await input.fill("Quelle mission passe en premier ?");
     await input.press("Enter");
-    const cardGroup = panel.getByRole("group", { name: "Proposition de Paul à confirmer" });
-    for (const line of view.lines) await expect(cardGroup.getByText(line, { exact: true })).toBeVisible();
-    // Rien n'est écrit avant le clic.
-    expect((await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).revenueTarget).toBe(before);
 
-    await cardGroup.getByRole("button", { name: "Confirmer" }).click();
-    await expect(cardGroup.getByText("C’est enregistré.")).toBeVisible();
-    await expect.poll(async () => (await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).revenueTarget).toBe(16667);
+    const cards = panel.getByRole("group", { name: "Proposition de Paul à confirmer" });
+    await expect(cards).toHaveCount(2);
+    await expect(cards.first()).toContainText("Paul · proposition à confirmer");
+    await expect(cards.first()).toContainText("Faire de « Seconde publication » la priorité");
+    // Rien ne change avant le clic.
+    expect((await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).priorityMissionId).toBeNull();
 
-    // Le tour réel rattache la carte au message de Paul : l'historique la montre confirmée après rechargement.
-    const message = await prisma.chatMessage.create({ data: { companyId: company.id, role: "assistant", content: "Voici votre objectif, à confirmer." } });
-    await attachPendingActions(company.id, [card.id], message.id);
-    await page.unroute("**/api/co-ceo/message");
-    await page.reload();
-    await expect(panel).toBeVisible();
-    await expect(panel.getByRole("group", { name: "Proposition de Paul à confirmer" }).getByText("C’est enregistré.")).toBeVisible();
-    await expect(panel.getByRole("button", { name: "Confirmer" })).toHaveCount(0);
+    await cards.first().getByRole("button", { name: "Retenir cette priorité" }).click();
+    await expect(cards.first().getByRole("status")).toHaveText("Priorité retenue. Aucune mission lancée.");
+    await expect.poll(async () => (await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).priorityMissionId).toBe(second.id);
+    expect((await prisma.mission.findUniqueOrThrow({ where: { id: second.id } })).status).toBe("proposed");
+
+    await cards.nth(1).getByRole("button", { name: "Garder le cap actuel" }).click();
+    await expect(cards.nth(1).getByRole("status")).toHaveText("Proposition écartée : rien n'a changé.");
+    await expect(panel.getByText("Nous gardons le cap actuel. Aucun changement appliqué.")).toBeVisible();
+    expect((await prisma.mission.findUniqueOrThrow({ where: { id: first.id } })).status).toBe("proposed");
+    expect((await prisma.paulPendingAction.findUniqueOrThrow({ where: { id: dismiss.id } })).status).toBe("cancelled");
   } finally {
     await prisma.$disconnect();
   }
@@ -1913,36 +1924,64 @@ test("an expired profile card shows its expired message instead of the buttons",
   await expect(cardGroup.getByRole("button", { name: "Confirmer" })).toHaveCount(0);
 });
 
-test("Paul's panel is titled Partenaire de croissance and a launch card offers Lancer or Plus tard", async ({ page, company }) => {
+test("GH-288: one conversation per context, switched with the selector, and Lancer opens the mission frame, at 1440 and 360 px", async ({ page, company }) => {
   const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }) });
   try {
+    await prisma.company.update({ where: { id: company.id }, data: { workspaceV52: true } });
     const { createPendingAction, toPendingActionView } = await import("../src/lib/agents/pending-actions");
-    const item = await prisma.actionPlanItem.create({ data: {
-      companyId: company.id, agent: "demarchage", title: "Pistes de croissance du quartier", rationale: "Demandé à Paul.", outcome: "Trois pistes de clients à contacter", timing: "Demandé dans le chat",
-    } });
-    const card = await createPendingAction(company.id, "launch_plan_item", { planItemId: item.id, agent: "demarchage", title: item.title, outcome: item.outcome! });
-    const view = toPendingActionView(card)!;
-    await page.route("**/api/co-ceo/message", (route) => route.fulfill({
-      status: 200,
-      contentType: "application/x-ndjson; charset=utf-8",
-      body: `${JSON.stringify({ type: "done", reply: "Je vous propose de lancer Jean-Claude.", references: [], actions: [view] })}\n`,
-    }));
+    const mission = await createMissionThroughApi(page, "Publier un chantier");
+    await prisma.chatMessage.createMany({ data: [
+      { companyId: company.id, role: "user", content: "Question sur la stratégie", contextKey: "strategie" },
+      { companyId: company.id, role: "user", content: "Question sur la mission", contextKey: `mission:${mission.id}` },
+    ] });
+    const launch = toPendingActionView(await createPendingAction(company.id, "mission_launch", { missionId: mission.id, title: mission.title }))!;
+    const sent: Array<{ message: string; contextKey?: string }> = [];
+    await page.route("**/api/co-ceo/message", async (route) => {
+      sent.push(route.request().postDataJSON());
+      await route.fulfill({
+        status: 200,
+        contentType: "application/x-ndjson; charset=utf-8",
+        body: `${JSON.stringify({ type: "done", reply: "Je peux ouvrir le cadre de cette mission.", references: [], actions: [launch] })}\n`,
+      });
+    });
 
-    await page.goto(`${baseURL}/dashboard`);
-    await page.getByRole("button", { name: "Échanger avec Paul", exact: true }).click();
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`${baseURL}/missions/${mission.id}`);
+    await page.getByRole("button", { name: "Discuter avec Paul", exact: true }).click();
     const panel = page.getByRole("dialog", { name: "Discussion avec Paul" });
-    await expect(panel.locator("header")).toContainText("Partenaire de croissance");
-    const input = panel.getByLabel("Message à Paul");
-    await input.fill("Lance Jean-Claude sur les pistes du quartier");
-    await input.press("Enter");
-    const cardGroup = panel.getByRole("group", { name: "Proposition de Paul à confirmer" });
-    await expect(cardGroup.getByText("Lancer Jean-Claude : Pistes de croissance du quartier", { exact: true })).toBeVisible();
-    await expect(cardGroup.getByRole("button", { name: "Lancer" })).toBeVisible();
+    // Sur la page d'une mission, la conversation de cette mission, et seulement elle.
+    const selector = panel.getByLabel("Changer de conversation");
+    await expect(selector.locator("option:checked")).toHaveText("Mission · Publier un chantier");
+    await expect(panel.getByText("Question sur la mission")).toBeVisible();
+    await expect(panel.getByText("Question sur la stratégie")).toHaveCount(0);
+    await selector.selectOption({ label: "Votre stratégie" });
+    await expect(panel.getByText("Question sur la stratégie")).toBeVisible();
+    await expect(panel.getByText("Question sur la mission")).toHaveCount(0);
+    await selector.selectOption({ label: "Mission · Publier un chantier" });
+    await expect(panel.getByText("Question sur la mission")).toBeVisible();
 
-    await cardGroup.getByRole("button", { name: "Plus tard" }).click();
-    await expect(cardGroup.getByRole("status")).toContainText("reste dans votre plan, à lancer");
-    expect((await prisma.actionPlanItem.findUniqueOrThrow({ where: { id: item.id } })).status).toBe("propose");
-    expect(await prisma.agentRun.count({ where: { planItemId: item.id } })).toBe(0);
+    const input = panel.getByLabel("Message à Paul");
+    await input.fill("Lance cette mission");
+    await input.press("Enter");
+    await expect.poll(() => sent.length).toBe(1);
+    expect(sent[0]).toMatchObject({ message: "Lance cette mission", contextKey: `mission:${mission.id}` });
+
+    // « Lancer » ouvre le cadre de la mission : rien n'est lancé ni débité avant « Confirmer le lancement ».
+    const card = panel.getByRole("group", { name: "Proposition de Paul à confirmer" });
+    await card.getByRole("button", { name: "Lancer" }).click();
+    await expect(page).toHaveURL(new RegExp(`/missions/${mission.id}\\?cadre=1$`));
+    await expect(page.getByRole("dialog", { name: "Confirmer le cadre de la mission" })).toBeVisible();
+    expect(await prisma.mission.findUniqueOrThrow({ where: { id: mission.id } })).toMatchObject({ status: "proposed", firstLaunchedAt: null });
+    expect((await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).creditBalance).toBe(20);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+
+    await page.setViewportSize({ width: 360, height: 760 });
+    await page.goto(`${baseURL}/missions/${mission.id}`);
+    await expect(panel).toBeVisible();
+    await expect(panel.getByText("Question sur la mission")).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    // Sur téléphone, l'ouverture ne donne pas le focus au champ (le clavier ne recouvre pas la conversation).
+    await expect(input).not.toBeFocused();
   } finally {
     await prisma.$disconnect();
   }

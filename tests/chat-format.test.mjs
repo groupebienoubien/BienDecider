@@ -27,6 +27,14 @@ test("copied text keeps the object names and drops unknown markers", () => {
   assert.equal(plainMessage("À contacter : [[bd:lead:z]] puis [[bd:finding:q]] \nFin", references), "À contacter : Association suivie puis\nFin");
 });
 
+test("GH-288: a mission link marker is a marker node, named in copied text, dropped when unknown", () => {
+  assert.deepEqual(parseInline("Voyez [[bd:mission:m-1]] ici"), [
+    { type: "text", text: "Voyez " }, { type: "marker", marker: "[[bd:mission:m-1]]" }, { type: "text", text: " ici" },
+  ]);
+  const references = [{ marker: "[[bd:mission:m-1]]", type: "mission", id: "m-1", label: "Publier un chantier", href: "/missions/m-1" }];
+  assert.equal(plainMessage("Priorité : [[bd:mission:m-1]] puis [[bd:mission:autre]] \nFin", references), "Priorité : Publier un chantier puis\nFin");
+});
+
 test("days are labelled relative to today", () => {
   const now = new Date(2026, 9, 18, 15, 0);
   assert.equal(dayLabel(new Date(2026, 9, 18, 8, 0).toISOString(), now), "Aujourd'hui");

@@ -2,155 +2,114 @@ import { withAgentRunWrite } from "@/lib/agent-run-execution";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { withSerializableRetry } from "@/lib/serialization-conflict";
-import { failureMessage } from "@/lib/agents/agent-errors";
-import { PERSONAS } from "@/lib/agents/personas";
+import { MissionError } from "@/lib/missions/messages";
+import { MissionNotFoundError, applyMissionTransitionIn, createMissionIn } from "@/lib/missions/service";
+import type { MissionAction } from "@/lib/missions/rules";
+import { DEFAULT_CONTEXT_KEY } from "@/lib/paul-contexts";
 import {
+  KEEP_COURSE_REPLY,
+  PAYLOAD_SCHEMAS,
   PENDING_ACTION_TTL_MS,
   isPendingActionType,
-  launchPlanItemPayloadSchema,
+  launchFrameHref,
   mergeProfilePayloads,
-  objectiveUpdateValues,
+  missionCreatePayloadSchema,
+  missionRefPayloadSchema,
+  missionScopePayloadSchema,
+  pendingActionMissionId,
   profileUpdateValues,
-  reviseProposalPayloadSchema,
   toPendingActionView,
-  updateObjectivePayloadSchema,
   updateProfilePayloadSchema,
+  type PayloadFor,
   type PendingActionType,
-  type LaunchPlanItemPayload,
-  type LaunchResult,
   type PendingActionView,
-  type ReviseProposalPayload,
-  type UpdateObjectivePayload,
-  type UpdateProfilePayload,
 } from "@/lib/agents/pending-action-view";
 
 export { describePendingAction, toPendingActionView, type PendingActionView } from "@/lib/agents/pending-action-view";
 
 /**
- * Intentions proposées par Paul (cartes de confirmation) : ses outils ne font
- * que créer ces enregistrements. Rien n'est écrit dans Company avant le clic
- * du dirigeant, qui passe par decidePendingAction.
+ * Propositions de Paul (cartes « Paul · proposition à confirmer », spécification §16.3) : ses outils ne font
+ * que créer ces enregistrements. Rien ne change avant « Accepter », qui passe par decidePendingAction :
+ * l'exécuteur appelle le service des missions dans la transaction de la confirmation, avec les mêmes
+ * contrôles qu'à la main.
  */
 
-type PayloadFor = {
-  update_objective: UpdateObjectivePayload;
-  update_profile: UpdateProfilePayload;
-  launch_plan_item: LaunchPlanItemPayload;
-  revise_proposal: ReviseProposalPayload;
-};
-/** Renvoie false, sans rien écrire, quand l'intention enregistrée n'est plus valide. */
-type Executor = (tx: Prisma.TransactionClient, companyId: string, payload: unknown) => Promise<boolean>;
+/** Effet d'une acceptation : rien de plus, ou une adresse où mener le dirigeant (lancement). Faux : intention devenue illisible. */
+type Executed = { redirect?: string } | false;
+type Executor = (tx: Prisma.TransactionClient, companyId: string, payload: unknown) => Promise<Executed>;
 
-/** Un exécuteur par type d'intention (exhaustif) : écrit ce que l'écran manuel équivalent écrirait. */
+/** Transition de mission proposée par Paul, appliquée à la version courante : un refus du service (M-xx) annule tout. */
+function transition(build: (payload: unknown) => { missionId: string; request: MissionAction } | null): Executor {
+  return async (tx, companyId, payload) => {
+    const target = build(payload);
+    if (!target) return false;
+    try {
+      await applyMissionTransitionIn(tx, companyId, target.missionId, target.request, null);
+    } catch (error) {
+      if (error instanceof MissionNotFoundError) return false;
+      throw error;
+    }
+    return {};
+  };
+}
+
+/** Statuts où le dialogue « Confirmer le cadre de la mission » peut s'ouvrir. */
+const LAUNCHABLE: readonly string[] = ["proposed", "paused"];
+
+const ref = (action: "set_priority" | "pause" | "dismiss" | "restore") => transition((payload) => {
+  const parsed = missionRefPayloadSchema.safeParse(payload);
+  return parsed.success ? { missionId: parsed.data.missionId, request: { action } } : null;
+});
+
+/** Un exécuteur par type de proposition (exhaustif) : écrit ce que l'écran manuel équivalent écrirait. */
 const EXECUTORS: { [K in PendingActionType]: Executor } = {
-  // Mêmes champs que la page Entreprise, en valeurs mensuelles.
-  update_objective: async (tx, companyId, payload) => {
-    const parsed = updateObjectivePayloadSchema.safeParse(payload);
-    if (!parsed.success) return false;
-    await tx.company.update({ where: { id: companyId }, data: objectiveUpdateValues(parsed.data) });
-    return true;
-  },
   // Mêmes limites et même nettoyage que la page Entreprise (src/lib/company-profile.ts).
   update_profile: async (tx, companyId, payload) => {
     const parsed = updateProfilePayloadSchema.safeParse(payload);
     if (!parsed.success) return false;
     await tx.company.update({ where: { id: companyId }, data: profileUpdateValues(parsed.data) });
-    return true;
+    return {};
   },
-  // Le lancement lui-même se fait après la transaction (launchConfirmedPlanItem) : il a ses propres
-  // transactions et programme l'exécution avec after(). Ici, on vérifie seulement que la carte est lisible.
-  launch_plan_item: async (_tx, _companyId, payload) => launchPlanItemPayloadSchema.safeParse(payload).success,
-  // Comme un lancement : l'exécution de révision est créée après la transaction (reviseConfirmedProposal).
-  revise_proposal: async (_tx, _companyId, payload) => reviseProposalPayloadSchema.safeParse(payload).success,
+  mission_priority: ref("set_priority"),
+  mission_scope: transition((payload) => {
+    const parsed = missionScopePayloadSchema.safeParse(payload);
+    return parsed.success ? { missionId: parsed.data.missionId, request: { action: "set_scope", scope: parsed.data.scope } } : null;
+  }),
+  mission_pause: ref("pause"),
+  mission_dismiss: ref("dismiss"),
+  mission_restore: ref("restore"),
+  mission_create: async (tx, companyId, payload) => {
+    const parsed = missionCreatePayloadSchema.safeParse(payload);
+    if (!parsed.success) return false;
+    await createMissionIn(tx, companyId, parsed.data, "paul");
+    return {};
+  },
+  // « Lancer » n'exécute rien : il mène au dialogue « Confirmer le cadre de la mission » (§13.7), rien n'est débité ici.
+  mission_launch: async (tx, companyId, payload) => {
+    const parsed = missionRefPayloadSchema.safeParse(payload);
+    if (!parsed.success) return false;
+    const mission = await tx.mission.findFirst({ where: { id: parsed.data.missionId, companyId }, select: { id: true, status: true } });
+    if (!mission) return false;
+    if (mission.status === "stopped") throw new MissionError("M-40");
+    if (mission.status === "dismissed") throw new MissionError("M-21");
+    // Déjà en cours : rien à lancer (idempotent, §2.2) et pas de cadre à ouvrir.
+    return LAUNCHABLE.includes(mission.status) ? { redirect: launchFrameHref(mission.id) } : {};
+  },
 };
 
 /**
- * Lancement confirmé d'une carte : même chemin que le bouton « Lancer » du
- * plan (launchPlanItemFromCard : relance d'un échec, motifs typés). Le résultat
- * est enregistré sur la carte pour le panneau et pour Paul au tour suivant.
- */
-async function launchConfirmedPlanItem(companyId: string, id: string, payload: unknown): Promise<LaunchResult | null> {
-  const parsed = launchPlanItemPayloadSchema.safeParse(payload);
-  if (!parsed.success) return null;
-  const { planItemId, agent, title, extras } = parsed.data;
-  const agentName = PERSONAS[agent].name;
-  let result: LaunchResult;
-  try {
-    // Import différé : co-ceo.ts importe ce module (outils de Paul), pas de dépendance circulaire au chargement.
-    const { launchPlanItemFromCard } = await import("@/lib/agents/co-ceo");
-    const delegation = await launchPlanItemFromCard(companyId, agent, planItemId, extras ?? {});
-    result = {
-      ok: delegation.ok,
-      ...(delegation.reason ? { reason: delegation.reason } : {}),
-      // Sans motif, l'action n'était plus lançable (écartée, terminée) : le message destiné à Paul n'est pas montré.
-      message: delegation.ok || delegation.reason ? delegation.message : `L'action « ${title} » n'est plus à lancer dans votre plan : rien n'a été lancé.`,
-      ...(delegation.runId ? { runId: delegation.runId } : {}),
-    };
-  } catch (error) {
-    console.error(`Lancement confirmé ${agent} impossible :`, error);
-    result = { ok: false, reason: "outage", message: failureMessage("outage", agentName) };
-  }
-  // L'exécution est peut-être déjà en file : un échec d'écriture du résultat ne fait pas échouer la décision.
-  try {
-    await prisma.paulPendingAction.updateMany({
-      where: { id, companyId },
-      data: { payload: { ...parsed.data, result } as Prisma.InputJsonValue },
-    });
-  } catch (error) {
-    console.error("Résultat du lancement non enregistré sur la carte :", error);
-  }
-  return result;
-}
-
-/**
- * Révision confirmée d'une carte (story 3.3) : crée l'exécution de révision
- * de l'agent auteur, après la transition atomique de la carte. Le résultat
- * est enregistré sur la carte, comme pour un lancement.
- */
-async function reviseConfirmedProposal(companyId: string, id: string, payload: unknown): Promise<LaunchResult | null> {
-  const parsed = reviseProposalPayloadSchema.safeParse(payload);
-  if (!parsed.success) return null;
-  const { proposalId, agent, title, fromVersion, instruction } = parsed.data;
-  const card = { proposalId, agent, title, fromVersion, instruction };
-  let result: LaunchResult;
-  try {
-    // Import différé : revision.ts dépend d'agent-runs, chargé seulement au clic.
-    const { startRevisionFromCard } = await import("@/lib/agents/revision");
-    result = await startRevisionFromCard(companyId, card);
-  } catch (error) {
-    console.error(`Révision confirmée ${card.agent} impossible :`, error);
-    result = { ok: false, reason: "outage", message: failureMessage("outage", PERSONAS[card.agent].name) };
-  }
-  try {
-    await prisma.paulPendingAction.updateMany({
-      where: { id, companyId },
-      data: { payload: { ...card, result } as Prisma.InputJsonValue },
-    });
-  } catch (error) {
-    console.error("Résultat de la révision non enregistré sur la carte :", error);
-  }
-  return result;
-}
-
-/** Effets exécutés après la transition pending → confirmed, hors transaction. */
-const AFTER_CONFIRM: { [K in PendingActionType]?: (companyId: string, id: string, payload: unknown) => Promise<LaunchResult | null> } = {
-  launch_plan_item: launchConfirmedPlanItem,
-  revise_proposal: reviseConfirmedProposal,
-};
-
-/**
- * Cible d'une intention : une nouvelle carte ne remplace que la carte en
- * attente de même type et de même cible. Objectif et profil n'ont qu'une
- * cible (l'entreprise) ; un lancement vise une action du plan, une révision une production.
+ * Cible d'une intention : une nouvelle carte ne remplace que la carte en attente de même type et de même
+ * cible. Le profil n'a qu'une cible (l'entreprise) ; une proposition sur une mission vise cette mission,
+ * une création vise son titre.
  */
 function sameTarget(type: PendingActionType, payload: unknown): Prisma.PaulPendingActionWhereInput {
-  if (type === "launch_plan_item") {
-    const parsed = launchPlanItemPayloadSchema.safeParse(payload);
-    return parsed.success ? { payload: { path: ["planItemId"], equals: parsed.data.planItemId } } : {};
-  }
-  if (type === "revise_proposal") {
-    const parsed = reviseProposalPayloadSchema.safeParse(payload);
-    return parsed.success ? { payload: { path: ["proposalId"], equals: parsed.data.proposalId } } : {};
+  // Une seule priorité possible : une nouvelle carte de priorité remplace toute carte de priorité en attente.
+  if (type === "mission_priority") return {};
+  const missionId = pendingActionMissionId({ type, payload });
+  if (missionId) return { payload: { path: ["missionId"], equals: missionId } };
+  if (type === "mission_create") {
+    const parsed = missionCreatePayloadSchema.safeParse(payload);
+    return parsed.success ? { payload: { path: ["title"], equals: parsed.data.title } } : {};
   }
   return {};
 }
@@ -167,13 +126,6 @@ const MERGERS: { [K in PendingActionType]?: (previous: unknown, next: PayloadFor
   },
 };
 
-const PAYLOAD_SCHEMAS: { [K in PendingActionType]: { parse: (value: unknown) => PayloadFor[K] } } = {
-  update_objective: updateObjectivePayloadSchema,
-  update_profile: updateProfilePayloadSchema,
-  launch_plan_item: launchPlanItemPayloadSchema,
-  revise_proposal: reviseProposalPayloadSchema,
-};
-
 const MAX_CREATE_ATTEMPTS = 3;
 
 /**
@@ -183,7 +135,7 @@ const MAX_CREATE_ATTEMPTS = 3;
  * qu'une carte en attente.
  */
 export async function createPendingAction<T extends PendingActionType>(companyId: string, type: T, payload: PayloadFor[T]) {
-  const valid = PAYLOAD_SCHEMAS[type].parse(payload);
+  const valid = PAYLOAD_SCHEMAS[type].parse(payload) as PayloadFor[T];
   const target = sameTarget(type, valid);
   return withSerializableRetry(() => {
     const now = new Date();
@@ -207,59 +159,77 @@ export async function createPendingAction<T extends PendingActionType>(companyId
 }
 
 export type PendingDecision = "confirm" | "cancel";
+export type PaulReplyMessage = { id: string; role: "assistant"; content: string; createdAt: string; contextKey: string };
 export type DecisionResult =
-  | { ok: true; action: PendingActionView; launch?: LaunchResult }
+  | { ok: true; action: PendingActionView; redirect?: string; reply?: PaulReplyMessage }
   | { ok: false; error: "not_found" }
   | { ok: false; error: "expired"; action: PendingActionView }
+  | { ok: false; error: "refused"; message: string; code: string; status: number; action: PendingActionView | null }
   | { ok: false; error: "inactive"; action: PendingActionView | null };
 
 const OUTCOME: Record<PendingDecision, "confirmed" | "cancelled"> = { confirm: "confirmed", cancel: "cancelled" };
 
+type Transitioned = { kind: "transitioned"; redirect?: string; reply?: PaulReplyMessage };
+type TxOutcome = { kind: "not_found" | "unsupported" | "invalid" | "expired" | "unchanged" } | Transitioned;
+
 /**
- * Décision du dirigeant, filtrée sur son entreprise. La transition
- * pending → confirmed est un UPDATE conditionnel fait avant l'exécuteur, dans
- * la même transaction : deux clics simultanés n'écrivent qu'une fois, le
- * second reçoit l'état confirmé sans réécrire. Une carte qui n'est plus en
- * attente (remplacée, annulée…) est refusée. Un lancement confirmé part
- * après la transaction : rien n'est lancé sans la transition, et un second
- * clic ne lance pas une seconde fois.
+ * Décision du dirigeant, filtrée sur son entreprise. La transition pending → confirmed est un UPDATE
+ * conditionnel fait avant l'exécuteur, dans la même transaction : deux clics simultanés n'écrivent qu'une
+ * fois. Un refus du service des missions (M-xx) annule toute la transaction : la carte reste en attente
+ * et rien n'est écrit. « Garder le cap actuel » annule la carte et enregistre la réponse fixe de Paul
+ * dans le fil de la carte.
  */
 export async function decidePendingAction(companyId: string, id: string, decision: PendingDecision, now: Date = new Date()): Promise<DecisionResult> {
   const outcome = OUTCOME[decision];
-  const result = await prisma.$transaction(async (tx): Promise<"not_found" | "unsupported" | "invalid" | "expired" | "transitioned" | "unchanged"> => {
-    const action = await tx.paulPendingAction.findFirst({ where: { id, companyId } });
-    if (!action) return "not_found";
-    if (!isPendingActionType(action.type)) return "unsupported";
-    if (action.status === "pending" && action.expiresAt.getTime() <= now.getTime()) {
-      await tx.paulPendingAction.updateMany({ where: { id, companyId, status: "pending" }, data: { status: "expired", decidedAt: now } });
-      return "expired";
-    }
-    const transition = await tx.paulPendingAction.updateMany({
-      where: { id, companyId, status: "pending", expiresAt: { gt: now } },
-      data: { status: outcome, decidedAt: now },
+  let result: TxOutcome;
+  try {
+    result = await prisma.$transaction(async (tx): Promise<TxOutcome> => {
+      const action = await tx.paulPendingAction.findFirst({ where: { id, companyId }, include: { chatMessage: { select: { contextKey: true } } } });
+      if (!action) return { kind: "not_found" };
+      if (!isPendingActionType(action.type)) return { kind: "unsupported" };
+      if (action.status === "pending" && action.expiresAt.getTime() <= now.getTime()) {
+        await tx.paulPendingAction.updateMany({ where: { id, companyId, status: "pending" }, data: { status: "expired", decidedAt: now } });
+        return { kind: "expired" };
+      }
+      const moved = await tx.paulPendingAction.updateMany({
+        where: { id, companyId, status: "pending", expiresAt: { gt: now } },
+        data: { status: outcome, decidedAt: now },
+      });
+      if (moved.count === 0) return { kind: "unchanged" };
+      if (decision === "cancel") {
+        const contextKey = action.chatMessage?.contextKey ?? DEFAULT_CONTEXT_KEY;
+        const message = await tx.chatMessage.create({ data: { companyId, role: "assistant", content: KEEP_COURSE_REPLY, contextKey } });
+        return { kind: "transitioned", reply: { id: message.id, role: "assistant", content: message.content, createdAt: message.createdAt.toISOString(), contextKey } };
+      }
+      const executed = await EXECUTORS[action.type](tx, companyId, action.payload);
+      if (executed === false) {
+        // Intention devenue illisible ou mission disparue : rien n'est écrit, la carte est retirée.
+        await tx.paulPendingAction.updateMany({ where: { id, companyId }, data: { status: "cancelled" } });
+        return { kind: "invalid" };
+      }
+      return { kind: "transitioned", ...(executed.redirect ? { redirect: executed.redirect } : {}) };
     });
-    if (transition.count === 0) return "unchanged";
-    if (decision === "confirm" && !(await EXECUTORS[action.type](tx, companyId, action.payload))) {
-      // Intention devenue illisible : rien n'est écrit, la carte est retirée.
-      await tx.paulPendingAction.updateMany({ where: { id, companyId }, data: { status: "cancelled" } });
-      return "invalid";
-    }
-    return "transitioned";
-  });
-  if (result === "not_found") return { ok: false, error: "not_found" };
-  let launch: LaunchResult | null = null;
-  if (result === "transitioned" && decision === "confirm") {
-    const record = await prisma.paulPendingAction.findFirst({ where: { id, companyId } });
-    const afterConfirm = record && isPendingActionType(record.type) ? AFTER_CONFIRM[record.type] : undefined;
-    if (record && afterConfirm) launch = await afterConfirm(companyId, id, record.payload);
+  } catch (error) {
+    if (!(error instanceof MissionError)) throw error;
+    // Refus des règles : la transaction est annulée, la carte reste en attente, le message M-xx s'affiche sur elle.
+    const current = await prisma.paulPendingAction.findFirst({ where: { id, companyId } });
+    return { ok: false, error: "refused", message: error.message, code: error.code, status: error.status, action: current ? toPendingActionView(current, now) : null };
   }
+  if (result.kind === "not_found") return { ok: false, error: "not_found" };
   const current = await prisma.paulPendingAction.findFirst({ where: { id, companyId } });
-  const stored = current ? toPendingActionView(current, now) : null;
-  // Résultat du lancement non relu (écriture échouée) : la vue le reprend quand même.
-  const view = stored && launch && !stored.result ? { ...stored, result: launch } : stored;
   if (!current) return { ok: false, error: "not_found" };
-  if (result === "unsupported" || result === "invalid" || !view) return { ok: false, error: "inactive", action: view };
-  if (result === "transitioned" || view.status === outcome) return { ok: true, action: view, ...(launch ? { launch } : {}) };
+  const view = toPendingActionView(current, now);
+  if (result.kind === "unsupported" || result.kind === "invalid" || !view) return { ok: false, error: "inactive", action: view };
+  if (result.kind === "transitioned") return { ok: true, action: view, ...(result.redirect ? { redirect: result.redirect } : {}), ...(result.reply ? { reply: result.reply } : {}) };
+  // Second clic sur une carte déjà décidée de la même façon : même réponse, sans réécrire.
+  if (view.status === outcome) {
+    const missionId = pendingActionMissionId(current);
+    const launchable = decision === "confirm" && current.type === "mission_launch" && missionId
+      ? await prisma.mission.findFirst({ where: { id: missionId, companyId, status: { in: [...LAUNCHABLE] } }, select: { id: true } })
+      : null;
+    const redirect = launchable ? launchFrameHref(launchable.id) : undefined;
+    return { ok: true, action: view, ...(redirect ? { redirect } : {}) };
+  }
   if (view.status === "expired") return { ok: false, error: "expired", action: view };
   return { ok: false, error: "inactive", action: view };
 }
@@ -282,7 +252,7 @@ export async function attachPendingActions(companyId: string, ids: string[], cha
   });
 }
 
-/** Cartes de chaque message de Paul, pour l'historique du panneau. */
+/** Cartes de chaque message de Paul, pour l'historique du panneau ; les anciennes cartes ne s'affichent plus. */
 export async function pendingActionsByMessage(companyId: string, chatMessageIds: string[]): Promise<Map<string, PendingActionView[]>> {
   const byMessage = new Map<string, PendingActionView[]>();
   if (chatMessageIds.length === 0) return byMessage;
@@ -300,44 +270,27 @@ export async function pendingActionsByMessage(companyId: string, chatMessageIds:
 }
 
 /**
- * Ce que Paul sait de ses dernières cartes (get_current_status) : type, statut
- * et date de décision ; pour un lancement, l'action visée et ce que le clic a donné ;
- * pour une révision, la production visée, sa version et ce que le clic a donné.
+ * Ce que Paul sait de ses dernières propositions (get_current_status) : type, statut, date de décision
+ * et mission visée. pending = à confirmer, confirmed = acceptée, cancelled = « Garder le cap actuel »,
+ * superseded = remplacée par une plus récente, expired = non décidée sous 24 h.
  */
 export async function recentPendingActions(companyId: string, take = 10) {
   const actions = await prisma.paulPendingAction.findMany({
-    where: { companyId },
+    where: { companyId, type: { in: Object.keys(PAYLOAD_SCHEMAS) } },
     orderBy: { createdAt: "desc" },
     take,
     select: { type: true, status: true, decidedAt: true, expiresAt: true, payload: true },
   });
   const now = Date.now();
   return actions.map((action) => {
-    const launch = action.type === "launch_plan_item" ? launchPlanItemPayloadSchema.safeParse(action.payload) : null;
-    const revision = action.type === "revise_proposal" ? reviseProposalPayloadSchema.safeParse(action.payload) : null;
+    const title = action.payload !== null && typeof action.payload === "object" && !Array.isArray(action.payload) ? (action.payload as Record<string, unknown>).title : undefined;
+    const missionId = pendingActionMissionId(action);
     return {
       type: action.type,
       status: action.status === "pending" && action.expiresAt.getTime() <= now ? "expired" : action.status,
       decidedAt: action.decidedAt?.toISOString() ?? null,
-      ...(launch?.success ? {
-        planItemId: launch.data.planItemId,
-        agent: launch.data.agent,
-        action: launch.data.title,
-        ...(launch.data.result
-          ? { lancement: { ok: launch.data.result.ok, reason: launch.data.result.reason ?? null, message: launch.data.result.message } }
-          // Confirmée sans résultat enregistré : issue inconnue pour l'instant (voir executionsRecentes).
-          : action.status === "confirmed" ? { lancement: { ok: null } } : {}),
-      } : {}),
-      ...(revision?.success ? {
-        proposalId: revision.data.proposalId,
-        agent: revision.data.agent,
-        production: revision.data.title,
-        versionRevisee: revision.data.fromVersion,
-        consigne: revision.data.instruction,
-        ...(revision.data.result
-          ? { lancement: { ok: revision.data.result.ok, reason: revision.data.result.reason ?? null, message: revision.data.result.message } }
-          : action.status === "confirmed" ? { lancement: { ok: null } } : {}),
-      } : {}),
+      ...(missionId ? { missionId } : {}),
+      ...(typeof title === "string" ? { mission: title } : {}),
     };
   });
 }

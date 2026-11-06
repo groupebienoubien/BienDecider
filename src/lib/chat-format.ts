@@ -14,7 +14,7 @@ export type Block =
   | { type: "list"; ordered: boolean; items: Inline[][] }
   | { type: "code"; text: string };
 
-const MARKER_SOURCE = "\\[\\[bd:(?:proposal|finding|lead):[A-Za-z0-9_-]{1,100}\\]\\]";
+const MARKER_SOURCE = "\\[\\[bd:(?:proposal|finding|lead|mission):[A-Za-z0-9_-]{1,100}\\]\\]";
 const INLINE_SOURCE = `(${MARKER_SOURCE})|\\*\\*(.+?)\\*\\*|\`([^\`\\n]+)\`|\\*([^*\\s](?:[^*\\n]*?[^*\\s])?)\\*`;
 
 export function parseInline(text: string): Inline[] {

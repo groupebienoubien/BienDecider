@@ -98,3 +98,24 @@
 - source_spec: `docs/bmad/implementation/spec-gh-8-renouveler-jetons-google-meta.md`
   summary: Ne pas afficher « Connexion expirée · reliez de nouveau le compte » quand un refresh token GBP permet le renouvellement à la demande.
   evidence: `src/app/connexions/page.tsx` déduit l'expiration de `expiresAt` seul; l'accès dure environ une heure, donc une connexion renouvelable est présentée comme à relier. Le libellé préexistait à l'US #8 et la spec choisit un renouvellement à la demande sans tâche planifiée.
+- source_spec: `docs/bmad/implementation/spec-gh-288-paul-propositions-a-confirmer.md`
+  summary: Proposition d'une nouvelle version d'un contenu préparée avec Paul (`propose_new_version`, 1 crédit débité à l'acceptation) et conversation `contenu:{id}` (#289).
+  evidence: l'atelier n'existe pas encore ; la route des messages refuse la clé `contenu:{id}` et Paul ne propose plus de révision depuis GH-288 (le Studio de l'ancien parcours garde sa révision par `startRevisionFromCard`).
+- source_spec: `docs/bmad/implementation/spec-gh-288-paul-propositions-a-confirmer.md`
+  summary: Carte « Explorer une idée » transformée en mission depuis la conversation `idee:{n}` (`propose_idea`, #312).
+  evidence: la conversation « Nouvelle idée n°n » existe et Paul peut y proposer une mission avec `propose_mission`, mais pas de carte d'idée dédiée.
+- source_spec: `docs/bmad/implementation/spec-gh-288-paul-propositions-a-confirmer.md`
+  summary: Proposition de limite d'ambition par Paul (`propose_ambition_limit`, #282).
+  evidence: l'ancienne carte d'objectif chiffré (`update_objective`) est retirée ; aucune carte ne la remplace encore, l'ambition se modifie sur sa page.
+- source_spec: `docs/bmad/implementation/spec-gh-288-paul-propositions-a-confirmer.md`
+  summary: Retirer les noms et avatars de Martine, Camille et Jean-Claude des pages de l'ancien parcours (Équipe, Studio, Décisions, Diagnostic, plan) et des messages de résultat d'exécution.
+  evidence: le panneau, le prompt du chat et les pages V5.2 ne montrent que Paul ; la génération de plan (`runCoCeoPlanning`, `CAPABILITY_CATALOG`) et ces pages, hors périmètre, nomment encore les agents.
+- source_spec: `docs/bmad/implementation/spec-gh-288-paul-propositions-a-confirmer.md`
+  summary: Exposer la délégation et les programmations réelles dans `get_current_status` quand elles seront stockées.
+  evidence: aucune donnée de délégation ni de programmation n'existe : Paul lit « Valider avant chaque action (par défaut) » et une liste de programmations vide.
+- source_spec: `docs/bmad/implementation/spec-gh-288-paul-propositions-a-confirmer.md`
+  summary: Ouvrir les conversations « ambition », « concurrence » et « sources » depuis leurs écrans (étape 3 et Modifier mon ambition, Entreprise › Diagnostic, dialogue d'une source).
+  evidence: leurs titres, introductions et suggestions existent dans `paul-contexts.ts`, mais aucun bouton n'y mène ; l'ambition arrive avec #282, le diagnostic en constats avec #292.
+- source_spec: `docs/bmad/implementation/spec-gh-288-paul-propositions-a-confirmer.md`
+  summary: Tester ce que `get_current_status` expose des cartes récentes (`cartesRecentes`, `missionId`) et du message précédent de Paul dans le contexte courant.
+  evidence: non vérifié ; un test qui affirme qu'une carte `mission_pause` en attente apparaît avec sa mission, qu'une ancienne carte `launch_plan_item` est écartée et qu'un message d'un autre contexte est ignoré le trancherait.

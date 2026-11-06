@@ -7,7 +7,7 @@ import { MissionActions, PaulButton } from "@/components/mission-actions";
 import { getShellProps } from "@/lib/shell-data";
 import { prisma } from "@/lib/prisma";
 import { firstNameOf, requireWorkspaceCompany } from "@/lib/workspace";
-import { loadMissionViews } from "@/lib/missions/view";
+import { loadMissionViews, priorityOf } from "@/lib/missions/view";
 import { nextStep } from "@/lib/missions/stage";
 import { LAUNCH_COST_CREDITS } from "@/lib/missions/rules";
 import { asDelegationLevel } from "@/lib/delegation-level";
@@ -20,7 +20,7 @@ export default async function StrategiePage() {
   const shell = await getShellProps(company);
   const missions = await loadMissionViews(company.id);
   const connected = await prisma.channelConnection.count({ where: { companyId: company.id, status: "connecte" } });
-  const step = nextStep(missions, asDelegationLevel(company.delegationLevel));
+  const step = nextStep(missions, asDelegationLevel(company.delegationLevel), priorityOf(missions));
   const stepMission = missions.find((mission) => mission.id === step.missionId) ?? null;
   const toValidate = missions.filter((mission) => (mission.stage === "approve" || mission.stage === "verify") && mission.contentId);
   const firstName = firstNameOf(company.ownerName);
@@ -52,7 +52,7 @@ export default async function StrategiePage() {
         <div className="heading-actions">
           {step.target.kind === "link"
             ? <Link className="btn primary" href={step.target.href}>{step.target.label}<Icon name="arrow-right" /></Link>
-            : <PaulButton label={step.target.label} className="primary" />}
+            : <PaulButton label={step.target.label} className="primary" idea />}
           {stepMission && <PaulButton label="Challenger avec Paul" mission={stepMission} />}
         </div>
         <small>Rien ne sera lancé ou diffusé sans votre accord.</small>
@@ -92,7 +92,7 @@ export default async function StrategiePage() {
             <p>Créez votre première mission à partir d&apos;un constat, ou explorez une idée avec Paul.</p>
             <div className="heading-actions">
               <Link className="btn" href="/missions/nouvelle"><Icon name="plus" />Créer une mission</Link>
-              <PaulButton label="Explorer une idée" />
+              <PaulButton label="Explorer une idée" idea />
             </div>
           </div>
         ) : (

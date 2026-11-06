@@ -1,132 +1,77 @@
 import { z } from "zod";
-import { clientsToMonthly, formatDecimal, formatEuros, toMonthly, type Period } from "@/lib/business-target";
-import { PERSONAS } from "@/lib/agents/personas";
 import { PAUL_PROFILE_FIELDS, PROFILE_FIELD_LABELS, PROFILE_TEXT_LIMITS, cleanProfileText, profileTextIssue, type PaulProfileField } from "@/lib/company-profile";
+import { MISSION_CHANNELS, channelLabel } from "@/lib/missions/channels";
+import { MISSION_TEMPLATES, TEMPLATE_KEYS } from "@/lib/missions/templates";
+import { scopeSummary } from "@/lib/missions/scope";
 
 /**
- * Partie pure des intentions de Paul (cartes de confirmation) : schémas,
- * conversion et lignes affichées. Sans accès base, donc utilisable par le
- * panneau de Paul et les tests sans base — cf. pending-actions.ts.
+ * Partie pure des propositions de Paul (cartes « Paul · proposition à confirmer », spécification §16.3) :
+ * schémas, lignes affichées et libellés. Sans accès base, donc utilisable par le panneau de Paul
+ * et les tests sans base — cf. pending-actions.ts.
  */
 
-export const PENDING_ACTION_TYPES = ["update_objective", "update_profile", "launch_plan_item", "revise_proposal"] as const;
+export const PENDING_ACTION_TYPES = [
+  "update_profile",
+  "mission_priority",
+  "mission_scope",
+  "mission_pause",
+  "mission_dismiss",
+  "mission_restore",
+  "mission_create",
+  "mission_launch",
+] as const;
 export type PendingActionType = (typeof PENDING_ACTION_TYPES)[number];
 export function isPendingActionType(type: string): type is PendingActionType {
   return (PENDING_ACTION_TYPES as readonly string[]).includes(type);
 }
-/** superseded = remplacée par une carte plus récente du même type, sans geste du dirigeant. */
+/** superseded = remplacée par une carte plus récente du même type et de même cible, sans geste du dirigeant. */
 export const PENDING_ACTION_STATUSES = ["pending", "confirmed", "cancelled", "expired", "superseded"] as const;
 export type PendingActionStatus = (typeof PENDING_ACTION_STATUSES)[number];
 
 /** Une carte non décidée expire 24 h après sa création. */
 export const PENDING_ACTION_TTL_MS = 24 * 60 * 60 * 1000;
-export const EXPIRED_MESSAGE = "Cette proposition a expiré. Redites votre objectif à Paul.";
-const EXPIRED_MESSAGES: Record<PendingActionType, string> = {
-  update_objective: EXPIRED_MESSAGE,
-  update_profile: "Cette proposition a expiré. Redites à Paul ce qu'il faut enregistrer dans votre profil.",
-  launch_plan_item: "Cette proposition a expiré. L'action reste dans votre plan : lancez-la depuis le plan ou redemandez-la à Paul.",
-  revise_proposal: "Cette proposition a expiré. La production reste à relire, telle quelle : redemandez la correction à Paul.",
-};
-const NEUTRAL_EXPIRED_MESSAGE = "Cette proposition a expiré. Redites votre demande à Paul.";
+const EXPIRED_MESSAGE = "Cette proposition a expiré. Redites votre demande à Paul.";
+const PROFILE_EXPIRED_MESSAGE = "Cette proposition a expiré. Redites à Paul ce qu'il faut enregistrer dans votre profil.";
 /** Message d'une carte expirée, selon ce qu'elle proposait. */
 export function expiredMessage(type: string): string {
-  return isPendingActionType(type) ? EXPIRED_MESSAGES[type] : NEUTRAL_EXPIRED_MESSAGE;
+  return type === "update_profile" ? PROFILE_EXPIRED_MESSAGE : EXPIRED_MESSAGE;
 }
+export const INACTIVE_MESSAGE = "Cette proposition n'est plus active.";
+
+/** Refuser une proposition (§16.3) : le bouton et la réponse fixe de Paul, enregistrée dans le fil de la carte. */
+export const KEEP_COURSE_LABEL = "Garder le cap actuel";
+export const KEEP_COURSE_REPLY = "Nous gardons le cap actuel. Aucun changement appliqué.";
+
+const CONFIRMED_TEXT: Record<PendingActionType, string> = {
+  update_profile: "C’est enregistré.",
+  mission_priority: "Priorité retenue. Aucune mission lancée.",
+  mission_scope: "Périmètre modifié.",
+  mission_pause: "Mission mise en pause.",
+  mission_dismiss: "Mission écartée du plan.",
+  mission_restore: "Mission remise au plan.",
+  mission_create: "Mission créée, à décider : rien n'est lancé.",
+  mission_launch: "Confirmez le cadre de la mission pour la lancer.",
+};
 
 /** Texte affiché sous une carte décidée, selon son statut et son type (vide tant qu'elle est en attente). */
-export function decidedText(status: PendingActionStatus, type: string, result?: LaunchResult): string {
-  const launch = type === "launch_plan_item";
+export function decidedText(status: PendingActionStatus, type: string): string {
   switch (status) {
     case "pending": return "";
-    case "confirmed": return launchesRun(type) ? (result?.message ?? LAUNCH_UNKNOWN_MESSAGE) : "C’est enregistré.";
-    case "cancelled":
-      if (launch) return "Plus tard : l’action reste dans votre plan, à lancer.";
-      if (type === "revise_proposal") return "Annulé : la production reste à relire, telle quelle.";
-      return "Proposition annulée. Dites à Paul ce qu’il faut corriger.";
+    case "confirmed": return isPendingActionType(type) ? CONFIRMED_TEXT[type] : "C’est fait.";
+    case "cancelled": return "Proposition écartée : rien n'a changé.";
     case "expired": return expiredMessage(type);
     case "superseded": return "Remplacée par une proposition plus récente.";
   }
 }
-/** Cartes dont la confirmation crée une exécution (lancement, révision) : leur résultat est enregistré sur la carte. */
-export function launchesRun(type: string): boolean {
-  return type === "launch_plan_item" || type === "revise_proposal";
-}
-/** Carte de lancement confirmée dont le résultat n'est pas (encore) connu. */
-export const LAUNCH_UNKNOWN_MESSAGE = "Lancement en cours de vérification…";
-export const INACTIVE_MESSAGE = "Cette proposition n'est plus active.";
 
-// Mêmes bornes que la page Entreprise (entiers 32 bits en base).
-export const MAX_AMOUNT = 1_000_000_000;
-const amount = z.number().finite().min(0).max(MAX_AMOUNT);
-const period = z.enum(["month", "year"]);
-
-/**
- * Ce que dit le dirigeant, tel quel : chaque montant avec la période dans
- * laquelle il l'a dit (la valeur d'un client n'en a pas). Le code convertit.
- */
-export const updateObjectivePayloadSchema = z.object({
-  revenueTarget: amount,
-  targetPeriod: period,
-  currentRevenue: amount.optional(),
-  currentPeriod: period.optional(),
-  averageClientValue: amount.optional(),
-  newClients: amount.optional(),
-  newClientsPeriod: period.optional(),
-  /** Échéance « AAAA-MM », enregistrée en fin de mois comme sur la page Entreprise. */
-  targetDate: z.string().regex(/^20\d{2}-(0[1-9]|1[0-2])$/).optional(),
-}).strict().superRefine((payload, context) => {
-  const issue = (path: string, message: string) => context.addIssue({ code: "custom", path: [path], message });
-  if (payload.currentRevenue != null && !payload.currentPeriod) issue("currentPeriod", "Période du chiffre d'affaires actuel manquante");
-  if (payload.newClients != null && !payload.newClientsPeriod) issue("newClientsPeriod", "Période du nombre de clients manquante");
-  // Un montant qui, converti au mois, arrondit sous 1 € ne peut pas être enregistré.
-  if (toMonthly(payload.revenueTarget, payload.targetPeriod) < 1) issue("revenueTarget", "Objectif inférieur à 1 € par mois");
-  if (payload.currentRevenue != null && payload.currentPeriod && toMonthly(payload.currentRevenue, payload.currentPeriod) < 1) {
-    issue("currentRevenue", "Chiffre d'affaires actuel inférieur à 1 € par mois");
-  }
-  if (payload.averageClientValue != null && Math.round(payload.averageClientValue) < 1) issue("averageClientValue", "Valeur d'un client inférieure à 1 €");
-});
-export type UpdateObjectivePayload = z.infer<typeof updateObjectivePayloadSchema>;
-
-/** Valeurs mensuelles écrites dans Company à la confirmation ; un champ absent n'est pas modifié. */
-export type ObjectiveUpdate = {
-  revenueTarget: number;
-  monthlyRevenue?: number;
-  averageClientValue?: number;
-  newClientsPerMonth?: number;
-  targetDate?: Date;
-  objective: string;
-};
-
-const PERIOD_WORD: Record<Period, string> = { month: "par mois", year: "par an" };
-const MONTH_LABEL = new Intl.DateTimeFormat("fr-FR", { month: "long", year: "numeric", timeZone: "UTC" });
-
-/** Fin du mois « AAAA-MM » (dernier jour, minuit UTC). */
-export function endOfMonth(month: string): Date {
-  return new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0));
+/** Adresse où mène une proposition de lancement acceptée : le dialogue « Confirmer le cadre de la mission », jamais un lancement direct. */
+export function launchFrameHref(missionId: string): string {
+  return `/missions/${encodeURIComponent(missionId)}?cadre=1`;
 }
 
-export function objectiveUpdateValues(payload: UpdateObjectivePayload): ObjectiveUpdate {
-  const target = formatEuros(payload.revenueTarget);
-  const hasCurrent = payload.currentRevenue != null && payload.currentPeriod != null;
-  let objective: string;
-  if (hasCurrent && payload.currentPeriod === payload.targetPeriod) {
-    objective = `Passer de ${formatEuros(payload.currentRevenue!)} à ${target} de chiffre d'affaires ${PERIOD_WORD[payload.targetPeriod]}`;
-  } else if (hasCurrent) {
-    objective = `Passer de ${formatEuros(payload.currentRevenue!)} ${PERIOD_WORD[payload.currentPeriod!]} à ${target} ${PERIOD_WORD[payload.targetPeriod]} de chiffre d'affaires`;
-  } else {
-    objective = `Atteindre ${target} de chiffre d'affaires ${PERIOD_WORD[payload.targetPeriod]}`;
-  }
-  if (payload.targetDate) objective += ` d'ici ${MONTH_LABEL.format(endOfMonth(payload.targetDate))}`;
-  return {
-    revenueTarget: toMonthly(payload.revenueTarget, payload.targetPeriod),
-    ...(hasCurrent ? { monthlyRevenue: toMonthly(payload.currentRevenue!, payload.currentPeriod!) } : {}),
-    // La valeur d'un client ne dépend pas d'une période : gardée telle quelle, arrondie à l'euro.
-    ...(payload.averageClientValue != null ? { averageClientValue: Math.round(payload.averageClientValue) } : {}),
-    ...(payload.newClients != null && payload.newClientsPeriod ? { newClientsPerMonth: clientsToMonthly(payload.newClients, payload.newClientsPeriod) } : {}),
-    ...(payload.targetDate ? { targetDate: endOfMonth(payload.targetDate) } : {}),
-    objective,
-  };
-}
+// ---------------------------------------------------------------------------
+// Profil (gardé, addendum §8)
+// ---------------------------------------------------------------------------
 
 /**
  * Saisie de l'outil de Paul : seuls prénom et nom du dirigeant, site, comptes
@@ -194,111 +139,130 @@ export function profileUpdateValues(payload: UpdateProfilePayload): Partial<Reco
   return values;
 }
 
-/** Agents qu'une carte de lancement peut faire travailler (mêmes que PLAN_AGENTS, sans accès base). */
-/** Longueur maximale d'une actualité ou d'une description de prospects transmise à l'agent. */
-export const LAUNCH_EXTRA_MAX = 1000;
-const LAUNCH_AGENTS = ["marketing", "contenu", "demarchage"] as const;
+// ---------------------------------------------------------------------------
+// Missions (§16.3) : la carte ne porte que la cible et ce qui est proposé ; les contrôles
+// sont ceux du service des missions, refaits à l'acceptation sur la version courante.
+// ---------------------------------------------------------------------------
 
-/** Résultat du lancement, enregistré sur la carte au clic « Lancer » (motifs typés de l'épopée 1). */
-export const launchResultSchema = z.object({
-  ok: z.boolean(),
-  reason: z.enum(["already_running", "quota_runs", "quota_budget", "email_not_verified", "suspended", "no_result", "outage"]).optional(),
-  message: z.string(),
-  runId: z.string().optional(),
+const missionId = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/);
+const shortText = (max: number) => z.string().trim().min(1).max(max);
+
+/** Priorité, pause, écarter, remettre au plan, lancer : une mission et son titre au moment de la proposition. */
+export const missionRefPayloadSchema = z.object({ missionId, title: shortText(80) }).strict();
+export type MissionRefPayload = z.infer<typeof missionRefPayloadSchema>;
+
+/** Périmètre proposé, avec son résumé d'une ligne (§6.3) calculé à la proposition. */
+export const missionScopePayloadSchema = z.object({
+  missionId,
+  title: shortText(80),
+  scope: z.record(z.string(), z.unknown()),
+  summary: shortText(300),
 }).strict();
-export type LaunchResult = z.infer<typeof launchResultSchema>;
+export type MissionScopePayload = z.infer<typeof missionScopePayloadSchema>;
 
-/**
- * Lancement proposé par Paul : l'action du plan (créée ou reprise au statut
- * « à lancer ») et ce que l'agent doit recevoir. Rien n'est lancé avant le clic.
- */
-export const launchPlanItemPayloadSchema = z.object({
-  planItemId: z.string().min(1),
-  agent: z.enum(LAUNCH_AGENTS),
-  title: z.string().min(1),
-  outcome: z.string().optional(),
-  extras: z.object({ newsContext: z.string().max(LAUNCH_EXTRA_MAX).optional(), prospectDescription: z.string().max(LAUNCH_EXTRA_MAX).optional() }).strict().optional(),
-  /** Action active déjà au plan (même agent, même thème) reprise au lieu d'en créer une seconde. */
-  reused: z.literal(true).optional(),
-  result: launchResultSchema.optional(),
+/** Mission à créer (§2.2 Créer), tout modèle du catalogue, y compris « Sur mesure » ; jamais lancée. */
+export const missionCreatePayloadSchema = z.object({
+  template: z.enum(TEMPLATE_KEYS),
+  channel: z.enum(MISSION_CHANNELS).nullable(),
+  title: shortText(80),
+  outcome: shortText(120),
+  finding: shortText(300),
+  scope: z.record(z.string(), z.unknown()),
+  stopRuleDays: z.number().int().min(7).max(90).optional(),
 }).strict();
-export type LaunchPlanItemPayload = z.infer<typeof launchPlanItemPayloadSchema>;
+export type MissionCreatePayload = z.infer<typeof missionCreatePayloadSchema>;
 
-/** Ligne d'une carte qui reprend une action déjà au plan au lieu d'en créer une seconde (le titre est déjà dans l'en-tête). */
-export const REUSED_LAUNCH_LINE = "Je reprends l'action déjà au plan.";
+export type PayloadFor = {
+  update_profile: UpdateProfilePayload;
+  mission_priority: MissionRefPayload;
+  mission_scope: MissionScopePayload;
+  mission_pause: MissionRefPayload;
+  mission_dismiss: MissionRefPayload;
+  mission_restore: MissionRefPayload;
+  mission_create: MissionCreatePayload;
+  mission_launch: MissionRefPayload;
+};
 
-function describeLaunch(payload: unknown): PendingActionDescription | null {
-  const parsed = launchPlanItemPayloadSchema.safeParse(payload);
-  if (!parsed.success) return null;
-  const { agent, title, outcome, reused } = parsed.data;
-  return {
-    title: `Lancer ${PERSONAS[agent].name} : ${title}`,
-    lines: [
-      ...(reused ? [REUSED_LAUNCH_LINE] : []),
-      ...(outcome?.trim() ? [outcome.trim()] : []),
-    ],
-    confirmLabel: "Lancer",
-    cancelLabel: "Plus tard",
-  };
-}
+export const PAYLOAD_SCHEMAS: { [K in PendingActionType]: z.ZodType<PayloadFor[K]> } = {
+  update_profile: updateProfilePayloadSchema,
+  mission_priority: missionRefPayloadSchema,
+  mission_scope: missionScopePayloadSchema,
+  mission_pause: missionRefPayloadSchema,
+  mission_dismiss: missionRefPayloadSchema,
+  mission_restore: missionRefPayloadSchema,
+  mission_create: missionCreatePayloadSchema,
+  mission_launch: missionRefPayloadSchema,
+};
 
-/** Longueur maximale de la consigne d'une révision. */
-export const REVISION_INSTRUCTION_MAX = 1000;
-
-/**
- * Révision proposée par Paul (story 3.3) : la production visée, sa version
- * au moment de la proposition et la consigne du dirigeant. Rien n'est
- * demandé à l'agent avant le clic.
- */
-export const reviseProposalPayloadSchema = z.object({
-  proposalId: z.string().min(1),
-  agent: z.enum(LAUNCH_AGENTS),
-  title: z.string().min(1),
-  fromVersion: z.number().int().min(1),
-  instruction: z.string().min(1).max(REVISION_INSTRUCTION_MAX),
-  result: launchResultSchema.optional(),
-}).strict();
-export type ReviseProposalPayload = z.infer<typeof reviseProposalPayloadSchema>;
-
-function describeRevision(payload: unknown): PendingActionDescription | null {
-  const parsed = reviseProposalPayloadSchema.safeParse(payload);
-  if (!parsed.success) return null;
-  const { agent, title, fromVersion, instruction } = parsed.data;
-  return {
-    title: `Demander à ${PERSONAS[agent].name} une version ${fromVersion + 1} de « ${title} »`,
-    lines: [`Consigne : ${instruction}`],
-    confirmLabel: "Confirmer",
-    cancelLabel: "Annuler",
-  };
-}
+/** Bouton d'acceptation de chaque proposition (§16.3). */
+export const CONFIRM_LABELS: Record<PendingActionType, string> = {
+  update_profile: "Enregistrer dans mon profil",
+  mission_priority: "Retenir cette priorité",
+  mission_scope: "Modifier le périmètre",
+  mission_pause: "Mettre en pause",
+  mission_dismiss: "Écarter",
+  mission_restore: "Remettre au plan",
+  mission_create: "Créer la mission",
+  mission_launch: "Lancer",
+};
 
 export type PendingActionDescription = { title: string; lines: string[]; confirmLabel: string; cancelLabel: string };
 
-/** Lignes de la carte, construites depuis l'intention enregistrée (jamais depuis le texte de Paul). */
-export function describePendingAction(action: { type: string; payload: unknown }): PendingActionDescription | null {
-  if (action.type === "update_profile") return describeProfileUpdate(action.payload);
-  if (action.type === "launch_plan_item") return describeLaunch(action.payload);
-  if (action.type === "revise_proposal") return describeRevision(action.payload);
-  if (action.type !== "update_objective") return null;
-  const parsed = updateObjectivePayloadSchema.safeParse(action.payload);
-  if (!parsed.success) return null;
-  const values = objectiveUpdateValues(parsed.data);
-  const lines = [`${formatEuros(values.revenueTarget)}/mois visés`];
-  if (values.monthlyRevenue != null) lines.push(`${formatEuros(values.monthlyRevenue)}/mois actuels`);
-  if (values.averageClientValue != null) lines.push(`${formatEuros(values.averageClientValue)} par client`);
-  if (values.newClientsPerMonth != null) {
-    lines.push(`${formatDecimal(values.newClientsPerMonth)} ${values.newClientsPerMonth >= 2 ? "clients" : "client"}/mois aujourd'hui`);
-  }
-  if (values.targetDate) lines.push(`Échéance : ${MONTH_LABEL.format(values.targetDate)}`);
-  return { title: `Enregistrer votre objectif : ${values.objective}`, lines, confirmLabel: "Confirmer", cancelLabel: "Corriger" };
+const card = (type: PendingActionType, title: string, lines: string[]): PendingActionDescription => ({ title, lines, confirmLabel: CONFIRM_LABELS[type], cancelLabel: KEEP_COURSE_LABEL });
+
+type Describer = (payload: unknown) => PendingActionDescription | null;
+
+function describeRef(type: PendingActionType, title: (mission: string) => string, line: string): Describer {
+  return (payload) => {
+    const parsed = missionRefPayloadSchema.safeParse(payload);
+    return parsed.success ? card(type, title(parsed.data.title), [line]) : null;
+  };
 }
 
-function describeProfileUpdate(payload: unknown): PendingActionDescription | null {
-  const parsed = updateProfilePayloadSchema.safeParse(payload);
-  if (!parsed.success) return null;
-  const lines = Object.entries(profileUpdateValues(parsed.data)).map(([field, value]) =>
-    `${PROFILE_FIELD_LABELS[field as PaulProfileField]} : ${value ?? "(effacé)"}`);
-  return { title: "Enregistrer dans votre profil", lines, confirmLabel: "Confirmer", cancelLabel: "Corriger" };
+/** Lignes de chaque carte, construites depuis l'intention enregistrée (jamais depuis le texte de Paul). */
+const DESCRIBERS: Record<PendingActionType, Describer> = {
+  update_profile: (payload) => {
+    const parsed = updateProfilePayloadSchema.safeParse(payload);
+    if (!parsed.success) return null;
+    const lines = Object.entries(profileUpdateValues(parsed.data)).map(([field, value]) =>
+      `${PROFILE_FIELD_LABELS[field as PaulProfileField]} : ${value ?? "(effacé)"}`);
+    return card("update_profile", "Enregistrer dans votre profil", lines);
+  },
+  mission_priority: describeRef("mission_priority", (mission) => `Faire de « ${mission} » la priorité`, "Change la priorité ; ne lance ni ne suspend aucune mission."),
+  mission_scope: (payload) => {
+    const parsed = missionScopePayloadSchema.safeParse(payload);
+    return parsed.success ? card("mission_scope", `Modifier le périmètre de « ${parsed.data.title} »`, [`Nouveau périmètre : ${parsed.data.summary}`]) : null;
+  },
+  mission_pause: describeRef("mission_pause", (mission) => `Mettre en pause « ${mission} »`, "La préparation s'arrête et ses programmations sont annulées. Vous pourrez la reprendre sans frais."),
+  mission_dismiss: describeRef("mission_dismiss", (mission) => `Écarter « ${mission} » du plan`, "Rien n'est effacé : elle reste sous « Écartées » et pourra être remise au plan."),
+  mission_restore: describeRef("mission_restore", (mission) => `Remettre « ${mission} » au plan`, "Elle redevient à décider, ou en pause si elle l'était. Rien n'est lancé."),
+  mission_create: (payload) => {
+    const parsed = missionCreatePayloadSchema.safeParse(payload);
+    if (!parsed.success) return null;
+    const { template, channel, outcome, finding, title, scope, stopRuleDays } = parsed.data;
+    // Ce que l'acceptation écrira : périmètre et règle d'arrêt (celle du modèle hors « Sur mesure »).
+    const days = template === "custom" ? stopRuleDays : MISSION_TEMPLATES[template].stopRuleDays;
+    return card("mission_create", `Créer la mission « ${title} »`, [
+      `${MISSION_TEMPLATES[template].label} · ${channel ? channelLabel(channel) : "Hors canal, diffusion déclarée"}`,
+      `Résultat recherché : ${outcome}`,
+      `Constat : ${finding}`,
+      `Périmètre : ${scopeSummary(template, scope)} · Règle d'arrêt : ${days ? `${days} jours` : "—"}`,
+      "Elle sera à décider : rien n'est lancé sans votre confirmation du cadre.",
+    ]);
+  },
+  mission_launch: describeRef("mission_launch", (mission) => `Lancer « ${mission} »`, "J'ouvre le cadre de la mission : vous confirmez le coût et le périmètre avant tout lancement."),
+};
+
+export function describePendingAction(action: { type: string; payload: unknown }): PendingActionDescription | null {
+  // Anciennes cartes (lancement d'agents, révision, objectif) : ignorées à l'affichage.
+  return isPendingActionType(action.type) ? DESCRIBERS[action.type](action.payload) : null;
+}
+
+/** Mission visée par une carte, ou null (profil, création). */
+export function pendingActionMissionId(action: { type: string; payload: unknown }): string | null {
+  if (!isPendingActionType(action.type) || action.type === "update_profile" || action.type === "mission_create") return null;
+  const parsed = z.object({ missionId }).loose().safeParse(action.payload);
+  return parsed.success ? parsed.data.missionId : null;
 }
 
 export type PendingActionView = {
@@ -310,8 +274,6 @@ export type PendingActionView = {
   confirmLabel: string;
   cancelLabel: string;
   expiresAt: string;
-  /** Carte de lancement ou de révision confirmée : ce que le lancement a donné (lancé, ou motif en clair). */
-  result?: LaunchResult;
 };
 
 /** Vue affichable ; une carte encore « pending » dont l'échéance est passée est montrée expirée. */
@@ -323,8 +285,22 @@ export function toPendingActionView(
   if (!description) return null;
   const known = (PENDING_ACTION_STATUSES as readonly string[]).includes(action.status) ? (action.status as PendingActionStatus) : "expired";
   const status = known === "pending" && action.expiresAt.getTime() <= now.getTime() ? "expired" : known;
-  const launched = action.type === "launch_plan_item" ? launchPlanItemPayloadSchema.safeParse(action.payload)
-    : action.type === "revise_proposal" ? reviseProposalPayloadSchema.safeParse(action.payload) : null;
-  const result = launched?.success ? launched.data.result : undefined;
-  return { id: action.id, type: action.type, status, ...description, expiresAt: action.expiresAt.toISOString(), ...(result ? { result } : {}) };
+  return { id: action.id, type: action.type, status, ...description, expiresAt: action.expiresAt.toISOString() };
 }
+
+// ---------------------------------------------------------------------------
+// Révision d'une production (ancien parcours, page Studio) : plus proposée par Paul,
+// gardée pour la route de révision tant que l'atelier (#289) ne la remplace pas.
+// ---------------------------------------------------------------------------
+
+/** Longueur maximale de la consigne d'une révision. */
+export const REVISION_INSTRUCTION_MAX = 1000;
+
+/** Résultat d'une révision demandée depuis le Studio (motifs typés de l'épopée 1). */
+export const launchResultSchema = z.object({
+  ok: z.boolean(),
+  reason: z.enum(["already_running", "quota_runs", "quota_budget", "email_not_verified", "suspended", "no_result", "outage"]).optional(),
+  message: z.string(),
+  runId: z.string().optional(),
+}).strict();
+export type LaunchResult = z.infer<typeof launchResultSchema>;

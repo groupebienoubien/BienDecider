@@ -62,7 +62,7 @@ export type MissionSnapshot = {
 };
 
 export type MissionAction =
-  | { action: "launch" | "resume" | "pause" | "dismiss" | "restore" | "confirm_contacts" }
+  | { action: "launch" | "resume" | "pause" | "dismiss" | "restore" | "confirm_contacts" | "set_priority" }
   | { action: "set_channel"; channel: unknown }
   | { action: "set_outcome"; outcome: unknown }
   | { action: "set_scope"; scope: unknown };
@@ -132,6 +132,11 @@ export function checkTransition(mission: MissionSnapshot, request: MissionAction
       const changed = mission.template === "leads" && JSON.stringify(scope.scope) !== JSON.stringify(mission.scope);
       return done(changed ? { scope: scope.scope, contactsConfirmedAt: null } : { scope: scope.scope });
     }
+    case "set_priority":
+      // Changer la priorité (§2.2) : ni Écartée ni Arrêtée ; rien n'est lancé ni suspendu, la mission elle-même ne change pas.
+      if (mission.status === "dismissed") return failure("M-21");
+      if (mission.status === "stopped") return failure("M-23");
+      return same;
     case "confirm_contacts":
       if (mission.status === "stopped") return failure("M-23");
       if (mission.status === "dismissed") return failure("M-21");

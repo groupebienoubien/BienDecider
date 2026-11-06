@@ -2,18 +2,25 @@
 
 import Link from "next/link";
 import { useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Icon } from "@/components/icon";
 import { Modal } from "@/components/modal";
-import { openPaul } from "@/lib/paul-context";
+import { NEW_IDEA_CONTEXT, openPaul } from "@/lib/paul-context";
 import type { MissionActionData } from "@/lib/missions/view";
 
 type Dialog = "launch" | "pause" | "dismiss" | "outcome" | null;
 
-/** Ouvre Paul sur un élément, ou sur la page seule. */
-export function PaulButton({ label, mission, className }: { label: string; mission?: { id: string; title: string }; className?: string }) {
+/**
+ * Ouvre Paul dans la conversation de la mission, dans une nouvelle conversation « idée » (`idea`),
+ * ou dans celle de la page.
+ */
+export function PaulButton({ label, mission, idea = false, className }: { label: string; mission?: { id: string; title: string }; idea?: boolean; className?: string }) {
+  const open = () => {
+    if (mission) openPaul({ type: "mission", id: mission.id, title: mission.title }, `mission:${mission.id}`);
+    else openPaul(undefined, idea ? NEW_IDEA_CONTEXT : undefined);
+  };
   return (
-    <button type="button" className={className} onClick={() => openPaul(mission ? { type: "mission", id: mission.id, title: mission.title } : undefined)}>
+    <button type="button" className={className} onClick={open}>
       <Icon name="message-circle" />{label}
     </button>
   );
@@ -39,8 +46,34 @@ export function MissionActions({ mission, credits, launchCost, variant }: { miss
   const busy = sending || refreshing;
   const [error, setError] = useState("");
 
+  // Carte « Lancer » de Paul acceptée : elle mène ici avec ?cadre=1 et le dialogue de cadre s'ouvre ; rien n'est
+  // débité avant « Confirmer le lancement ». État ajusté pendant le rendu, pas dans un effet.
+  const detail = variant === "detail";
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const cadreInUrl = searchParams.get("cadre") === "1";
+  const frameRequested = cadreInUrl && detail && (mission.status === "proposed" || mission.status === "paused");
+  const [frameSeen, setFrameSeen] = useState(false);
+  if (frameRequested !== frameSeen) {
+    setFrameSeen(frameRequested);
+    if (frameRequested) {
+      setError("");
+      setOutcome(mission.outcome);
+      setDialog("launch");
+    }
+  }
+
   const cost = mission.launched ? 0 : launchCost;
   const short = credits < cost;
+
+  /** Ferme le dialogue et retire ?cadre=1 : un rechargement ou un retour ne le rouvre pas, une nouvelle carte « Lancer » si. */
+  function closeDialog() {
+    setDialog(null);
+    if (!cadreInUrl) return;
+    const rest = new URLSearchParams(searchParams.toString());
+    rest.delete("cadre");
+    router.replace(rest.size > 0 ? `${pathname}?${rest}` : pathname, { scroll: false });
+  }
 
   function open(next: Dialog) {
     setError("");
@@ -59,12 +92,11 @@ export function MissionActions({ mission, credits, launchCost, variant }: { miss
     }
     // Le dialogue se ferme avec l'affichage de l'état à jour : un geste suivant part toujours de la bonne version.
     startRefresh(() => {
-      setDialog(null);
+      closeDialog();
       router.refresh();
     });
   }
 
-  const detail = variant === "detail";
   const canEdit = mission.status !== "stopped";
   const canDismiss = mission.status === "proposed" || mission.status === "paused";
 
@@ -84,7 +116,7 @@ export function MissionActions({ mission, credits, launchCost, variant }: { miss
 
       <Modal
         open={dialog === "launch"}
-        onClose={() => setDialog(null)}
+        onClose={closeDialog}
         kicker="Votre accord"
         title="Confirmer le cadre de la mission"
         actions={<button type="button" className="primary" disabled={busy || short} onClick={() => void run({ action: mission.launched ? "resume" : "launch" })}><Icon name="play" />{mission.launched ? "Reprendre la mission" : "Confirmer le lancement"}</button>}
@@ -105,7 +137,7 @@ export function MissionActions({ mission, credits, launchCost, variant }: { miss
 
       <Modal
         open={dialog === "pause"}
-        onClose={() => setDialog(null)}
+        onClose={closeDialog}
         kicker="Votre accord"
         title="Mettre cette mission en pause ?"
         cancelLabel="Garder en cours"
@@ -118,7 +150,7 @@ export function MissionActions({ mission, credits, launchCost, variant }: { miss
 
       <Modal
         open={dialog === "dismiss"}
-        onClose={() => setDialog(null)}
+        onClose={closeDialog}
         kicker="Votre plan"
         title="Écarter cette mission du plan ?"
         cancelLabel="Garder au plan"
@@ -131,7 +163,7 @@ export function MissionActions({ mission, credits, launchCost, variant }: { miss
 
       <Modal
         open={dialog === "outcome"}
-        onClose={() => setDialog(null)}
+        onClose={closeDialog}
         kicker="Votre mission"
         title="Modifier l'objectif de la mission"
         actions={<button type="button" className="primary" disabled={busy} onClick={() => void run({ action: "set_outcome", outcome })}>Enregistrer l&apos;objectif</button>}

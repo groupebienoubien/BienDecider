@@ -1,31 +1,38 @@
 import { agentRunnerOptions, bindAgentTools, createAgentExecution, currentAgentExecution, withAgentExecution, withAgentRunWrite } from "@/lib/agent-run-execution";
 import { AGENT_RUN_MAX_TURNS } from "@/lib/agent-run-limits";
 import { z } from "zod";
+import { DELEGATION_DETAILS, DELEGATION_LABELS, asDelegationLevel } from "@/lib/delegation-level";
 import { betaZodTool } from "@anthropic-ai/sdk/helpers/beta/zod";
 import type Anthropic from "@anthropic-ai/sdk";
 import type { BetaToolRunnerParams } from "@anthropic-ai/sdk/lib/tools/BetaToolRunner";
+import type { Mission } from "@prisma/client";
 import { anthropic, AGENT_MODEL } from "@/lib/anthropic";
 import { prisma } from "@/lib/prisma";
 import { getRejectionContext } from "@/lib/agents/rejection-context";
-import { AgentRunQuotaError, ensureAgentProduced, classifyRunError, failureMessage, isRunFailureReason, type RunFailureReason } from "@/lib/agents/agent-errors";
+import { ensureAgentProduced } from "@/lib/agents/agent-errors";
 import { PERSONAS, objectiveLine, directionLine, companyProfileLines, runtimeContextLines, formatParisTime, formatParisDate } from "@/lib/agents/personas";
 import { WEEKLY_REVIEW_MARKER } from "@/lib/weekly-review";
-import { enqueuePlanRun } from "@/lib/agent-runs";
-import { createChatPlanItem, findLaunchablePlanItem, isPlanAgent, cleanPlanLaunchExtras, resolvePlanLaunchExtras, type PlanAgent } from "@/lib/agents/plan-items";
-import { PLAN_THEMES, type PlanTheme } from "@/lib/plan-themes";
+import { PLAN_THEMES } from "@/lib/plan-themes";
 import { runStreamingToolLoop, runToolLoop } from "@/lib/usage";
 import { getFunnelStats, funnelLines } from "@/lib/funnel";
 import { CAPABILITY_CATALOG, recordUncoveredRequest } from "@/lib/agents/capabilities";
-import { getChatInstructionsForPlan, loadPaulMessageTimes, loadRecentChatHistory } from "@/lib/agents/chat-context";
-import { lastMessageBefore, latestOf } from "@/lib/agents/paul-message-times";
-import { getTeamState } from "@/lib/team-state";
+import { getChatInstructionsForPlan, loadRecentChatHistory } from "@/lib/agents/chat-context";
 import { getLatestAuditFindings } from "@/lib/audit-findings";
 import { latestAuditLines } from "@/lib/agents/audit-plan-context";
 import { isPlanTitleAlreadyTaken } from "@/lib/agents/plan-item-shared";
 import { resolvePaulReferences } from "@/lib/paul-references";
 import { attachPendingActions, cancelOrphanPendingActions, createPendingAction, recentPendingActions } from "@/lib/agents/pending-actions";
-import { activeRevisionRun, revisionRefusal } from "@/lib/agents/revision";
-import { LAUNCH_EXTRA_MAX, MAX_AMOUNT, PROFILE_PAGE_ONLY_MESSAGE, REVISION_INSTRUCTION_MAX, type PendingActionType, profileUpdateToolSchema, readProfileToolInput, updateObjectivePayloadSchema, updateProfilePayloadSchema } from "@/lib/agents/pending-action-view";
+import { PROFILE_PAGE_ONLY_MESSAGE, type PayloadFor, type PendingActionType, profileUpdateToolSchema, readProfileToolInput, updateProfilePayloadSchema } from "@/lib/agents/pending-action-view";
+import { DEFAULT_CONTEXT_KEY } from "@/lib/paul-contexts";
+import { renderMissionMessage } from "@/lib/missions/messages";
+import { LAUNCH_COST_CREDITS, checkTransition, validateNewMission, type MissionAction, type MissionStatus } from "@/lib/missions/rules";
+import { missionSnapshot } from "@/lib/missions/service";
+import { loadMissionViews, priorityOf } from "@/lib/missions/view";
+import { STAGE_LABELS, nextStep } from "@/lib/missions/stage";
+import { MISSION_CHANNELS, channelLabel } from "@/lib/missions/channels";
+import { TEMPLATE_KEYS, availableTemplates, enabledChannels } from "@/lib/missions/templates";
+import { scopeSummary } from "@/lib/missions/scope";
+import { PAUL_VERSION_CREDITS } from "@/lib/credits";
 
 const PERSONA = PERSONAS.co_ceo;
 
@@ -36,11 +43,12 @@ const PERSONA = PERSONAS.co_ceo;
 function uncoveredRequestTool(companyId: string, source: "chat" | "plan") {
   return betaZodTool({
     name: "record_uncovered_request",
-    description:
-      "Note pour les fondateurs de BienDecider une demande ou un objectif du dirigeant qu'aucun agent ne couvre. À appeler une fois par besoin non couvert, après l'avoir dit au dirigeant — jamais pour une demande que l'équipe sait traiter.",
+    description: source === "chat"
+      ? "Note pour les fondateurs de BienDecider une demande du dirigeant qu'aucun modèle de mission du catalogue ne couvre. À appeler une fois par besoin non couvert, après l'avoir dit au dirigeant ; tu peux proposer en même temps une mission « Sur mesure » avec propose_mission."
+      : "Note pour les fondateurs de BienDecider une demande ou un objectif du dirigeant qu'aucun agent ne couvre. À appeler une fois par besoin non couvert, après l'avoir dit au dirigeant — jamais pour une demande que l'équipe sait traiter.",
     inputSchema: z.object({
       request: z.string().describe("Le besoin non couvert, en une ou deux phrases, sans nom ni coordonnée de personne"),
-      closestAlternative: z.string().optional().describe("Ce que tu as proposé à la place parmi ce que l'équipe sait faire — omettre si rien ne s'en rapproche"),
+      closestAlternative: z.string().optional().describe("Ce que tu as proposé à la place parmi ce que BienDecider sait faire — omettre si rien ne s'en rapproche"),
     }),
     run: async (input) => {
       await recordUncoveredRequest(companyId, source, input.request, input.closestAlternative);
@@ -49,238 +57,84 @@ function uncoveredRequestTool(companyId: string, source: "chat" | "plan") {
   });
 }
 
+const STATUS_WORDS: Record<MissionStatus, string> = { proposed: "À décider", active: "En cours", paused: "En pause", stopped: "Arrêtée", dismissed: "Écartée" };
+
+/** Modèles de mission proposés aujourd'hui, avec leurs canaux actifs (catalogue ouvert, D9). */
+function catalogueLines(): string {
+  return availableTemplates().map((template) => {
+    const channels = enabledChannels(template).map(channelLabel);
+    return `${template.label} (template ${template.key}) : ${template.contentFormat} ; canaux : ${template.key === "custom" ? `${channels.join(", ")} ou hors canal` : channels.join(", ")}`;
+  }).join(" ; ");
+}
+
 /**
- * État lu par Paul via get_current_status : actions et exécutions viennent
- * de getTeamState, la lecture unique partagée avec le menu et l'accueil.
- * Chaque état porte son heure (Europe/Paris), avec l'heure courante et celle
- * du message précédent de Paul, pour qu'il distingue une mise à jour d'une erreur (story 3.5),
- * et l'heure de son dernier message relu antérieur au changement (aChangeApresMonMessageDe, story 4.2).
+ * État lu par Paul via get_current_status (addendum §8) : missions avec leur étape, prochain pas,
+ * priorité, crédits, délégation et programmations, et ce que sont devenues ses dernières propositions.
+ * Chaque état porte son heure (Europe/Paris), avec l'heure courante et celle de son message précédent.
  */
-export async function buildCurrentStatus(companyId: string, now = new Date()) {
-  const [teamState, funnel, pending, findings, leads, cards, previousReply, paulTimes] = await Promise.all([
-    getTeamState(companyId, now),
-    getFunnelStats(companyId),
-    prisma.agentProposal.findMany({
-      where: { companyId, status: "en_attente" },
-      orderBy: { createdAt: "desc" },
-    }),
-    // Story 5.1 : seuls les constats du dernier audit terminé.
-    getLatestAuditFindings(companyId, { take: 5 }),
-    prisma.lead.findMany({
-      where: { companyId, stage: { notIn: ["propose", "ecarte"] } },
-      orderBy: { updatedAt: "desc" },
-      take: 10,
-      select: { id: true, name: true, stage: true },
-    }),
+export async function buildCurrentStatus(companyId: string, now = new Date(), contextKey: string = DEFAULT_CONTEXT_KEY) {
+  const [missions, company, cards, previousReply, rawMissions] = await Promise.all([
+    loadMissionViews(companyId),
+    prisma.company.findUniqueOrThrow({ where: { id: companyId }, select: { creditBalance: true, priorityMissionId: true, delegationLevel: true } }),
     recentPendingActions(companyId),
-    // Message de Paul précédant le tour en cours : celui du tour n'est enregistré qu'à la fin ;
-    // le point hebdomadaire du cron, écrit sans Paul, ne compte pas.
+    // Message de Paul précédant le tour en cours dans cette conversation ; le point hebdomadaire du cron ne compte pas.
     prisma.chatMessage.findFirst({
-      where: { companyId, role: "assistant", createdAt: { lte: now }, NOT: { content: { startsWith: WEEKLY_REVIEW_MARKER } } },
+      where: { companyId, contextKey, role: "assistant", createdAt: { lte: now }, NOT: { content: { startsWith: WEEKLY_REVIEW_MARKER } } },
       orderBy: { createdAt: "desc" },
       select: { createdAt: true },
     }),
-    loadPaulMessageTimes(companyId, now),
+    prisma.mission.findMany({ where: { companyId }, select: { id: true, updatedAt: true, firstLaunchedAt: true } }),
   ]);
-  // Calculé ici à la milliseconde : à la minute près, Paul ne pourrait pas trancher.
-  const previousAt = previousReply?.createdAt.getTime() ?? null;
-  const since = (date: Date | string | null) => previousAt !== null && date !== null && new Date(date).getTime() > previousAt;
-  // Le changement est postérieur au début du tour de ce message de Paul (il a lu l'état pendant le tour) :
-  // ce qu'il y disait était peut-être vrai à ce moment. L'heure affichée reste celle du message.
-  const changedAfter = (changedAt: Date | string | null) => formatParisTime(lastMessageBefore(paulTimes, changedAt), now);
+  const updated = new Map(rawMissions.map((mission) => [mission.id, mission]));
+  const priority = priorityOf(missions);
+  const delegationLevel = asDelegationLevel(company.delegationLevel);
+  const step = nextStep(missions, delegationLevel, priority);
+  const priorityMission = missions.find((mission) => mission.id === priority) ?? null;
   return {
     maintenant: `${formatParisDate(now)}, ${formatParisTime(now, now)}`,
     monMessagePrecedent: formatParisTime(previousReply?.createdAt, now),
-    planEnCours: teamState.actions.map(({ updatedAt, ...action }) => ({
-      ...action, misAJour: formatParisTime(updatedAt, now), depuisMonMessagePrecedent: since(updatedAt),
-      aChangeApresMonMessageDe: changedAfter(updatedAt),
+    prochainPas: { titre: step.title, detail: step.detail, missionId: step.missionId, bouton: step.target.label, ...(step.target.kind === "link" ? { adresse: step.target.href } : {}) },
+    priorite: priorityMission
+      ? { missionId: priorityMission.id, titre: priorityMission.title, choisieAvecPaul: company.priorityMissionId === priorityMission.id }
+      : null,
+    missions: missions.map((mission) => ({
+      id: mission.id,
+      titre: mission.title,
+      modele: mission.templateLabel,
+      canal: mission.channelLabel,
+      statut: STATUS_WORDS[mission.status],
+      etape: STAGE_LABELS[mission.stage],
+      resultatRecherche: mission.outcome,
+      constat: mission.finding,
+      perimetre: mission.scopeSummary,
+      regleDArretJours: mission.stopRuleDays,
+      priorite: mission.priority,
+      dejaLancee: Boolean(updated.get(mission.id)?.firstLaunchedAt),
+      misAJour: formatParisTime(updated.get(mission.id)?.updatedAt, now),
+      // Story 4.2 : la mission a-t-elle changé depuis ton message précédent dans cette conversation ?
+      aChangeDepuisMonMessagePrecedent: Boolean(previousReply && (updated.get(mission.id)?.updatedAt.getTime() ?? 0) > previousReply.createdAt.getTime()),
     })),
-    // Heures de Paris uniquement (pas d'horodatage UTC brut) : enFileDepuis pour une exécution en file,
-    // debut nul tant qu'elle attend son tour, fin nulle tant qu'elle n'est pas terminée.
-    executionsRecentes: teamState.recentRuns.map(({ queuedAt, startedAt, finishedAt, ...run }) => ({
-      ...run,
-      enFileDepuis: run.status === "queued" ? formatParisTime(queuedAt, now) : null,
-      debut: formatParisTime(startedAt, now),
-      fin: formatParisTime(finishedAt, now),
-      depuisMonMessagePrecedent: since(startedAt) || since(finishedAt),
-      aChangeApresMonMessageDe: changedAfter(latestOf(startedAt, finishedAt)),
-    })),
-    decisionsEnAttente: teamState.pendingDecisions,
-    suiviProspects: funnelLines(funnel) || "Aucun prospect suivi pour l'instant.",
-    refusRecents: await getRejectionContext(companyId),
-    propositionsEnAttente: pending.map((p) => ({
-      id: p.id,
-      agent: p.agent,
-      kind: p.kind,
-      title: p.title,
-      version: p.version,
-      content: p.content,
-    })),
-    derniersConstatsAudit: findings.map((f) => ({
-      id: f.id,
-      title: f.title,
-      content: f.content,
-    })),
-    prospectsSuivis: leads,
-    // Dernières cartes proposées par Paul : pending = à confirmer, confirmed = enregistrée, cancelled = refusée
-    // par le dirigeant, superseded = remplacée par une plus récente, expired = non décidée sous 24 h.
+    credits: { solde: company.creditBalance, coutPremierLancement: LAUNCH_COST_CREDITS, coutVersionPrepareeAvecPaul: PAUL_VERSION_CREDITS, repriseApresPause: 0 },
+    // Règle de collaboration choisie par le dirigeant (spécification §9, #36).
+    delegation: `${DELEGATION_LABELS[delegationLevel]} : ${DELEGATION_DETAILS[delegationLevel]}`,
+    // La diffusion et sa programmation arrivent avec l'atelier : aucune programmation n'existe encore.
+    programmations: [],
+    // Dernières propositions : pending = à confirmer, confirmed = acceptée, cancelled = « Garder le cap actuel »,
+    // superseded = remplacée par une plus récente, expired = non décidée sous 24 h.
     cartesRecentes: cards,
   };
 }
 
-export type DelegationResult = {
-  ok: boolean;
-  /** Motif typé quand rien n'a été lancé ; absent si l'identifiant d'action passé par Paul n'était pas lançable. */
-  reason?: RunFailureReason;
-  message: string;
-  runId?: string;
-  planItemId?: string;
-};
-
-export type DelegationInput = {
-  actionTitle: string;
-  brief: string;
-  outcome: string;
-  theme: PlanTheme;
-  priority: number;
-  planItemId?: string;
-};
-
-const ACTIVE_RUN_STATUSES = ["queued", "running"];
-
-/** Au plus 3 cartes par message de Paul, tous types confondus (objectif, profil, lancements, révisions). */
+/** Au plus 3 cartes par message de Paul, tous types confondus. */
 export const MAX_CARDS_PER_REPLY = 3;
 export const CARDS_LIMIT_MESSAGE = `Aucune carte créée : ${MAX_CARDS_PER_REPLY} cartes sont déjà proposées dans cette réponse, c'est le maximum. Propose le reste au prochain message.`;
 
-type LaunchExtras = { newsContext?: string; prospectDescription?: string };
-
-/** Action déjà en cours : l'agent y travaille, rien n'est relancé. null si l'action n'est pas en cours. */
-async function alreadyRunningResult(companyId: string, agent: PlanAgent, planItemId: string): Promise<DelegationResult | null> {
-  const existing = await prisma.actionPlanItem.findFirst({ where: { id: planItemId, companyId, agent } });
-  if (existing?.status !== "en_cours") return null;
-  const activeRun = await prisma.agentRun.findFirst({
-    where: { companyId, planItemId: existing.id, status: { in: ACTIVE_RUN_STATUSES } },
-    orderBy: { createdAt: "desc" },
-  });
-  return {
-    ok: false, reason: "already_running", message: failureMessage("already_running", PERSONAS[agent].name),
-    ...(activeRun ? { runId: activeRun.id } : {}), planItemId: existing.id,
-  };
-}
-
-/** Action écartée, terminée ou inconnue : erreur de l'appelant, pas un motif d'échec, donc pas de reason. */
-function notLaunchableResult(agent: PlanAgent): DelegationResult {
-  return {
-    ok: false,
-    message: `Aucune action à lancer avec cet identifiant pour ${PERSONAS[agent].name} : rien n'a été lancé. Relire le plan avec get_current_status avant de déléguer à nouveau.`,
-  };
-}
+const missionIdField = z.string().describe("Identifiant exact de la mission, lu dans get_current_status (missions[].id) ou dans le contexte de la conversation");
 
 /**
- * Lancement d'une action du plan « à lancer » par le même chemin que le
- * bouton "Lancer" : relance d'une exécution échouée, motifs typés. Le
- * résultat porte le vrai motif d'un lancement non fait, jamais une panne
- * quand il n'y en a pas.
- */
-async function launchItem(
-  companyId: string,
-  agent: PlanAgent,
-  item: Awaited<ReturnType<typeof createChatPlanItem>>["item"],
-  extras: LaunchExtras,
-  launchedMessage: string,
-): Promise<DelegationResult> {
-  const agentName = PERSONAS[agent].name;
-  const callStart = new Date();
-  const alreadyRunning = (runId: string): DelegationResult => ({
-    ok: false, reason: "already_running", message: failureMessage("already_running", agentName), runId, planItemId: item.id,
-  });
-  const stillOnPlan = ` L'action « ${item.title} » reste au plan, à lancer.`;
-  try {
-    const latest = await prisma.agentRun.findFirst({
-      where: { companyId, planItemId: item.id },
-      orderBy: { createdAt: "desc" },
-      select: { id: true, status: true },
-    });
-    if (latest && ACTIVE_RUN_STATUSES.includes(latest.status)) return alreadyRunning(latest.id);
-    // Une exécution échouée est relancée, par le même chemin que le bouton « Relancer l'action ».
-    const retryRunId = latest?.status === "failed" ? latest.id : undefined;
-    const run = await enqueuePlanRun({ companyId, item: { ...item, agent }, extras, retryRunId });
-    // Une exécution active créée avant cet appel appartient à un autre lancement : l'agent y travaille déjà.
-    if (ACTIVE_RUN_STATUSES.includes(run.status) && run.id !== retryRunId && run.createdAt.getTime() < callStart.getTime()) {
-      return alreadyRunning(run.id);
-    }
-    if (run.status === "failed") {
-      const reason = isRunFailureReason(run.failureReason) ? run.failureReason : "outage";
-      return { ok: false, reason, message: failureMessage(reason, agentName) + stillOnPlan, runId: run.id, planItemId: item.id };
-    }
-    return {
-      ok: true,
-      message: `Action « ${item.title} » ${launchedMessage}. ${agentName} travaille en arrière-plan ; le résultat apparaîtra dans le plan.`,
-      runId: run.id,
-      planItemId: item.id,
-    };
-  } catch (error) {
-    console.error(`Erreur délégation ${agent}:`, error);
-    // classifyRunError ne renvoie null que pour un conflit « action non lançable » (écartée ou terminée
-    // entre-temps) ; toute erreur inattendue (réseau, base…) y est classée outage.
-    const reason = classifyRunError(error);
-    if (reason === null) return notLaunchableResult(agent);
-    // Le message d'un quota est déjà affichable et précise journalier, mensuel ou réservé.
-    const message = error instanceof AgentRunQuotaError ? error.message : failureMessage(reason, agentName);
-    return {
-      ok: false, reason,
-      message: message + (reason === "already_running" ? "" : stillOnPlan),
-      planItemId: item.id,
-    };
-  }
-}
-
-/**
- * Lancement d'une action du plan, créée avec son brief ou reprise si elle y
- * figure déjà (chemin historique, gardé pour les appelants qui créent l'action).
- * Paul ne l'appelle jamais : ses outils ne créent que des cartes.
- */
-export async function delegatePlanAction(
-  companyId: string,
-  agent: PlanAgent,
-  input: DelegationInput,
-  extras: LaunchExtras = {},
-): Promise<DelegationResult> {
-  if (input.planItemId) {
-    const running = await alreadyRunningResult(companyId, agent, input.planItemId);
-    if (running) return running;
-    const item = await findLaunchablePlanItem(companyId, agent, input.planItemId);
-    if (!item) return notLaunchableResult(agent);
-    return launchItem(companyId, agent, item, extras, "du plan lancée");
-  }
-  // Une action active de même agent et même thème est reprise (AD-16), jamais recréée.
-  const { item, reused } = await createChatPlanItem(companyId, agent, input.actionTitle, input.brief, input.theme, input.priority, input.outcome, cleanPlanLaunchExtras(extras));
-  if (reused) {
-    const running = await alreadyRunningResult(companyId, agent, item.id);
-    if (running) return running;
-  }
-  return launchItem(companyId, agent, item, extras, reused ? "déjà au plan lancée" : "ajoutée au plan et mise en cours");
-}
-
-/**
- * Clic « Lancer » sur une carte de Paul (pending-actions.ts) : lance l'action
- * du plan visée, telle qu'elle y figure, par le même chemin que delegatePlanAction.
- */
-export async function launchPlanItemFromCard(companyId: string, agent: PlanAgent, planItemId: string, extras: LaunchExtras = {}): Promise<DelegationResult> {
-  const running = await alreadyRunningResult(companyId, agent, planItemId);
-  if (running) return running;
-  const item = await findLaunchablePlanItem(companyId, agent, planItemId);
-  if (!item) return notLaunchableResult(agent);
-  return launchItem(companyId, agent, item, extras, "du plan lancée");
-}
-
-/**
- * Agent "Partenaire de croissance" (Paul, ex-"Co-CEO" — cf. docs/archives/backlog.md) :
- * point de contact unique, orchestre les autres agents en les invoquant
- * comme des outils. Équipe rationalisée le 2026-10-05 : 4 agents
- * (Marketing/Contenu/Démarchage + lui-même), Nadia fusionnée dans Martine.
- * Garde-fou : ses outils ne créent que des cartes (propose_launch_*,
- * objectif, profil) ; aucune exécution avant le clic du dirigeant.
+ * Agent "Partenaire de croissance" (Paul) : seul interlocuteur du dirigeant (D3). Ses outils ne créent
+ * que des propositions à confirmer (cartes) ; aucune mission n'est créée, lancée, suspendue, écartée
+ * ou modifiée avant le clic du dirigeant, qui passe par le service des missions.
  */
 async function runCoCeoTurnImpl(
   companyId: string,
@@ -289,26 +143,22 @@ async function runCoCeoTurnImpl(
   pageContext?: string,
   // Si fourni, la réponse est produite en flux : le texte de chaque tour est transmis au fur et à mesure.
   stream?: { onTurnStart: () => void; onText: (delta: string) => void },
+  // Conversation du contexte (spécification §16.1) : le message y est enregistré et seul son fil part au modèle.
+  contextKey: string = DEFAULT_CONTEXT_KEY,
 ) {
   const company = await prisma.company.findUniqueOrThrow({
     where: { id: companyId },
   });
 
   await withAgentRunWrite(companyId, undefined, (tx) => tx.chatMessage.create({
-    data: { companyId, role: "user", content: userMessage },
+    data: { companyId, role: "user", content: userMessage, contextKey },
   }));
 
-  const history = await loadRecentChatHistory(companyId);
+  const history = await loadRecentChatHistory(companyId, contextKey);
 
-  // Le dernier tour est marqué pour le prompt caching : chaque nouveau
-  // message relit l'historique mis en cache au tour précédent plutôt que de
-  // le refacturer en entier (cf. doc prompt caching — pattern "conversation
-  // multi-tours"). Le système ci-dessous est lui-même entièrement stable
-  // pour une entreprise donnée (aucune donnée recalculée par appel, Paul
-  // passe par get_current_status plutôt que par un état injecté), donc mis
-  // en cache en un seul bloc.
-  // Le contexte de page, la date du jour et le nom du dirigeant changent d'un tour ou d'un jour à l'autre :
-  // ils précèdent le dernier message, hors du système mis en cache (le cache de la conversation ne se réinitialise pas chaque jour).
+  // Le dernier tour est marqué pour le prompt caching ; le système ci-dessous est stable pour une entreprise
+  // donnée. Le contexte de page, la date du jour et le nom du dirigeant changent d'un tour ou d'un jour à
+  // l'autre : ils précèdent le dernier message, hors du système mis en cache.
   const messages: Anthropic.MessageParam[] = history.map((m, i) => ({
     role: m.role === "user" ? "user" : "assistant",
     content:
@@ -324,21 +174,18 @@ async function runCoCeoTurnImpl(
   const getCurrentStatus = betaZodTool({
     name: "get_current_status",
     description:
-      "Récupère l'état réel actuel : actions actives du plan (planEnCours), exécutions des dernières 24 h et celles encore en cours (executionsRecentes), nombre de décisions en attente, suivi des prospects, propositions en attente (avec leur contenu) et derniers constats d'audit. Statuts du plan : propose = à lancer, en_cours = en cours d'exécution, lance = exécuté, productions à décider. decisionsEnAttente est le nombre total de productions qui attendent le dirigeant : à relire, mais aussi validées en attente de mise en ligne ou de publication incertaine à vérifier. propositionsEnAttente ne détaille que les productions encore à relire (statut en_attente), avec leur contenu. À utiliser systématiquement avant de répondre à toute question sur l'état, le plan, les prospects, le contenu ou le nombre de propositions/constats — ne jamais deviner ni se fier à ce qui a été dit dans un tour précédent.",
+      "Récupère l'état réel actuel : missions (statut, étape, résultat recherché, périmètre, priorité), prochain pas, priorité (choisie avec toi ou calculée), solde et coûts en crédits, délégation, programmations et ce que sont devenues tes dernières propositions (cartesRecentes). À utiliser systématiquement avant de répondre sur l'état, les missions, la priorité, le prochain pas ou les crédits, et avant toute proposition — ne jamais deviner ni se fier à un tour précédent.",
     inputSchema: z.object({}),
-    run: async () => {
-      return JSON.stringify(await buildCurrentStatus(companyId));
-    },
+    run: async () => JSON.stringify(await buildCurrentStatus(companyId, new Date(), contextKey)),
   });
 
   const recordUncovered = uncoveredRequestTool(companyId, "chat");
 
   // Intentions créées pendant ce tour : rattachées au message de Paul enregistré à la fin.
   const createdActionIds: string[] = [];
-  // Au plus MAX_CARDS_PER_REPLY cartes par réponse, tous types confondus. Le compteur est réservé
-  // avant tout await (deux appels simultanés ne dépassent pas le plafond) et rendu si rien n'est créé.
+  // Au plus MAX_CARDS_PER_REPLY cartes par réponse. Le compteur est réservé avant tout await
+  // (deux appels simultanés ne dépassent pas le plafond) et rendu si rien n'est créé.
   let cardsThisTurn = 0;
-  /** Réserve une carte du tour ; la fonction renvoyée la rend, une seule fois quel que soit le nombre d'appels. null au-delà du plafond. */
   function reserveCard(): (() => void) | null {
     if (cardsThisTurn >= MAX_CARDS_PER_REPLY) return null;
     cardsThisTurn++;
@@ -352,7 +199,7 @@ async function runCoCeoTurnImpl(
 
   // Une erreur de création n'est jamais renvoyée brute à Paul.
   const CARD_FAILED = "Aucune carte créée : réessaie.";
-  async function createCard<T extends PendingActionType>(type: T, payload: Parameters<typeof createPendingAction<T>>[2]) {
+  async function createCard<T extends PendingActionType>(type: T, payload: PayloadFor[T]) {
     try {
       const action = await createPendingAction(companyId, type, payload);
       createdActionIds.push(action.id);
@@ -363,153 +210,127 @@ async function runCoCeoTurnImpl(
     }
   }
 
-  // Toute demande de travail depuis le chat passe par une action du plan et une carte « Lancer » :
-  // rien n'est lancé avant le clic du dirigeant (delegatePlanAction n'est appelé qu'à la confirmation).
-  const planActionFields = {
-    actionTitle: z.string().describe("Titre court et concret de l'action demandée, tel qu'il apparaîtra dans le plan, ex: 'Trois posts sur les chantiers terminés'"),
-    brief: z.string().describe("Ce que le dirigeant a demandé et pourquoi, en une ou deux phrases : c'est la consigne que l'agent devra réaliser"),
-    outcome: z.string().max(160).describe("Résultat attendu, en une phrase courte écrite pour le dirigeant, sans consigne technique ni nom d'agent : c'est ce qu'il lira dans son plan"),
-    theme: z.enum(PLAN_THEMES).describe("But principal : Visibilité, Conversion ou Prospection ; ne pas utiliser le nom de l'agent ou du canal"),
-    priority: z.number().int().min(1).max(5).describe("Priorité de 1 (la plus urgente) à 5"),
-    planItemId: z
-      .string()
-      .optional()
-      .describe("Identifiant d'une action déjà au plan avec le statut 'propose' (lu via get_current_status) si la demande y correspond — la carte propose alors de la lancer au lieu d'en créer une seconde"),
-  };
-
-  /**
-   * Proposition de lancement : crée l'action au plan (ou reprend celle « à
-   * lancer » indiquée), puis la carte « Lancer {agent} : {titre} ». Aucune
-   * exécution n'est créée ici.
-   */
-  async function proposeLaunch(agent: PlanAgent, input: DelegationInput, extras: LaunchExtras): Promise<string> {
-    const agentName = PERSONAS[agent].name;
-    const tooLong = (Object.keys(extras) as (keyof LaunchExtras)[]).filter((key) => (extras[key]?.trim().length ?? 0) > LAUNCH_EXTRA_MAX);
-    if (tooLong.length > 0) {
-      const label = tooLong.includes("newsContext") ? "l'actualité" : "la description des prospects";
-      return `Aucune carte créée : ${label} dépasse ${LAUNCH_EXTRA_MAX} caractères. Résume-la en moins de ${LAUNCH_EXTRA_MAX} caractères, sans rien inventer.`;
-    }
+  /** Crée une carte réservée ; rend la place si rien n'est créé. */
+  async function withCard<T extends PendingActionType>(type: T, payload: PayloadFor[T], created: string): Promise<string> {
     const releaseCard = reserveCard();
     if (!releaseCard) return CARDS_LIMIT_MESSAGE;
     try {
-      let item: { id: string; title: string; rationale: string; outcome: string | null; status: string } | null;
-      let reused = false;
-      if (input.planItemId) {
-        item = await findLaunchablePlanItem(companyId, agent, input.planItemId);
-        if (!item) {
-          releaseCard();
-          const existing = await prisma.actionPlanItem.findFirst({ where: { id: input.planItemId, companyId, agent }, select: { status: true } });
-          return existing?.status === "en_cours"
-            ? `Aucune carte créée : ${agentName} travaille déjà sur cette action. Dis-le au dirigeant, sans rien relancer.`
-            : `Aucune carte créée : aucune action à lancer avec cet identifiant pour ${agentName}. Relis le plan avec get_current_status.`;
-        }
-      } else {
-        // Une action active (à lancer ou en cours) de même agent et même thème est reprise telle quelle (AD-16).
-        ({ item, reused } = await createChatPlanItem(companyId, agent, input.actionTitle, input.brief, input.theme, input.priority, input.outcome, cleanPlanLaunchExtras(extras)));
-      }
-      const cleanExtras = await resolvePlanLaunchExtras(companyId, item);
-      const action = await createCard("launch_plan_item", {
-        planItemId: item.id, agent, title: item.title,
-        ...(item.outcome ? { outcome: item.outcome } : {}),
-        ...(Object.keys(cleanExtras).length > 0 ? { extras: cleanExtras } : {}),
-        ...(reused ? { reused: true as const } : {}),
-      });
-      const inProgress = reused && item.status === "en_cours";
+      const action = await createCard(type, payload);
       if (!action) {
         releaseCard();
-        return `${CARD_FAILED} L'action « ${item.title} » est au plan, ${inProgress ? "marquée en cours" : "à lancer"}.`;
+        return CARD_FAILED;
       }
-      // Action reprise : Paul sait ce qui était déjà au plan et ce qui vient d'être demandé, pour dire au dirigeant ce qui diffère.
-      const reusedNote = reused
-        ? `Aucune nouvelle action créée : une action active de ${agentName} sur ce thème était déjà au plan et la carte la reprend telle quelle. Action reprise : « ${item.title} », consigne : « ${item.rationale} ». Demande de ce tour, non enregistrée : « ${input.actionTitle.trim()} ». Si elles diffèrent, dis au dirigeant en une phrase ce qui est repris et ce qui change, sans lui demander de trier des doublons. `
-        : "";
-      if (inProgress) {
-        const running = await alreadyRunningResult(companyId, agent, item.id);
-        return running?.runId
-          ? `${reusedNote}${agentName} y travaille déjà (exécution ${running.runId}) : un clic sur « Lancer » ne relancera rien. Dis au dirigeant que le résultat apparaîtra dans le plan.`
-          : `${reusedNote}L'action est marquée en cours, mais aucune exécution de ${agentName} n'est visible : vérifie executionsRecentes avec get_current_status avant de dire au dirigeant où elle en est ; ne dis pas que ${agentName} y travaille.`;
-      }
-      return `${reusedNote}Carte « Lancer ${agentName} : ${item.title} » affichée sous ta réponse (action du plan ${item.id}, à lancer). RIEN N'EST LANCÉ tant que le dirigeant n'a pas cliqué sur « Lancer » : ne dis pas que c'est lancé ni que ${agentName} y travaille ; dis-lui qu'il peut la lancer d'un clic ou choisir « Plus tard ».`;
+      return `${created} RIEN NE CHANGE tant que le dirigeant n'a pas cliqué sur le bouton d'acceptation ; « Garder le cap actuel » la retire. Ne dis pas que c'est fait.`;
     } catch (error) {
       releaseCard();
-      console.error(`Proposition de lancement ${agent} impossible :`, error);
+      console.error(`Proposition ${type} impossible :`, error);
       return CARD_FAILED;
     }
   }
 
-  const proposeLaunchMarketing = betaZodTool({
-    name: "propose_launch_marketing",
-    description:
-      `Propose au dirigeant de faire travailler ${PERSONAS.marketing.name} (${PERSONAS.marketing.role}) : audit de présence en ligne, positionnement concurrentiel, et pilotage de la fiche Google (infos, avis). Ne produit pas de contenu créatif. Crée l'action dans le plan (statut à lancer) et une carte « Lancer » sous ta réponse : rien n'est lancé avant son clic.`,
-    inputSchema: z.object(planActionFields),
-    run: async (input) => proposeLaunch("marketing", input, {}),
+  async function findMission(missionId: string): Promise<Mission | null> {
+    return prisma.mission.findFirst({ where: { id: missionId, companyId } });
+  }
+
+  const NO_MISSION = "Aucune carte créée : aucune mission avec cet identifiant. Relis missions avec get_current_status.";
+
+  /** Proposition d'une transition : vérifiée avec les règles du service avant la carte, puis de nouveau à l'acceptation. */
+  async function proposeTransition(type: "mission_priority" | "mission_pause" | "mission_dismiss" | "mission_restore", request: MissionAction, missionId: string, label: (title: string) => string): Promise<string> {
+    const mission = await findMission(missionId);
+    if (!mission) return NO_MISSION;
+    const check = checkTransition(missionSnapshot(mission), request);
+    if (!check.ok) return `Aucune carte créée : ${renderMissionMessage(check.code, check.params)} Dis-le au dirigeant simplement.`;
+    if (request.action !== "set_priority" && check.noop) return `Aucune carte créée : « ${mission.title} » est déjà dans cet état. Dis-le au dirigeant.`;
+    if (request.action === "set_priority") {
+      const current = await prisma.company.findUniqueOrThrow({ where: { id: companyId }, select: { priorityMissionId: true } });
+      if (current.priorityMissionId === mission.id) return `Aucune carte créée : « ${mission.title} » est déjà la priorité retenue avec le dirigeant. Dis-le-lui.`;
+    }
+    return withCard(type, { missionId: mission.id, title: mission.title }, `Carte « ${label(mission.title)} » affichée sous ta réponse.`);
+  }
+
+  const proposePriority = betaZodTool({
+    name: "propose_priority",
+    description: "Propose au dirigeant de faire d'une mission sa priorité : carte « Retenir cette priorité ». Change seulement l'ordre des missions et le prochain pas ; ne lance ni ne suspend aucune mission. Une mission écartée doit d'abord être remise au plan ; une mission arrêtée ne peut pas devenir la priorité. Si la mission est déjà la priorité retenue, aucune carte n'est créée.",
+    inputSchema: z.object({ missionId: missionIdField }),
+    run: async (input) => proposeTransition("mission_priority", { action: "set_priority" }, input.missionId, (title) => `Faire de « ${title} » la priorité`),
   });
 
-  const proposeLaunchContenu = betaZodTool({
-    name: "propose_launch_contenu",
-    description:
-      `Propose au dirigeant de faire travailler ${PERSONAS.contenu.name} (${PERSONAS.contenu.role}) sur des posts réseaux sociaux et/ou du contenu de site web. Si une actualité réelle a été mentionnée par l'utilisateur, passe-la — sinon laisse vide, elle proposera ses propres idées génériques. Ne jamais inventer une actualité. Crée l'action dans le plan (statut à lancer) et une carte « Lancer » sous ta réponse : rien n'est lancé avant son clic.`,
-    inputSchema: z.object({
-      ...planActionFields,
-      newsContext: z
-        .string()
-        .optional()
-        .describe("Actualité à communiquer, telle que mentionnée par l'utilisateur — omettre si aucune n'a été donnée"),
-    }),
-    run: async (input) => proposeLaunch("contenu", input, { newsContext: input.newsContext }),
+  const proposePause = betaZodTool({
+    name: "propose_pause",
+    description: "Propose de mettre en pause une mission En cours : carte « Mettre en pause ». La préparation s'arrête et ses programmations seront annulées ; la reprise est gratuite.",
+    inputSchema: z.object({ missionId: missionIdField }),
+    run: async (input) => proposeTransition("mission_pause", { action: "pause" }, input.missionId, (title) => `Mettre en pause « ${title} »`),
   });
 
-  const proposeLaunchDemarchage = betaZodTool({
-    name: "propose_launch_demarchage",
-    description:
-      `Propose au dirigeant de faire travailler ${PERSONAS.demarchage.name} (${PERSONAS.demarchage.role}) : recherche des pistes de croissance réelles (actualités, événements locaux) et, si un type de prospects a été décrit par l'utilisateur, prépare des templates de prospection générique. Crée l'action dans le plan (statut à lancer) et une carte « Lancer » sous ta réponse : rien n'est lancé avant son clic.`,
-    inputSchema: z.object({
-      ...planActionFields,
-      prospectDescription: z
-        .string()
-        .optional()
-        .describe("Type de prospects visés, tel que mentionné par l'utilisateur — omettre si non précisé"),
-    }),
-    run: async (input) => proposeLaunch("demarchage", input, { prospectDescription: input.prospectDescription }),
+  const proposeDismiss = betaZodTool({
+    name: "propose_dismiss",
+    description: "Propose d'écarter une mission du plan (À décider ou En pause) : carte « Écarter ». Rien n'est effacé, elle reste récupérable. Une mission En cours doit d'abord être mise en pause : propose alors la pause.",
+    inputSchema: z.object({ missionId: missionIdField }),
+    run: async (input) => proposeTransition("mission_dismiss", { action: "dismiss" }, input.missionId, (title) => `Écarter « ${title} » du plan`),
   });
 
-  let objectiveCardProposed = false;
+  const proposeRestore = betaZodTool({
+    name: "propose_restore",
+    description: "Propose de remettre au plan une mission écartée : carte « Remettre au plan ». Elle redevient à décider, ou en pause si elle l'était ; rien n'est lancé.",
+    inputSchema: z.object({ missionId: missionIdField }),
+    run: async (input) => proposeTransition("mission_restore", { action: "restore" }, input.missionId, (title) => `Remettre « ${title} » au plan`),
+  });
 
-  // Le schéma de l'outil reste permissif : les bornes sont celles de la carte (safeParse ci-dessous),
-  // pour qu'un montant hors bornes donne un message lisible à Paul au lieu de faire échouer le tour.
-  const proposeObjectiveUpdate = betaZodTool({
-    name: "propose_objective_update",
-    description:
-      "Propose au dirigeant d'enregistrer son objectif de chiffre d'affaires : crée une carte de confirmation sous ta réponse, rien n'est enregistré avant son clic sur « Confirmer ». Passe chaque montant exactement tel qu'il l'a dit, avec la période dans laquelle il l'a dit (month ou year) : le code fait la conversion au mois. Une seule carte par réponse. N'appelle pas cet outil si la période de l'objectif n'est pas connue : demande d'abord « par mois ou par an ? ».",
+  const proposeScope = betaZodTool({
+    name: "propose_scope",
+    description: "Propose de modifier le périmètre d'une mission : carte « Modifier le périmètre ». Forme du périmètre selon le modèle : Publication {\"topic\": sujet de 5 à 120 caractères} ; Réalisation {\"proofId\": identifiant de la réalisation, 1 à 80 caractères} ; Sur mesure {\"description\": 10 à 300 caractères} ; Page du site vitrine {\"page\": nom de la page} ; Réponse aux avis {\"reviewIds\": 1 à 5 identifiants} ; Partenariats {\"agencyIds\": 1 ou 2} ; Réactivation {\"contactIds\": 1 à 8}. Fiche Google à jour : {}.",
     inputSchema: z.object({
-      revenueTarget: z.number().describe(`Chiffre d'affaires visé, en euros, tel que dit par le dirigeant (entre 1 et ${MAX_AMOUNT.toLocaleString("fr-FR")})`),
-      targetPeriod: z.enum(["month", "year"]).describe("Période de l'objectif : month (par mois) ou year (par an)"),
-      currentRevenue: z.number().optional().describe("Chiffre d'affaires actuel, en euros, tel que dit — omettre s'il ne l'a pas dit"),
-      currentPeriod: z.enum(["month", "year"]).optional().describe("Période du chiffre d'affaires actuel — obligatoire avec currentRevenue"),
-      averageClientValue: z.number().optional().describe("Ce que rapporte un client en tout, en euros (sans période) — omettre s'il ne l'a pas dit"),
-      newClients: z.number().optional().describe("Nombre de nouveaux clients actuels, tel que dit — omettre s'il ne l'a pas dit"),
-      newClientsPeriod: z.enum(["month", "year"]).optional().describe("Période du nombre de nouveaux clients — obligatoire avec newClients"),
-      targetDate: z.string().optional().describe("Échéance de l'objectif au format AAAA-MM, si le dirigeant l'a donnée — omettre sinon"),
+      missionId: missionIdField,
+      scope: z.record(z.string(), z.unknown()).describe("Nouveau périmètre complet, dans la forme du modèle de la mission"),
     }),
     run: async (input) => {
-      // Drapeau posé avant tout await : deux appels dans le même message ne créent qu'une carte.
-      if (objectiveCardProposed) return "Une carte d'objectif est déjà proposée dans cette réponse : rien de plus n'a été proposé.";
-      const releaseCard = reserveCard();
-      if (!releaseCard) return CARDS_LIMIT_MESSAGE;
-      objectiveCardProposed = true;
-      const parsed = updateObjectivePayloadSchema.safeParse(input);
-      if (!parsed.success) {
-        objectiveCardProposed = false;
-        releaseCard();
-        return `Aucune carte créée : ${parsed.error.issues.map((issue) => issue.message).join(" ; ")}. Vérifie les montants et leurs périodes avec le dirigeant.`;
-      }
-      const action = await createCard("update_objective", parsed.data);
-      if (!action) {
-        objectiveCardProposed = false;
-        releaseCard();
-        return CARD_FAILED;
-      }
-      return "Carte de confirmation affichée sous ta réponse. Rien n'est enregistré tant que le dirigeant n'a pas cliqué sur « Confirmer » : dis-le-lui, sans citer de montant converti.";
+      const mission = await findMission(input.missionId);
+      if (!mission) return NO_MISSION;
+      const check = checkTransition(missionSnapshot(mission), { action: "set_scope", scope: input.scope });
+      if (!check.ok) return `Aucune carte créée : ${renderMissionMessage(check.code, check.params)} Reformule avec le dirigeant.`;
+      const scope = check.patch.scope ?? {};
+      const summary = scopeSummary(missionSnapshot(mission).template, scope);
+      return withCard("mission_scope", { missionId: mission.id, title: mission.title, scope, summary: summary.slice(0, 300) },
+        `Carte « Modifier le périmètre de « ${mission.title} » » affichée sous ta réponse (nouveau périmètre : ${summary}).`);
+    },
+  });
+
+  const proposeMission = betaZodTool({
+    name: "propose_mission",
+    description: `Propose de créer une mission, pour tout modèle du catalogue, y compris « Sur mesure » : carte « Créer la mission ». Elle sera À décider, jamais lancée. Modèles et canaux proposés aujourd'hui : ${catalogueLines()}.`,
+    inputSchema: z.object({
+      template: z.enum(TEMPLATE_KEYS).describe("Modèle d'action (template) du catalogue"),
+      channel: z.enum(MISSION_CHANNELS).nullable().optional().describe("Canal de la mission ; null ou omis pour « Sur mesure » hors canal, ou quand le modèle n'a qu'un canal actif"),
+      title: z.string().describe("Titre court et concret, 5 à 80 caractères, sans balise"),
+      outcome: z.string().describe("Résultat recherché, 5 à 120 caractères, écrit pour le dirigeant"),
+      finding: z.string().describe("Constat de départ qui justifie le test, 10 à 300 caractères ; ce que le dirigeant a dit ou ce que tu as relevé, jamais inventé"),
+      scope: z.record(z.string(), z.unknown()).optional().describe("Périmètre dans la forme du modèle (voir propose_scope) ; obligatoire pour « Sur mesure » : {\"description\": …}"),
+      stopRuleDays: z.number().int().optional().describe("Règle d'arrêt en jours (7 à 90), seulement pour « Sur mesure »"),
+    }),
+    run: async (input) => {
+      const open = await prisma.mission.count({ where: { companyId, createdBy: { in: ["owner", "paul"] }, status: { not: "stopped" } } });
+      const checked = validateNewMission({ ...input, scope: input.scope ?? {} }, open);
+      if (!checked.ok) return `Aucune carte créée : ${renderMissionMessage(checked.code, checked.params)} Reformule avec le dirigeant.`;
+      const { value } = checked;
+      return withCard("mission_create", {
+        template: value.template, channel: value.channel, title: value.title, outcome: value.outcome, finding: value.finding, scope: value.scope,
+        ...(value.template === "custom" ? { stopRuleDays: value.stopRuleDays } : {}),
+      }, `Carte « Créer la mission « ${value.title} » » affichée sous ta réponse. Acceptée, la mission sera À décider : rien n'est lancé.`);
+    },
+  });
+
+  const proposeMissionLaunch = betaZodTool({
+    name: "propose_mission_launch",
+    description: `Propose de lancer (ou reprendre) une mission : carte « Lancer ». L'acceptation n'exécute rien : elle ouvre le dialogue « Confirmer le cadre de la mission », où le dirigeant voit le coût (${LAUNCH_COST_CREDITS} crédits au premier lancement, reprise gratuite) et confirme lui-même. Jamais de lancement direct.`,
+    inputSchema: z.object({ missionId: missionIdField }),
+    run: async (input) => {
+      const mission = await findMission(input.missionId);
+      if (!mission) return NO_MISSION;
+      if (mission.status === "active") return `Aucune carte créée : « ${mission.title} » est déjà en cours. Dis-le au dirigeant.`;
+      if (mission.status === "stopped") return `Aucune carte créée : ${renderMissionMessage("M-40")}`;
+      if (mission.status === "dismissed") return `Aucune carte créée : ${renderMissionMessage("M-21")}`;
+      return withCard("mission_launch", { missionId: mission.id, title: mission.title },
+        `Carte « Lancer « ${mission.title} » » affichée sous ta réponse : elle ouvre le cadre de la mission, que le dirigeant confirmera lui-même.`);
     },
   });
 
@@ -519,7 +340,7 @@ async function runCoCeoTurnImpl(
   const proposeProfileUpdate = betaZodTool({
     name: "propose_profile_update",
     description:
-      "Propose au dirigeant d'enregistrer dans son profil son prénom et nom, son site web, son compte Instagram ou Facebook, son téléphone, ses horaires ou sa description : crée une carte de confirmation sous ta réponse, rien n'est enregistré avant son clic sur « Confirmer ». Mets tous les champs donnés dans un seul appel (une seule carte par réponse) ; reprends chaque valeur telle qu'il l'a dite, une chaîne vide efface le champ. Le nom commercial, le métier et la zone de chalandise ne se modifient pas ici : ils se changent sur la page Entreprise.",
+      "Propose au dirigeant d'enregistrer dans son profil son prénom et nom, son site web, son compte Instagram ou Facebook, son téléphone, ses horaires ou sa description : crée une carte sous ta réponse, rien n'est enregistré avant son clic. Mets tous les champs donnés dans un seul appel (une seule carte par réponse) ; reprends chaque valeur telle qu'il l'a dite, une chaîne vide efface le champ. Le nom commercial, le métier et la zone de chalandise ne se modifient pas ici : ils se changent sur la page Entreprise.",
     inputSchema: profileUpdateToolSchema,
     run: async (input) => {
       // Drapeau posé avant tout await : deux appels dans le même message ne créent qu'une carte.
@@ -545,74 +366,8 @@ async function runCoCeoTurnImpl(
         releaseCard();
         return CARD_FAILED;
       }
-      const created = "Carte de confirmation affichée sous ta réponse. Rien n'est enregistré tant que le dirigeant n'a pas cliqué sur « Confirmer » : dis-le-lui.";
+      const created = "Carte de confirmation affichée sous ta réponse. Rien n'est enregistré tant que le dirigeant n'a pas cliqué sur « Enregistrer dans mon profil » : dis-le-lui.";
       return pageOnly ? `${created} ${PROFILE_PAGE_ONLY_MESSAGE}` : created;
-    },
-  });
-
-  /**
-   * Proposition de révision (story 3.3) : la carte « Demander à {agent} une
-   * version N+1 de « {titre} » ». Aucune exécution n'est créée ici ; seule
-   * une production à relire se révise, jamais un prospect.
-   */
-  const proposeRevision = betaZodTool({
-    name: "propose_revision",
-    description:
-      `Propose au dirigeant de faire corriger une production existante par l'agent qui l'a écrite : la même production passe à la version suivante, avec sa consigne ; la version actuelle reste consultable. Aucune nouvelle production n'est créée. Crée une carte « Confirmer » sous ta réponse : rien n'est demandé avant son clic. Seule une production à relire (propositionsEnAttente) se révise ; un prospect se corrige dans sa fiche, dans Prospection.`,
-    inputSchema: z.object({
-      proposalId: z.string().describe("Identifiant exact de la production à corriger, lu dans propositionsEnAttente (get_current_status) ou dans le contexte de page"),
-      instruction: z.string().describe(`Consigne du dirigeant, telle qu'il l'a dite, en une ou deux phrases (${REVISION_INSTRUCTION_MAX} caractères au plus), ex: « retire l'avertissement et signe avec mon nom »`),
-    }),
-    run: async (input) => {
-      const instruction = input.instruction.trim();
-      if (!instruction) return "Aucune carte créée : la consigne est vide. Demande au dirigeant ce qu'il faut corriger.";
-      if (instruction.length > REVISION_INSTRUCTION_MAX) {
-        return `Aucune carte créée : la consigne dépasse ${REVISION_INSTRUCTION_MAX} caractères. Résume-la en moins de ${REVISION_INSTRUCTION_MAX} caractères, sans rien inventer.`;
-      }
-      const releaseCard = reserveCard();
-      if (!releaseCard) return CARDS_LIMIT_MESSAGE;
-      try {
-        const proposal = await prisma.agentProposal.findFirst({ where: { id: input.proposalId, companyId } });
-        if (!proposal) {
-          releaseCard();
-          return "Aucune carte créée : aucune production avec cet identifiant. Relis propositionsEnAttente avec get_current_status.";
-        }
-        const refusal = revisionRefusal(proposal);
-        if (refusal === "prospect") {
-          releaseCard();
-          return `Aucune carte créée : « ${proposal.title} » est un prospect, qui ne se révise pas. Dis au dirigeant de corriger sa fiche lui-même dans Prospection.`;
-        }
-        if (refusal === "decided") {
-          releaseCard();
-          return `Aucune carte créée : « ${proposal.title} » est déjà décidée (${proposal.status === "rejetee" ? "rejetée" : "validée ou diffusée"}) ; seule une production à relire se révise. Explique-le au dirigeant${proposal.status === "rejetee" ? " : il peut la rouvrir pour relecture depuis ses décisions, puis te redemander la correction" : ""}. Ne propose pas de nouvelle exécution à la place.`;
-        }
-        if (refusal === "too_long") {
-          releaseCard();
-          return `Aucune carte créée : « ${proposal.title} » est trop longue pour être réécrite d'un coup par l'agent. Dis au dirigeant de la corriger lui-même avec « Modifier ».`;
-        }
-        if (refusal === "agent" || !isPlanAgent(proposal.agent)) {
-          releaseCard();
-          return `Aucune carte créée : « ${proposal.title} » n'a pas été écrite par un agent de l'équipe. Le dirigeant peut la modifier lui-même avec « Modifier ».`;
-        }
-        const agentName = PERSONAS[proposal.agent].name;
-        const running = await activeRevisionRun(companyId, proposal.id);
-        if (running) {
-          releaseCard();
-          return `Aucune carte créée : ${agentName} révise déjà « ${proposal.title} » (exécution ${running.id}). Dis au dirigeant que la nouvelle version apparaîtra dans ses décisions.`;
-        }
-        const action = await createCard("revise_proposal", {
-          proposalId: proposal.id, agent: proposal.agent, title: proposal.title, fromVersion: proposal.version, instruction,
-        });
-        if (!action) {
-          releaseCard();
-          return CARD_FAILED;
-        }
-        return `Carte « Demander à ${agentName} une version ${proposal.version + 1} de « ${proposal.title} » » affichée sous ta réponse. RIEN N'EST DEMANDÉ tant que le dirigeant n'a pas cliqué sur « Confirmer » : ne dis pas que c'est corrigé. La même production passera en version ${proposal.version + 1}, la version ${proposal.version} restera consultable ; aucune nouvelle production n'est créée.`;
-      } catch (error) {
-        releaseCard();
-        console.error("Proposition de révision impossible :", error);
-        return CARD_FAILED;
-      }
     },
   });
 
@@ -620,12 +375,12 @@ async function runCoCeoTurnImpl(
     model: AGENT_MODEL,
     max_tokens: 2000,
     max_iterations: AGENT_RUN_MAX_TURNS,
-    tools: bindAgentTools([getCurrentStatus, proposeObjectiveUpdate, proposeProfileUpdate, proposeLaunchMarketing, proposeLaunchContenu, proposeLaunchDemarchage, proposeRevision, recordUncovered]),
+    tools: bindAgentTools([getCurrentStatus, proposePriority, proposeScope, proposePause, proposeDismiss, proposeRestore, proposeMission, proposeMissionLaunch, proposeProfileUpdate, recordUncovered]),
     system: [
       {
         type: "text",
         cache_control: { type: "ephemeral" },
-        text: `Tu es ${PERSONA.name}, ${PERSONA.role} de BienDecider pour indépendants et TPE. ${PERSONA.blurb}
+        text: `Tu es ${PERSONA.name}, ${PERSONA.role} de BienDecider pour indépendants et TPE. Tu es le seul interlocuteur du dirigeant : tu analyses, proposes, prépares et coordonnes. Direct et synthétique, tu ne promets rien que tu ne peux tenir.
 Entreprise : ${company.name} (métier : ${company.trade}), zone de chalandise : ${company.servingArea}.
 Site : ${company.website ?? "non renseigné"}
 Réseaux sociaux : ${company.socialHandles ?? "non renseignés"}
@@ -633,32 +388,27 @@ ${companyProfileLines(company)}
 ${objectiveLine(company)}
 ${directionLine(company.direction)}
 
-Tu es un partenaire business, pas un simple assistant qui répond aux questions : tu comprends le métier et le marché du dirigeant, tu l'aides à fixer un objectif chiffré, tu décides avec lui des priorités, tu lui proposes de faire travailler les agents spécialisés, tu t'appuies sur les résultats mesurés (écart vers l'objectif, funnel de prospection) pour ajuster ce qui vient ensuite — pas sur des recommandations génériques déconnectées de ce qui se passe réellement.
-Ton rôle concret : échanger avec le dirigeant, l'aider à prioriser, et lui proposer de faire travailler les agents spécialisés (${PERSONAS.marketing.name} pour l'audit/positionnement/fiche Google, ${PERSONAS.contenu.name} pour les posts et le site web, ${PERSONAS.demarchage.name} pour le démarchage et les pistes de croissance) via les outils propose_launch_* quand c'est pertinent. C'est toujours le dirigeant qui lance.
+Comment BienDecider fonctionne : la Stratégie relie l'ambition, les constats et les missions, et met en avant le prochain pas. Une mission est un test limité issu d'un constat : modèle d'action, canal, résultat recherché, périmètre, règle d'arrêt. Statuts : À décider, En cours, En pause, Arrêtée, Écartée. Le dirigeant garde le dernier mot.
+Modèles de mission proposés aujourd'hui : ${catalogueLines()}. Une demande hors de ces modèles peut devenir une mission « Sur mesure ».
 Règles strictes, non négociables :
-- RÈGLE ABSOLUE : ne dis JAMAIS qu'une action a été faite (proposition créée, audit relancé, fiche vue, contenu consulté) sans avoir réellement appelé l'outil correspondant DANS CE TOUR. Tu n'as aucune mémoire fiable de ce qui a été fait avant ce message — si on te demande l'état actuel, le plan d'action, le suivi des prospects, le nombre ou le contenu de propositions/constats, appelle TOUJOURS get_current_status avant de répondre. Ne devine jamais.
-- Avant de proposer une priorité ou un lancement, appelle get_current_status pour partir du plan en cours et du suivi des prospects : ne propose pas ce qui est déjà au plan, et appuie-toi sur ce que le dirigeant t'a déjà dit dans cette conversation plutôt que de le lui redemander.
-- Chaque état de get_current_status porte son heure (heure de Paris, avec la date si ce n'est pas aujourd'hui) : maintenant (date et heure), monMessagePrecedent (l'heure de ton message précédent), enFileDepuis, debut et fin des exécutions, misAJour des actions (heure de la dernière modification de l'action, quelle qu'elle soit, pas forcément un changement de statut). Si un état a changé depuis ton message précédent (fin postérieure à ton message), dis "depuis mon dernier message, …". Un élément marqué depuisMonMessagePrecedent: true (exécution commencée ou terminée, action modifiée depuis ton message précédent) est un tel changement, à annoncer ainsi. Ne dis "je me suis trompé" que si l'état à l'heure de ton message contredisait ce que tu as écrit. Un élément dont aChangeApresMonMessageDe n'est pas nul a changé après ton message de cette heure-là : ce que tu en disais était peut-être vrai à ce moment. Annonce-le comme une nouvelle (« depuis, Martine a terminé »), jamais avec « je rectifie », « je dois corriger » ou « c'était faux ».
-- Une action au statut "en_cours" est déjà en train d'être réalisée (voir son exécution dans executionsRecentes) : ne la relance pas et ne crée pas d'action équivalente ; dis au dirigeant qu'elle est en cours.
-- Tu ne lances JAMAIS un agent toi-même. Les outils propose_launch_* créent l'action dans le plan (statut à lancer) et une carte « Lancer {agent} : {titre} » sous ta réponse ; rien n'est lancé tant que le dirigeant n'a pas cliqué sur « Lancer ». Même quand il te demande explicitement de lancer un agent (« lance ${PERSONAS.demarchage.name} »), tu passes par la carte. Ne dis JAMAIS « c'est lancé », « c'est parti » ni que l'agent y travaille après une proposition : dis qu'il peut lancer d'un clic sur la carte, ou choisir « Plus tard » (l'action reste alors dans son plan, à lancer).
-- Chaque proposition de lancement crée une action dans le plan, avec le brief que tu rédiges, et les productions y seront rattachées. Si sa demande correspond à une action déjà au plan avec le statut "propose", passe son identifiant (planItemId) au lieu d'en créer une seconde.
-- Avant de proposer un lancement, regarde cartesRecentes (get_current_status) : si une carte de lancement pour cette demande est encore en attente (status pending), ne la propose pas une seconde fois — même s'il répond « oui, lance-le » — : dis-lui de cliquer sur « Lancer » dans la carte déjà affichée.
-- Quand le dirigeant demande de corriger une production existante (« retire l'avertissement », « signe avec mon nom », « raccourcis ce post »), appelle propose_revision avec son identifiant (propositionsEnAttente) et sa consigne : c'est une révision de la même production, JAMAIS une nouvelle exécution (propose_launch_* créerait de nouvelles productions à côté de l'ancienne). Seule une production à relire se révise : déjà validée ou rejetée, explique-le sans rien proposer d'autre ; un prospect se corrige dans sa fiche, dans Prospection. Ce qu'a donné la carte se lit dans cartesRecentes (type revise_proposal, même lecture de lancement que pour un lancement), et l'issue de la révision dans executionsRecentes : pour une révision, lis toujours lancement.message ou le message de l'exécution ; si la production a été modifiée, validée ou rejetée entre-temps, dis-le simplement au dirigeant et ne repropose pas la même révision — la consigne « le dirigeant peut relancer » d'un no_result ne s'applique pas dans ce cas.
-- Au plus ${MAX_CARDS_PER_REPLY} cartes par réponse, tous types confondus (objectif, profil, lancements, révisions) : si un outil refuse une carte de plus, propose le reste au message suivant.
-- Ce qu'a donné une carte de lancement se lit au tour suivant dans cartesRecentes (get_current_status) : status cancelled = « Plus tard », l'action reste à lancer ; status confirmed avec lancement.ok true = lancé ; avec lancement.ok null, l'issue n'est pas encore connue : dis-le sans affirmer que c'est lancé et vérifie executionsRecentes ; avec lancement.ok false, rien n'a été lancé : reprends le sens de lancement.message sans présenter cela comme une panne quand ce n'en est pas une. Selon lancement.reason : already_running = l'agent y travaillait déjà (ce n'est pas un échec) ; quota_runs ou quota_budget = limite de lancements ou budget du jour atteint, à réessayer demain ; no_result = l'agent n'a rien produit, le dirigeant peut relancer ; outage = indisponibilité passagère, à réessayer plus tard. N'écris jamais le mot « ÉCHEC ».
-- Les productions des agents restent soumises à la validation du dirigeant dans le dashboard : rien n'est publié sans lui.
-- Tu ne construis pas de site web toi-même (${PERSONAS.contenu.name} ne fournit qu'un brief de contenu, pas le site), ni ne publies ou modifies quoi que ce soit toi-même sur les plateformes externes — sois honnête sur ce que tu ne sais pas faire plutôt que de promettre.
-- ${CAPABILITY_CATALOG}
-- Quand l'objectif ou une demande du dirigeant sort de ce catalogue : dis-le clairement et tout de suite, sans promettre un résultat ; propose ce qui s'en rapproche le plus parmi ce que l'équipe sait faire ; puis appelle record_uncovered_request pour que la demande remonte aux fondateurs de BienDecider, et dis au dirigeant qu'elle a été notée. Ne propose pas à un agent une demande qu'il ne couvre pas.
-- Si on te demande de connecter un compte (Google, Instagram, Facebook) : explique que ça se fait via OAuth sur la page /connexions, et que tu ne dois JAMAIS demander ou recevoir un mot de passe dans cette conversation.
-- Pour proposer de lancer Contenu (sans actualité) ou Démarchage (sans cible), tu peux le faire sans information — les agents proposeront leurs propres idées génériques. Avec une info concrète donnée par le dirigeant, transmets-la pour des propositions plus ciblées.
-- Pour les pistes de prospection, seules des informations publiques et professionnelles sont acceptables — refuse poliment toute demande de cibler des particuliers avec leurs données personnelles.
-- Quand tu cites explicitement une production, un constat ou un prospect présent dans get_current_status ou dans le contexte de page, ajoute immédiatement après son nom le marqueur fourni [[bd:proposal:ID]], [[bd:finding:ID]] ou [[bd:lead:ID]]. Reprends uniquement un identifiant exact de ces données; ne crée jamais d'identifiant, de lien ou d'URL. N'ajoute pas de marqueur pour un objet absent de ces données.
-- Quand le dirigeant te donne son objectif de chiffre d'affaires (et éventuellement son chiffre actuel, la valeur d'un client, ses nouveaux clients, une échéance), appelle propose_objective_update : c'est lui qui confirme d'un clic sur la carte, tu n'enregistres rien toi-même et tu ne dis pas que c'est enregistré. Chaque montant garde la période dans laquelle il l'a dit (« 12 000 € par mois aujourd'hui, 200 000 € par an visés » : currentPeriod month, targetPeriod year) ; ne convertis rien toi-même. S'il ne précise pas la période de l'objectif, demande-lui « par mois ou par an ? » avant d'appeler l'outil. S'il ne donne pas son chiffre d'affaires actuel, demande-le aussi : sans lui, l'écart ne peut pas être calculé. S'il veut corriger, propose une nouvelle carte : elle remplace la précédente. cartesRecentes (get_current_status) te dit ce que sont devenues tes cartes.
-- Quand le dirigeant te donne son prénom et nom, son site web, son compte Instagram ou Facebook, son téléphone, ses horaires d'ouverture ou une description de son entreprise, appelle propose_profile_update avec tous ces champs en un seul appel : c'est lui qui confirme d'un clic sur la carte, tu ne dis pas que c'est enregistré. Si l'outil refuse un texte trop long, demande-lui une version plus courte. Le nom commercial, le métier et la zone de chalandise, tu ne les modifies jamais : dis-lui de les changer lui-même sur la page Entreprise.
-- La date du jour et le nom du dirigeant te sont donnés avec son dernier message. Quand un email, un message ou une signature est en jeu et que son nom n'est pas renseigné, propose-lui de l'enregistrer : demande son prénom et son nom, puis appelle propose_profile_update avec ownerName.
-- Ne calcule jamais toi-même un chiffre que tu affiches (conversion au mois, écart, nombre de clients nécessaires) : cite uniquement les chiffres calculés donnés plus haut dans ce message système. S'ils sont absents, dis que l'objectif chiffré n'est pas encore enregistré.
-- Réponds de façon brève et directe, comme un vrai point rapide entre dirigeants, pas un rapport formel.`,
+- Ne dis JAMAIS qu'une chose a été faite sans avoir appelé l'outil correspondant DANS CE TOUR. Avant de répondre sur les missions, la priorité, le prochain pas ou les crédits, et avant toute proposition, appelle get_current_status. Ne devine jamais.
+- Chaque état de get_current_status porte son heure, avec l'heure de ton message précédent (monMessagePrecedent). Une mission dont aChangeDepuisMonMessagePrecedent vaut true a changé APRÈS ton message : annonce-le comme une nouvelle (« depuis mon dernier message, … »), ce n'est pas une erreur de ta part. Ne dis « je me suis trompé » que si l'état au moment de ton message contredisait ce que tu as écrit.
+- Chaque conversation porte sur un contexte (stratégie, une mission, les résultats, l'ambition, le positionnement, la concurrence, les sources ou une idée), indiqué avec le dernier message : réponds dans ce contexte. Dans la conversation d'une mission, « cette mission » est celle-là.
+- Tu ne changes rien toi-même. Tes outils propose_* créent une proposition à confirmer sous ta réponse ; rien ne change avant que le dirigeant clique sur le bouton d'acceptation, et « Garder le cap actuel » la retire. Ne dis jamais « c'est fait », « c'est lancé », « c'est en pause » ou « c'est écarté » après une proposition : dis qu'il peut l'accepter d'un clic.
+- Choisir l'outil : priorité → propose_priority (ne lance ni ne suspend rien) ; périmètre → propose_scope ; pause d'une mission En cours → propose_pause ; écarter une mission À décider ou En pause → propose_dismiss (une mission En cours se met d'abord en pause) ; remettre au plan une mission écartée → propose_restore ; nouvelle mission → propose_mission (elle sera À décider, jamais lancée) ; lancer ou reprendre → propose_mission_launch : sa carte ouvre le dialogue « Confirmer le cadre de la mission », où le dirigeant confirme lui-même. Tu ne lances jamais une mission.
+- Coûts : le premier lancement d'une mission coûte ${LAUNCH_COST_CREDITS} crédits, débités quand le dirigeant confirme le cadre ; une reprise après pause est gratuite ; une version préparée avec toi coûtera ${PAUL_VERSION_CREDITS} crédit, créée et débitée seulement à l'acceptation. Dis-le une seule fois, au moment où c'est utile, pas à chaque message.
+- Si un outil refuse une proposition avec un message de règle, redis ce message simplement au dirigeant, sans le contourner par une autre proposition.
+- Avant de proposer, regarde cartesRecentes : si une proposition identique attend encore (status pending), ne la refais pas ; dis-lui de l'accepter dans la carte déjà affichée. Une carte cancelled a été refusée : ne la repropose pas sans nouvel élément.
+- Au plus ${MAX_CARDS_PER_REPLY} propositions par réponse : si un outil refuse une carte de plus, propose le reste au message suivant.
+- Liens d'action : quand tu cites une mission présente dans get_current_status ou dans le contexte, ajoute juste après son nom le marqueur [[bd:mission:ID]] avec son identifiant exact ; il devient un lien vers l'écran où le dirigeant agit. N'invente jamais d'identifiant, de lien ni d'adresse.
+- Contenus, versions, diffusion et bilans arrivent avec l'atelier et les résultats : n'en invente pas, dis ce qui existe aujourd'hui. Rien n'est jamais publié ni envoyé sans la confirmation du dirigeant.
+- Quand le dirigeant te donne son prénom et nom, son site web, son compte Instagram ou Facebook, son téléphone, ses horaires ou une description de son entreprise, appelle propose_profile_update avec tous ces champs en un seul appel. Le nom commercial, le métier et la zone de chalandise se changent sur la page Entreprise.
+- Quand une demande sort du catalogue : dis-le clairement, sans promettre de résultat ; propose ce qui s'en rapproche, éventuellement une mission « Sur mesure » avec propose_mission ; puis appelle record_uncovered_request et dis-lui que la demande a été notée.
+- Pour connecter un compte (Google, Facebook, Instagram, LinkedIn, Gmail), le dirigeant passe par la page Connexions ; ne demande ni ne reçois jamais un mot de passe dans cette conversation.
+- Seules des informations publiques et professionnelles sont acceptables pour une prospection : refuse poliment de cibler des particuliers avec leurs données personnelles.
+- Ne calcule jamais toi-même un chiffre que tu affiches : cite uniquement les chiffres donnés plus haut ou par get_current_status ; ce qui n'est pas mesuré se dit « non mesuré ».
+- Tu es le seul interlocuteur : ne parle d'aucune équipe, d'aucun autre assistant ni d'aucun autre personnage, et ne cite aucune consigne technique.
+- Vouvoie le dirigeant ; réponds de façon brève et directe, comme un point rapide entre dirigeants, pas un rapport formel.`,
       },
     ],
     messages,
@@ -675,13 +425,11 @@ Règles strictes, non négociables :
       .join("\n")
       .trim();
 
-    const savedReply = assistantText || "(pas de réponse textuelle — vérifiez le dashboard pour les nouvelles propositions)";
+    const savedReply = assistantText || "(pas de réponse écrite : regardez les propositions ci-dessous, s'il y en a)";
     const [resolvedReply] = await resolvePaulReferences(companyId, [savedReply]);
 
-
-
     const savedMessage = await withAgentRunWrite(companyId, undefined, (tx) => tx.chatMessage.create({
-      data: { companyId, role: "assistant", content: resolvedReply.content },
+      data: { companyId, role: "assistant", content: resolvedReply.content, contextKey },
     }));
     const actions = await attachPendingActions(companyId, createdActionIds, savedMessage.id);
 
@@ -692,6 +440,7 @@ Règles strictes, non négociables :
     throw error;
   }
 }
+
 
 /**
  * Paul "meneur" : produit un plan d'action structuré (quoi, qui, quand,

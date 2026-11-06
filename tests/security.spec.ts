@@ -336,7 +336,7 @@ test("malformed or oversized input gets a clear 4xx, never a server error", asyn
   const planItem = await prisma.actionPlanItem.create({ data: { companyId: company.id, agent: "marketing", title: "Action", rationale: "Raison", timing: "bientôt" } });
   const proposal = await prisma.agentProposal.create({ data: { companyId: company.id, agent: "contenu", kind: "social_post", title: "Post", content: "Contenu" } });
   const card = await prisma.paulPendingAction.create({ data: {
-    companyId: company.id, type: "update_objective", payload: { targetPeriod: "year", revenueTarget: 200000 }, expiresAt: new Date(Date.now() + 3_600_000),
+    companyId: company.id, type: "update_profile", payload: { website: "https://atelier-input.fr" }, expiresAt: new Date(Date.now() + 3_600_000),
   } });
   const cookie = sessionCookie(email, company.sessionVersion);
   const send = (method: string, path: string, body: string, authenticated = true) => request.fetch(`${baseURL}${path}`, {

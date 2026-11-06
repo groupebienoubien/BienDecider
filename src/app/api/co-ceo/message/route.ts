@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { runCoCeoTurn } from "@/lib/agents/co-ceo";
 import { buildPageContext, pageContextSchema } from "@/lib/agents/page-context";
+import { resolveOwnedContext } from "@/lib/agents/chat-context";
 import { AgentRunQuotaError, reserveUsageBudget } from "@/lib/agent-runs";
 import { getSessionCompany } from "@/lib/session";
 import { encodeStreamEvent, NDJSON_CONTENT_TYPE, type PaulStreamEvent } from "@/lib/chat-stream";
@@ -13,6 +14,8 @@ export const maxDuration = 300;
 const bodySchema = z.object({
   message: z.string().trim().min(1).max(4000),
   context: pageContextSchema.optional(),
+  /** Conversation du contexte (spécification §16.1) ; « strategie » par défaut. */
+  contextKey: z.string().max(80).optional(),
 });
 
 export async function POST(request: NextRequest) {
@@ -24,12 +27,15 @@ export async function POST(request: NextRequest) {
   if (!parsed.success) {
     return NextResponse.json({ error: "Message requis (4 000 caractères au plus)." }, { status: 400 });
   }
+  // Une conversation sur une mission d'une autre entreprise, ou un contexte inconnu, est refusée avant toute dépense.
+  const owned = await resolveOwnedContext(company.id, parsed.data.contextKey);
+  if (!owned) return NextResponse.json({ error: "Conversation introuvable." }, { status: 404 });
 
   try {
-    const pageContext = parsed.data.context ? await buildPageContext(company.id, parsed.data.context) : undefined;
+    const pageContext = await buildPageContext(company.id, parsed.data.context ?? { path: "/strategie" }, owned);
     const reservation = await reserveUsageBudget(company.id, "co_ceo_chat");
     if (!request.headers.get("accept")?.includes(NDJSON_CONTENT_TYPE)) {
-      const reply = await runCoCeoTurn(company.id, parsed.data.message, reservation.id, pageContext);
+      const reply = await runCoCeoTurn(company.id, parsed.data.message, reservation.id, pageContext, undefined, owned.key);
       return NextResponse.json({ reply: reply.content, references: reply.references, actions: reply.actions });
     }
 
@@ -44,7 +50,7 @@ export async function POST(request: NextRequest) {
           const reply = await runCoCeoTurn(company.id, parsed.data.message, reservation.id, pageContext, {
             onTurnStart: () => send({ type: "reset" }),
             onText: (text) => send({ type: "delta", text }),
-          });
+          }, owned.key);
           send({ type: "done", reply: reply.content, references: reply.references, actions: reply.actions });
         } catch (error) {
           console.error("Erreur Co-CEO:", error);

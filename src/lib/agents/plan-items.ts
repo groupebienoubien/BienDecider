@@ -3,8 +3,15 @@ import { prisma } from "@/lib/prisma";
 import { withSerializableRetry } from "@/lib/serialization-conflict";
 import type { PlanTheme } from "@/lib/plan-themes";
 import { CHAT_REQUEST_TIMING, cleanPlanLaunchExtras, type PlanLaunchExtras } from "@/lib/agents/plan-item-shared";
-import { launchPlanItemPayloadSchema } from "@/lib/agents/pending-action-view";
+import { z } from "zod";
 import { assertAgentExecutionActive, withAgentRunWrite } from "@/lib/agent-run-execution";
+
+/** Anciennes cartes de lancement (retirées avec #288) : seule la reprise de leur demande les lit encore. */
+const launchPlanItemPayloadSchema = z.object({
+  planItemId: z.string().min(1),
+  extras: z.unknown().optional(),
+  reused: z.literal(true).optional(),
+}).loose();
 
 export const PLAN_AGENTS = ["marketing", "contenu", "demarchage"] as const;
 export type PlanAgent = (typeof PLAN_AGENTS)[number];

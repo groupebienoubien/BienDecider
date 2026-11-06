@@ -1,7 +1,7 @@
 import type { PaulReference } from "@/lib/paul-references";
 
 // Import de type seulement : ce module reste exécutable par les tests Node sans l'alias "@/".
-const REFERENCE_MARKER = /\[\[bd:(?:proposal|finding|lead):[A-Za-z0-9_-]{1,100}\]\]/g;
+const REFERENCE_MARKER = /\[\[bd:(?:proposal|finding|lead|mission):[A-Za-z0-9_-]{1,100}\]\]/g;
 
 /** Texte lu à voix haute : les marqueurs de lien deviennent le nom de l'objet cité, ou disparaissent s'ils sont inconnus. */
 export function spokenText(content: string, references: PaulReference[] = []): string {
