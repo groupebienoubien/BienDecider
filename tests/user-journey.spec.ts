@@ -2572,7 +2572,11 @@ test("GH-168: Stratégie shows the finding behind each mission, its certainty an
     await linked.getByRole("button", { name: /Voir la source/ }).click();
     await source.getByRole("button", { name: "Questionner ce constat" }).click();
     await expect(source).toBeHidden();
-    await expect(page.getByRole("dialog", { name: "Discussion avec Paul" }).locator("header")).toContainText("Fiabilité des sources");
+    const paul = page.getByRole("dialog", { name: "Discussion avec Paul" });
+    await expect(paul.locator("header")).toContainText("Fiabilité des sources");
+    // Le panneau reste ouvert d'une page à l'autre et couvre l'écran d'un téléphone : on le replie avant les largeurs étroites.
+    await paul.getByRole("button", { name: "Replier" }).click();
+    await expect(paul).toBeHidden();
 
     // Téléphone : la ligne et la fenêtre tiennent sans défilement horizontal.
     for (const width of [390, 320]) {
