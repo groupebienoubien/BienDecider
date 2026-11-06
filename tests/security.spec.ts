@@ -102,6 +102,7 @@ const PUBLIC_ROUTES: Record<string, string> = {
   "/api/auth/reset-password": "le jeton à usage unique du lien reçu par e-mail fait foi, sans session (POST même origine)",
   "/api/auth/verify-email": "le jeton à usage unique du lien reçu par e-mail fait foi, sans session (POST même origine)",
   "/api/cron/weekly-review": "protégée par CRON_SECRET, pas par la session",
+  "/api/cron/publications": "protégée par CRON_SECRET, pas par la session (programmations, #261)",
   "/api/health": "sonde publique sans donnée métier",
 };
 
@@ -191,6 +192,10 @@ test("missing, unsigned and forged session cookies are refused everywhere", asyn
   }
   const cron = await request.get(`${baseURL}/api/cron/weekly-review`, { headers: { Authorization: "Bearer wrong-secret" } });
   expect([401, 500]).toContain(cron.status());
+  for (const authorization of [undefined, "Bearer wrong-secret"]) {
+    const publications = await request.get(`${baseURL}/api/cron/publications`, { headers: authorization ? { Authorization: authorization } : {} });
+    expect([401, 500]).toContain(publications.status());
+  }
 });
 
 test("login does not create unknown accounts; signup is explicit", async ({ request }) => {
@@ -1198,6 +1203,9 @@ test("diffusion is decided by the server for the session company, and « Prépar
     expect((await diffuse(a, { action: "envoyer", number: 1 })).status()).toBe(400);
     expect((await diffuse(a, { action: "resolve", number: 1 })).status()).toBe(400);
     expect(await (await diffuse(a, { action: "publish", number: 1 })).json()).toMatchObject({ code: "M-82" });
+    expect(await (await diffuse(a, { action: "publish", number: 1, confirmed: true, scheduledAt: "demain 9h" })).json()).toMatchObject({ code: "M-61" });
+    expect(await (await diffuse(a, { action: "publish", number: 1, confirmed: true, scheduledAt: "2020-01-01T09:00:00.000Z" })).json()).toMatchObject({ code: "M-61" });
+    expect(await (await diffuse(a, { action: "cancel", number: 1 })).json()).toMatchObject({ code: "M-87" });
 
     // Mise en ligne : la page publique sert exactement la version validée, en texte.
     const published = await diffuse(a, { action: "publish", number: 1, confirmed: true, status: "sent" });

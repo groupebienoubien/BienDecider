@@ -8,6 +8,7 @@ import { getShellProps } from "@/lib/shell-data";
 import { prisma } from "@/lib/prisma";
 import { firstNameOf, requireWorkspaceCompany } from "@/lib/workspace";
 import { loadMissionViews, priorityOf } from "@/lib/missions/view";
+import { loadCancelledSchedules } from "@/lib/contents/view";
 import { nextStep } from "@/lib/missions/stage";
 import { LAUNCH_COST_CREDITS } from "@/lib/missions/rules";
 import { asDelegationLevel } from "@/lib/delegation-level";
@@ -22,7 +23,9 @@ export default async function StrategiePage() {
   const connected = await prisma.channelConnection.count({ where: { companyId: company.id, status: "connecte" } });
   const step = nextStep(missions, asDelegationLevel(company.delegationLevel), priorityOf(missions));
   const stepMission = missions.find((mission) => mission.id === step.missionId) ?? null;
-  const toValidate = missions.filter((mission) => (mission.stage === "approve" || mission.stage === "verify") && mission.contentId);
+  const toValidate = missions.filter((mission) => (mission.stage === "approve" || mission.stage === "verify" || mission.stage === "scheduled") && mission.contentId);
+  const cancelledSchedules = await loadCancelledSchedules(company.id);
+  const STAGE_LINE: Partial<Record<string, [string, string]>> = { verify: ["diffusion à vérifier", "Vérifier"], scheduled: ["diffusion programmée", "Voir la programmation"] };
   const firstName = firstNameOf(company.ownerName);
 
   return (
@@ -60,7 +63,7 @@ export default async function StrategiePage() {
 
       <section className="section-space" aria-labelledby="to-validate-title">
         <div className="section-title"><h2 id="to-validate-title">À valider par vous</h2></div>
-        {toValidate.length === 0 ? (
+        {toValidate.length === 0 && cancelledSchedules.length === 0 ? (
           <div className="decision">
             <Icon name="panels-top-left" />
             <span>Aucun contenu à valider pour le moment. Les contenus de vos missions en cours arriveront dans l&apos;atelier.</span>
@@ -68,8 +71,15 @@ export default async function StrategiePage() {
         ) : toValidate.map((mission) => (
           <div key={mission.id} className="decision">
             <Icon name="panels-top-left" />
-            <span><strong>{mission.title}</strong> · V{mission.content?.number} · {mission.channelLabel} · {mission.stage === "verify" ? "diffusion à vérifier" : "prête à relire"}</span>
-            <Link href={`/atelier/${mission.contentId}`}>{mission.stage === "verify" ? "Vérifier" : "Relire et valider"}</Link>
+            <span><strong>{mission.title}</strong> · V{mission.content?.number} · {mission.channelLabel} · {STAGE_LINE[mission.stage]?.[0] ?? "prête à relire"}</span>
+            <Link href={`/atelier/${mission.contentId}`}>{STAGE_LINE[mission.stage]?.[1] ?? "Relire et valider"}</Link>
+          </div>
+        ))}
+        {cancelledSchedules.map((item) => (
+          <div key={item.contentId} className="decision">
+            <Icon name="refresh-cw" />
+            <span><strong>{item.missionTitle}</strong> · V{item.versionNumber} · programmation annulée : {item.reason}</span>
+            <Link href={`/atelier/${item.contentId}`}>Voir le contenu</Link>
           </div>
         ))}
         <div className="decision">

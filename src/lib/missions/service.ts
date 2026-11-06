@@ -8,6 +8,7 @@ import type { TemplateKey } from "@/lib/missions/templates";
 import { scopeSummary } from "@/lib/missions/scope";
 import { writeJournal, type JournalCode } from "@/lib/journal";
 import { adaptContentToChannel } from "@/lib/contents/service";
+import { cancelScheduledPublications } from "@/lib/contents/publish";
 
 export class MissionNotFoundError extends Error {
   constructor() {
@@ -124,8 +125,8 @@ export async function applyMissionTransitionIn(tx: Prisma.TransactionClient, com
   // Écarter la priorité choisie la rend au calcul : la première mission non écartée (§2.2).
   if (request.action === "dismiss") await tx.company.updateMany({ where: { id: companyId, priorityMissionId: mission.id }, data: { priorityMissionId: null } });
   const updated = await tx.mission.findUniqueOrThrow({ where: { id: mission.id } });
-  if (request.action === "set_channel") await adaptContentToChannel(tx, updated);
-  const entry = journalFor(request, updated);
+  if (request.action === "set_channel") await adaptContentToChannel(tx, updated);    if (request.action === "pause") await cancelScheduledPublications(tx, { companyId, missionId: mission.id }, "mission mise en pause", "owner");
+    if (request.action === "dismiss") await cancelScheduledPublications(tx, { companyId, missionId: mission.id }, "mission écartée du plan", "owner");  const entry = journalFor(request, updated);
   if (entry) await writeJournal(tx, { companyId, missionId: mission.id, ...entry });
   return { mission: updated, balance };
 }

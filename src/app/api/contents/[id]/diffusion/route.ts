@@ -1,13 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionCompany } from "@/lib/session";
 import { readJsonObject } from "@/lib/request-body";
-import { MissionError } from "@/lib/missions/messages";
+import { MISSION_MESSAGES, MissionError } from "@/lib/missions/messages";
 import { ContentNotFoundError } from "@/lib/contents/service";
-import { declareContentDiffusion, publishContentNow, resolveUncertainDiffusion } from "@/lib/contents/publish";
+import { parseSchedule } from "@/lib/contents/rules";
+import { cancelContentSchedule, declareContentDiffusion, publishContentNow, resolveUncertainDiffusion } from "@/lib/contents/publish";
 
 export const maxDuration = 60;
 
-// Diffusion d'une version (stories 12.1 et 12.2, #315 #295) : maintenant par BienDecider, déclarée par vous, ou résultat incertain vérifié.
+// Diffusion d'une version (stories 12.1, 12.2 et 12.4, #315 #295 #261) : maintenant ou programmée, annulée, déclarée par vous, ou résultat incertain vérifié.
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   if (request.headers.get("origin") !== request.nextUrl.origin) return NextResponse.json({ error: "Origine refusée." }, { status: 403 });
   const company = await getSessionCompany();
@@ -18,8 +19,13 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const { id } = await params;
   try {
     switch (body.action) {
-      case "publish":
-        return NextResponse.json(await publishContentNow(company.id, id, { number, confirmed: body.confirmed === true }));
+      case "publish": {
+        const schedule = parseSchedule(body.scheduledAt, body.timezone);
+        if (schedule === undefined) return NextResponse.json({ error: MISSION_MESSAGES["M-61"], code: "M-61" }, { status: 422 });
+        return NextResponse.json(await publishContentNow(company.id, id, { number, confirmed: body.confirmed === true, scheduledAt: schedule?.at ?? null, timezone: schedule?.timezone ?? null }));
+      }
+      case "cancel":
+        return NextResponse.json(await cancelContentSchedule(company.id, id, { number }));
       case "declare":
         return NextResponse.json(await declareContentDiffusion(company.id, id, { number, channel: body.channel, date: body.date, confirmed: body.confirmed === true }));
       case "resolve":

@@ -45,7 +45,7 @@ import { scopeSummary } from "../src/lib/missions/scope";
 import { renderJournal } from "../src/lib/journal";
 import { DELEGATION_LABELS, asDelegationLevel, prepareOnlyRefusal } from "../src/lib/delegation-level";
 import { slugify } from "../src/lib/site/slug";
-import { BODY_MAX, checkDeclaration, checkDiffusion, checkNewVersion, checkRejection, checkValidation, contentFormat, contentStatus, exposureFor, parseVariant, reviewChecklist, titleLabel, validateDraft, validateRejection, variantLabel, type ContentSnapshot } from "../src/lib/contents/rules";
+import { BODY_MAX, checkDeclaration, checkDiffusion, checkNewVersion, isSchedulable, parseSchedule, checkRejection, checkValidation, contentFormat, contentStatus, exposureFor, parseVariant, reviewChecklist, titleLabel, validateDraft, validateRejection, variantLabel, type ContentSnapshot } from "../src/lib/contents/rules";
 import { firstNameOf } from "../src/lib/workspace";
 import { workspacePageLabel } from "../src/components/workspace-nav";
 import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH, passwordPolicyError } from "../src/lib/password-policy";
@@ -1764,6 +1764,17 @@ test("diffusion (§5.1, §5.4): server checks in the specification order, declar
   expect(checkDiffusion(contentSnapshot({ validatedNumber: 2, currentDiffused: true }), context, confirm)).toEqual({ code: "M-53" });
   expect(checkDiffusion(contentSnapshot({ validatedNumber: 2, channel: "gmail", format: "email", recipients: 0 }), context, confirm)).toEqual({ code: "M-49" });
   expect(checkDiffusion(ready, context, { number: 2, confirmed: false })).toEqual({ code: "M-82" });
+  const at = new Date("2026-11-05T10:00:00Z");
+  expect(checkDiffusion(ready, context, { number: 2, confirmed: true, scheduledAt: new Date("2026-11-05T10:02:00Z"), now: at })).toEqual({ code: "M-61" });
+  expect(checkDiffusion(ready, context, { number: 2, confirmed: false, scheduledAt: new Date("2026-11-05T09:00:00Z"), now: at })).toEqual({ code: "M-61" });
+  expect(checkDiffusion(ready, context, { number: 2, confirmed: true, scheduledAt: new Date("2026-11-06T08:00:00Z"), now: at })).toBeNull();
+  expect(isSchedulable(new Date("2026-11-05T10:05:00Z"), at)).toBe(true);
+  expect(isSchedulable(new Date("2027-11-06T10:00:00Z"), at)).toBe(false);
+  expect(parseSchedule(undefined, "Europe/Paris")).toBeNull();
+  expect(parseSchedule("2026-11-06T08:00:00.000Z", "America/Martinique")).toEqual({ at: new Date("2026-11-06T08:00:00Z"), timezone: "America/Martinique" });
+  expect(parseSchedule("2026-11-06T08:00:00.000Z", "Lune/Mer")).toEqual({ at: new Date("2026-11-06T08:00:00Z"), timezone: "Europe/Paris" });
+  expect(parseSchedule("demain 9h", "Europe/Paris")).toBeUndefined();
+  expect(renderJournal("J-21", { n: "2", canal: "Page Facebook « Dupont »", date: "7 novembre vers 09:05" })).toBe("V2 programmée sur Page Facebook « Dupont » le 7 novembre vers 09:05.");
   expect(checkNewVersion(contentSnapshot({ uncertain: true }))).toEqual({ code: "M-81" });
 
   const now = new Date("2026-11-05T10:00:00Z");

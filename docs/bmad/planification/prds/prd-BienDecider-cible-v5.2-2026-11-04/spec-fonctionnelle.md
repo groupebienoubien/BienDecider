@@ -630,6 +630,7 @@ Tout dialogue se ferme par Échap ou le bouton de fermeture ; une navigation le 
 | M-84 | Cochez « Je confirme avoir diffusé cette version » avant de déclarer. |
 | M-85 | Choisissez l'un des trois niveaux de délégation. |
 | M-86 | Aucun résultat incertain à vérifier pour cette version. |
+| M-87 | Aucune programmation à annuler pour cette version. |
 
 ## 15. Journal
 
