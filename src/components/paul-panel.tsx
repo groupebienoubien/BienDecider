@@ -514,9 +514,14 @@ export function PaulPanel({ launchLabel }: { launchLabel?: string } = {}) {
       if (data?.action) replaceAction(data.action as PendingActionView);
       // Refus d'une règle (M-xx) : la carte reste à confirmer et affiche le message. Une carte expirée ou remplacée se lit sur la carte elle-même.
       if (!response.ok && (!data?.action || data.reason === "refused")) throw new Error(data?.error ?? "La décision n'a pas pu être enregistrée. Réessayez.");
-      if (response.ok && typeof data?.reply === "string") {
-        const now = new Date().toISOString();
-        setMessages((previous) => [...previous, { id: `local-${now}-keep`, role: "assistant", content: data.reply, createdAt: now }]);
+      // « Garder le cap actuel » : la route renvoie le message de Paul enregistré dans le fil de la carte.
+      const keep = data?.reply as { id?: unknown; content?: unknown; createdAt?: unknown } | undefined;
+      if (response.ok && keep && typeof keep.content === "string") {
+        const createdAt = typeof keep.createdAt === "string" ? keep.createdAt : new Date().toISOString();
+        const id = typeof keep.id === "string" ? keep.id : `local-${createdAt}-keep`;
+        const content = keep.content;
+        localEditsRef.current += 1;
+        setMessages((previous) => (previous.some((entry) => entry.id === id) ? previous : [...previous, { id, role: "assistant", content, createdAt }]));
       }
       if (response.ok && typeof data?.redirect === "string" && data.redirect.startsWith("/")) router.push(data.redirect);
       else if (response.ok && decision === "confirm") router.refresh();
