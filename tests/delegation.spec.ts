@@ -1820,8 +1820,11 @@ test("an OAuth flow started from a Vercel alias restarts from the public address
     process.env.APP_BASE_URL = "https://www.biendecider.com";
     const alias = canonicalOAuthStart(new NextRequest("https://bien-decider-git-main-groupe-bienou-bien.vercel.app/api/oauth/gmail/start"));
     expect(alias?.headers.get("location")).toBe("https://www.biendecider.com/api/oauth/gmail/start");
+    const apex = canonicalOAuthStart(new NextRequest("https://biendecider.com/api/oauth/gmail/start"));
+    expect(apex?.headers.get("location")).toBe("https://www.biendecider.com/api/oauth/gmail/start");
     expect(canonicalOAuthStart(new NextRequest("https://www.biendecider.com/api/oauth/gmail/start"))).toBeNull();
     expect(canonicalOAuthStart(new NextRequest("http://localhost:3000/api/oauth/meta/start"))).toBeNull();
+    expect(canonicalOAuthStart(new NextRequest("http://192.168.1.67:3000/api/oauth/meta/start"))).toBeNull();
     delete process.env.APP_BASE_URL;
     expect(canonicalOAuthStart(new NextRequest("https://bien-decider-git-main-groupe-bienou-bien.vercel.app/api/oauth/meta/start"))).toBeNull();
   } finally {
