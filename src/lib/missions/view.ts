@@ -1,4 +1,5 @@
-import type { Mission, MissionContent, MissionDecision, MissionReport } from "@prisma/client";
+import type { AuditFinding, Mission, MissionContent, MissionDecision, MissionReport } from "@prisma/client";
+import { normalizeCertainty, type MissionSourceFinding } from "@/lib/findings/certainty";
 import { prisma } from "@/lib/prisma";
 import { channelLabel, isMissionChannel, type MissionChannel } from "@/lib/missions/channels";
 import { scopeSummary } from "@/lib/missions/scope";
@@ -28,6 +29,10 @@ export type MissionView = StageMission & {
   priority: boolean;
   finding: string;
   createdBy: string;
+  /** Déduction de Paul à la proposition (#168) ; null pour une mission du dirigeant ou ancienne. */
+  deduction: string | null;
+  /** Constat du diagnostic relié (#168) ; null s'il n'y en a pas ou s'il a été supprimé. */
+  source: MissionSourceFinding | null;
   templateLabel: string;
   channelLabel: string;
   scopeSummary: string;
@@ -49,7 +54,24 @@ type MissionWithContent = Mission & {
   content: (MissionContent & { publications: { versionNumber: number; status: string; sentAt: Date | null }[] }) | null;
   reports: MissionReport[];
   decisions: MissionDecision[];
+  sourceFinding: AuditFinding | null;
 };
+
+/** Constat relié, seulement s'il est de l'entreprise de la mission ; « Observé » refait selon la source. */
+function sourceOf(mission: MissionWithContent): MissionSourceFinding | null {
+  const finding = mission.sourceFinding;
+  if (!finding || finding.companyId !== mission.companyId) return null;
+  return {
+    id: finding.id,
+    title: finding.title,
+    category: finding.category,
+    content: finding.content,
+    sourceUrl: finding.sourceUrl,
+    sourceStatus: finding.sourceStatus,
+    certainty: normalizeCertainty(finding.certainty, finding.sourceStatus, finding.sourceUrl),
+    createdAt: finding.createdAt.toISOString(),
+  };
+}
 
 /** Le site est publié par BienDecider : il n'a pas de connexion à établir. */
 function isConnected(channel: MissionChannel | null, connected: ReadonlySet<string>): boolean {
@@ -98,6 +120,8 @@ function toView(mission: MissionWithContent, priorityId: string | null, connecte
     priority: mission.id === priorityId,
     finding: mission.finding,
     createdBy: mission.createdBy,
+    deduction: mission.deduction,
+    source: sourceOf(mission),
     templateLabel: MISSION_TEMPLATES[base.template]?.label ?? "Sur mesure",
     channelLabel: label,
     scopeSummary: summary,
@@ -147,6 +171,7 @@ export async function loadMissionViews(companyId: string): Promise<MissionView[]
         content: { include: { publications: { select: { versionNumber: true, status: true, sentAt: true } } } },
         reports: { orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: 1 },
         decisions: { orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: 1 },
+        sourceFinding: true,
       },
     }),
     prisma.channelConnection.findMany({ where: { companyId, status: "connecte" }, select: { channel: true } }),

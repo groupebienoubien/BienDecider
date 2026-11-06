@@ -10,6 +10,7 @@ import { googlePlacesConfigured } from "@/lib/google-places";
 import { COMPETITOR_READ_CAP, describeOwnReading, readCompetitorGooglePlace, readOwnGooglePlace } from "@/lib/google-place";
 import { describeFacebookReading, knownFacebookPageUrl, proposeFacebookPage, readOwnFacebookPage } from "@/lib/facebook-page";
 import { runToolLoop } from "@/lib/usage";
+import { CERTAINTY_LEVELS, normalizeCertainty } from "@/lib/findings/certainty";
 import { agentRunnerOptions, bindAgentTools } from "@/lib/agent-run-execution";
 import { AGENT_RUN_MAX_TURNS } from "@/lib/agent-run-limits";
 import {
@@ -69,6 +70,12 @@ export async function runMarketingAgent(
         .describe("Ce qu'il faut améliorer, en 2-4 phrases factuelles et concrètes — pas de jargon marketing creux."),
       sourceUrl: z.string().url().optional().describe("URL effectivement consultée pour étayer ce constat"),
       sourceStatus: z.enum(["consultée", "accès limité", "indisponible"]).optional().describe("Résultat réel de consultation de la source"),
+      certainty: z
+        .enum(CERTAINTY_LEVELS)
+        .optional()
+        .describe(
+          "Niveau de certitude : observe = constaté sur une source réellement lue (sourceStatus « consultée » et sourceUrl obligatoires, sinon le constat est enregistré « à vérifier ») ; piste = déduction plausible sans preuve directe ; a_verifier = source non lue ou incomplète.",
+        ),
       actionItems: z
         .array(
           z.object({
@@ -98,6 +105,8 @@ export async function runMarketingAgent(
             actionItems: input.actionItems,
             sourceUrl: input.sourceUrl,
             sourceStatus: input.sourceStatus,
+            // FR-6 : « Observé » seulement si la source a été consultée, quoi qu'en dise l'agent.
+            certainty: normalizeCertainty(input.certainty, input.sourceStatus, input.sourceUrl),
           },
         });
         return { id: finding.id, message: `Constat enregistré (id: ${finding.id}).` };
@@ -206,6 +215,7 @@ Règles strictes :
 - ${websiteInstruction}
 - ${facebookInstruction}
 - Si le site est inaccessible, signale-le comme un constat factuel, ne devine jamais son contenu.
+- Certitude de chaque constat (certainty) : observe seulement pour ce que tu as lu toi-même sur la source citée (sourceStatus « consultée » et sourceUrl) ; piste pour une déduction plausible sans preuve directe ; a_verifier quand la source n'a pas pu être lue ou ne l'a été qu'en partie. Un constat observe sans source consultée est enregistré « à vérifier ».
 - Utilise web_search pour identifier des concurrents réels (ex: "${company.trade} ${company.servingArea}") — cite tes sources, n'invente jamais de concurrent.
 - Tu ne fais QUE proposer/constater, jamais exécuter directement.
 - Pas de jargon marketing creux : chaque constat ou proposition doit être concret et actionnable.

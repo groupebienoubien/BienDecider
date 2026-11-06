@@ -2,6 +2,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { describePage, PAUL_ELEMENT_LABELS, PAUL_ELEMENT_TYPES, type PaulElementType } from "@/lib/paul-context";
 import type { PaulContext } from "@/lib/paul-contexts";
+import { CERTAINTY_LABELS, formatReadDate, normalizeCertainty, safeSourceUrl } from "@/lib/findings/certainty";
 
 const MAX_FIELD_CHARS = 1500;
 
@@ -25,7 +26,14 @@ async function loadElement(companyId: string, type: PaulElementType, id: string)
   }
   if (type === "finding") {
     const finding = await prisma.auditFinding.findFirst({ where: { id, companyId } });
-    return finding && { id: finding.id, type: "constat", categorie: finding.category, titre: finding.title, resume: clip(finding.content), ceQuiEstBien: clip(finding.whatWorks), aAmeliorer: clip(finding.toImprove) };
+    // Certitude refaite selon la source (#168) : « Observé » seulement si la source a été consultée.
+    return finding && {
+      id: finding.id, type: "constat", categorie: finding.category, titre: finding.title, resume: clip(finding.content), ceQuiEstBien: clip(finding.whatWorks), aAmeliorer: clip(finding.toImprove),
+      certitude: CERTAINTY_LABELS[normalizeCertainty(finding.certainty, finding.sourceStatus, finding.sourceUrl)],
+      statutDeLaSource: finding.sourceStatus ?? "non indiqué",
+      source: safeSourceUrl(finding.sourceUrl),
+      luLe: formatReadDate(finding.createdAt),
+    };
   }
   if (type === "mission") {
     const mission = await prisma.mission.findFirst({ where: { id, companyId } });

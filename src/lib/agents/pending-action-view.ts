@@ -4,6 +4,7 @@ import { MISSION_CHANNELS, channelLabel } from "@/lib/missions/channels";
 import { MISSION_TEMPLATES, TEMPLATE_KEYS } from "@/lib/missions/templates";
 import { scopeSummary } from "@/lib/missions/scope";
 import { IDEA_TEXT_MAX, isIdeaId, validateIdeaText } from "@/lib/idea-text";
+import { validateDeduction } from "@/lib/missions/rules";
 
 /**
  * Partie pure des propositions de Paul (cartes « Paul · proposition à confirmer », spécification §16.3) :
@@ -174,6 +175,9 @@ export const missionCreatePayloadSchema = z.object({
   stopRuleDays: z.number().int().min(7).max(90).optional(),
   // Idée notée que cette mission cadre (US #312) : retirée à l'acceptation, dans la même transaction.
   ideaId: z.string().refine(isIdeaId).optional(),
+  // Provenance (#168) : constat du diagnostic courant, vérifié de nouveau à l'acceptation, et déduction de Paul.
+  findingId: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/).optional(),
+  deduction: z.string().refine((text) => validateDeduction(text).ok).transform((text) => text.trim()).optional(),
 }).strict();
 export type MissionCreatePayload = z.infer<typeof missionCreatePayloadSchema>;
 
@@ -260,6 +264,8 @@ const DESCRIBERS: Record<PendingActionType, Describer> = {
       `${MISSION_TEMPLATES[template].label} · ${channel ? channelLabel(channel) : "Hors canal, diffusion déclarée"}`,
       `Résultat recherché : ${outcome}`,
       `Constat : ${finding}`,
+      ...(parsed.data.findingId ? ["Fondée sur un constat du diagnostic"] : []),
+      ...(parsed.data.deduction ? [`Déduction de Paul : ${parsed.data.deduction}`] : []),
       `Périmètre : ${scopeSummary(template, scope)} · Règle d'arrêt : ${days ? `${days} jours` : "—"}`,
       ...(parsed.data.ideaId ? ["Elle cadre une idée notée, qui sera retirée de la liste."] : []),
       "Elle sera à décider : rien n'est lancé sans votre confirmation du cadre.",

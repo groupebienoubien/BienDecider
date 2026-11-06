@@ -11,12 +11,10 @@ import { spokenText } from "@/lib/voice";
 import { openPaul } from "@/lib/paul-context";
 import { parseFindingActionItems, type FindingActionItem } from "@/lib/finding-shared";
 import { isPositiveFinding } from "@/lib/diagnostic-groups";
+import { FINDING_CATEGORY_LABELS, safeSourceUrl } from "@/lib/findings/certainty";
 
-const CATEGORY_LABELS: Record<string, string> = {
-  site_web: "Site web",
-  reseaux_sociaux: "Réseaux sociaux",
-  concurrence: "Concurrence",
-};
+// Libellés partagés avec la Stratégie (#168) : définis dans le module pur, réexportés ici.
+export const CATEGORY_LABELS = FINDING_CATEGORY_LABELS;
 
 export const CATEGORY_ICONS: Record<string, IconName> = {
   site_web: "panel-top",
@@ -38,7 +36,7 @@ export function FindingCard({ finding }: { finding: AuditFinding }) {
     : `${finding.title}. ${finding.content}`);
   const category = CATEGORY_LABELS[finding.category] ?? finding.category;
   const positive = isPositiveFinding(finding);
-  const safeSource = finding.sourceUrl && /^https?:\/\//i.test(finding.sourceUrl) ? finding.sourceUrl : null;
+  const safeSource = safeSourceUrl(finding.sourceUrl);
 
   return (
     <>

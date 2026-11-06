@@ -89,9 +89,10 @@ const EXECUTORS: { [K in PendingActionType]: Executor } = {
   mission_create: async (tx, companyId, payload) => {
     const parsed = missionCreatePayloadSchema.safeParse(payload);
     if (!parsed.success) return false;
-    const { ideaId, ...body } = parsed.data;
+    const { ideaId, findingId, deduction, ...body } = parsed.data;
     try {
-      await createMissionIn(tx, companyId, body, "paul", ideaId);
+      // Le constat est vérifié de nouveau par le service : devenu étranger ou ancien, la mission est créée sans lien (#168).
+      await createMissionIn(tx, companyId, body, "paul", ideaId, { sourceFindingId: findingId, deduction });
     } catch (error) {
       // Idée déjà cadrée, retirée ou absente : aucune mission n'est créée (vérifié avant toute écriture).
       if (error instanceof IdeaNotFoundError) return false;

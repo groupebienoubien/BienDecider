@@ -17,7 +17,8 @@ import { runStreamingToolLoop, runToolLoop } from "@/lib/usage";
 import { getFunnelStats, funnelLines } from "@/lib/funnel";
 import { CAPABILITY_CATALOG, recordUncoveredRequest } from "@/lib/agents/capabilities";
 import { getChatInstructionsForPlan, loadRecentChatHistory } from "@/lib/agents/chat-context";
-import { getLatestAuditFindings } from "@/lib/audit-findings";
+import { findCurrentFinding, getLatestAuditFindings } from "@/lib/audit-findings";
+import { CERTAINTY_LABELS, FINDING_CATEGORY_LABELS, normalizeCertainty } from "@/lib/findings/certainty";
 import { latestAuditLines } from "@/lib/agents/audit-plan-context";
 import { isPlanTitleAlreadyTaken } from "@/lib/agents/plan-item-shared";
 import { resolvePaulReferences } from "@/lib/paul-references";
@@ -25,7 +26,7 @@ import { attachPendingActions, cancelOrphanPendingActions, createPendingAction, 
 import { PROFILE_PAGE_ONLY_MESSAGE, type PayloadFor, type PendingActionType, profileUpdateToolSchema, readProfileToolInput, updateProfilePayloadSchema } from "@/lib/agents/pending-action-view";
 import { DEFAULT_CONTEXT_KEY } from "@/lib/paul-contexts";
 import { renderMissionMessage } from "@/lib/missions/messages";
-import { LAUNCH_COST_CREDITS, checkTransition, validateNewMission, type MissionAction, type MissionStatus } from "@/lib/missions/rules";
+import { LAUNCH_COST_CREDITS, checkTransition, validateDeduction, validateNewMission, type MissionAction, type MissionStatus } from "@/lib/missions/rules";
 import { missionSnapshot } from "@/lib/missions/service";
 import { loadMissionViews, priorityOf } from "@/lib/missions/view";
 import { listAgencies } from "@/lib/agencies/service";
@@ -76,7 +77,7 @@ function catalogueLines(): string {
  * Chaque état porte son heure (Europe/Paris), avec l'heure courante et celle de son message précédent.
  */
 export async function buildCurrentStatus(companyId: string, now = new Date(), contextKey: string = DEFAULT_CONTEXT_KEY) {
-  const [missions, company, cards, previousReply, rawMissions, agencies, ideas] = await Promise.all([
+  const [missions, company, cards, previousReply, rawMissions, agencies, ideas, findings] = await Promise.all([
     loadMissionViews(companyId),
     prisma.company.findUniqueOrThrow({ where: { id: companyId }, select: { creditBalance: true, priorityMissionId: true, delegationLevel: true } }),
     recentPendingActions(companyId),
@@ -89,6 +90,7 @@ export async function buildCurrentStatus(companyId: string, now = new Date(), co
     prisma.mission.findMany({ where: { companyId }, select: { id: true, updatedAt: true, firstLaunchedAt: true } }),
     listAgencies(companyId),
     listOpenIdeas(companyId),
+    getLatestAuditFindings(companyId),
   ]);
   const updated = new Map(rawMissions.map((mission) => [mission.id, mission]));
   const priority = priorityOf(missions);
@@ -130,6 +132,13 @@ export async function buildCurrentStatus(companyId: string, now = new Date(), co
     }),
     // Idées notées avec toi, pas encore des missions (US #312) : à cadrer avec propose_mission et leur ideaId.
     idees: { maximum: IDEA_MAX, ouvertes: ideas.map((idea) => ({ id: idea.id, texte: idea.text, noteeLe: formatParisDate(idea.createdAt) })) },
+    // Constats du diagnostic courant (#168) : une mission qui en découle les cite avec propose_mission et leur findingId.
+    constats: findings.map((finding) => ({
+      id: finding.id,
+      titre: finding.title,
+      categorie: FINDING_CATEGORY_LABELS[finding.category] ?? finding.category,
+      certitude: CERTAINTY_LABELS[normalizeCertainty(finding.certainty, finding.sourceStatus, finding.sourceUrl)],
+    })),
     credits: { solde: company.creditBalance, coutPremierLancement: LAUNCH_COST_CREDITS, coutVersionPrepareeAvecPaul: PAUL_VERSION_CREDITS, repriseApresPause: 0 },
     // Liste d'agences des Partenariats (recherche de prescripteurs) : les identifiants à utiliser dans un périmètre {"agencyIds"}.
     agences: agencies.map((agency) => ({ id: agency.id, nom: agency.name, secteur: agency.sector })),
@@ -192,7 +201,7 @@ async function runCoCeoTurnImpl(
   const getCurrentStatus = betaZodTool({
     name: "get_current_status",
     description:
-      "Récupère l'état réel actuel : missions (statut, étape, résultat recherché, périmètre, priorité), idées notées à cadrer, prochain pas, priorité (choisie avec toi ou calculée), solde et coûts en crédits, délégation, programmations et ce que sont devenues tes dernières propositions (cartesRecentes). À utiliser systématiquement avant de répondre sur l'état, les missions, la priorité, le prochain pas ou les crédits, et avant toute proposition — ne jamais deviner ni se fier à un tour précédent.",
+      "Récupère l'état réel actuel : missions (statut, étape, résultat recherché, périmètre, priorité), idées notées à cadrer, constats du diagnostic courant (id, titre, catégorie, certitude), prochain pas, priorité (choisie avec toi ou calculée), solde et coûts en crédits, délégation, programmations et ce que sont devenues tes dernières propositions (cartesRecentes). À utiliser systématiquement avant de répondre sur l'état, les missions, la priorité, le prochain pas ou les crédits, et avant toute proposition — ne jamais deviner ni se fier à un tour précédent.",
     inputSchema: z.object({}),
     run: async () => JSON.stringify(await buildCurrentStatus(companyId, new Date(), contextKey)),
   });
@@ -325,12 +334,21 @@ async function runCoCeoTurnImpl(
       scope: z.record(z.string(), z.unknown()).optional().describe("Périmètre dans la forme du modèle (voir propose_scope) ; obligatoire pour « Sur mesure » : {\"description\": …}"),
       stopRuleDays: z.number().int().optional().describe("Règle d'arrêt en jours (7 à 90), seulement pour « Sur mesure »"),
       ideaId: z.string().optional().describe("Identifiant de l'idée notée que cette mission cadre (get_current_status, idees.ouvertes[].id) ; l'idée sera retirée à l'acceptation ; le constat (finding) reprend alors le texte de l'idée, complété seulement s'il fait moins de 10 caractères. Omettre sinon."),
+      findingId: z.string().optional().describe("Identifiant du constat du diagnostic dont découle la mission (get_current_status, constats[].id). À donner dès qu'un constat la fonde ; omettre si elle vient seulement de la conversation."),
+      deduction: z.string().optional().describe("Ce que tu en déduis, en une phrase de 10 à 300 caractères sans balise : pourquoi ce constat justifie ce test. Affiché au dirigeant entre le constat et la mission."),
     }),
     run: async (input) => {
-      const { ideaId, ...mission } = input;
+      const { ideaId, findingId, deduction, ...mission } = input;
       if (ideaId !== undefined && !(await findOpenIdea(companyId, ideaId))) {
         return "Aucune carte créée : cette idée n'est plus à cadrer (absente, retirée ou déjà cadrée). Relis idees avec get_current_status.";
       }
+      // Seul un constat de l'entreprise et du diagnostic courant peut fonder la mission (#168).
+      if (findingId !== undefined && !(await findCurrentFinding(companyId, findingId))) {
+        return "Aucune carte créée : ce constat n'est pas dans le diagnostic actuel de l'entreprise. Relis constats avec get_current_status, ou propose la mission sans findingId.";
+      }
+      // Une déduction vide vaut absente : elle ne fait pas refuser la proposition.
+      const checkedDeduction = validateDeduction(deduction?.trim() ? deduction : undefined);
+      if (!checkedDeduction.ok) return "Aucune carte créée : la déduction doit faire 10 à 300 caractères, sans balise HTML. Reformule-la.";
       const open = await prisma.mission.count({ where: { companyId, createdBy: { in: ["owner", "paul"] }, status: { not: "stopped" } } });
       const checked = validateNewMission({ ...mission, scope: mission.scope ?? {} }, open);
       if (!checked.ok) return `Aucune carte créée : ${renderMissionMessage(checked.code, checked.params)} Reformule avec le dirigeant.`;
@@ -339,6 +357,8 @@ async function runCoCeoTurnImpl(
         template: value.template, channel: value.channel, title: value.title, outcome: value.outcome, finding: value.finding, scope: value.scope,
         ...(value.template === "custom" ? { stopRuleDays: value.stopRuleDays } : {}),
         ...(ideaId !== undefined ? { ideaId } : {}),
+        ...(findingId !== undefined ? { findingId } : {}),
+        ...(checkedDeduction.deduction !== null ? { deduction: checkedDeduction.deduction } : {}),
       }, `Carte « Créer la mission « ${value.title} » » affichée sous ta réponse. Acceptée, la mission sera À décider : rien n'est lancé.${ideaId !== undefined ? " L'idée qu'elle cadre sera retirée de la liste." : ""}`);
     },
   });
@@ -436,6 +456,7 @@ Règles strictes, non négociables :
 - Chaque conversation porte sur un contexte (stratégie, une mission, les résultats, l'ambition, le positionnement, la concurrence, les sources ou une idée), indiqué avec le dernier message : réponds dans ce contexte. Dans la conversation d'une mission, « cette mission » est celle-là.
 - Tu ne changes rien toi-même. Tes outils propose_* créent une proposition à confirmer sous ta réponse ; rien ne change avant que le dirigeant clique sur le bouton d'acceptation, et « Garder le cap actuel » la retire. Ne dis jamais « c'est fait », « c'est lancé », « c'est en pause » ou « c'est écarté » après une proposition : dis qu'il peut l'accepter d'un clic.
 - Choisir l'outil : priorité → propose_priority (ne lance ni ne suspend rien) ; périmètre → propose_scope ; pause d'une mission En cours → propose_pause ; écarter une mission À décider ou En pause → propose_dismiss (une mission En cours se met d'abord en pause) ; remettre au plan une mission écartée → propose_restore ; nouvelle mission → propose_mission (elle sera À décider, jamais lancée) ; lancer ou reprendre → propose_mission_launch : sa carte ouvre le dialogue « Confirmer le cadre de la mission », où le dirigeant confirme lui-même. Tu ne lances jamais une mission. Une envie encore floue (pas de constat, de modèle ni de résultat clairs) → propose_idea, qui la note pour la cadrer plus tard ; pour cadrer une idée notée (idees dans get_current_status) → propose_mission avec son ideaId, et pour constat le texte de l'idée, complété seulement s'il fait moins de 10 caractères. Si les ${IDEA_MAX} idées sont atteintes, n'insiste pas : invite le dirigeant à en retirer une dans Stratégie.
+- Provenance d'une mission : quand elle découle d'un constat du diagnostic (constats dans get_current_status), donne son findingId à propose_mission, avec ta déduction (deduction : en une phrase, pourquoi ce constat justifie ce test). Ne relie jamais une mission à un constat qui ne la fonde pas ; sans constat, omets findingId et donne quand même ta déduction. Un constat « À vérifier » ou « Piste à qualifier » n'est pas une preuve : dis-le au dirigeant.
 - Coûts : le premier lancement d'une mission coûte ${LAUNCH_COST_CREDITS} crédits, débités quand le dirigeant confirme le cadre ; une reprise après pause est gratuite ; une version préparée avec toi coûtera ${PAUL_VERSION_CREDITS} crédit, créée et débitée seulement à l'acceptation. Dis-le une seule fois, au moment où c'est utile, pas à chaque message.
 - Si un outil refuse une proposition avec un message de règle, redis ce message simplement au dirigeant, sans le contourner par une autre proposition.
 - Avant de proposer, regarde cartesRecentes : si une proposition identique attend encore (status pending), ne la refais pas ; dis-lui de l'accepter dans la carte déjà affichée. Une carte cancelled a été refusée : ne la repropose pas sans nouvel élément.
