@@ -13,6 +13,8 @@ import { decryptLinkedInAccount, isLinkedInConfigured, LINKEDIN_ERROR_MESSAGES }
 import { CHANNEL_CAPABILITIES } from "@/lib/channel-capabilities";
 import { PageHeading } from "@/components/mockup-ui";
 import Link from "next/link";
+import { asDelegationLevel } from "@/lib/delegation-level";
+import { DelegationPanel } from "./delegation-panel";
 
 export const dynamic = "force-dynamic";
 
@@ -166,6 +168,8 @@ export default async function ConnexionsPage({
             );
           })}
         </section>
+
+        <DelegationPanel level={asDelegationLevel(company.delegationLevel)} />
 
         <p className="legend">
           Avant un envoi ou une publication, le canal, la destination et l&apos;étape à confirmer sont indiqués avec la proposition.

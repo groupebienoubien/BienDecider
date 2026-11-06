@@ -10,6 +10,7 @@ import { firstNameOf, requireWorkspaceCompany } from "@/lib/workspace";
 import { loadMissionViews, priorityOf } from "@/lib/missions/view";
 import { nextStep } from "@/lib/missions/stage";
 import { LAUNCH_COST_CREDITS } from "@/lib/missions/rules";
+import { asDelegationLevel } from "@/lib/delegation-level";
 
 export const dynamic = "force-dynamic";
 
@@ -19,9 +20,9 @@ export default async function StrategiePage() {
   const shell = await getShellProps(company);
   const missions = await loadMissionViews(company.id);
   const connected = await prisma.channelConnection.count({ where: { companyId: company.id, status: "connecte" } });
-  const step = nextStep(missions, "review", priorityOf(missions));
+  const step = nextStep(missions, asDelegationLevel(company.delegationLevel), priorityOf(missions));
   const stepMission = missions.find((mission) => mission.id === step.missionId) ?? null;
-  const toValidate = missions.filter((mission) => mission.stage === "approve" && mission.contentId);
+  const toValidate = missions.filter((mission) => (mission.stage === "approve" || mission.stage === "verify") && mission.contentId);
   const firstName = firstNameOf(company.ownerName);
 
   return (
@@ -67,8 +68,8 @@ export default async function StrategiePage() {
         ) : toValidate.map((mission) => (
           <div key={mission.id} className="decision">
             <Icon name="panels-top-left" />
-            <span><strong>{mission.title}</strong> · V{mission.content?.number} · {mission.channelLabel} · prête à relire</span>
-            <Link href={`/atelier/${mission.contentId}`}>Relire et valider</Link>
+            <span><strong>{mission.title}</strong> · V{mission.content?.number} · {mission.channelLabel} · {mission.stage === "verify" ? "diffusion à vérifier" : "prête à relire"}</span>
+            <Link href={`/atelier/${mission.contentId}`}>{mission.stage === "verify" ? "Vérifier" : "Relire et valider"}</Link>
           </div>
         ))}
         <div className="decision">

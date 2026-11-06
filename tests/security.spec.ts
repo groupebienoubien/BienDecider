@@ -37,6 +37,8 @@ const GUARDED_ROUTES: Guarded[] = [
   { method: "POST", path: "/api/missions/[id]/transition", denied: 401 },
   { method: "POST", path: "/api/missions/[id]/content", denied: 401 },
   { method: "POST", path: "/api/contents/[id]", denied: 401 },
+  { method: "POST", path: "/api/contents/[id]/diffusion", denied: 401 },
+  { method: "POST", path: "/api/delegation", denied: 401 },
   { method: "GET", path: "/api/credits", denied: 401 },
   { method: "POST", path: "/api/feedback", denied: 401 },
   { method: "PATCH", path: "/api/admin/feedback/[id]", denied: 403 },
@@ -1174,6 +1176,53 @@ test("mission contents belong to the session company: versions, validation and r
     // Mission arrêtée : le contenu reste en lecture seule (M-44).
     await prisma.mission.update({ where: { id: mission.id }, data: { status: "stopped" } });
     expect(await (await act(a, { action: "save", number: 3, title: "Autre", body: "Autre texte" })).json()).toMatchObject({ code: "M-44" });
+  } finally {
+    await prisma.company.deleteMany({ where: { id: { in: [a.id, b.id] } } });
+    await prisma.$disconnect();
+  }
+});
+
+test("diffusion is decided by the server for the session company, and « Préparer seulement » refuses every external execution", async ({ request }) => {
+  const prisma = openDatabase();
+  const marker = randomUUID().slice(0, 8);
+  const a = await prisma.company.create({ data: { ownerEmail: `security-diffusion-a-${marker}@example.invalid`, name: `Diffusion A ${marker}`, trade: "Artisan", servingArea: "Paris" } });
+  const b = await prisma.company.create({ data: { ownerEmail: `security-diffusion-b-${marker}@example.invalid`, name: `Diffusion B ${marker}`, trade: "Artisan", servingArea: "Paris" } });
+  const headers = (company: typeof a) => ({ Cookie: sessionCookie(company.ownerEmail, company.sessionVersion), Origin: baseURL });
+  const mission = await prisma.mission.create({ data: { companyId: a.id, template: "site_page", channel: "site", title: "Page tarifs", outcome: "Des demandes", originalOutcome: "Des demandes", finding: "Pas de page tarifs", scope: { page: "Nos tarifs" }, status: "active", position: 1 } });
+  const content = await prisma.missionContent.create({ data: { companyId: a.id, missionId: mission.id, channel: "site", format: "site_page", currentNumber: 1, validatedNumber: 1, versions: { create: { number: 1, title: "Nos tarifs <script>alert(1)</script>", body: "Sur devis.", author: "paul" } } } });
+  const diffuse = (company: typeof a, data: unknown, extra: Record<string, string> = {}) => request.post(`${baseURL}/api/contents/${content.id}/diffusion`, { headers: { ...headers(company), ...extra }, data });
+  try {
+    expect((await request.post(`${baseURL}/api/contents/${content.id}/diffusion`, { headers: { Origin: baseURL }, data: { action: "publish", number: 1, confirmed: true } })).status()).toBe(401);
+    expect((await diffuse(a, { action: "publish", number: 1, confirmed: true }, { Origin: "https://attacker.invalid" })).status()).toBe(403);
+    expect((await diffuse(b, { action: "publish", number: 1, confirmed: true })).status()).toBe(404);
+    expect((await diffuse(a, { action: "envoyer", number: 1 })).status()).toBe(400);
+    expect((await diffuse(a, { action: "resolve", number: 1 })).status()).toBe(400);
+    expect(await (await diffuse(a, { action: "publish", number: 1 })).json()).toMatchObject({ code: "M-82" });
+
+    // Mise en ligne : la page publique sert exactement la version validée, en texte.
+    const published = await diffuse(a, { action: "publish", number: 1, confirmed: true, status: "sent" });
+    expect(published.status()).toBe(200);
+    const { url } = await published.json();
+    expect(url).toMatch(/^\/site\/[a-z0-9-]+\/nos-tarifs$/);
+    const page = await request.get(`${baseURL}${url}`);
+    expect(page.status()).toBe(200);
+    const html = await page.text();
+    expect(html).toContain("Nos tarifs &lt;script&gt;alert(1)&lt;/script&gt;");
+    expect(html).not.toContain("<script>alert(1)</script>");
+    expect(await (await diffuse(a, { action: "publish", number: 1, confirmed: true })).json()).toMatchObject({ code: "M-53" });
+    expect(await prisma.publication.count({ where: { companyId: b.id } })).toBe(0);
+
+    // Délégation : niveau inconnu refusé ; « Préparer seulement » ferme toutes les portes d'exécution, même contournées.
+    expect((await request.post(`${baseURL}/api/delegation`, { headers: { ...headers(a), Origin: "https://attacker.invalid" }, data: { level: "prepare" } })).status()).toBe(403);
+    expect(await (await request.post(`${baseURL}/api/delegation`, { headers: headers(a), data: { level: "tout" } })).json()).toMatchObject({ code: "M-85" });
+    expect(await (await request.post(`${baseURL}/api/delegation`, { headers: headers(b), data: { level: "prepare" } })).json()).toEqual({ level: "prepare", cancelled: 0 });
+    expect((await prisma.company.findUniqueOrThrow({ where: { id: a.id } })).delegationLevel).toBe("review");
+    const prepareOnly = { code: "M-55", error: "Votre règle autorise uniquement la préparation. Diffusez vous-même ou modifiez les règles." };
+    for (const [path, data] of [["/api/gmail/send", { to: "x@example.invalid", subject: "S", text: "T", confirmed: true, requestId: randomUUID() }], ["/api/proposals/inconnue/execute", { expectedVersion: 1 }], ["/api/site/republish", {}]] as const) {
+      const refused = await request.post(`${baseURL}${path}`, { headers: headers(b), data });
+      expect(refused.status(), path).toBe(403);
+      expect(await refused.json(), path).toEqual(prepareOnly);
+    }
   } finally {
     await prisma.company.deleteMany({ where: { id: { in: [a.id, b.id] } } });
     await prisma.$disconnect();

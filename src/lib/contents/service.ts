@@ -21,7 +21,8 @@ export class ContentNotFoundError extends Error {
 }
 
 type Tx = Prisma.TransactionClient;
-type ContentWithMission = MissionContent & { mission: Mission };
+type PublicationState = { versionNumber: number; status: string };
+type ContentWithMission = MissionContent & { mission: Mission; publications?: PublicationState[] };
 
 /** Variante proposée par Paul, en attente : elle ne devient une version qu'à l'acceptation (FR-29). */
 export type ContentSuggestion = { basedOn: number; variant: VariantRequest; title: string; body: string };
@@ -42,17 +43,19 @@ function recipientsOf(mission: Mission): number {
   return Array.isArray(ids) ? ids.length : 0;
 }
 
-/** Aucun contenu n'est encore programmé ni diffusé : la diffusion arrive avec #315, #261 et #295. */
+/** État de la version courante d'après ses diffusions : programmée, diffusée, ou en attente de vérification (envoi en cours ou incertain). */
 export function snapshotOf(content: ContentWithMission): ContentSnapshot {
   const format = asFormat(content.format);
+  const current = (content.publications ?? []).filter((publication) => publication.versionNumber === content.currentNumber);
   return {
     missionStatus: content.mission.status as MissionStatus,
     channel: isMissionChannel(content.channel) ? content.channel : null,
     format,
     currentNumber: content.currentNumber,
     validatedNumber: content.validatedNumber,
-    scheduled: false,
-    currentDiffused: false,
+    scheduled: current.some((publication) => publication.status === "scheduled"),
+    currentDiffused: current.some((publication) => publication.status === "sent"),
+    uncertain: current.some((publication) => publication.status === "uncertain" || publication.status === "sending"),
     recipients: format === "email" ? recipientsOf(content.mission) : null,
     hasVisual: false,
   };
@@ -155,7 +158,7 @@ export async function adaptContentToChannel(tx: Tx, mission: Mission): Promise<v
   );
 }
 
-const ACTIONS = ["save", "restore", "variant", "accept_variant", "dismiss_variant", "validate", "reject"] as const;
+const ACTIONS = ["save", "restore", "variant", "accept_variant", "dismiss_variant", "validate", "reject", "next_version"] as const;
 export type ContentAction = (typeof ACTIONS)[number];
 
 export type ContentRequest = { action: ContentAction; number: number; input: Record<string, unknown> };
@@ -170,7 +173,7 @@ export function parseContentBody(body: unknown): ContentRequest | null {
 }
 
 async function lockContent(tx: Tx, companyId: string, contentId: string, number: number): Promise<{ content: ContentWithMission; snapshot: ContentSnapshot; current: ContentVersion }> {
-  const content = await tx.missionContent.findFirst({ where: { id: contentId, companyId }, include: { mission: true } });
+  const content = await tx.missionContent.findFirst({ where: { id: contentId, companyId }, include: { mission: true, publications: { select: { versionNumber: true, status: true } } } });
   if (!content || content.currentNumber === 0) throw new ContentNotFoundError();
   if (number !== content.currentNumber) throw new MissionError("M-02");
   const current = await tx.contentVersion.findUniqueOrThrow({ where: { contentId_number: { contentId, number } } });
@@ -235,6 +238,14 @@ export async function applyContentAction(companyId: string, contentId: string, r
         if (written.count === 0) throw new MissionError("M-02");
         await tx.contentVersion.update({ where: { id: current.id }, data: { rejectedAt: new Date(), rejectionReason: reason.value } });
         await writeJournal(tx, { companyId, missionId: content.missionId, code: "J-27", params: { n: String(current.number), motif: reason.value } });
+        return done();
+      }
+      case "next_version": {
+        // « Créer V(n+1) à partir de Vn » : seule façon de retravailler une version diffusée (FR-32).
+        if (!snapshot.currentDiffused) throw new MissionError("M-02");
+        const refusal = checkNewVersion(snapshot, { fromDiffused: true });
+        if (refusal) refuse(refusal);
+        await addVersion(tx, content, { title: current.title, body: current.body, author: "owner", note: `Nouvelle version créée à partir de V${current.number}, déjà diffusée` }, { origine: `créée à partir de V${current.number} déjà diffusée`, actor: "owner" });
         return done();
       }
       default:

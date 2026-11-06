@@ -8,6 +8,7 @@ import { requireWorkspaceCompany } from "@/lib/workspace";
 import { loadMissionViews } from "@/lib/missions/view";
 import { STAGE_LABELS } from "@/lib/missions/stage";
 import { MissionList, type MissionCardData } from "./mission-list";
+import { DELEGATION_LABELS, asDelegationLevel } from "@/lib/delegation-level";
 
 export const dynamic = "force-dynamic";
 
@@ -31,7 +32,7 @@ export default async function MissionsPage() {
       <PageHeading
         kicker="Vos missions"
         title="Des missions, pas une liste de tâches."
-        description="Chaque mission teste une idée dans un cadre limité, puis vous décidez de la suite au vu du bilan."
+        description={<>Chaque mission teste une idée dans un cadre limité, puis vous décidez de la suite au vu du bilan. Délégation : {DELEGATION_LABELS[asDelegationLevel(company.delegationLevel)]} (<Link href="/connexions#delegation">modifier</Link>).</>}
         actions={<Link className="btn primary" href="/missions/nouvelle"><Icon name="plus" />Créer une mission avec Paul</Link>}
       />
       <p className="notice mission-banner">

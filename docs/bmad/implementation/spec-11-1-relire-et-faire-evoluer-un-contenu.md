@@ -60,4 +60,4 @@ context:
 - [x] Stratégie (« À valider par vous », prochain pas) et mission (étapes 2 et 3, lien vers le contenu) branchées sur l'état réel.
 - [ ] Profil relu avant validation et versions « Profil corrigé » (§4.4 condition 3, §4.5).
 - [ ] Visuels, marque et droits (M-51, M-65 en vrai) : #290.
-- [ ] « Créer V(n+1) à partir de Vn » après diffusion : avec la diffusion (#315).
+- [x] « Créer V(n+1) à partir de Vn » après diffusion : avec la diffusion (#315, story 12.1).

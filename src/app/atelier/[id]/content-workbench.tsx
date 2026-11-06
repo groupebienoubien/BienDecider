@@ -11,14 +11,16 @@ import type { AtelierItem, ContentDetail, VersionView } from "@/lib/contents/vie
 
 const AUTHORS: Record<VersionView["author"], string> = { owner: "vous", paul: "Paul", system: "système" };
 
-async function send(id: string, body: Record<string, unknown>): Promise<string | null> {
-  const response = await fetch(`/api/contents/${id}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-  if (response.ok) return null;
+async function send(path: string, body: Record<string, unknown>): Promise<{ error: string | null; message: string | null }> {
+  const response = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   const payload = await response.json().catch(() => null);
-  return payload?.error ?? "Action impossible pour le moment.";
+  if (response.ok) return { error: null, message: typeof payload?.message === "string" ? payload.message : null };
+  return { error: payload?.error ?? "Action impossible pour le moment.", message: null };
 }
 
 const formatDate = (iso: string) => new Date(iso).toLocaleString("fr-FR", { day: "numeric", month: "long", hour: "2-digit", minute: "2-digit", timeZone: "Europe/Paris" });
+const formatDay = (iso: string) => new Date(iso).toLocaleDateString("fr-FR", { day: "numeric", month: "long", year: "numeric", timeZone: "Europe/Paris" });
+const today = () => new Date().toLocaleDateString("sv-SE");
 
 function initials(name: string) {
   return name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join("") || "BD";
@@ -96,8 +98,12 @@ export function ContentWorkbench({ detail, viewing, items, checklist, credits }:
   const { title, body } = edit ?? stored ?? { title: current.title, body: current.body };
   const setTitle = (value: string) => setEdit({ title: value, body });
   const setBody = (value: string) => setEdit({ title, body: value });
-  const [dialog, setDialog] = useState<"validate" | "reject" | null>(null);
+  const [dialog, setDialog] = useState<"validate" | "reject" | "publish" | "declare" | null>(null);
   const [reviewed, setReviewed] = useState(false);
+  const [confirmed, setConfirmed] = useState(false);
+  const [declaredWhere, setDeclaredWhere] = useState("");
+  const [declaredOn, setDeclaredOn] = useState("");
+  const [notice, setNotice] = useState<string | null>(null);
   const [reason, setReason] = useState("");
   const [variant, setVariant] = useState<VariantKind>("shorter");
   const [instruction, setInstruction] = useState("");
@@ -117,16 +123,18 @@ export function ContentWorkbench({ detail, viewing, items, checklist, credits }:
   const editRefusal = detail.editRefusal ? MISSION_MESSAGES[detail.editRefusal as keyof typeof MISSION_MESSAGES].replace("{n}", String(current.number)) : null;
   const canEdit = !editRefusal;
 
-  async function run(area: string, payload: Record<string, unknown>, after?: () => void) {
+  async function run(area: string, payload: Record<string, unknown>, after?: () => void, path = `/api/contents/${detail.id}`) {
     setSending(area);
     setError(null);
-    const refused = await send(detail.id, { ...payload, number: current.number });
+    setNotice(null);
+    const result = await send(path, { ...payload, number: current.number });
     setSending(null);
-    if (refused) {
-      setError({ area, text: refused });
+    if (result.error) {
+      setError({ area, text: result.error });
       return;
     }
     after?.();
+    setNotice(result.message);
     // Le dialogue se ferme avec l'état à jour : un geste suivant part toujours de la bonne version.
     startRefresh(() => {
       setDialog(null);
@@ -149,6 +157,37 @@ export function ContentWorkbench({ detail, viewing, items, checklist, credits }:
 
   const overLimit = body.length > detail.bodyLimit;
   const validated = !archive && detail.status === "validated";
+  const diffused = !archive && detail.status === "diffused";
+  const publication = archive ? null : detail.publication;
+  const pending = publication && (publication.status === "uncertain" || publication.status === "sending") ? publication : null;
+  const lastFailure = validated && publication?.status === "failed" ? publication.failureReason : null;
+  const diffusionPath = `/api/contents/${detail.id}/diffusion`;
+  const selfPublish = detail.delegation === "prepare" || detail.mission.channel === null;
+  const openDialog = (next: "validate" | "reject" | "publish" | "declare") => {
+    setError(null);
+    setReviewed(false);
+    setConfirmed(false);
+    setReason("");
+    setDeclaredWhere(detail.mission.channel ? detail.destination.label : "");
+    setDeclaredOn(today());
+    setDialog(next);
+  };
+
+  const decisionTitle = archive ? `V${version.number} · archive en lecture seule`
+    : pending ? (detail.resolvable ? "Résultat incertain" : "Diffusion en cours")
+    : diffused ? `V${version.number} diffusée`
+    : version.rejectionReason ? `V${version.number} refusée`
+    : validated ? `V${version.number} validée`
+    : "Votre accord est nécessaire";
+  const decisionText = archive ? "Y revenir crée une nouvelle version, à relire et valider."
+    : pending ? (detail.resolvable ? `${pending.channelLabel} n'a pas confirmé la diffusion. Vérifiez sur le canal, puis dites-le : rien ne sera renvoyé automatiquement.` : "Le canal n'a pas encore répondu. Rechargez la page dans un instant.")
+    : diffused && publication ? `${publication.mode === "declared" ? "Diffusée par vous" : "Publiée"} sur ${publication.channelLabel}${publication.sentAt ? ` le ${formatDay(publication.sentAt)}` : ""}${publication.mode === "declared" ? " · déclarée par vous" : ""}. Elle ne se modifie plus.`
+    : version.rejectionReason ? `Votre motif : « ${version.rejectionReason} ». Paul en tiendra compte pour les prochaines versions de cette mission.`
+    : validated ? (selfPublish
+      ? (detail.mission.channel === null ? "Mission menée hors canal : récupérez le texte, diffusez-le, puis déclarez-le." : `Votre règle : ${detail.delegationLabel}. Récupérez le texte, diffusez-le vous-même, puis déclarez-le.`)
+      : `Aucun envoi effectué. ${detail.publishRefusal ?? "Validation et diffusion sont deux décisions distinctes : rien ne part sans votre confirmation."}`)
+    : detail.canValidate ? "Valider n'envoie rien : la diffusion reste une décision distincte."
+    : MISSION_MESSAGES["M-47"];
 
   return (
     <div className="atelier">
@@ -161,7 +200,7 @@ export function ContentWorkbench({ detail, viewing, items, checklist, credits }:
         </label>
         <div className="tags">
           <span className="tag blue">V{version.number} · {archive ? "archive" : "courante"}</span>
-          <span className={`tag ${validated ? "green" : archive ? "gray" : "orange"}`}>{archive ? version.state : detail.statusLabel}</span>
+          <span className={`tag ${validated || diffused ? "green" : archive ? "gray" : "orange"}`}>{archive ? version.state : detail.statusLabel}</span>
         </div>
       </div>
 
@@ -184,29 +223,35 @@ export function ContentWorkbench({ detail, viewing, items, checklist, credits }:
 
           <div className="atelier-decision" aria-labelledby="decision-title">
             <div>
-              <h2 id="decision-title">
-                {archive
-                  ? `V${version.number} · archive en lecture seule`
-                  : version.rejectionReason ? `V${version.number} refusée`
-                  : validated ? `V${version.number} validée`
-                  : "Votre accord est nécessaire"}
-              </h2>
-              <p className="small muted">
-                {archive
-                  ? "Y revenir crée une nouvelle version, à relire et valider."
-                  : version.rejectionReason ? `Votre motif : « ${version.rejectionReason} ». Paul en tiendra compte pour les prochaines versions de cette mission.`
-                  : validated ? "Aucun envoi effectué. Validation du contenu et diffusion sont deux décisions distinctes : la diffusion sera proposée ici."
-                  : detail.canValidate ? "Valider n'envoie rien : la diffusion reste une décision distincte."
-                  : MISSION_MESSAGES["M-47"]}
-              </p>
+              <h2 id="decision-title">{decisionTitle}</h2>
+              <p className="small muted">{decisionText}</p>
+              {lastFailure && <p className="warning small">La dernière tentative n&apos;a pas abouti : {lastFailure}. Rien n&apos;a été diffusé.</p>}
+              {diffused && publication?.url && <p className="small"><a href={publication.url} target="_blank" rel="noopener noreferrer">Voir la page publiée</a></p>}
+              {notice && <p className="small" role="status">{notice}</p>}
             </div>
             <div className="heading-actions">
               {archive && <button type="button" disabled={busy || !canEdit} onClick={() => void run("decision", { action: "restore", from: version.number }, clearDraft)}><Icon name="undo-2" />Revenir à cette version</button>}
-              {!archive && !detail.readOnly && !validated && (
-                <button type="button" className="primary" disabled={busy || !detail.canValidate} onClick={() => { setError(null); setReviewed(false); setDialog("validate"); }}><Icon name="check" />Valider cette version</button>
+              {pending && detail.resolvable && <>
+                <button type="button" className="primary" disabled={busy} onClick={() => void run("decision", { action: "resolve", sent: true }, undefined, diffusionPath)}><Icon name="check" />C&apos;est bien parti</button>
+                <button type="button" disabled={busy} onClick={() => void run("decision", { action: "resolve", sent: false }, undefined, diffusionPath)}><Icon name="x" />Ce n&apos;est pas parti</button>
+              </>}
+              {diffused && <>
+                <button type="button" className="primary" disabled={busy || detail.readOnly} onClick={() => void run("decision", { action: "next_version" }, clearDraft)}><Icon name="plus" />Créer V{current.number + 1} à partir de V{current.number}</button>
+                <Link className="btn" href={`/resultats?mission=${detail.mission.id}`}>Voir le suivi</Link>
+              </>}
+              {validated && !pending && !detail.readOnly && <>
+                {selfPublish
+                  ? <button type="button" className="primary" onClick={() => void copy()}><Icon name="copy" />{copied ? "Texte copié" : "Récupérer le texte"}</button>
+                  : detail.publishRefusal === null
+                    ? <button type="button" className="primary" disabled={busy || dirty} onClick={() => openDialog("publish")}><Icon name="megaphone" />{lastFailure ? "Réessayer" : detail.format === "email" ? "Préparer l'envoi" : "Préparer la publication"}</button>
+                    : !detail.destination.connected && detail.destination.enabled && <Link className="btn primary" href="/connexions">Connecter {detail.mission.channelLabel}</Link>}
+                <button type="button" disabled={busy || dirty} onClick={() => openDialog("declare")}><Icon name="check" />Je l&apos;ai diffusé moi-même</button>
+              </>}
+              {!archive && !pending && !diffused && !detail.readOnly && !validated && (
+                <button type="button" className="primary" disabled={busy || !detail.canValidate} onClick={() => openDialog("validate")}><Icon name="check" />Valider cette version</button>
               )}
-              {!archive && !detail.readOnly && !version.rejectionReason && (
-                <button type="button" disabled={busy} onClick={() => { setError(null); setReason(""); setDialog("reject"); }}><Icon name="x" />Je ne veux pas de cette version</button>
+              {!archive && !pending && !diffused && !detail.readOnly && !version.rejectionReason && (
+                <button type="button" disabled={busy} onClick={() => openDialog("reject")}><Icon name="x" />Je ne veux pas de cette version</button>
               )}
             </div>
             {failure("decision")}
@@ -300,13 +345,59 @@ export function ContentWorkbench({ detail, viewing, items, checklist, credits }:
             <h3 id="frame-title">Cadre de diffusion</h3>
             <dl className="atelier-frame small">
               <dt>Canal</dt>
-              <dd>{detail.mission.channelLabel}{detail.mission.channel && detail.mission.channel !== "site" && (detail.channelConnected ? <span className="tag green">Connecté</span> : <> · <Link href="/connexions">Connecter</Link></>)}</dd>
-              <dt>Délégation</dt><dd>Vous validez chaque contenu ; rien n&apos;est diffusé sans votre confirmation.</dd>
+              <dd>{detail.mission.channel ? detail.destination.label : detail.mission.channelLabel}{detail.mission.channel && detail.mission.channel !== "site" && (detail.channelConnected ? <span className="tag green">Connecté</span> : <> · <Link href="/connexions">Connecter</Link></>)}</dd>
+              <dt>Délégation</dt><dd>{detail.delegationLabel} · <Link href="/connexions#delegation">Modifier</Link></dd>
               {detail.format === "email" && <><dt>Destinataires</dt><dd>{detail.mission.scopeSummary}</dd></>}
             </dl>
           </section>
         </aside>
       </div>
+
+      <Modal
+        open={dialog === "publish"}
+        onClose={() => setDialog(null)}
+        kicker="Votre accord"
+        title="Confirmer la diffusion"
+        actions={<button type="button" className="primary" disabled={busy || !confirmed || dirty} onClick={() => void run("publish", { action: "publish", confirmed }, undefined, diffusionPath)}><Icon name="megaphone" />{sending === "publish" ? "Diffusion en cours…" : "Diffuser maintenant"}</button>}
+      >
+        <dl className="modal-details">
+          <dt>Version</dt><dd>V{current.number} · {current.title}</dd>
+          <dt>Destination</dt><dd>{detail.destination.label}</dd>
+          <dt>Moment</dt><dd>Maintenant</dd>
+          <dt>Qui le verra</dt><dd>{detail.exposure}</dd>
+        </dl>
+        {dirty && <p className="warning">{MISSION_MESSAGES["M-60"]}</p>}
+        <label className="check-field">
+          <input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} />
+          <span>Je confirme cette version, cette destination et ce moment</span>
+        </label>
+        <p className="small muted">Une diffusion faite ne se reprend pas. Si le canal ne répond pas, rien n&apos;est renvoyé automatiquement.</p>
+        {failure("publish")}
+      </Modal>
+
+      <Modal
+        open={dialog === "declare"}
+        onClose={() => setDialog(null)}
+        kicker="Votre déclaration"
+        title="Je l'ai diffusé moi-même"
+        actions={<button type="button" className="primary" disabled={busy || !confirmed || dirty} onClick={() => void run("declare", { action: "declare", channel: declaredWhere, date: declaredOn, confirmed }, undefined, diffusionPath)}><Icon name="check" />Déclarer la diffusion</button>}
+      >
+        <p><strong>V{current.number} · {current.title}</strong></p>
+        <label className="field">
+          <span>Où l&apos;avez-vous diffusé ?</span>
+          <input value={declaredWhere} maxLength={60} onChange={(event) => setDeclaredWhere(event.target.value)} placeholder="Ex. : affichage en boutique, salon du quartier" />
+        </label>
+        <label className="field">
+          <span>Date de diffusion</span>
+          <input type="date" value={declaredOn} max={today()} onChange={(event) => setDeclaredOn(event.target.value)} />
+        </label>
+        <label className="check-field">
+          <input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} />
+          <span>Je confirme avoir diffusé cette version</span>
+        </label>
+        <p className="small muted">La diffusion sera marquée « déclarée par vous » partout et la version ne se modifiera plus.</p>
+        {failure("declare")}
+      </Modal>
 
       <Modal
         open={dialog === "validate"}

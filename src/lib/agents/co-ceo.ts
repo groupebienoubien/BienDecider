@@ -1,6 +1,7 @@
 import { agentRunnerOptions, bindAgentTools, createAgentExecution, currentAgentExecution, withAgentExecution, withAgentRunWrite } from "@/lib/agent-run-execution";
 import { AGENT_RUN_MAX_TURNS } from "@/lib/agent-run-limits";
 import { z } from "zod";
+import { DELEGATION_DETAILS, DELEGATION_LABELS, asDelegationLevel } from "@/lib/delegation-level";
 import { betaZodTool } from "@anthropic-ai/sdk/helpers/beta/zod";
 import type Anthropic from "@anthropic-ai/sdk";
 import type { BetaToolRunnerParams } from "@anthropic-ai/sdk/lib/tools/BetaToolRunner";
@@ -57,7 +58,6 @@ function uncoveredRequestTool(companyId: string, source: "chat" | "plan") {
 }
 
 const STATUS_WORDS: Record<MissionStatus, string> = { proposed: "À décider", active: "En cours", paused: "En pause", stopped: "Arrêtée", dismissed: "Écartée" };
-const DEFAULT_DELEGATION = "Valider avant chaque action (par défaut) : Paul prépare dans les missions en cours, chaque contenu est validé et chaque diffusion confirmée par le dirigeant.";
 
 /** Modèles de mission proposés aujourd'hui, avec leurs canaux actifs (catalogue ouvert, D9). */
 function catalogueLines(): string {
@@ -75,7 +75,7 @@ function catalogueLines(): string {
 export async function buildCurrentStatus(companyId: string, now = new Date(), contextKey: string = DEFAULT_CONTEXT_KEY) {
   const [missions, company, cards, previousReply, rawMissions] = await Promise.all([
     loadMissionViews(companyId),
-    prisma.company.findUniqueOrThrow({ where: { id: companyId }, select: { creditBalance: true, priorityMissionId: true } }),
+    prisma.company.findUniqueOrThrow({ where: { id: companyId }, select: { creditBalance: true, priorityMissionId: true, delegationLevel: true } }),
     recentPendingActions(companyId),
     // Message de Paul précédant le tour en cours dans cette conversation ; le point hebdomadaire du cron ne compte pas.
     prisma.chatMessage.findFirst({
@@ -87,7 +87,8 @@ export async function buildCurrentStatus(companyId: string, now = new Date(), co
   ]);
   const updated = new Map(rawMissions.map((mission) => [mission.id, mission]));
   const priority = priorityOf(missions);
-  const step = nextStep(missions, "review", priority);
+  const delegationLevel = asDelegationLevel(company.delegationLevel);
+  const step = nextStep(missions, delegationLevel, priority);
   const priorityMission = missions.find((mission) => mission.id === priority) ?? null;
   return {
     maintenant: `${formatParisDate(now)}, ${formatParisTime(now, now)}`,
@@ -114,7 +115,8 @@ export async function buildCurrentStatus(companyId: string, now = new Date(), co
       aChangeDepuisMonMessagePrecedent: Boolean(previousReply && (updated.get(mission.id)?.updatedAt.getTime() ?? 0) > previousReply.createdAt.getTime()),
     })),
     credits: { solde: company.creditBalance, coutPremierLancement: LAUNCH_COST_CREDITS, coutVersionPrepareeAvecPaul: PAUL_VERSION_CREDITS, repriseApresPause: 0 },
-    delegation: DEFAULT_DELEGATION,
+    // Règle de collaboration choisie par le dirigeant (spécification §9, #36).
+    delegation: `${DELEGATION_LABELS[delegationLevel]} : ${DELEGATION_DETAILS[delegationLevel]}`,
     // La diffusion et sa programmation arrivent avec l'atelier : aucune programmation n'existe encore.
     programmations: [],
     // Dernières propositions : pending = à confirmer, confirmed = acceptée, cancelled = « Garder le cap actuel »,

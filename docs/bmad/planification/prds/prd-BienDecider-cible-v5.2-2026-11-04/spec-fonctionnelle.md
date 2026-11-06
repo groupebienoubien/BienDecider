@@ -623,6 +623,13 @@ Tout dialogue se ferme par Échap ou le bouton de fermeture ; une navigation le 
 | M-77 | Cochez « J'ai relu le contenu et vérifié les informations qui engagent mon entreprise » avant de valider. |
 | M-78 | Choisissez comment retravailler : plus court, plus humain, un autre angle, ou votre consigne (5 à 300 caractères). |
 | M-79 | Paul n'a pas pu préparer ce contenu. Réessayez dans un instant. |
+| M-80 | Cette mission est menée hors canal : diffusez-la vous-même, puis déclarez-le. |
+| M-81 | Le résultat de la diffusion précédente est incertain : vérifiez sur le canal, puis dites-le. |
+| M-82 | Cochez « Je confirme cette version, cette destination et ce moment » avant de diffuser. |
+| M-83 | Indiquez où vous avez diffusé (2 à 60 caractères) et une date passée ou d'aujourd'hui. |
+| M-84 | Cochez « Je confirme avoir diffusé cette version » avant de déclarer. |
+| M-85 | Choisissez l'un des trois niveaux de délégation. |
+| M-86 | Aucun résultat incertain à vérifier pour cette version. |
 
 ## 15. Journal
 
