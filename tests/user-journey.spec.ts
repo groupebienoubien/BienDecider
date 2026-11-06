@@ -653,6 +653,8 @@ test("Canaux & délégation: only active channels, honest states, scheduled diff
     await prisma.channelRollout.upsert({ where: { channel: "gmail" }, create: { channel: "gmail", openToAll: false }, update: { openToAll: false } });
     await page.reload();
     const gmail = page.getByRole("region", { name: "Gmail · envoi de messages" });
+    // La page arrive en flux : on attend le bloc avant de savoir si Gmail est configuré sur ce serveur.
+    await expect(gmail.getByRole("heading", { name: "Gmail · envoi de messages" })).toBeVisible();
     if (await gmail.getByText("L'envoi Gmail n'est pas disponible sur cette version.").count() === 0) {
       await expect(gmail.getByRole("link", { name: /Relier/ })).toHaveCount(0);
       await expect(gmail).toContainText("Pas encore disponible pour votre compte.");

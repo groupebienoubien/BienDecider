@@ -45,6 +45,8 @@ import { scopeSummary } from "../src/lib/missions/scope";
 import { renderJournal } from "../src/lib/journal";
 import { DELEGATION_LABELS, asDelegationLevel, prepareOnlyRefusal } from "../src/lib/delegation-level";
 import { slugify } from "../src/lib/site/slug";
+import { canonicalOAuthStart } from "../src/lib/oauth/canonical-host";
+import { NextRequest } from "next/server";
 import { BODY_MAX, checkDeclaration, checkDiffusion, checkNewVersion, isSchedulable, parseSchedule, checkRejection, checkValidation, contentFormat, contentStatus, exposureFor, parseVariant, reviewChecklist, titleLabel, validateDraft, validateRejection, variantLabel, type ContentSnapshot } from "../src/lib/contents/rules";
 import { firstNameOf } from "../src/lib/workspace";
 import { workspacePageLabel } from "../src/components/workspace-nav";
@@ -1810,4 +1812,23 @@ test("mission stage with diffusion: uncertain result to verify, self-publishing 
   expect(missionStage(uncertain)).toBe("verify");
   expect(missionTracker("verify")?.find((step) => step.state === "current")?.label).toBe("Diffuser");
   expect(nextStep([uncertain])).toMatchObject({ stage: "verify", title: "Vérifier la diffusion", target: { href: "/atelier?mission=m1", label: "Ouvrir l'atelier" } });
+});
+
+test("an OAuth flow started from a Vercel alias restarts from the public address registered with the providers", () => {
+  const previous = process.env.APP_BASE_URL;
+  try {
+    process.env.APP_BASE_URL = "https://www.biendecider.com";
+    const alias = canonicalOAuthStart(new NextRequest("https://bien-decider-git-main-groupe-bienou-bien.vercel.app/api/oauth/gmail/start"));
+    expect(alias?.headers.get("location")).toBe("https://www.biendecider.com/api/oauth/gmail/start");
+    const apex = canonicalOAuthStart(new NextRequest("https://biendecider.com/api/oauth/gmail/start"));
+    expect(apex?.headers.get("location")).toBe("https://www.biendecider.com/api/oauth/gmail/start");
+    expect(canonicalOAuthStart(new NextRequest("https://www.biendecider.com/api/oauth/gmail/start"))).toBeNull();
+    expect(canonicalOAuthStart(new NextRequest("http://localhost:3000/api/oauth/meta/start"))).toBeNull();
+    expect(canonicalOAuthStart(new NextRequest("http://192.168.1.67:3000/api/oauth/meta/start"))).toBeNull();
+    delete process.env.APP_BASE_URL;
+    expect(canonicalOAuthStart(new NextRequest("https://bien-decider-git-main-groupe-bienou-bien.vercel.app/api/oauth/meta/start"))).toBeNull();
+  } finally {
+    if (previous === undefined) delete process.env.APP_BASE_URL;
+    else process.env.APP_BASE_URL = previous;
+  }
 });
