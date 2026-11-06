@@ -3,8 +3,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSessionCompany } from "@/lib/session";
 import { buildMetaAuthUrl, createMetaState, isMetaOAuthConfigured, META_CALLBACK, META_STATE_COOKIE } from "@/lib/oauth/meta";
 import { canUseChannel, readChannelAccess } from "@/lib/channel-access";
+import { canonicalOAuthStart } from "@/lib/oauth/canonical-host";
 
 export async function GET(request: NextRequest) {
+  const canonical = canonicalOAuthStart(request);
+  if (canonical) return canonical;
   const company = await getSessionCompany();
   if (!company) return NextResponse.redirect(new URL("/login", request.url));
   if (request.headers.get("sec-fetch-site") === "cross-site") return NextResponse.json({ error: "Origine refusée." }, { status: 403 });
