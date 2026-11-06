@@ -123,8 +123,14 @@ development_status:
   13-2-ne-proposer-que-les-canaux-disponibles: done
   epic-13-retrospective: optional
 
-  epic-14: in-progress
-  14-1-trouver-des-agences-de-ma-zone: review
-  14-2-choisir-une-ou-deux-agences: review
-  14-3-envoyer-un-email-par-agence: review
+  epic-14: done
+  14-1-trouver-des-agences-de-ma-zone: done
+  14-2-choisir-une-ou-deux-agences: done
+  14-3-envoyer-un-email-par-agence: done
   epic-14-retrospective: optional
+
+  epic-15: in-progress
+  15-1-renseigner-le-bilan: review
+  15-2-decider-la-suite: review
+  15-3-ce-que-paul-apprend: review
+  epic-15-retrospective: optional

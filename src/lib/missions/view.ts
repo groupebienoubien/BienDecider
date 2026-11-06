@@ -1,4 +1,4 @@
-import type { Mission, MissionContent } from "@prisma/client";
+import type { Mission, MissionContent, MissionDecision, MissionReport } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { channelLabel, isMissionChannel, type MissionChannel } from "@/lib/missions/channels";
 import { scopeSummary } from "@/lib/missions/scope";
@@ -6,6 +6,7 @@ import { missionStage, orderMissions, priorityMissionId, type ContentState, type
 import { asDelegationLevel } from "@/lib/delegation-level";
 import { MISSION_TEMPLATES, type TemplateKey } from "@/lib/missions/templates";
 import type { MissionStatus } from "@/lib/missions/rules";
+import { isUpToDate, stopRuleDue } from "@/lib/missions/report";
 import { listAgencies } from "@/lib/agencies/service";
 
 export type MissionActionData = {
@@ -35,16 +36,27 @@ export type MissionView = StageMission & {
   hasValidatedVersion: boolean;
   contentId: string | null;
   actions: MissionActionData;
+  /** Diffusions de la mission, confirmées ou déclarées. */
+  diffusions: number;
+  /** Dernier bilan déclaré ; « à jour » tant que le nombre de diffusions n'a pas changé (§7.1). */
+  report: { qualifiedLeads: number; meetings: number; signedRevenue: number | null; note: string | null; upToDate: boolean; createdAt: string } | null;
+  decision: { choice: "continue" | "stop"; upToDate: boolean; createdAt: string } | null;
+  /** Échéance de la règle d'arrêt de la série en cours, depuis sa première diffusion ; null avant toute diffusion. */
+  stopRuleDue: string | null;
 };
 
-type MissionWithContent = Mission & { content: (MissionContent & { publications: { versionNumber: number; status: string }[] }) | null };
+type MissionWithContent = Mission & {
+  content: (MissionContent & { publications: { versionNumber: number; status: string; sentAt: Date | null }[] }) | null;
+  reports: MissionReport[];
+  decisions: MissionDecision[];
+};
 
 /** Le site est publié par BienDecider : il n'a pas de connexion à établir. */
 function isConnected(channel: MissionChannel | null, connected: ReadonlySet<string>): boolean {
   return channel === "site" || (channel !== null && connected.has(channel));
 }
 
-/** État du contenu principal d'après ses diffusions ; le bilan et la décision arrivent avec #294 et #52. */
+/** État du contenu principal d'après ses diffusions, le dernier bilan et la dernière décision. */
 function contentStateOf(mission: MissionWithContent, connected: ReadonlySet<string>): ContentState | null {
   const content = mission.content;
   if (!content || content.currentNumber === 0) return null;
@@ -56,8 +68,8 @@ function contentStateOf(mission: MissionWithContent, connected: ReadonlySet<stri
     scheduled: current.some((publication) => publication.status === "scheduled"),
     uncertain: current.some((publication) => publication.status === "uncertain" || publication.status === "sending"),
     diffusions: content.publications.filter((publication) => publication.status === "sent").length,
-    reportAt: null,
-    decisionAt: null,
+    reportAt: mission.reports[0]?.publicationCount ?? null,
+    decisionAt: mission.decisions[0]?.publicationCount ?? null,
     channelConnected: isConnected(isMissionChannel(mission.channel) ? mission.channel : null, connected),
   };
 }
@@ -105,13 +117,38 @@ function toView(mission: MissionWithContent, priorityId: string | null, connecte
       stopRuleDays: mission.stopRuleDays,
       launched: mission.firstLaunchedAt !== null,
     },
+    ...resultsOf(mission),
+  };
+}
+
+function resultsOf(mission: MissionWithContent): Pick<MissionView, "diffusions" | "report" | "decision" | "stopRuleDue"> {
+  const sent = (mission.content?.publications ?? []).filter((publication) => publication.status === "sent" && publication.sentAt).map((publication) => publication.sentAt as Date);
+  const diffusions = (mission.content?.publications ?? []).filter((publication) => publication.status === "sent").length;
+  const report = mission.reports[0] ?? null;
+  const decision = mission.decisions[0] ?? null;
+  // Une décision de poursuivre ouvre une nouvelle série : son échéance part de la première diffusion qui la suit.
+  const since = decision?.choice === "continue" ? decision.createdAt.getTime() : 0;
+  const start = sent.filter((at) => at.getTime() >= since).sort((a, b) => a.getTime() - b.getTime())[0] ?? null;
+  return {
+    diffusions,
+    report: report && { qualifiedLeads: report.qualifiedLeads, meetings: report.meetings, signedRevenue: report.signedRevenue, note: report.note, upToDate: isUpToDate(report.publicationCount, diffusions), createdAt: report.createdAt.toISOString() },
+    decision: decision && { choice: decision.choice === "stop" ? "stop" : "continue", upToDate: isUpToDate(decision.publicationCount, diffusions), createdAt: decision.createdAt.toISOString() },
+    stopRuleDue: stopRuleDue(start, mission.stopRuleDays)?.toISOString() ?? null,
   };
 }
 
 /** Missions de l'entreprise, la priorité d'abord (choisie avec Paul si elle est valable) puis l'ordre du plan. */
 export async function loadMissionViews(companyId: string): Promise<MissionView[]> {
   const [missions, connections, company, agencies] = await Promise.all([
-    prisma.mission.findMany({ where: { companyId }, orderBy: [{ position: "asc" }, { id: "asc" }], include: { content: { include: { publications: { select: { versionNumber: true, status: true } } } } } }),
+    prisma.mission.findMany({
+      where: { companyId },
+      orderBy: [{ position: "asc" }, { id: "asc" }],
+      include: {
+        content: { include: { publications: { select: { versionNumber: true, status: true, sentAt: true } } } },
+        reports: { orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: 1 },
+        decisions: { orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: 1 },
+      },
+    }),
     prisma.channelConnection.findMany({ where: { companyId, status: "connecte" }, select: { channel: true } }),
     prisma.company.findUniqueOrThrow({ where: { id: companyId }, select: { delegationLevel: true, priorityMissionId: true } }),
     listAgencies(companyId),

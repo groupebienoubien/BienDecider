@@ -600,6 +600,69 @@ test("stories 14.1 to 14.3: Paul's agency list, a scope of one or two listed age
   await expect(applyMissionTransition(company.id, mission.id, { action: "set_scope", scope: { agencyIds: [parc.id] } }, mission.version)).rejects.toMatchObject({ code: "M-88" });
 });
 
+test("stories 15.1 to 15.3: a report after a diffusion, a decision that continues or stops, the stage that follows, and what Paul reads", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { decideMission, saveMissionReport } = await import("../src/lib/missions/results");
+  const { loadMissionView } = await import("../src/lib/missions/view");
+  const { buildCurrentStatus } = await import("../src/lib/agents/co-ceo");
+  const seed = async (title: string, outcome: string) => {
+    const mission = await prisma.mission.create({ data: { companyId: company.id, template: "site_page", channel: "site", title, outcome, originalOutcome: outcome, finding: "Un constat", scope: { page: title }, status: "active", firstLaunchedAt: new Date(), stopRuleDays: 30, position: 1 } });
+    const content = await prisma.missionContent.create({ data: { companyId: company.id, missionId: mission.id, channel: "site", format: "site_page", currentNumber: 1, validatedNumber: 1, validatedAt: new Date(), versions: { create: { number: 1, title, body: "Sur devis.", author: "paul" } } } });
+    return { mission, content };
+  };
+  const diffuse = (target: { mission: { id: string }; content: { id: string } }, versionNumber: number, sentAt: Date, status = "sent") => prisma.publication.create({ data: {
+    companyId: company.id, missionId: target.mission.id, contentId: target.content.id, versionNumber, title: "Page", channel: "site", channelLabel: "Votre site vitrine", mode: "confirmed", status, sentAt: status === "sent" ? sentAt : null,
+    scheduledAt: status === "scheduled" ? new Date(Date.now() + 86_400_000) : null, idempotencyKey: `${target.content.id}:v${versionNumber}:${status}:${sentAt.getTime()}`,
+  } });
+  const version = async (id: string) => (await prisma.mission.findUniqueOrThrow({ where: { id } })).version;
+
+  // Bilan : jamais avant une diffusion (M-37) ; puis enregistré avec le nombre de diffusions, J-15 « attribution déclarative ».
+  const tarifs = await seed("Nos tarifs", "Deux demandes de devis");
+  await expect(saveMissionReport(company.id, tarifs.mission.id, { qualifiedLeads: 1, meetings: 0 })).rejects.toMatchObject({ code: "M-37" });
+  await expect(decideMission(company.id, tarifs.mission.id, "stop", await version(tarifs.mission.id))).rejects.toMatchObject({ code: "M-35" });
+  const firstSent = new Date(Date.now() - 40 * 86_400_000);
+  await diffuse(tarifs, 1, firstSent);
+  expect((await loadMissionView(company.id, tarifs.mission.id))?.stage).toBe("report");
+  await expect(saveMissionReport(company.id, tarifs.mission.id, { qualifiedLeads: 1, meetings: 2 })).rejects.toMatchObject({ code: "M-33" });
+  await expect(decideMission(company.id, tarifs.mission.id, "continue", await version(tarifs.mission.id))).rejects.toMatchObject({ code: "M-36" });
+  await saveMissionReport(company.id, tarifs.mission.id, { qualifiedLeads: 3, meetings: 1, signedRevenue: "", note: "Deux appels du syndic" });
+  expect(await prisma.journalEntry.findFirstOrThrow({ where: { missionId: tarifs.mission.id, code: "J-15" } })).toMatchObject({ params: { n: "3", m: "1", ca: "" } });
+  let view = await loadMissionView(company.id, tarifs.mission.id);
+  expect(view).toMatchObject({ stage: "decide", diffusions: 1, report: { qualifiedLeads: 3, meetings: 1, signedRevenue: null, upToDate: true }, stopRuleDue: new Date(firstSent.getTime() + 30 * 86_400_000).toISOString() });
+
+  // Paul lit le bilan : échéance passée, résultat atteint, proposition à confirmer.
+  const status = await buildCurrentStatus(company.id);
+  expect(status.missions.find((item) => item.id === tarifs.mission.id)).toMatchObject({
+    bilan: { demandesQualifiees: 3, rendezVous: 1, caSigne: "non déclaré", aJour: true },
+    lectureDuBilan: { impact: "Proposition à confirmer : poursuivre dans les mêmes limites." },
+    regleDArret: { atteinte: true },
+  });
+
+  // Poursuivre : décision enregistrée, mission En cours, série suivante ; une nouvelle diffusion rend bilan et décision à mettre à jour.
+  await expect(decideMission(company.id, tarifs.mission.id, "continue", (await version(tarifs.mission.id)) - 1)).rejects.toMatchObject({ code: "M-02" });
+  await decideMission(company.id, tarifs.mission.id, "continue", await version(tarifs.mission.id));
+  view = await loadMissionView(company.id, tarifs.mission.id);
+  expect(view).toMatchObject({ status: "active", stage: "next-round", decision: { choice: "continue", upToDate: true }, stopRuleDue: null });
+  expect(await prisma.journalEntry.findFirstOrThrow({ where: { missionId: tarifs.mission.id, code: "J-14" } })).toMatchObject({ params: { décision: "poursuite, mêmes limites" } });
+  await prisma.missionContent.update({ where: { id: tarifs.content.id }, data: { currentNumber: 2, validatedNumber: 2, versions: { create: { number: 2, title: "Nos tarifs", body: "Sur devis, sous 48 h.", author: "owner" } } } });
+  const secondSent = new Date();
+  await diffuse(tarifs, 2, secondSent);
+  view = await loadMissionView(company.id, tarifs.mission.id);
+  expect(view).toMatchObject({ stage: "report", diffusions: 2, report: { upToDate: false }, decision: { upToDate: false }, stopRuleDue: new Date(secondSent.getTime() + 30 * 86_400_000).toISOString() });
+  await expect(decideMission(company.id, tarifs.mission.id, "continue", await version(tarifs.mission.id))).rejects.toMatchObject({ code: "M-36" });
+
+  // Arrêter : mission close, programmations annulées, plus de décision possible (M-34).
+  const horaires = await seed("Nos horaires", "Un rendez-vous qualifié");
+  await diffuse(horaires, 1, new Date());
+  await diffuse(horaires, 1, new Date(Date.now() + 1), "scheduled");
+  await decideMission(company.id, horaires.mission.id, "stop", await version(horaires.mission.id));
+  expect(await prisma.mission.findUniqueOrThrow({ where: { id: horaires.mission.id } })).toMatchObject({ status: "stopped" });
+  expect(await prisma.publication.findFirstOrThrow({ where: { missionId: horaires.mission.id, status: { not: "sent" } } })).toMatchObject({ status: "cancelled", cancelReason: "mission arrêtée" });
+  expect((await loadMissionView(company.id, horaires.mission.id))?.stage).toBe("closed");
+  await expect(decideMission(company.id, horaires.mission.id, "stop", await version(horaires.mission.id))).rejects.toMatchObject({ code: "M-34" });
+  expect((await prisma.journalEntry.findMany({ where: { missionId: horaires.mission.id }, orderBy: [{ createdAt: "asc" }, { id: "asc" }] })).map((entry) => entry.code)).toEqual(["J-23", "J-14"]);
+});
+
 test("story 9.1 to 9.3: missions and credits follow the transitions of the specification, in one transaction each", async ({ company }) => {
   const { prisma } = await import("../src/lib/prisma");
   const { readCredits } = await import("../src/lib/credits");

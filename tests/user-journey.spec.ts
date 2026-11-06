@@ -336,7 +336,8 @@ test("V5.2 workspace: four pages, a single next decision, and a mission created,
     // Anciennes adresses et pages encore vides, honnêtes.
     await page.goto(`${baseURL}/rapport`);
     await expect(page).toHaveURL(/\/resultats$/);
-    await expect(page.getByText("Rien n'a encore été diffusé")).toBeVisible();
+    await expect(page.getByText("Rien n'a encore été diffusé.")).toBeVisible();
+    await expect(page.getByText("Faites d'abord une première diffusion de cette mission : sans envoi, il n'y a rien à mesurer.")).toBeVisible();
 
     // Téléphone : menu repliable, page derrière inerte, Échap ferme.
     await page.setViewportSize({ width: 390, height: 800 });
@@ -606,6 +607,80 @@ test("risk policy API rejects non-admin sessions", async ({ page }) => {
     headers: { Origin: baseURL }, data: { actionKind: "piste_croissance", riskLevel: "eleve" },
   });
   expect(patch.status()).toBe(403);
+});
+
+test("V5.2 bilan: a report after a diffusion, a decision to continue or stop, and what Paul learns on the Strategy, at 1440 and 390 px", async ({ page, company }, testInfo) => {
+  test.setTimeout(90000);
+  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }) });
+  try {
+    await prisma.company.update({ where: { id: company.id }, data: { workspaceV52: true } });
+    const seed = async (title: string, outcome: string, position: number) => {
+      const mission = await prisma.mission.create({ data: { companyId: company.id, template: "site_page", channel: "site", title, outcome, originalOutcome: outcome, finding: "Un constat", scope: { page: title }, status: "active", firstLaunchedAt: new Date(), stopRuleDays: 30, position } });
+      const content = await prisma.missionContent.create({ data: { companyId: company.id, missionId: mission.id, channel: "site", format: "site_page", currentNumber: 1, validatedNumber: 1, validatedAt: new Date(), versions: { create: { number: 1, title, body: "Sur devis.", author: "paul" } } } });
+      await prisma.publication.create({ data: { companyId: company.id, missionId: mission.id, contentId: content.id, versionNumber: 1, title, channel: "site", channelLabel: "Votre site vitrine", mode: "confirmed", status: "sent", sentAt: new Date(Date.now() - 40 * 86_400_000), idempotencyKey: `${content.id}:v1:1` } });
+      return { mission, content };
+    };
+    const tarifs = await seed("Nos tarifs", "Deux demandes de devis", 1);
+    const horaires = await seed("Nos horaires", "Un rendez-vous qualifié", 2);
+
+    // Résultats : la diffusion est listée ; « Poursuivre » reste indisponible sans bilan.
+    await page.goto(`${baseURL}/resultats`);
+    await expect(page.getByRole("heading", { level: 1, name: "L'activité n'est pas le résultat." })).toBeVisible();
+    await expect(page.getByRole("region", { name: "La diffusion et son suivi" })).toContainText("Nos tarifs · V1 · Votre site vitrine");
+    await page.getByRole("row", { name: /Nos tarifs/ }).getByRole("button", { name: "Décider la suite" }).click();
+    const decide = page.getByRole("dialog", { name: "Décider la suite de la mission" });
+    await expect(decide.getByRole("button", { name: "Poursuivre" })).toBeDisabled();
+    await expect(decide).toContainText("Sans bilan, Paul ne peut pas comparer au résultat recherché");
+    await decide.getByRole("button", { name: "Annuler" }).click();
+
+    // Bilan : le contrôle des rendez-vous s'affiche en direct ; changer de mission recharge ses chiffres.
+    const form = page.getByRole("region", { name: "Renseigner mon bilan" });
+    await expect(form.getByLabel("Mission")).toHaveValue(tarifs.mission.id);
+    await form.getByLabel("Demandes qualifiées").fill("1");
+    await form.getByLabel("Rendez-vous").fill("2");
+    await expect(form.getByRole("alert")).toHaveText("Vous ne pouvez pas avoir plus de rendez-vous que de demandes qualifiées. Vérifiez vos chiffres.");
+    await form.getByLabel("Demandes qualifiées").fill("3");
+    await form.getByLabel("Rendez-vous").fill("1");
+    await form.getByLabel("Origine des demandes et contexte").fill("Deux appels du syndic");
+    await form.getByRole("button", { name: "Enregistrer le bilan" }).click();
+    await expect(form.getByRole("status")).toHaveText("Bilan enregistré. Attribution déclarative, non vérifiée.");
+    const metric = (label: string) => page.locator(".metrics div", { hasText: label }).locator("dd");
+    await expect(metric("Demandes qualifiées")).toHaveText("3");
+    await expect(metric("CA signé")).toHaveText("—");
+    await form.getByLabel("Mission").selectOption({ label: "Nos horaires" });
+    await expect(page).toHaveURL(new RegExp(`mission=${horaires.mission.id}`));
+    await expect(form.getByLabel("Demandes qualifiées")).toHaveValue("");
+    await form.getByLabel("Mission").selectOption({ label: "Nos tarifs" });
+    await expect(form.getByLabel("Demandes qualifiées")).toHaveValue("3");
+
+    // Stratégie : ce que Paul apprend, comparé au résultat recherché, sans élargir.
+    await page.goto(`${baseURL}/strategie`);
+    const learning = page.getByRole("article", { name: "Ce que Paul apprend : Nos tarifs" });
+    await expect(learning).toContainText("3 demandes qualifiées, 1 rendez-vous, chiffre d'affaires non déclaré.");
+    await expect(learning).toContainText("Résultat recherché atteint");
+    await expect(learning).toContainText("Proposition à confirmer : poursuivre dans les mêmes limites.");
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.screenshot({ path: testInfo.outputPath("strategie-bilan-1440.png"), fullPage: true });
+
+    // Poursuivre ouvre l'atelier pour la série suivante ; arrêter clôt la mission.
+    await page.goto(`${baseURL}/resultats`);
+    await page.getByRole("row", { name: /Nos tarifs/ }).getByRole("button", { name: "Décider la suite" }).click();
+    await page.getByRole("dialog", { name: "Décider la suite de la mission" }).getByRole("button", { name: "Poursuivre" }).click();
+    await expect(page).toHaveURL(new RegExp(`/atelier/${tarifs.content.id}$`));
+    await page.goto(`${baseURL}/resultats`);
+    await expect(page.getByRole("row", { name: /Nos tarifs/ })).toContainText("Poursuivie, mêmes limites");
+    await page.getByRole("row", { name: /Nos horaires/ }).getByRole("button", { name: "Décider la suite" }).click();
+    await page.getByRole("dialog", { name: "Décider la suite de la mission" }).getByRole("button", { name: "Arrêter la mission" }).click();
+    await expect(page.getByRole("row", { name: /Nos horaires/ })).toContainText("Arrêtée");
+    await expect(page.getByRole("row", { name: /Nos horaires/ }).getByRole("button", { name: "Décider la suite" })).toHaveCount(0);
+    expect(await prisma.mission.findUniqueOrThrow({ where: { id: horaires.mission.id } })).toMatchObject({ status: "stopped" });
+    await page.screenshot({ path: testInfo.outputPath("resultats-1440.png"), fullPage: true });
+    await page.setViewportSize({ width: 390, height: 800 });
+    await page.goto(`${baseURL}/resultats`);
+    await expect(page.getByRole("heading", { level: 1, name: "L'activité n'est pas le résultat." })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath("resultats-390.png"), fullPage: true });
+  } finally { await prisma.$disconnect(); }
 });
 
 test("Canaux & délégation: only active channels, honest states, scheduled diffusions listed before disconnecting, access requested for a reserved channel", async ({ page, company }, testInfo) => {
