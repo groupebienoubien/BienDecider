@@ -1775,6 +1775,7 @@ async function createMissionThroughApi(page: Page, title: string) {
 test("GH-288: a priority card is accepted in one click, another proposal is declined with « Garder le cap actuel »", async ({ page, company }) => {
   const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }) });
   try {
+    await prisma.company.update({ where: { id: company.id }, data: { workspaceV52: true } });
     const { createPendingAction, toPendingActionView } = await import("../src/lib/agents/pending-actions");
     const first = await createMissionThroughApi(page, "Première publication");
     const second = await createMissionThroughApi(page, "Seconde publication");
@@ -1842,6 +1843,7 @@ test("an expired profile card shows its expired message instead of the buttons",
 test("GH-288: one conversation per context, switched with the selector, and Lancer opens the mission frame, at 1440 and 360 px", async ({ page, company }) => {
   const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }) });
   try {
+    await prisma.company.update({ where: { id: company.id }, data: { workspaceV52: true } });
     const { createPendingAction, toPendingActionView } = await import("../src/lib/agents/pending-actions");
     const mission = await createMissionThroughApi(page, "Publier un chantier");
     await prisma.chatMessage.createMany({ data: [

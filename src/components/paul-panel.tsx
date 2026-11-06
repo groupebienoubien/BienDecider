@@ -276,6 +276,8 @@ export function PaulPanel({ launchLabel }: { launchLabel?: string } = {}) {
   const abortRef = useRef<AbortController | null>(null);
   const followRef = useRef(true);
   const sendingRef = useRef(false);
+  // Échanges ajoutés au fil depuis le navigateur : un chargement parti avant eux ne doit pas les effacer.
+  const localEditsRef = useRef(0);
   const submitRef = useRef<(text: string) => Promise<string | null>>(async () => null);
   const conversationRef = useRef<ReturnType<typeof createVoiceConversation> | null>(null);
   const wasOpen = useRef(false);
@@ -325,6 +327,7 @@ export function PaulPanel({ launchLabel }: { launchLabel?: string } = {}) {
   useEffect(() => {
     if (!panel.open) return;
     const controller = new AbortController();
+    const editsAtStart = localEditsRef.current;
     fetch(`/api/co-ceo/messages?context=${encodeURIComponent(contextKey)}`, { signal: controller.signal })
       .then(async (response) => {
         // Conversation introuvable (mission retirée…) : retour à la conversation « stratégie ».
@@ -336,7 +339,8 @@ export function PaulPanel({ launchLabel }: { launchLabel?: string } = {}) {
         const data = response.ok ? await response.json() : null;
         if (!data?.context || !Array.isArray(data.messages)) return;
         setThread({ key: data.context.key, title: data.context.title, template: data.context.template ?? null, conversations: Array.isArray(data.conversations) ? data.conversations : [] });
-        if (!sendingRef.current) setMessages(data.messages);
+        // Un message envoyé pendant le chargement est déjà dans le fil : ne pas le remplacer par l'état antérieur du serveur.
+        if (!sendingRef.current && localEditsRef.current === editsAtStart) setMessages(data.messages);
       })
       .catch(() => undefined);
     return () => controller.abort();
@@ -427,6 +431,7 @@ export function PaulPanel({ launchLabel }: { launchLabel?: string } = {}) {
   async function submit(text: string): Promise<string | null> {
     if (!text || sendingRef.current) return null;
     sendingRef.current = true;
+    localEditsRef.current += 1;
     setSending(true);
     setError(null);
     followRef.current = true;
