@@ -2410,7 +2410,7 @@ test("GH-288: Paul has only proposal tools, names no other agent, and checks eac
     const foreign = await createSocialMission(other.id, "Mission d'une autre entreprise");
     const paul = await capturePaulTools(company.id);
     expect([...paul.names].sort()).toEqual([
-      "get_current_status", "propose_dismiss", "propose_mission", "propose_mission_launch", "propose_pause", "propose_priority",
+      "get_current_status", "propose_dismiss", "propose_idea", "propose_mission", "propose_mission_launch", "propose_pause", "propose_priority",
       "propose_profile_update", "propose_restore", "propose_scope", "record_uncovered_request",
     ]);
     for (const name of ["Martine", "Camille", "Jean-Claude"]) expect(paul.system).not.toContain(name);
@@ -3604,6 +3604,194 @@ test("story 5.5: deleting an account deletes its photo files first, best effort,
       expect(calls.del).toEqual([second.url]);
       expect(calls.del).not.toContain(theirs.url);
     });
+  } finally {
+    await deleteCompany(other.id);
+  }
+});
+
+const IDEA_MISSION = { template: "custom", channel: null, title: "Salon du quartier", outcome: "Dix contacts utiles", finding: "Un salon a lieu près de chez moi en mai", scope: { description: "Tenir un stand au salon de mon quartier" }, stopRuleDays: 21 };
+
+test("GH-312: an idea is noted only on « Noter l'idée », with J-16 and the prefilled frame; « Garder le cap actuel » notes nothing", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { createPendingAction, decidePendingAction } = await import("../src/lib/agents/pending-actions");
+  const { listOpenIdeas } = await import("../src/lib/ideas");
+  const { renderJournal } = await import("../src/lib/journal");
+  const kept = await createPendingAction(company.id, "idea_note", { text: "Un stand au salon de mai" });
+  expect(await prisma.idea.count({ where: { companyId: company.id } })).toBe(0);
+  expect(await decidePendingAction(company.id, kept.id, "cancel")).toMatchObject({ ok: true, action: { status: "cancelled" } });
+  expect(await prisma.idea.count({ where: { companyId: company.id } })).toBe(0);
+
+  const card = await createPendingAction(company.id, "idea_note", { text: "  Un stand au salon de mai  " });
+  const accepted = await decidePendingAction(company.id, card.id, "confirm");
+  const [idea] = await listOpenIdeas(company.id);
+  expect(idea).toMatchObject({ text: "Un stand au salon de mai", convertedMissionId: null });
+  expect(accepted).toMatchObject({ ok: true, action: { status: "confirmed" }, redirect: `/missions/nouvelle?idee=${idea.id}` });
+  const entry = await prisma.journalEntry.findFirstOrThrow({ where: { companyId: company.id, code: "J-16" } });
+  expect(entry).toMatchObject({ actor: "owner", missionId: null });
+  expect(renderJournal("J-16", entry.params as Record<string, string>)).toBe("Idée notée avec Paul : « Un stand au salon de mai ». À cadrer avant tout lancement.");
+  // Second clic : la même réponse, pas de seconde idée.
+  expect(await decidePendingAction(company.id, card.id, "confirm")).toMatchObject({ ok: true });
+  expect(await prisma.idea.count({ where: { companyId: company.id } })).toBe(1);
+  // Une carte expirée ne note rien.
+  const expired = await createPendingAction(company.id, "idea_note", { text: "Une autre envie" });
+  await prisma.paulPendingAction.update({ where: { id: expired.id }, data: { expiresAt: new Date(Date.now() - 1000) } });
+  expect(await decidePendingAction(company.id, expired.id, "confirm")).toMatchObject({ ok: false, error: "expired" });
+  expect(await prisma.idea.count({ where: { companyId: company.id } })).toBe(1);
+});
+
+test("GH-312: ten open ideas at most and no tag: Paul makes no card, a card made before is refused on click with M-63", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { createPendingAction, decidePendingAction } = await import("../src/lib/agents/pending-actions");
+  const { noteIdeaIn } = await import("../src/lib/ideas");
+  const { renderMissionMessage } = await import("../src/lib/missions/messages");
+  const paul = await capturePaulTools(company.id);
+  for (const text of ["  ", "<b>x</b>"]) expect(await paul.tool("propose_idea").run({ text })).toContain(renderMissionMessage("M-62"));
+  await expect(prisma.$transaction((tx) => noteIdeaIn(tx, company.id, "<b>x</b>"))).rejects.toMatchObject({ code: "M-62" });
+  expect(await prisma.paulPendingAction.count({ where: { companyId: company.id } })).toBe(0);
+
+  const early = await createPendingAction(company.id, "idea_note", { text: "Idée de trop" });
+  for (let n = 1; n <= 10; n++) await prisma.$transaction((tx) => noteIdeaIn(tx, company.id, `Idée ${n}`));
+  const answer = await paul.tool("propose_idea").run({ text: "Une onzième idée" });
+  expect(answer).toContain(renderMissionMessage("M-63"));
+  expect(answer).toContain("Retirer l'idée");
+  expect(await prisma.paulPendingAction.count({ where: { companyId: company.id, type: "idea_note", status: "pending" } })).toBe(1);
+  expect(await decidePendingAction(company.id, early.id, "confirm")).toMatchObject({ ok: false, error: "refused", code: "M-63", action: { status: "pending" } });
+  expect(await prisma.idea.count({ where: { companyId: company.id } })).toBe(10);
+  expect(await prisma.journalEntry.count({ where: { companyId: company.id, code: "J-16" } })).toBe(10);
+  // Paul lit les idées ouvertes et le plafond.
+  const status = JSON.parse(await paul.tool("get_current_status").run({}));
+  expect(status.idees.maximum).toBe(10);
+  expect(status.idees.ouvertes).toHaveLength(10);
+});
+
+test("GH-312: Paul's propose_idea makes one card with the trimmed text; the same idea replaces its pending card, another one is added", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { createPendingAction } = await import("../src/lib/agents/pending-actions");
+  const paul = await capturePaulTools(company.id);
+  expect(await paul.tool("propose_idea").run({ text: "  Un stand au salon de mai  " })).toContain("Noter l'idée");
+  const proposed = await prisma.paulPendingAction.findFirstOrThrow({ where: { companyId: company.id, type: "idea_note" } });
+  expect(proposed).toMatchObject({ status: "pending", payload: { text: "Un stand au salon de mai" } });
+  expect(await prisma.idea.count({ where: { companyId: company.id } })).toBe(0);
+
+  const a = await createPendingAction(company.id, "idea_note", { text: "Idée A" });
+  const b = await createPendingAction(company.id, "idea_note", { text: "Idée B" });
+  const status = async (id: string) => (await prisma.paulPendingAction.findUniqueOrThrow({ where: { id } })).status;
+  expect([await status(a.id), await status(b.id)]).toEqual(["pending", "pending"]);
+  const again = await createPendingAction(company.id, "idea_note", { text: "Idée A" });
+  expect([await status(a.id), await status(b.id), await status(again.id)]).toEqual(["superseded", "pending", "pending"]);
+});
+
+test("GH-312: two ideas noted at once from nine open ones: one succeeds, the other is refused with M-63", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { noteIdeaIn } = await import("../src/lib/ideas");
+  for (let n = 1; n <= 9; n++) await prisma.$transaction((tx) => noteIdeaIn(tx, company.id, `Idée ${n}`));
+  const results = await Promise.allSettled([
+    prisma.$transaction((tx) => noteIdeaIn(tx, company.id, "Dixième A")),
+    prisma.$transaction((tx) => noteIdeaIn(tx, company.id, "Dixième B")),
+  ]);
+  expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+  expect(results.find((result) => result.status === "rejected")).toMatchObject({ reason: { code: "M-63" } });
+  expect(await prisma.idea.count({ where: { companyId: company.id } })).toBe(10);
+});
+
+test("GH-312: framing an idea creates the mission and retires the idea in one transaction, J-01 then J-31; twice or from another company creates nothing", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { createMission } = await import("../src/lib/missions/service");
+  const { IdeaNotFoundError, listOpenIdeas, noteIdeaIn, removeIdea } = await import("../src/lib/ideas");
+  const { renderJournal } = await import("../src/lib/journal");
+  const idea = await prisma.$transaction((tx) => noteIdeaIn(tx, company.id, "Un salon"));
+
+  // Mission invalide (M-20) : rien n'est créé, l'idée reste à cadrer.
+  await expect(createMission(company.id, { ...IDEA_MISSION, finding: "Un salon" }, idea.id)).rejects.toMatchObject({ code: "M-20" });
+  expect(await listOpenIdeas(company.id)).toHaveLength(1);
+
+  // Une autre entreprise ne cadre ni ne retire cette idée.
+  const other = await prisma.company.create({ data: { ownerEmail: `engine-other-${randomUUID()}@example.invalid`, name: "Autre", trade: "Artisan", servingArea: "Lyon" } });
+  try {
+    await expect(createMission(other.id, IDEA_MISSION, idea.id)).rejects.toBeInstanceOf(IdeaNotFoundError);
+    expect(await removeIdea(other.id, idea.id)).toBeNull();
+    expect(await prisma.mission.count({ where: { companyId: other.id } })).toBe(0);
+  } finally {
+    await deleteCompany(other.id);
+  }
+
+  // Double envoi simultané : une seule mission, l'idée est retirée.
+  const results = await Promise.allSettled([createMission(company.id, IDEA_MISSION, idea.id), createMission(company.id, IDEA_MISSION, idea.id)]);
+  expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+  expect(results.find((result) => result.status === "rejected")).toMatchObject({ reason: expect.any(IdeaNotFoundError) });
+  const mission = await prisma.mission.findFirstOrThrow({ where: { companyId: company.id } });
+  expect(mission).toMatchObject({ finding: IDEA_MISSION.finding, status: "proposed", createdBy: "owner" });
+  expect(await prisma.mission.count({ where: { companyId: company.id } })).toBe(1);
+  expect(await prisma.idea.findUniqueOrThrow({ where: { id: idea.id } })).toMatchObject({ convertedMissionId: mission.id });
+  expect(await listOpenIdeas(company.id)).toHaveLength(0);
+  expect(await journalCodes(company.id, mission.id)).toEqual([["J-01", "owner"], ["J-31", "owner"]]);
+  const j31 = await prisma.journalEntry.findFirstOrThrow({ where: { companyId: company.id, code: "J-31" } });
+  expect(renderJournal("J-31", j31.params as Record<string, string>)).toBe("Idée cadrée en mission : Salon du quartier.");
+  // « Sur mesure » : la demande part à l'administration.
+  expect(await prisma.uncoveredRequest.count({ where: { companyId: company.id, source: "mission" } })).toBe(1);
+  // Déjà cadrée : ni retrait ni second cadrage.
+  expect(await removeIdea(company.id, idea.id)).toBeNull();
+  await expect(createMission(company.id, { ...IDEA_MISSION, title: "Autre salon" }, idea.id)).rejects.toBeInstanceOf(IdeaNotFoundError);
+  expect(await prisma.mission.count({ where: { companyId: company.id } })).toBe(1);
+});
+
+test("GH-312: Paul frames an idea with propose_mission, and the accepted card retires it; a stale idea gives no mission", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { createPendingAction, decidePendingAction } = await import("../src/lib/agents/pending-actions");
+  const { listOpenIdeas, noteIdeaIn, removeIdea } = await import("../src/lib/ideas");
+  const idea = await prisma.$transaction((tx) => noteIdeaIn(tx, company.id, "Un salon"));
+  const paul = await capturePaulTools(company.id);
+  expect(await paul.tool("propose_mission").run({ ...IDEA_MISSION, ideaId: "inconnue" })).toContain("n'est plus à cadrer");
+  expect(await paul.tool("propose_mission").run({ ...IDEA_MISSION, ideaId: idea.id })).toContain("Créer la mission");
+  const card = await prisma.paulPendingAction.findFirstOrThrow({ where: { companyId: company.id, type: "mission_create", status: "pending" } });
+  expect(card.payload).toMatchObject({ ideaId: idea.id });
+  expect(await decidePendingAction(company.id, card.id, "confirm")).toMatchObject({ ok: true, action: { status: "confirmed" } });
+  const mission = await prisma.mission.findFirstOrThrow({ where: { companyId: company.id } });
+  expect(mission.createdBy).toBe("paul");
+  expect(await listOpenIdeas(company.id)).toHaveLength(0);
+  expect((await journalCodes(company.id, mission.id)).map(([code]) => code)).toEqual(["J-01", "J-31"]);
+
+  // Idée retirée entre la proposition et l'acceptation : aucune mission, la carte est retirée.
+  const second = await prisma.$transaction((tx) => noteIdeaIn(tx, company.id, "Une vitrine de Noël"));
+  const stale = await createPendingAction(company.id, "mission_create", { ...IDEA_MISSION, template: "custom", channel: null, title: "Vitrine de Noël", ideaId: second.id });
+  expect(await removeIdea(company.id, second.id)).toMatchObject({ id: second.id });
+  expect(await prisma.journalEntry.count({ where: { companyId: company.id, code: "J-30" } })).toBe(1);
+  expect(await decidePendingAction(company.id, stale.id, "confirm")).toMatchObject({ ok: false, error: "inactive" });
+  expect(await prisma.mission.count({ where: { companyId: company.id } })).toBe(1);
+});
+
+test("GH-312: the routes check the session's company: prefilled frame, framing and removal answer 404 for a foreign or stale idea", async ({ company, request }) => {
+  if (!process.env.SESSION_SECRET) throw new Error("SESSION_SECRET is required for engine tests.");
+  const { prisma } = await import("../src/lib/prisma");
+  const { noteIdeaIn } = await import("../src/lib/ideas");
+  const { renderJournal } = await import("../src/lib/journal");
+  const baseURL = process.env.UX_TEST_BASE_URL ?? "http://localhost:3000";
+  const headers = { Cookie: `pepito_session=${createSessionToken(company.ownerEmail, company.sessionVersion, process.env.SESSION_SECRET)}`, Origin: baseURL };
+  const other = await prisma.company.create({ data: { ownerEmail: `engine-other-${randomUUID()}@example.invalid`, name: "Autre", trade: "Artisan", servingArea: "Lyon" } });
+  try {
+    const foreign = await prisma.$transaction((tx) => noteIdeaIn(tx, other.id, "Leur idée secrète de salon"));
+    const prefilled = await request.get(`${baseURL}/missions/nouvelle?idee=${foreign.id}`, { headers });
+    expect(prefilled.status()).toBe(200);
+    expect(await prefilled.text()).not.toContain("Leur idée secrète de salon");
+    expect((await request.delete(`${baseURL}/api/ideas/${foreign.id}`, { headers })).status()).toBe(404);
+    expect((await request.post(`${baseURL}/api/missions`, { headers, data: { ...IDEA_MISSION, ideaId: foreign.id } })).status()).toBe(404);
+    for (const ideaId of [42, "", { id: foreign.id }]) expect((await request.post(`${baseURL}/api/missions`, { headers, data: { ...IDEA_MISSION, ideaId } })).status()).toBe(400);
+    expect(await prisma.idea.count({ where: { id: foreign.id, convertedMissionId: null } })).toBe(1);
+    expect(await prisma.mission.count({ where: { companyId: company.id } })).toBe(0);
+
+    const mine = await prisma.$transaction((tx) => noteIdeaIn(tx, company.id, "Notre idée"));
+    expect((await request.delete(`${baseURL}/api/ideas/${mine.id}`, { headers: { Cookie: headers.Cookie } })).status()).toBe(403);
+    expect((await request.delete(`${baseURL}/api/ideas/${mine.id}`, { headers })).status()).toBe(200);
+    expect(await prisma.idea.count({ where: { id: mine.id } })).toBe(0);
+    const j30 = await prisma.journalEntry.findFirstOrThrow({ where: { companyId: company.id, code: "J-30" } });
+    expect(renderJournal("J-30", j30.params as Record<string, string>)).toBe("Idée retirée : « Notre idée ».");
+    expect((await request.delete(`${baseURL}/api/ideas/${mine.id}`, { headers })).status()).toBe(404);
+
+    const framed = await prisma.$transaction((tx) => noteIdeaIn(tx, company.id, "Un salon"));
+    const created = await request.post(`${baseURL}/api/missions`, { headers, data: { ...IDEA_MISSION, ideaId: framed.id } });
+    expect(created.status()).toBe(201);
+    expect((await request.post(`${baseURL}/api/missions`, { headers, data: { ...IDEA_MISSION, title: "Autre salon", ideaId: framed.id } })).status()).toBe(404);
+    expect(await prisma.mission.count({ where: { companyId: company.id } })).toBe(1);
   } finally {
     await deleteCompany(other.id);
   }

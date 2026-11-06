@@ -10,6 +10,7 @@ import { writeJournal, type JournalCode } from "@/lib/journal";
 import { adaptContentToChannel, checkScopeLock, markRecipientsChanged } from "@/lib/contents/service";
 import { cancelScheduledPublications } from "@/lib/contents/publish";
 import { agencyNames, checkAgencyScope } from "@/lib/agencies/service";
+import { convertIdeaIn, lockOpenIdeaIn } from "@/lib/ideas";
 
 export class MissionNotFoundError extends Error {
   constructor() {
@@ -48,16 +49,22 @@ export async function listMissions(companyId: string): Promise<Mission[]> {
   return prisma.mission.findMany({ where: { companyId }, orderBy: [{ position: "asc" }, { id: "asc" }] });
 }
 
-/** Création : 0 crédit, aucune diffusion autorisée. Une demande « Sur mesure » est transmise à l'administration pour enrichir le catalogue. */
-export async function createMission(companyId: string, body: unknown): Promise<Mission> {
-  return prisma.$transaction((tx) => createMissionIn(tx, companyId, body));
+/**
+ * Création : 0 crédit, aucune diffusion autorisée. Une demande « Sur mesure » est transmise à l'administration pour enrichir le catalogue.
+ * Avec `ideaId`, la mission cadre cette idée (US #312) : l'idée est retirée dans la même transaction, ou rien n'est créé.
+ */
+export async function createMission(companyId: string, body: unknown, ideaId?: string): Promise<Mission> {
+  return prisma.$transaction((tx) => createMissionIn(tx, companyId, body, "owner", ideaId));
 }
 
 /**
  * Création dans la transaction de l'appelant : celle du formulaire, ou celle d'une proposition de Paul acceptée
  * (mêmes contrôles, même trace J-01). `createdBy` dit d'où vient le constat : le dirigeant, ou Paul.
+ * `ideaId` : idée ouverte de l'entreprise cadrée par cette mission, verrouillée d'abord ; absente, d'une autre
+ * entreprise, déjà cadrée ou retirée → IdeaNotFoundError, rien n'est créé. Sinon elle est retirée et J-31 suit J-01.
  */
-export async function createMissionIn(tx: Prisma.TransactionClient, companyId: string, body: unknown, createdBy: "owner" | "paul" = "owner"): Promise<Mission> {
+export async function createMissionIn(tx: Prisma.TransactionClient, companyId: string, body: unknown, createdBy: "owner" | "paul" = "owner", ideaId?: string): Promise<Mission> {
+  if (ideaId !== undefined) await lockOpenIdeaIn(tx, companyId, ideaId);
   // Plafond des missions créées par le dirigeant, directement ou en acceptant une proposition de Paul (§12).
   const openMissions = await tx.mission.count({ where: { companyId, createdBy: { in: ["owner", "paul"] }, status: { not: "stopped" } } });
   const validated = validateNewMission(body, openMissions);
@@ -84,6 +91,7 @@ export async function createMissionIn(tx: Prisma.TransactionClient, companyId: s
     await tx.uncoveredRequest.create({ data: { companyId, request: `${value.title} : ${value.outcome}`.slice(0, 300), source: "mission" } });
   }
   await writeJournal(tx, { companyId, missionId: mission.id, code: "J-01", params: { titre: mission.title } });
+  if (ideaId !== undefined) await convertIdeaIn(tx, companyId, ideaId, mission);
   return mission;
 }
 

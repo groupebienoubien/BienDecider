@@ -3,6 +3,7 @@ import { PAUL_PROFILE_FIELDS, PROFILE_FIELD_LABELS, PROFILE_TEXT_LIMITS, cleanPr
 import { MISSION_CHANNELS, channelLabel } from "@/lib/missions/channels";
 import { MISSION_TEMPLATES, TEMPLATE_KEYS } from "@/lib/missions/templates";
 import { scopeSummary } from "@/lib/missions/scope";
+import { IDEA_TEXT_MAX, isIdeaId, validateIdeaText } from "@/lib/idea-text";
 
 /**
  * Partie pure des propositions de Paul (cartes « Paul · proposition à confirmer », spécification §16.3) :
@@ -19,6 +20,7 @@ export const PENDING_ACTION_TYPES = [
   "mission_restore",
   "mission_create",
   "mission_launch",
+  "idea_note",
 ] as const;
 export type PendingActionType = (typeof PENDING_ACTION_TYPES)[number];
 export function isPendingActionType(type: string): type is PendingActionType {
@@ -51,6 +53,7 @@ const CONFIRMED_TEXT: Record<PendingActionType, string> = {
   mission_restore: "Mission remise au plan.",
   mission_create: "Mission créée, à décider : rien n'est lancé.",
   mission_launch: "Confirmez le cadre de la mission pour la lancer.",
+  idea_note: "Idée notée : cadrez-la avant tout lancement.",
 };
 
 /** Texte affiché sous une carte décidée, selon son statut et son type (vide tant qu'elle est en attente). */
@@ -169,8 +172,16 @@ export const missionCreatePayloadSchema = z.object({
   finding: shortText(300),
   scope: z.record(z.string(), z.unknown()),
   stopRuleDays: z.number().int().min(7).max(90).optional(),
+  // Idée notée que cette mission cadre (US #312) : retirée à l'acceptation, dans la même transaction.
+  ideaId: z.string().refine(isIdeaId).optional(),
 }).strict();
 export type MissionCreatePayload = z.infer<typeof missionCreatePayloadSchema>;
+
+/** Idée à noter (US #312, §16.3) : 1 à 200 caractères après `trim`, sans `<` ni `>` (M-62). */
+export const ideaNotePayloadSchema = z.object({
+  text: z.string().max(IDEA_TEXT_MAX * 2).refine((text) => validateIdeaText(text).ok).transform((text) => text.trim()),
+}).strict();
+export type IdeaNotePayload = z.infer<typeof ideaNotePayloadSchema>;
 
 export type PayloadFor = {
   update_profile: UpdateProfilePayload;
@@ -181,6 +192,7 @@ export type PayloadFor = {
   mission_restore: MissionRefPayload;
   mission_create: MissionCreatePayload;
   mission_launch: MissionRefPayload;
+  idea_note: IdeaNotePayload;
 };
 
 export const PAYLOAD_SCHEMAS: { [K in PendingActionType]: z.ZodType<PayloadFor[K]> } = {
@@ -192,6 +204,7 @@ export const PAYLOAD_SCHEMAS: { [K in PendingActionType]: z.ZodType<PayloadFor[K
   mission_restore: missionRefPayloadSchema,
   mission_create: missionCreatePayloadSchema,
   mission_launch: missionRefPayloadSchema,
+  idea_note: ideaNotePayloadSchema,
 };
 
 /** Bouton d'acceptation de chaque proposition (§16.3). */
@@ -204,6 +217,7 @@ export const CONFIRM_LABELS: Record<PendingActionType, string> = {
   mission_restore: "Remettre au plan",
   mission_create: "Créer la mission",
   mission_launch: "Lancer",
+  idea_note: "Noter l'idée",
 };
 
 export type PendingActionDescription = { title: string; lines: string[]; confirmLabel: string; cancelLabel: string };
@@ -247,10 +261,17 @@ const DESCRIBERS: Record<PendingActionType, Describer> = {
       `Résultat recherché : ${outcome}`,
       `Constat : ${finding}`,
       `Périmètre : ${scopeSummary(template, scope)} · Règle d'arrêt : ${days ? `${days} jours` : "—"}`,
+      ...(parsed.data.ideaId ? ["Elle cadre une idée notée, qui sera retirée de la liste."] : []),
       "Elle sera à décider : rien n'est lancé sans votre confirmation du cadre.",
     ]);
   },
   mission_launch: describeRef("mission_launch", (mission) => `Lancer « ${mission} »`, "J'ouvre le cadre de la mission : vous confirmez le coût et le périmètre avant tout lancement."),
+  idea_note: (payload) => {
+    const parsed = ideaNotePayloadSchema.safeParse(payload);
+    return parsed.success
+      ? card("idea_note", "Noter cette idée", [`« ${parsed.data.text} »`, "Elle apparaît dans Stratégie, après vos missions, pour la cadrer ensuite. Rien n'est lancé."])
+      : null;
+  },
 };
 
 export function describePendingAction(action: { type: string; payload: unknown }): PendingActionDescription | null {
@@ -258,9 +279,9 @@ export function describePendingAction(action: { type: string; payload: unknown }
   return isPendingActionType(action.type) ? DESCRIBERS[action.type](action.payload) : null;
 }
 
-/** Mission visée par une carte, ou null (profil, création). */
+/** Mission visée par une carte, ou null (profil, création, idée). */
 export function pendingActionMissionId(action: { type: string; payload: unknown }): string | null {
-  if (!isPendingActionType(action.type) || action.type === "update_profile" || action.type === "mission_create") return null;
+  if (!isPendingActionType(action.type) || action.type === "update_profile" || action.type === "mission_create" || action.type === "idea_note") return null;
   const parsed = z.object({ missionId }).loose().safeParse(action.payload);
   return parsed.success ? parsed.data.missionId : null;
 }

@@ -14,11 +14,12 @@ const SCOPE_FIELD: Record<string, { key: string; label: string; min: number; max
 };
 
 /** Création d'une mission : 0 crédit, aucune diffusion autorisée ; le serveur valide tout et renvoie le message de la spécification. */
-export function NewMissionForm({ templates, launchCost }: { templates: TemplateOption[]; launchCost: number }) {
+export function NewMissionForm({ templates, launchCost, idea = null }: { templates: TemplateOption[]; launchCost: number; idea?: { id: string; text: string } | null }) {
   const router = useRouter();
   const [templateKey, setTemplateKey] = useState(templates[0]?.key ?? "custom");
   const template = templates.find((candidate) => candidate.key === templateKey) ?? templates[0];
-  const [finding, setFinding] = useState("");
+  // Idée cadrée (US #312) : son texte préremplit le constat, modifiable ; trop court, le dirigeant le complète (M-20).
+  const [finding, setFinding] = useState(idea?.text ?? "");
   const [title, setTitle] = useState("");
   const [outcome, setOutcome] = useState(template?.defaultOutcome ?? "");
   const [outcomeTouched, setOutcomeTouched] = useState(false);
@@ -49,15 +50,21 @@ export function NewMissionForm({ templates, launchCost }: { templates: TemplateO
       channel: channel || null,
       scope: field && scopeValue.trim() ? { [field.key]: scopeValue } : {},
       ...(templateKey === "custom" ? { stopRuleDays: Number(stopRuleDays) } : {}),
+      ...(idea ? { ideaId: idea.id } : {}),
     };
-    const response = await fetch("/api/missions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    const payload = await response.json().catch(() => null);
-    setBusy(false);
-    if (!response.ok) {
-      setError(payload?.error ?? "Impossible de créer la mission pour le moment.");
+    const generic = "Impossible de créer la mission pour le moment.";
+    const response = await fetch("/api/missions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).catch(() => null);
+    const payload = response ? await response.json().catch(() => null) : null;
+    const missionId: unknown = payload?.mission?.id;
+    if (!response || !response.ok || typeof missionId !== "string") {
+      // Idée cadrée ou retirée ailleurs : renvoyer son identifiant échouerait toujours.
+      const stale = idea && response?.status === 404;
+      setError(stale ? "Cette idée n'est plus à cadrer : rechargez la page pour créer la mission sans elle." : response && !response.ok ? (payload?.error ?? generic) : generic);
+      setBusy(false);
       return;
     }
-    router.push(`/missions/${payload.mission.id}`);
+    // Le bouton reste désactivé jusqu'à la page de la mission : pas de second envoi.
+    router.push(`/missions/${missionId}`);
   }
 
   return (

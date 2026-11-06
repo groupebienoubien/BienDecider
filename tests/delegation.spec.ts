@@ -38,6 +38,7 @@ import { FEEDBACK_TEXT_MAX, cleanFeedbackPage, feedbackEmail, parseFeedbackInput
 import { cleanErrorMessage, cleanErrorPath, errorAlertEmail, errorFingerprint } from "../src/lib/error-tracking-rules";
 import { computeCredit, creditAlertEmail, parseCreditInput } from "../src/lib/llm-credit-rules";
 import { renderMissionMessage } from "../src/lib/missions/messages";
+import { IDEA_MAX, ideaFrameHref, validateIdeaText } from "../src/lib/idea-text";
 import { LAUNCH_COST_CREDITS, checkTransition, validateNewMission, type MissionSnapshot } from "../src/lib/missions/rules";
 import { availableTemplates, enabledChannels, MISSION_TEMPLATES } from "../src/lib/missions/templates";
 import { missionStage, missionTracker, nextStep, orderMissions, priorityMissionId, type ContentState, type StageMission } from "../src/lib/missions/stage";
@@ -501,7 +502,7 @@ test("a profile text over the Entreprise page limit gives no card and a readable
 const MISSION_REF = { missionId: "m-1", title: "Publier un chantier" } as const;
 
 test("GH-288: each mission card reads its §16.3 label, with « Garder le cap actuel », from the recorded intention only", () => {
-  expect([...PENDING_ACTION_TYPES].sort()).toEqual(["mission_create", "mission_dismiss", "mission_launch", "mission_pause", "mission_priority", "mission_restore", "mission_scope", "update_profile"]);
+  expect([...PENDING_ACTION_TYPES].sort()).toEqual(["idea_note", "mission_create", "mission_dismiss", "mission_launch", "mission_pause", "mission_priority", "mission_restore", "mission_scope", "update_profile"]);
   const labels = Object.fromEntries(["mission_priority", "mission_pause", "mission_dismiss", "mission_restore", "mission_launch"].map((type) => {
     const card = describePendingAction({ type, payload: MISSION_REF });
     expect(card?.cancelLabel).toBe(KEEP_COURSE_LABEL);
@@ -535,6 +536,30 @@ test("GH-288: a decided card says what changed, « Garder le cap actuel » chang
   const view = toPendingActionView({ id: "c1", type: "mission_launch", status: "confirmed", payload: MISSION_REF, expiresAt: new Date("2026-11-06T12:00:00Z") }, new Date("2026-11-05T12:00:00Z"));
   expect(view).toMatchObject({ status: "confirmed", confirmLabel: "Lancer", cancelLabel: KEEP_COURSE_LABEL });
   expect(view).not.toHaveProperty("result");
+});
+
+test("GH-312: an idea is 1 to 200 characters without tags; its card reads « Noter l'idée » and leads to the prefilled frame", () => {
+  expect(IDEA_MAX).toBe(10);
+  expect(validateIdeaText("  Un salon de quartier en mai  ")).toEqual({ ok: true, text: "Un salon de quartier en mai" });
+  expect(validateIdeaText("a".repeat(200))).toMatchObject({ ok: true });
+  for (const bad of ["", "   ", "<b>x</b>", "a > b", "a".repeat(201), 42, null]) expect(validateIdeaText(bad)).toEqual({ ok: false, code: "M-62" });
+  expect(renderMissionMessage("M-62")).toBe("Décrivez votre idée en une phrase.");
+  expect(renderMissionMessage("M-63")).toBe("10 idées au maximum : retirez-en une avant d'en noter une autre.");
+  expect(renderJournal("J-16", { idée: "Un salon" })).toBe("Idée notée avec Paul : « Un salon ». À cadrer avant tout lancement.");
+  expect(renderJournal("J-30", { idée: "Un salon" })).toBe("Idée retirée : « Un salon ».");
+  expect(renderJournal("J-31", { mission: "Salon de mai" })).toBe("Idée cadrée en mission : Salon de mai.");
+  expect(ideaFrameHref("idee-1")).toBe("/missions/nouvelle?idee=idee-1");
+
+  const card = describePendingAction({ type: "idea_note", payload: { text: "Un salon de quartier en mai" } });
+  expect(card).toMatchObject({ title: "Noter cette idée", confirmLabel: "Noter l'idée", cancelLabel: KEEP_COURSE_LABEL });
+  expect(card?.lines[0]).toBe("« Un salon de quartier en mai »");
+  expect(decidedText("confirmed", "idea_note")).toBe("Idée notée : cadrez-la avant tout lancement.");
+  for (const text of ["  ", "<b>x</b>"]) expect(describePendingAction({ type: "idea_note", payload: { text } })).toBeNull();
+  // Une création de mission peut cadrer une idée ; la carte le dit.
+  const create = describePendingAction({ type: "mission_create", payload: {
+    template: "custom", channel: null, title: "Salon du quartier", outcome: "Dix contacts utiles", finding: "Un salon a lieu près de chez moi", scope: { description: "Tenir un stand" }, stopRuleDays: 21, ideaId: "idee-1",
+  } });
+  expect(create?.lines).toContain("Elle cadre une idée notée, qui sera retirée de la liste.");
 });
 
 test("GH-288: one conversation per context, keys read safely, titles and default context per page", () => {

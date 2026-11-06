@@ -10,6 +10,7 @@ export const JOURNAL_TEXTS = {
   "J-12": "Périmètre modifié · {mission} : {résumé}.",
   "J-14": "Décision de fin de test · {mission} : {décision}.",
   "J-15": "Bilan déclaré · {mission} : {n} demande(s), {m} rendez-vous{ca}. Attribution déclarative, non vérifiée.",
+  "J-16": "Idée notée avec Paul : « {idée} ». À cadrer avant tout lancement.",
   "J-17": "Mission lancée (ou reprise) : {mission}. Paul prépare le premier contenu.",
   "J-18": "Mission suspendue : {mission}. Programmations annulées.",
   "J-19": "V{n} {origine} · {mission}.",
@@ -23,6 +24,8 @@ export const JOURNAL_TEXTS = {
   "J-27": "V{n} refusée : {motif}.",
   "J-28": "Échec de diffusion de V{n} sur {canal} : {motif}.",
   "J-29": "Canal de la mission changé · {mission} : {canal}. Nouvelle version du brouillon à relire.",
+  "J-30": "Idée retirée : « {idée} ».",
+  "J-31": "Idée cadrée en mission : {mission}.",
 } as const;
 
 export type JournalCode = keyof typeof JOURNAL_TEXTS;

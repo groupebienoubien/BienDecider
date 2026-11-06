@@ -6,8 +6,10 @@ import { MissionError } from "@/lib/missions/messages";
 import { MissionNotFoundError, applyMissionTransitionIn, createMissionIn } from "@/lib/missions/service";
 import type { MissionAction } from "@/lib/missions/rules";
 import { DEFAULT_CONTEXT_KEY } from "@/lib/paul-contexts";
+import { IdeaNotFoundError, ideaFrameHref, noteIdeaIn } from "@/lib/ideas";
 import {
   KEEP_COURSE_REPLY,
+  ideaNotePayloadSchema,
   PAYLOAD_SCHEMAS,
   PENDING_ACTION_TTL_MS,
   isPendingActionType,
@@ -81,7 +83,14 @@ const EXECUTORS: { [K in PendingActionType]: Executor } = {
   mission_create: async (tx, companyId, payload) => {
     const parsed = missionCreatePayloadSchema.safeParse(payload);
     if (!parsed.success) return false;
-    await createMissionIn(tx, companyId, parsed.data, "paul");
+    const { ideaId, ...body } = parsed.data;
+    try {
+      await createMissionIn(tx, companyId, body, "paul", ideaId);
+    } catch (error) {
+      // Idée déjà cadrée, retirée ou absente : aucune mission n'est créée (vérifié avant toute écriture).
+      if (error instanceof IdeaNotFoundError) return false;
+      throw error;
+    }
     return {};
   },
   // « Lancer » n'exécute rien : il mène au dialogue « Confirmer le cadre de la mission » (§13.7), rien n'est débité ici.
@@ -94,6 +103,13 @@ const EXECUTORS: { [K in PendingActionType]: Executor } = {
     if (mission.status === "dismissed") throw new MissionError("M-21");
     // Déjà en cours : rien à lancer (idempotent, §2.2) et pas de cadre à ouvrir.
     return LAUNCHABLE.includes(mission.status) ? { redirect: launchFrameHref(mission.id) } : {};
+  },
+  // « Noter l'idée » (US #312) : M-62 et M-63 refaits à l'acceptation, J-16, puis « Cadrons votre nouvelle mission » prérempli.
+  idea_note: async (tx, companyId, payload) => {
+    const parsed = ideaNotePayloadSchema.safeParse(payload);
+    if (!parsed.success) return false;
+    const idea = await noteIdeaIn(tx, companyId, parsed.data.text);
+    return { redirect: ideaFrameHref(idea.id) };
   },
 };
 
@@ -110,6 +126,11 @@ function sameTarget(type: PendingActionType, payload: unknown): Prisma.PaulPendi
   if (type === "mission_create") {
     const parsed = missionCreatePayloadSchema.safeParse(payload);
     return parsed.success ? { payload: { path: ["title"], equals: parsed.data.title } } : {};
+  }
+  // Une idée vise son texte : la même idée redite remplace la carte en attente, une autre idée s'ajoute.
+  if (type === "idea_note") {
+    const parsed = ideaNotePayloadSchema.safeParse(payload);
+    return parsed.success ? { payload: { path: ["text"], equals: parsed.data.text } } : {};
   }
   return {};
 }
