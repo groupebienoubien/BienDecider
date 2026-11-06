@@ -767,6 +767,11 @@
 .mq.workspace-v52 .review-checklist li{margin-bottom:4px;overflow-wrap:anywhere}
 .mq.workspace-v52 .check-field{display:flex;gap:10px;align-items:flex-start;font-size:13px;font-weight:600;margin:12px 0 6px}
 .mq.workspace-v52 dialog h4{margin:14px 0 4px;font-size:13px}
+.mq.workspace-v52 .moment-choice{border:0;padding:0;margin:12px 0;display:flex;flex-wrap:wrap;gap:8px 18px;align-items:center}
+.mq.workspace-v52 .moment-choice legend{font-weight:600;font-size:13px;margin-bottom:6px}
+.mq.workspace-v52 .moment-choice>label:not(.field){display:inline-flex;gap:6px;align-items:center;font-size:13px}
+.mq.workspace-v52 .moment-choice input[type=radio]{width:auto}
+.mq.workspace-v52 .moment-choice .field{flex-basis:100%;margin:4px 0 0}
 .mq.workspace-v52 .delegation-options{border:0;padding:0;margin:12px 0;display:grid;gap:8px}
 .mq.workspace-v52 .delegation-option{display:flex;gap:10px;align-items:flex-start;padding:12px;border:1px solid var(--line);border-radius:6px;background:white;cursor:pointer}
 .mq.workspace-v52 .delegation-option.selected{border-color:var(--green);box-shadow:inset 3px 0 var(--green)}

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSessionCompany } from "@/lib/session";
 import { decryptFacebookAccount, revokeFacebookAuthorization } from "@/lib/oauth/meta";
+import { cancelScheduledPublications } from "@/lib/contents/publish";
 
 export async function POST(request: NextRequest) {
   if (request.headers.get("origin") !== request.nextUrl.origin) return NextResponse.json({ error: "Origine refusée." }, { status: 403 });
@@ -20,6 +21,9 @@ export async function POST(request: NextRequest) {
       revoked = false;
     }
   }
-  await prisma.channelConnection.deleteMany({ where: { companyId: company.id, channel: "facebook" } });
+  await prisma.$transaction(async (tx) => {
+    await cancelScheduledPublications(tx, { companyId: company.id, channel: "facebook" }, "Page Facebook déconnectée", "owner");
+    await tx.channelConnection.deleteMany({ where: { companyId: company.id, channel: "facebook" } });
+  });
   return NextResponse.json({ disconnected: true, revoked });
 }

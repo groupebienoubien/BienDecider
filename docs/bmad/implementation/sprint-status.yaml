@@ -112,8 +112,8 @@ development_status:
   epic-11-retrospective: optional
 
   epic-12: in-progress
-  12-1-confirmer-une-diffusion: review
-  12-2-diffuser-moi-meme-et-le-declarer: review
-  12-3-choisir-mon-niveau-de-delegation: review
-  12-4-programmer-et-annuler-une-diffusion: backlog
+  12-1-confirmer-une-diffusion: done
+  12-2-diffuser-moi-meme-et-le-declarer: done
+  12-3-choisir-mon-niveau-de-delegation: done
+  12-4-programmer-et-annuler-une-diffusion: review
   epic-12-retrospective: optional

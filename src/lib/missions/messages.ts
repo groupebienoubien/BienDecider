@@ -35,6 +35,7 @@ export const MISSION_MESSAGES = {
   "M-58": "Validez la version courante avant de poursuivre.",
   "M-59": "Une programmation existe déjà pour cette version.",
   "M-60": "Enregistrez vos retouches dans une nouvelle version avant cette décision.",
+  "M-61": "Choisissez une date et une heure futures.",
   "M-64": "Choisissez de 1 à 5 avis sans réponse.",
   "M-65": "Ajoutez un visuel : {canal} ne publie pas sans image.",
   "M-66": "Ce texte dépasse {n} caractères, la limite de {canal}. Raccourcissez-le dans une nouvelle version.",
@@ -53,6 +54,7 @@ export const MISSION_MESSAGES = {
   "M-84": "Cochez « Je confirme avoir diffusé cette version » avant de déclarer.",
   "M-85": "Choisissez l'un des trois niveaux de délégation.",
   "M-86": "Aucun résultat incertain à vérifier pour cette version.",
+  "M-87": "Aucune programmation à annuler pour cette version.",
 } as const;
 
 export type MissionMessageCode = keyof typeof MISSION_MESSAGES;

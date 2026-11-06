@@ -661,6 +661,7 @@ model Publication {
   url            String? // adresse publique, si le canal en donne une
   failureReason  String? // en clair (J-28)
   cancelReason   String? // J-23
+  cancelledBy    String? // owner | system : une annulation par le système remonte dans « À valider par vous »
   idempotencyKey String         @unique // contenu, version et rang de la tentative : deux confirmations simultanees n'en font qu'une
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt

@@ -1,7 +1,7 @@
 import { Prisma, type Company, type ContentVersion, type Mission, type MissionContent } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { writeJournal } from "@/lib/journal";
-import { MissionError } from "@/lib/missions/messages";
+import { MissionError, renderMissionMessage } from "@/lib/missions/messages";
 import { channelLabel, isChannelEnabled, type MissionChannel } from "@/lib/missions/channels";
 import { asDelegationLevel } from "@/lib/delegation-level";
 import { decryptFacebookAccount, publishFacebookPagePost } from "@/lib/oauth/meta";
@@ -25,7 +25,7 @@ type Outcome =
   | { status: "failed"; reason: string; tokenRejected?: boolean }
   | { status: "uncertain" };
 
-export type DiffusionResult = { status: "sent" | "failed" | "uncertain"; url: string | null; message: string };
+export type DiffusionResult = { status: "sent" | "failed" | "uncertain" | "scheduled" | "cancelled"; url: string | null; message: string };
 
 function refuse(refusal: Refusal): never {
   throw new MissionError(refusal.code, refusal.params);
@@ -52,12 +52,12 @@ export async function readDestination(companyId: string, channel: MissionChannel
   return { channel, enabled, connected: live, label: channelLabel(channel) };
 }
 
-type LoadedContent = MissionContent & { mission: Mission; company: Company; publications: { versionNumber: number; status: string }[] };
+type LoadedContent = MissionContent & { mission: Mission; company: Company; publications: { id: string; versionNumber: number; status: string }[] };
 
 async function loadContent(companyId: string, contentId: string): Promise<{ content: LoadedContent; snapshot: ContentSnapshot; version: ContentVersion }> {
   const content = await prisma.missionContent.findFirst({
     where: { id: contentId, companyId },
-    include: { mission: true, company: true, publications: { select: { versionNumber: true, status: true } } },
+    include: { mission: true, company: true, publications: { select: { id: true, versionNumber: true, status: true } } },
   });
   if (!content || content.currentNumber === 0) throw new ContentNotFoundError();
   const version = await prisma.contentVersion.findUniqueOrThrow({ where: { contentId_number: { contentId, number: content.currentNumber } } });
@@ -115,25 +115,22 @@ async function execute(destination: Destination, content: LoadedContent, version
 }
 
 /**
- * Diffuser maintenant (§5.1, §5.2) : contrôles dans l'ordre, réservation de la tentative avec sa clé d'idempotence,
- * appel au canal, puis résultat enregistré (envoyée, échec ou incertain) et journalisé. Rien n'est relancé automatiquement.
+ * Diffuser maintenant ou programmer (§5.1 à §5.3) : contrôles dans l'ordre, réservation de la tentative avec sa clé d'idempotence,
+ * puis appel au canal et résultat enregistré (envoyée, échec ou incertain), ou programmation enregistrée pour l'ordonnanceur.
  */
 export async function publishContentNow(
   companyId: string,
   contentId: string,
-  input: { number: number; confirmed: boolean },
+  input: { number: number; confirmed: boolean; scheduledAt?: Date | null; timezone?: string | null },
   { fetchImpl = fetch, now = new Date() }: { fetchImpl?: typeof fetch; now?: Date } = {},
 ): Promise<DiffusionResult> {
   const { content, snapshot, version } = await loadContent(companyId, contentId);
   const destination = await readDestination(companyId, snapshot.channel);
-  const refusal = checkDiffusion(snapshot, {
-    emailVerified: content.company.emailVerifiedAt !== null,
-    delegation: asDelegationLevel(content.company.delegationLevel),
-    channelEnabled: destination.enabled,
-    channelConnected: destination.connected,
-  }, input);
+  const refusal = checkDiffusion(snapshot, contextOf(content.company, destination), { ...input, now });
   if (refusal) refuse(refusal);
 
+  const scheduledAt = input.scheduledAt ?? null;
+  const timezone = input.timezone ?? "Europe/Paris";
   const attempt = await prisma.publication.count({ where: { contentId, versionNumber: version.number } });
   let publicationId: string;
   try {
@@ -142,22 +139,41 @@ export async function publishContentNow(
       const created = await tx.publication.create({
         data: {
           companyId, missionId: content.missionId, contentId, versionNumber: version.number, title: version.title,
-          channel: snapshot.channel, channelLabel: destination.label, mode: "confirmed", status: "sending",
+          channel: snapshot.channel, channelLabel: destination.label, mode: "confirmed", status: scheduledAt ? "scheduled" : "sending",
+          scheduledAt, timezone: scheduledAt ? timezone : null,
           idempotencyKey: `${contentId}:v${version.number}:${attempt + 1}`,
         },
       });
+      if (scheduledAt) await writeJournal(tx, { companyId, missionId: content.missionId, code: "J-21", params: { n: String(version.number), canal: destination.label, date: formatMoment(scheduledAt, timezone) } });
       return created.id;
     });
   } catch (error) {
     if (isUniqueViolation(error)) throw new MissionError("M-81");
     throw error;
   }
+  if (scheduledAt) return { status: "scheduled", url: null, message: `V${version.number} programmée sur ${destination.label} le ${formatMoment(scheduledAt, timezone)}, à quelques minutes près.` };
+  return deliver(publicationId, content, version, destination, fetchImpl, now);
+}
 
+function contextOf(company: Company, destination: Destination) {
+  return { emailVerified: company.emailVerifiedAt !== null, delegation: asDelegationLevel(company.delegationLevel), channelEnabled: destination.enabled, channelConnected: destination.connected };
+}
+
+/** « le 7 novembre vers 09:05 » dans le fuseau choisi par le dirigeant. */
+export function formatMoment(at: Date, timezone: string): string {
+  const parts = new Intl.DateTimeFormat("fr-FR", { day: "numeric", month: "long", hour: "2-digit", minute: "2-digit", timeZone: timezone }).formatToParts(at);
+  const part = (type: string) => parts.find((item) => item.type === type)?.value ?? "";
+  return `${part("day")} ${part("month")} vers ${part("hour")}:${part("minute")}`;
+}
+
+/** Appel au canal et résultat enregistré et journalisé ; commun à la diffusion immédiate et à l'ordonnanceur. */
+async function deliver(publicationId: string, content: LoadedContent, version: ContentVersion, destination: Destination, fetchImpl: typeof fetch, now: Date): Promise<DiffusionResult> {
+  const companyId = content.companyId;
   const outcome = await execute(destination, content, version, fetchImpl, now);
   const n = String(version.number);
   await prisma.$transaction(async (tx) => {
     if (outcome.status === "sent") {
-      await tx.publication.update({ where: { id: publicationId }, data: { status: "sent", sentAt: now, externalId: outcome.externalId, url: outcome.url, recipientCount: outcome.recipientCount } });
+      await tx.publication.update({ where: { id: publicationId }, data: { status: "sent", sentAt: now, channelLabel: destination.label, externalId: outcome.externalId, url: outcome.url, recipientCount: outcome.recipientCount } });
       const destinataires = outcome.recipientCount ? ` · ${outcome.recipientCount} destinataire${outcome.recipientCount > 1 ? "s" : ""}` : "";
       await writeJournal(tx, { companyId, missionId: content.missionId, code: "J-22", params: { n, canal: destination.label, destinataires } });
     } else if (outcome.status === "failed") {
@@ -172,6 +188,64 @@ export async function publishContentNow(
   if (outcome.status === "sent") return { status: "sent", url: outcome.url ?? null, message: `V${n} publiée sur ${destination.label}.` };
   if (outcome.status === "failed") return { status: "failed", url: null, message: `Rien n'a été diffusé : ${outcome.reason}. La version reste validée.` };
   return { status: "uncertain", url: null, message: `${destination.label} n'a pas confirmé la diffusion. Vérifiez sur le canal, puis dites-le.` };
+}
+
+/** Annule les programmations visées (§5.3), chacune journalisée (J-23), dans la transaction de la décision qui les annule. */
+export async function cancelScheduledPublications(tx: Prisma.TransactionClient, where: Prisma.PublicationWhereInput, reason: string, actor: "owner" | "system"): Promise<number> {
+  const scheduled = await tx.publication.findMany({ where: { ...where, status: "scheduled" }, select: { id: true, companyId: true, missionId: true, versionNumber: true } });
+  for (const publication of scheduled) {
+    const written = await tx.publication.updateMany({ where: { id: publication.id, status: "scheduled" }, data: { status: "cancelled", cancelReason: reason, cancelledBy: actor } });
+    if (written.count === 1) await writeJournal(tx, { companyId: publication.companyId, missionId: publication.missionId, code: "J-23", actor, params: { n: String(publication.versionNumber), raison: reason } });
+  }
+  return scheduled.length;
+}
+
+/** « Annuler la programmation » : la seule annulation possible ; la version reste validée. */
+export async function cancelContentSchedule(companyId: string, contentId: string, input: { number: number }): Promise<DiffusionResult> {
+  const { content, version } = await loadContent(companyId, contentId);
+  if (input.number !== content.currentNumber) throw new MissionError("M-02");
+  const cancelled = await prisma.$transaction(async (tx) => {
+    await guardContent(tx, content);
+    const count = await cancelScheduledPublications(tx, { contentId, versionNumber: version.number }, "annulée par vous", "owner");
+    if (count === 0) throw new MissionError("M-87");
+    return count;
+  });
+  return { status: "cancelled", url: null, message: `Programmation annulée${cancelled > 1 ? "s" : ""}. V${version.number} reste validée.` };
+}
+
+export type SchedulerReport = { sent: number; failed: number; uncertain: number; cancelled: number; stale: number };
+
+/**
+ * Ordonnanceur (addendum §7), appelé toutes les 5 minutes : chaque programmation due est réservée une seule fois,
+ * les contrôles 2 à 9 sont rejoués (un refus l'annule, J-23, signalée au dirigeant), puis elle part comme une diffusion immédiate.
+ * Une diffusion restée « en cours » plus de 15 minutes devient incertaine : jamais de relance.
+ */
+export async function runDuePublications({ now = new Date(), fetchImpl = fetch, limit = 20 }: { now?: Date; fetchImpl?: typeof fetch; limit?: number } = {}): Promise<SchedulerReport> {
+  const report: SchedulerReport = { sent: 0, failed: 0, uncertain: 0, cancelled: 0, stale: 0 };
+  report.stale = (await prisma.publication.updateMany({ where: { status: "sending", updatedAt: { lt: new Date(now.getTime() - SENDING_STALE_MS) } }, data: { status: "uncertain" } })).count;
+  const due = await prisma.publication.findMany({ where: { status: "scheduled", scheduledAt: { lte: now } }, orderBy: { scheduledAt: "asc" }, take: limit });
+  for (const publication of due) {
+    const claimed = await prisma.publication.updateMany({ where: { id: publication.id, status: "scheduled" }, data: { status: "sending" } });
+    if (claimed.count !== 1) continue;
+    const { content, version } = await loadContent(publication.companyId, publication.contentId);
+    const others = { ...content, publications: content.publications.filter((item) => item.id !== publication.id) };
+    const destination = await readDestination(publication.companyId, snapshotOf(others).channel);
+    const refusal = publication.versionNumber !== content.currentNumber
+      ? { code: "M-02" as const }
+      : checkDiffusion(snapshotOf(others), contextOf(content.company, destination), { number: publication.versionNumber, confirmed: true });
+    if (refusal) {
+      const reason = renderMissionMessage(refusal.code, refusal.params).replace(/\.$/, "");
+      await prisma.$transaction(async (tx) => {
+        await tx.publication.update({ where: { id: publication.id }, data: { status: "cancelled", cancelReason: reason, cancelledBy: "system" } });
+        await writeJournal(tx, { companyId: publication.companyId, missionId: publication.missionId, code: "J-23", actor: "system", params: { n: String(publication.versionNumber), raison: reason } });
+      });
+      report.cancelled += 1;
+      continue;
+    }
+    const result = await deliver(publication.id, content, version, destination, fetchImpl, now);
+    report[result.status === "sent" ? "sent" : result.status === "failed" ? "failed" : "uncertain"] += 1;
+  }
+  return report;
 }
 
 const DATE = new Intl.DateTimeFormat("fr-FR", { day: "numeric", month: "long", year: "numeric", timeZone: "Europe/Paris" });

@@ -537,6 +537,40 @@ test("V5.2 diffusion: a validated page goes online once, an uncertain result is 
   } finally { await prisma.$disconnect(); }
 });
 
+test("V5.2 programmation: a validated page is scheduled for a future time, shown in the Strategy, then cancelled and stays validated", async ({ page, company }) => {
+  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }) });
+  try {
+    await prisma.company.update({ where: { id: company.id }, data: { workspaceV52: true } });
+    const mission = await prisma.mission.create({ data: { companyId: company.id, template: "site_page", channel: "site", title: "Nos horaires", outcome: "Des visites", originalOutcome: "Des visites", finding: "Horaires introuvables", scope: { page: "Nos horaires" }, status: "active", firstLaunchedAt: new Date(), position: 1 } });
+    const content = await prisma.missionContent.create({ data: { companyId: company.id, missionId: mission.id, channel: "site", format: "site_page", currentNumber: 1, validatedNumber: 1, validatedAt: new Date(), versions: { create: { number: 1, title: "Nos horaires", body: "Du lundi au vendredi.", author: "paul" } } } });
+    await page.goto(`${baseURL}/atelier/${content.id}`);
+    await page.getByRole("button", { name: "Préparer la publication" }).click();
+    const dialog = page.getByRole("dialog", { name: "Confirmer la diffusion" });
+    await dialog.getByLabel("Programmer").check();
+    const tomorrow = new Date(Date.now() + 24 * 3600_000);
+    const local = `${tomorrow.getFullYear()}-${String(tomorrow.getMonth() + 1).padStart(2, "0")}-${String(tomorrow.getDate()).padStart(2, "0")}T09:00`;
+    await dialog.getByLabel("Date et heure (heure de cet appareil)").fill(local);
+    await dialog.getByLabel("Je confirme cette version, cette destination et ce moment").check();
+    await dialog.getByRole("button", { name: "Programmer la diffusion" }).click();
+    await expect(dialog).toBeHidden();
+    await expect(page.getByRole("heading", { level: 2, name: "V1 programmée" })).toBeVisible();
+    await expect(page.locator(".atelier-decision")).toContainText("vers 09:00 sur Votre site vitrine, à quelques minutes près");
+    await expect(page.getByLabel("Titre de la page")).toBeDisabled();
+
+    await page.goto(`${baseURL}/strategie`);
+    await expect(page.getByRole("region", { name: "À valider par vous" })).toContainText("Nos horaires · V1 · Site vitrine · diffusion programmée");
+    await page.getByRole("region", { name: "À valider par vous" }).getByRole("link", { name: "Voir la programmation" }).click();
+    await page.waitForURL(new RegExp(`/atelier/${content.id}$`));
+    await page.getByRole("button", { name: "Annuler la programmation" }).click();
+    const cancel = page.getByRole("dialog", { name: "Annuler cette programmation ?" });
+    await expect(cancel).toContainText("Le contenu restera validé.");
+    await cancel.getByRole("button", { name: "Annuler la programmation" }).click();
+    await expect(cancel).toBeHidden();
+    await expect(page.getByRole("heading", { level: 2, name: "V1 validée" })).toBeVisible();
+    expect((await prisma.journalEntry.findMany({ where: { missionId: mission.id }, orderBy: [{ createdAt: "asc" }, { id: "asc" }] })).map((entry) => entry.code)).toEqual(["J-21", "J-23"]);
+  } finally { await prisma.$disconnect(); }
+});
+
 test("Gmail start, refusal and send guards do not contact providers", async ({ page, company }) => {
   expect(company.id).toBeTruthy();
   await page.goto(`${baseURL}/connexions`);
