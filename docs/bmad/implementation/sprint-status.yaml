@@ -118,7 +118,13 @@ development_status:
   12-4-programmer-et-annuler-une-diffusion: done
   epic-12-retrospective: optional
 
-  epic-13: in-progress
-  13-1-gerer-mes-canaux-et-ma-delegation: review
-  13-2-ne-proposer-que-les-canaux-disponibles: review
+  epic-13: done
+  13-1-gerer-mes-canaux-et-ma-delegation: done
+  13-2-ne-proposer-que-les-canaux-disponibles: done
   epic-13-retrospective: optional
+
+  epic-14: in-progress
+  14-1-trouver-des-agences-de-ma-zone: review
+  14-2-choisir-une-ou-deux-agences: review
+  14-3-envoyer-un-email-par-agence: review
+  epic-14-retrospective: optional

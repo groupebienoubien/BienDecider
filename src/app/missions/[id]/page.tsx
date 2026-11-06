@@ -14,6 +14,7 @@ import { STAGE_LABELS, missionTracker } from "@/lib/missions/stage";
 import { LAUNCH_COST_CREDITS } from "@/lib/missions/rules";
 import { channelLabel } from "@/lib/missions/channels";
 import { MISSION_TEMPLATES, enabledChannels } from "@/lib/missions/templates";
+import { listAgencies } from "@/lib/agencies/service";
 import { ScopeEditor } from "./scope-editor";
 
 export const dynamic = "force-dynamic";
@@ -30,6 +31,7 @@ export default async function MissionPage({ params }: { params: Promise<{ id: st
   const mission = await loadMissionView(company.id, id);
   if (!mission) notFound();
   const shell = await getShellProps(company);
+  const agencies = mission.template === "agencies" ? await listAgencies(company.id) : [];
   const template = MISSION_TEMPLATES[mission.template];
   const channels = [
     ...enabledChannels(template).map((key) => ({ key, label: channelLabel(key) })),
@@ -88,6 +90,7 @@ export default async function MissionPage({ params }: { params: Promise<{ id: st
               channels={channels}
               channelLocked={mission.hasValidatedVersion}
               lockedReason={LOCKS[mission.status] ?? null}
+              agencies={agencies}
             />
           </section>
 

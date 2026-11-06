@@ -28,6 +28,7 @@ import { renderMissionMessage } from "@/lib/missions/messages";
 import { LAUNCH_COST_CREDITS, checkTransition, validateNewMission, type MissionAction, type MissionStatus } from "@/lib/missions/rules";
 import { missionSnapshot } from "@/lib/missions/service";
 import { loadMissionViews, priorityOf } from "@/lib/missions/view";
+import { listAgencies } from "@/lib/agencies/service";
 import { STAGE_LABELS, nextStep } from "@/lib/missions/stage";
 import { MISSION_CHANNELS, channelLabel, isChannelEnabled } from "@/lib/missions/channels";
 import { TEMPLATE_KEYS, availableTemplates, enabledChannels } from "@/lib/missions/templates";
@@ -73,7 +74,7 @@ function catalogueLines(): string {
  * Chaque état porte son heure (Europe/Paris), avec l'heure courante et celle de son message précédent.
  */
 export async function buildCurrentStatus(companyId: string, now = new Date(), contextKey: string = DEFAULT_CONTEXT_KEY) {
-  const [missions, company, cards, previousReply, rawMissions] = await Promise.all([
+  const [missions, company, cards, previousReply, rawMissions, agencies] = await Promise.all([
     loadMissionViews(companyId),
     prisma.company.findUniqueOrThrow({ where: { id: companyId }, select: { creditBalance: true, priorityMissionId: true, delegationLevel: true } }),
     recentPendingActions(companyId),
@@ -84,6 +85,7 @@ export async function buildCurrentStatus(companyId: string, now = new Date(), co
       select: { createdAt: true },
     }),
     prisma.mission.findMany({ where: { companyId }, select: { id: true, updatedAt: true, firstLaunchedAt: true } }),
+    listAgencies(companyId),
   ]);
   const updated = new Map(rawMissions.map((mission) => [mission.id, mission]));
   const priority = priorityOf(missions);
@@ -107,6 +109,7 @@ export async function buildCurrentStatus(companyId: string, now = new Date(), co
       resultatRecherche: mission.outcome,
       constat: mission.finding,
       perimetre: mission.scopeSummary,
+      ...(mission.template === "agencies" ? { agencesChoisies: mission.scope.agencyIds ?? [] } : {}),
       regleDArretJours: mission.stopRuleDays,
       priorite: mission.priority,
       dejaLancee: Boolean(updated.get(mission.id)?.firstLaunchedAt),
@@ -115,6 +118,8 @@ export async function buildCurrentStatus(companyId: string, now = new Date(), co
       aChangeDepuisMonMessagePrecedent: Boolean(previousReply && (updated.get(mission.id)?.updatedAt.getTime() ?? 0) > previousReply.createdAt.getTime()),
     })),
     credits: { solde: company.creditBalance, coutPremierLancement: LAUNCH_COST_CREDITS, coutVersionPrepareeAvecPaul: PAUL_VERSION_CREDITS, repriseApresPause: 0 },
+    // Liste d'agences des Partenariats (recherche de prescripteurs) : les identifiants à utiliser dans un périmètre {"agencyIds"}.
+    agences: agencies.map((agency) => ({ id: agency.id, nom: agency.name, secteur: agency.sector })),
     // Règle de collaboration choisie par le dirigeant (spécification §9, #36).
     delegation: `${DELEGATION_LABELS[delegationLevel]} : ${DELEGATION_DETAILS[delegationLevel]}`,
     // La diffusion et sa programmation arrivent avec l'atelier : aucune programmation n'existe encore.
@@ -278,7 +283,7 @@ async function runCoCeoTurnImpl(
 
   const proposeScope = betaZodTool({
     name: "propose_scope",
-    description: "Propose de modifier le périmètre d'une mission : carte « Modifier le périmètre ». Forme du périmètre selon le modèle : Publication {\"topic\": sujet de 5 à 120 caractères} ; Réalisation {\"proofId\": identifiant de la réalisation, 1 à 80 caractères} ; Sur mesure {\"description\": 10 à 300 caractères} ; Page du site vitrine {\"page\": nom de la page} ; Réponse aux avis {\"reviewIds\": 1 à 5 identifiants} ; Partenariats {\"agencyIds\": 1 ou 2} ; Réactivation {\"contactIds\": 1 à 8}. Fiche Google à jour : {}.",
+    description: "Propose de modifier le périmètre d'une mission : carte « Modifier le périmètre ». Forme du périmètre selon le modèle : Publication {\"topic\": sujet de 5 à 120 caractères} ; Réalisation {\"proofId\": identifiant de la réalisation, 1 à 80 caractères} ; Sur mesure {\"description\": 10 à 300 caractères} ; Page du site vitrine {\"page\": nom de la page} ; Réponse aux avis {\"reviewIds\": 1 à 5 identifiants} ; Partenariats {\"agencyIds\": 1 ou 2 identifiants pris dans la liste \"agences\" de l'état} ; Réactivation {\"contactIds\": 1 à 8}. Fiche Google à jour : {}.",
     inputSchema: z.object({
       missionId: missionIdField,
       scope: z.record(z.string(), z.unknown()).describe("Nouveau périmètre complet, dans la forme du modèle de la mission"),

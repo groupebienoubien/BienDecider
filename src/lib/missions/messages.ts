@@ -55,6 +55,10 @@ export const MISSION_MESSAGES = {
   "M-85": "Choisissez l'un des trois niveaux de délégation.",
   "M-86": "Aucun résultat incertain à vérifier pour cette version.",
   "M-87": "Aucune programmation à annuler pour cette version.",
+  "M-88": "Une diffusion est programmée : annulez-la avant de modifier le périmètre.",
+  "M-89": "Ce contenu a déjà été diffusé : le périmètre est figé. Créez une nouvelle version dans l'atelier pour repartir sur un autre périmètre.",
+  "M-90": "Paul n'a trouvé aucune nouvelle agence avec un e-mail professionnel public dans votre zone. Réessayez plus tard.",
+  "M-91": "La recherche d'agences n'est pas disponible pour le moment. Réessayez dans un instant.",
 } as const;
 
 export type MissionMessageCode = keyof typeof MISSION_MESSAGES;
@@ -68,7 +72,7 @@ export class MissionError extends Error {
     super(renderMissionMessage(code, params));
     this.name = "MissionError";
     this.code = code;
-    this.status = code === "M-02" ? 409 : code === "M-79" ? 503 : 422;
+    this.status = code === "M-02" ? 409 : code === "M-79" || code === "M-91" ? 503 : 422;
   }
 }
 

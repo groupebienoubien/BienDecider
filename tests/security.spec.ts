@@ -33,6 +33,7 @@ const GUARDED_ROUTES: Guarded[] = [
   { method: "PATCH", path: "/api/admin/llm-credit", denied: 403 },
   { method: "PATCH", path: "/api/admin/channel-access", denied: 403 },
   { method: "POST", path: "/api/channel-access", denied: 401 },
+  { method: "POST", path: "/api/agencies/search", denied: 401 },
   { method: "GET", path: "/api/missions", denied: 401 },
   { method: "POST", path: "/api/missions", denied: 401 },
   { method: "GET", path: "/api/missions/catalogue", denied: 401 },
@@ -1094,7 +1095,7 @@ test("missions and credits belong to the session company: validated, refused acr
     expect((await (await request.get(`${baseURL}/api/missions`, { headers: headers(b) })).json()).missions).toHaveLength(0);
     expect((await (await request.get(`${baseURL}/api/missions`, { headers: headers(a) })).json()).missions).toHaveLength(1);
     const catalogue = (await (await request.get(`${baseURL}/api/missions/catalogue`, { headers: headers(a) })).json()).templates as { key: string; channels: { key: string }[] }[];
-    expect(catalogue.map((template) => template.key)).toEqual(["social_post", "site_page", "custom"]);
+    expect(catalogue.map((template) => template.key)).toEqual(["agencies", "social_post", "site_page", "custom"]);
     expect(catalogue.flatMap((template) => template.channels.map((channel) => channel.key))).not.toContain("instagram");
 
     // Transitions : autre entreprise, autre origine, corps illisible, version perimee.
@@ -1498,6 +1499,51 @@ test("story 5.5: site photo and republish routes refuse another origin, even wit
     expect((await request.patch(`${baseURL}/api/site/photos/identifiant-inexistant`, { headers: sameOrigin, data: { alt: "Photo" } })).status()).toBe(404);
   } finally {
     await prisma.company.deleteMany({ where: { id: company.id } });
+    await prisma.$disconnect();
+  }
+});
+
+test("Partenariats: the agency list belongs to its company, the scope names one or two of them, and the e-mail preview shows each address", async ({ request, page }) => {
+  const prisma = openDatabase();
+  const marker = randomUUID().slice(0, 8);
+  const a = await prisma.company.create({ data: { ownerEmail: `security-agencies-a-${marker}@example.invalid`, name: `Agences A ${marker}`, trade: "Artisan", servingArea: "Paris", emailVerifiedAt: new Date() } });
+  const b = await prisma.company.create({ data: { ownerEmail: `security-agencies-b-${marker}@example.invalid`, name: `Agences B ${marker}`, trade: "Artisan", servingArea: "Lyon" } });
+  const headers = (company: typeof a) => ({ Cookie: sessionCookie(company.ownerEmail, company.sessionVersion), Origin: baseURL });
+  const agency = (company: typeof a, name: string, email: string) => prisma.lead.create({ data: { companyId: company.id, segment: "agence", name, sector: "Agence immobilière", email, source: "https://exemple.invalid/agence", reason: "Elle vend des maisons à rénover." } });
+  try {
+    // Recherche : même origine seulement ; sans modèle configuré, refus en clair (M-91).
+    expect((await request.post(`${baseURL}/api/agencies/search`, { headers: { ...headers(a), Origin: "https://attacker.invalid" } })).status()).toBe(403);
+    const search = await request.post(`${baseURL}/api/agencies/search`, { headers: headers(a) });
+    if (search.status() === 503) expect(await search.json()).toMatchObject({ code: "M-91" });
+
+    const parc = await agency(a, "Agence du Parc", `parc-${marker}@example.invalid`);
+    await agency(a, "Syndic Horizon", `horizon-${marker}@example.invalid`);
+    const foreign = await agency(b, "Agence voisine", `voisine-${marker}@example.invalid`);
+    const created = await request.post(`${baseURL}/api/missions`, { headers: headers(a), data: { template: "agencies", title: "Deux agences de ma zone", outcome: "Un rendez-vous qualifié", finding: "Aucune agence ne me recommande" } });
+    expect(created.status()).toBe(201);
+    const { mission } = await created.json();
+    const transition = (data: unknown) => request.post(`${baseURL}/api/missions/${mission.id}/transition`, { headers: headers(a), data });
+    expect(await (await transition({ action: "set_scope", scope: { agencyIds: [foreign.id] }, expectedVersion: mission.version })).json()).toMatchObject({ code: "M-30" });
+
+    // Choix dans la page de la mission : 2 agences au plus, résumé nommé.
+    await page.context().addCookies([{ name: "pepito_session", value: headers(a).Cookie.slice(headers(a).Cookie.indexOf("=") + 1), url: baseURL }]);
+    await page.goto(`${baseURL}/missions/${mission.id}`);
+    const choice = page.getByRole("group", { name: "Agences à contacter (1 ou 2)" });
+    await expect(choice).toContainText(`parc-${marker}@example.invalid`);
+    await expect(choice).not.toContainText("Agence voisine");
+    await choice.getByRole("checkbox", { name: /Agence du Parc/ }).check();
+    await page.getByRole("button", { name: "Enregistrer le périmètre" }).click();
+    await expect(page.getByText("Périmètre enregistré.")).toBeVisible();
+    await expect(page.locator(".mission-status")).toContainText("Agence du Parc");
+
+    // Aperçu e-mail : chaque adresse, envois séparés.
+    const content = await prisma.missionContent.create({ data: { companyId: a.id, missionId: mission.id, channel: "gmail", format: "email", currentNumber: 1, versions: { create: { number: 1, title: "Travailler ensemble ?", body: "Bonjour,", author: "paul" } } } });
+    await page.goto(`${baseURL}/atelier/${content.id}`);
+    await expect(page.getByRole("article", { name: "Aperçu destinataire" })).toContainText(`Agence du Parc <parc-${marker}@example.invalid> · envois séparés`);
+    expect((await prisma.mission.findUniqueOrThrow({ where: { id: mission.id } })).scope).toEqual({ agencyIds: [parc.id] });
+  } finally {
+    await page.context().clearCookies();
+    await prisma.company.deleteMany({ where: { id: { in: [a.id, b.id] } } });
     await prisma.$disconnect();
   }
 });
