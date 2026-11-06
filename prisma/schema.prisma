@@ -126,7 +126,9 @@ model Lead {
   reason        String // pourquoi elle correspond à la cible / à l'objectif
   publicContact String? // canal professionnel public (site, téléphone pro, formulaire) — jamais de donnée personnelle
   source        String? // URL ayant permis de l'identifier
-  segment       String? // type de cible (ex: "associations", "copropriétés") — base de la boucle d'apprentissage
+  segment       String? // type de cible (ex: "associations", "copropriétés") — base de la boucle d'apprentissage ; "agence" : liste des Partenariats (D6)
+  email         String? // agence : e-mail professionnel public, destinataire d'une mission Partenariats
+  sector        String? // agence : secteur (immobilier, architecture, syndic…)
   stage         String    @default("propose") // propose, a_contacter, contacte, repondu, rdv, gagne, perdu, ecarte
   contactedAt   DateTime?
   repliedAt     DateTime?
@@ -136,6 +138,9 @@ model Lead {
   deferredUntil DateTime? // prospect différé : exclu du "prochain prospect" jusqu'à cette date
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
+  deliveries    PublicationRecipient[]
+
+  @@unique([companyId, email])
 }
 
 /**
@@ -668,9 +673,29 @@ model Publication {
   updatedAt      DateTime       @updatedAt
   company        Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
   content        MissionContent @relation(fields: [contentId], references: [id], onDelete: Cascade)
+  recipients     PublicationRecipient[]
 
   @@index([status, scheduledAt])
   @@index([contentId])
+}
+
+/// E-mail : un envoi par destinataire (addendum §4.3), chacun avec son résultat ; une adresse n'est servie qu'une fois par diffusion.
+model PublicationRecipient {
+  id            String      @id @default(cuid())
+  publicationId String
+  leadId        String?
+  name          String
+  email         String
+  status        String // sending | sent | failed | uncertain
+  externalId    String? // identifiant du message renvoyé par Gmail
+  failureReason String?
+  sentAt        DateTime?
+  createdAt     DateTime    @default(now())
+  publication   Publication @relation(fields: [publicationId], references: [id], onDelete: Cascade)
+  lead          Lead?       @relation(fields: [leadId], references: [id], onDelete: SetNull)
+
+  @@unique([publicationId, email])
+  @@index([leadId])
 }
 
 /// Page du site vitrine mise en ligne par une diffusion (#172) : exactement la version validee et confirmee, servie sous /site/{siteSlug}/{slug}.

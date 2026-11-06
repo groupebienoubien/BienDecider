@@ -509,6 +509,97 @@ test("story 13.2: a channel reserved by an administrator is usable only by autho
   }
 });
 
+test("stories 14.1 to 14.3: Paul's agency list, a scope of one or two listed agencies locked by §6.2, one Gmail message per agency, never sent twice", async ({ company }) => {
+  process.env.OAUTH_TOKEN_ENCRYPTION_KEY ||= "e".repeat(64);
+  const { prisma } = await import("../src/lib/prisma");
+  const { listAgencies, searchAgencies } = await import("../src/lib/agencies/service");
+  const { applyMissionTransition, createMission } = await import("../src/lib/missions/service");
+  const { publishContentNow, resolveUncertainDiffusion } = await import("../src/lib/contents/publish");
+  const { applyContentAction } = await import("../src/lib/contents/service");
+  const { encryptGmailToken } = await import("../src/lib/oauth/gmail");
+  await prisma.company.update({ where: { id: company.id }, data: { emailVerifiedAt: new Date() } });
+
+  // Recherche de prescripteurs : seules les agences complètes (nom, secteur, e-mail, source web) et nouvelles entrent dans la liste.
+  const found = [
+    { name: "Agence du Parc", sector: "Agence immobilière", email: "contact@agenceduparc.fr", source: "https://agenceduparc.fr/contact", reason: "Elle vend des maisons anciennes à rénover." },
+    { name: "Syndic Horizon", sector: "Syndic", email: "Bonjour@Syndic-Horizon.fr", source: "https://syndic-horizon.fr", reason: "Elle gère des copropriétés." },
+    { name: "Sans adresse", sector: "Architecte", email: "pas-un-email", source: "https://exemple.fr", reason: "" },
+    { name: "Sans source", sector: "Architecte", email: "contact@archi.fr", source: "javascript:alert(1)", reason: "" },
+    { name: "agence du parc", sector: "Agence immobilière", email: "autre@agenceduparc.fr", source: "https://agenceduparc.fr", reason: "Doublon" },
+  ];
+  const requests: { known: string[]; company: { name: string } }[] = [];
+  const finder = async (request: { known: string[]; company: { name: string } }) => { requests.push(request); return found; };
+  expect(await searchAgencies(company.id, finder)).toEqual({ added: 2, total: 2 });
+  expect(requests[0]).toMatchObject({ company: { name: "Atelier Test Moteur" }, known: [] });
+  const agencies = (await listAgencies(company.id)).sort((a, b) => a.name.localeCompare(b.name));
+  expect(agencies.map((agency) => [agency.name, agency.sector, agency.email])).toEqual([["Agence du Parc", "Agence immobilière", "contact@agenceduparc.fr"], ["Syndic Horizon", "Syndic", "bonjour@syndic-horizon.fr"]]);
+  await expect(searchAgencies(company.id, finder)).rejects.toMatchObject({ code: "M-90" });
+  expect(requests[1].known.sort()).toEqual(["Agence du Parc", "Syndic Horizon"]);
+  await expect(searchAgencies(company.id, async () => { throw new Error("modèle indisponible"); })).rejects.toMatchObject({ code: "M-91", status: 503 });
+  const [parc, horizon] = agencies;
+  const { buildCurrentStatus } = await import("../src/lib/agents/co-ceo");
+  expect((await buildCurrentStatus(company.id)).agences).toEqual([
+    { id: expect.any(String), nom: expect.any(String), secteur: expect.any(String) },
+    { id: expect.any(String), nom: expect.any(String), secteur: expect.any(String) },
+  ]);
+
+  // Périmètre : 1 ou 2 agences de la liste de l'entreprise, jamais une autre ; le résumé les nomme.
+  const foreign = await prisma.lead.create({ data: { companyId: company.id, segment: "associations", name: "Club local", reason: "Prospect" } });
+  const frame = { template: "agencies", title: "Deux agences de ma zone", outcome: "Un rendez-vous qualifié", finding: "Aucune agence ne me recommande" };
+  await expect(createMission(company.id, { ...frame, scope: { agencyIds: [foreign.id] } })).rejects.toMatchObject({ code: "M-30" });
+  let mission = await createMission(company.id, frame);
+  expect(mission).toMatchObject({ channel: "gmail", stopRuleDays: 30 });
+  await expect(applyMissionTransition(company.id, mission.id, { action: "set_scope", scope: { agencyIds: [parc.id, foreign.id] } }, mission.version)).rejects.toMatchObject({ code: "M-30" });
+  mission = (await applyMissionTransition(company.id, mission.id, { action: "set_scope", scope: { agencyIds: [parc.id] } }, mission.version)).mission;
+  mission = (await applyMissionTransition(company.id, mission.id, { action: "launch" }, mission.version)).mission;
+  expect(await prisma.journalEntry.findFirstOrThrow({ where: { missionId: mission.id, code: "J-12" } })).toMatchObject({ params: { résumé: "Agence du Parc" } });
+
+  // Agences changées sur une mission En cours au contenu validé : nouvelle version « Destinataires modifiés », validation retirée.
+  const content = await prisma.missionContent.create({ data: { companyId: company.id, missionId: mission.id, channel: "gmail", format: "email", currentNumber: 1, validatedNumber: 1, validatedAt: new Date(), versions: { create: { number: 1, title: "Travailler ensemble ?", body: "Bonjour,\n\nNous rénovons des maisons anciennes près de chez vous.", author: "paul" } } } });
+  mission = (await applyMissionTransition(company.id, mission.id, { action: "set_scope", scope: { agencyIds: [parc.id, horizon.id] } }, mission.version)).mission;
+  expect(await prisma.missionContent.findUniqueOrThrow({ where: { id: content.id } })).toMatchObject({ currentNumber: 2, validatedNumber: null });
+  expect(await prisma.contentVersion.findFirstOrThrow({ where: { contentId: content.id, number: 2 } })).toMatchObject({ author: "system", note: "Destinataires modifiés" });
+  expect(await prisma.journalEntry.findFirstOrThrow({ where: { missionId: mission.id, code: "J-12" }, orderBy: { createdAt: "desc" } })).toMatchObject({ params: { résumé: "Agence du Parc et Syndic Horizon" } });
+  await applyContentAction(company.id, content.id, { action: "validate", number: 2, input: { reviewed: true } });
+
+  // Gmail : sans compte relié (M-57) ; puis un message par agence, depuis l'adresse du dirigeant, chacun tracé.
+  await expect(publishContentNow(company.id, content.id, { number: 2, confirmed: true })).rejects.toMatchObject({ code: "M-57" });
+  await prisma.channelConnection.create({ data: {
+    companyId: company.id, channel: "gmail", status: "connecte", expiresAt: new Date(Date.now() + 3600_000),
+    accessToken: encryptGmailToken("access-token", company.id), refreshToken: encryptGmailToken(JSON.stringify({ token: "refresh-token", email: "dirigeant@example.invalid" }), company.id),
+  } });
+  const sent: { to: string; from: string; auth: string }[] = [];
+  const gmail = (statuses: number[]) => (async (_url: string, init: RequestInit) => {
+    const mime = Buffer.from(JSON.parse(String(init.body)).raw, "base64url").toString("utf8");
+    sent.push({ to: /^To: (.+)$/m.exec(mime)?.[1].trim() ?? "", from: /^From: (.+)$/m.exec(mime)?.[1].trim() ?? "", auth: String((init.headers as Record<string, string>).Authorization) });
+    const status = statuses.shift() ?? 200;
+    return new Response(JSON.stringify(status === 200 ? { id: `msg-${sent.length}` } : {}), { status, headers: { "Content-Type": "application/json" } });
+  }) as unknown as typeof fetch;
+  expect(await publishContentNow(company.id, content.id, { number: 2, confirmed: true }, { fetchImpl: gmail([200, 503]) })).toMatchObject({ status: "uncertain" });
+  expect(sent).toEqual([
+    { to: "contact@agenceduparc.fr", from: "dirigeant@example.invalid", auth: "Bearer access-token" },
+    { to: "bonjour@syndic-horizon.fr", from: "dirigeant@example.invalid", auth: "Bearer access-token" },
+  ]);
+  const recipients = async () => (await prisma.publicationRecipient.findMany({ where: { publication: { contentId: content.id } }, orderBy: { createdAt: "asc" } })).map((recipient) => `${recipient.email}:${recipient.status}`);
+  expect(await recipients()).toEqual(["contact@agenceduparc.fr:sent", "bonjour@syndic-horizon.fr:uncertain"]);
+  await expect(applyMissionTransition(company.id, mission.id, { action: "set_scope", scope: { agencyIds: [parc.id] } }, mission.version)).rejects.toMatchObject({ code: "M-81" });
+
+  // « Ce n'est pas parti », puis nouvelle diffusion : seule l'agence qui n'a rien reçu est servie.
+  await resolveUncertainDiffusion(company.id, content.id, { number: 2, sent: false });
+  sent.length = 0;
+  const done = await publishContentNow(company.id, content.id, { number: 2, confirmed: true }, { fetchImpl: gmail([200]) });
+  expect(done).toMatchObject({ status: "sent", message: "V2 envoyée depuis Gmail (dirigeant@example.invalid) à 1 destinataire, un e-mail chacun." });
+  expect(sent.map((item) => item.to)).toEqual(["bonjour@syndic-horizon.fr"]);
+  expect(await recipients()).toEqual(["contact@agenceduparc.fr:sent", "bonjour@syndic-horizon.fr:failed", "bonjour@syndic-horizon.fr:sent"]);
+  expect(await prisma.journalEntry.findFirstOrThrow({ where: { missionId: mission.id, code: "J-22" } })).toMatchObject({ params: { canal: "Gmail (dirigeant@example.invalid)", destinataires: " · 1 destinataire" } });
+
+  // Verrouillage §6.2 : version diffusée, puis programmation de la version suivante.
+  await expect(applyMissionTransition(company.id, mission.id, { action: "set_scope", scope: { agencyIds: [parc.id] } }, mission.version)).rejects.toMatchObject({ code: "M-89" });
+  await applyContentAction(company.id, content.id, { action: "next_version", number: 2, input: {} });
+  await prisma.publication.create({ data: { companyId: company.id, missionId: mission.id, contentId: content.id, versionNumber: 3, title: "Travailler ensemble ?", channel: "gmail", channelLabel: "Gmail", mode: "confirmed", status: "scheduled", scheduledAt: new Date(Date.now() + 86400_000), idempotencyKey: `${content.id}:v3:1` } });
+  await expect(applyMissionTransition(company.id, mission.id, { action: "set_scope", scope: { agencyIds: [parc.id] } }, mission.version)).rejects.toMatchObject({ code: "M-88" });
+});
+
 test("story 9.1 to 9.3: missions and credits follow the transitions of the specification, in one transaction each", async ({ company }) => {
   const { prisma } = await import("../src/lib/prisma");
   const { readCredits } = await import("../src/lib/credits");

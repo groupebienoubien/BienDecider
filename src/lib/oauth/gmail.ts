@@ -84,3 +84,23 @@ export async function buildGmailMessage(message: z.infer<typeof gmailMessageSche
   }).compile().build();
   return mime.toString("base64url");
 }
+
+export const GMAIL_SEND_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send";
+
+/** Jeton d'accès Gmail utilisable : celui enregistré s'il vaut encore une minute, sinon renouvelé puis réenregistré par `save`. */
+export async function freshGmailAccessToken(
+  connection: { accessToken: string | null; refreshToken: string | null; expiresAt: Date | null },
+  companyId: string,
+  save: (data: { accessToken: string; expiresAt: Date | null }) => Promise<unknown>,
+  now = new Date(),
+): Promise<string> {
+  if (!connection.accessToken || !connection.refreshToken) throw new Error("Gmail non autorisé.");
+  if (connection.expiresAt && connection.expiresAt.getTime() - now.getTime() > 60_000) return decryptGmailToken(connection.accessToken, companyId);
+  const client = gmailClient();
+  const account = decryptGmailAccount(connection.refreshToken, companyId);
+  client.setCredentials({ access_token: decryptGmailToken(connection.accessToken, companyId), refresh_token: account.token, expiry_date: connection.expiresAt?.getTime() });
+  const { token } = await client.getAccessToken();
+  if (!token) throw new Error("Jeton Gmail non renouvelé.");
+  await save({ accessToken: encryptGmailToken(token, companyId), expiresAt: client.credentials.expiry_date ? new Date(client.credentials.expiry_date) : connection.expiresAt });
+  return token;
+}

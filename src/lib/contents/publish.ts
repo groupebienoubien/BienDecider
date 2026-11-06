@@ -6,6 +6,8 @@ import { channelLabel, type MissionChannel } from "@/lib/missions/channels";
 import { canUseChannel, readChannelAccess } from "@/lib/channel-access";
 import { asDelegationLevel } from "@/lib/delegation-level";
 import { decryptFacebookAccount, publishFacebookPagePost } from "@/lib/oauth/meta";
+import { GMAIL_SEND_URL, buildGmailMessage, decryptGmailAccount, freshGmailAccessToken } from "@/lib/oauth/gmail";
+import { scopeAgencies } from "@/lib/agencies/service";
 import { slugify } from "@/lib/site/slug";
 import { checkDeclaration, checkDiffusion, type ContentSnapshot, type Refusal } from "@/lib/contents/rules";
 import { ContentNotFoundError, snapshotOf } from "@/lib/contents/service";
@@ -19,6 +21,7 @@ export type Destination = {
   connected: boolean;
   label: string;
   facebookPage?: { id: string; token: string; name: string };
+  gmail?: { connectionId: string; sender: string };
 };
 
 type Outcome =
@@ -49,6 +52,15 @@ export async function readDestination(companyId: string, channel: MissionChannel
       page = undefined;
     }
     return { channel, enabled, connected: Boolean(page), label: page ? `Page Facebook « ${page.name} »` : channelLabel(channel), facebookPage: page };
+  }
+  if (channel === "gmail") {
+    let sender: string | undefined;
+    try {
+      sender = live && connection?.refreshToken ? decryptGmailAccount(connection.refreshToken, companyId).email : undefined;
+    } catch {
+      sender = undefined;
+    }
+    return { channel, enabled, connected: Boolean(sender), label: sender ? `Gmail (${sender})` : channelLabel(channel), gmail: sender && connection ? { connectionId: connection.id, sender } : undefined };
   }
   return { channel, enabled, connected: live, label: channelLabel(channel) };
 }
@@ -94,9 +106,10 @@ async function publishSitePage(content: LoadedContent, version: ContentVersion, 
   });
 }
 
-async function execute(destination: Destination, content: LoadedContent, version: ContentVersion, fetchImpl: typeof fetch, now: Date): Promise<Outcome> {
+async function execute(publicationId: string, destination: Destination, content: LoadedContent, version: ContentVersion, fetchImpl: typeof fetch, now: Date): Promise<Outcome> {
   try {
     if (destination.channel === "site") return await publishSitePage(content, version, now);
+    if (destination.channel === "gmail" && destination.gmail) return await sendEmails(publicationId, destination.gmail, content, version, fetchImpl, now);
     if (destination.channel === "facebook" && destination.facebookPage) {
       const outcome = await publishFacebookPagePost(destination.facebookPage, `${version.title}\n\n${version.body}`, fetchImpl);
       if (outcome.status === "published") return { status: "sent", externalId: outcome.postId };
@@ -113,6 +126,68 @@ async function execute(destination: Destination, content: LoadedContent, version
     console.error("[diffusion]", error instanceof Error ? error.message : error);
     return destination.channel === "site" ? { status: "failed", reason: "la page n'a pas pu être mise en ligne" } : { status: "uncertain" };
   }
+}
+
+type RecipientResult = { status: "sent"; externalId?: string } | { status: "failed"; reason: string; tokenRejected?: boolean } | { status: "uncertain" };
+
+/**
+ * E-mail (§5.2) : un envoi par destinataire, chacun tracé avec son résultat. Une agence déjà servie pour cette version
+ * (diffusion précédente partiellement partie) n'est jamais relancée ; un accès refusé arrête les envois suivants.
+ */
+async function sendEmails(publicationId: string, gmail: NonNullable<Destination["gmail"]>, content: LoadedContent, version: ContentVersion, fetchImpl: typeof fetch, now: Date): Promise<Outcome> {
+  const agencies = content.mission.template === "agencies" ? await scopeAgencies(content.companyId, content.mission.scope) : [];
+  const served = new Set((await prisma.publicationRecipient.findMany({
+    where: { status: "sent", publication: { contentId: content.id, versionNumber: version.number } },
+    select: { email: true },
+  })).map((recipient) => recipient.email));
+  const recipients = agencies.filter((agency) => !served.has(agency.email));
+  if (recipients.length === 0) return { status: "failed", reason: agencies.length ? "chaque agence du périmètre a déjà reçu cette version" : "aucun destinataire dans le périmètre de cette mission" };
+  const connection = await prisma.channelConnection.findUniqueOrThrow({ where: { id: gmail.connectionId } });
+  let token: string;
+  try {
+    token = await freshGmailAccessToken(connection, content.companyId, (data) => prisma.channelConnection.update({ where: { id: connection.id }, data }), now);
+  } catch (error) {
+    console.error("[diffusion] jeton Gmail", error instanceof Error ? error.message : error);
+    return { status: "failed", tokenRejected: true, reason: "Gmail a refusé l'accès à votre compte : reconnectez-le, puis réessayez" };
+  }
+  const results: RecipientResult[] = [];
+  let blocked: string | null = null;
+  for (const agency of recipients) {
+    const row = await prisma.publicationRecipient.create({ data: { publicationId, leadId: agency.id, name: agency.name, email: agency.email, status: "sending" } });
+    const result: RecipientResult = blocked ? { status: "failed", reason: blocked } : await sendOne(token, gmail.sender, agency.email, version, fetchImpl);
+    if (result.status === "failed" && result.tokenRejected) blocked = "non tenté : accès Gmail refusé";
+    await prisma.publicationRecipient.update({
+      where: { id: row.id },
+      data: result.status === "sent" ? { status: "sent", sentAt: now, externalId: result.externalId } : result.status === "failed" ? { status: "failed", failureReason: result.reason } : { status: "uncertain" },
+    });
+    results.push(result);
+  }
+  const sent = results.filter((result) => result.status === "sent").length;
+  if (results.some((result) => result.status === "uncertain")) return { status: "uncertain" };
+  if (sent > 0) return { status: "sent", recipientCount: sent };
+  const failure = results.find((result): result is Extract<RecipientResult, { status: "failed" }> => result.status === "failed");
+  return { status: "failed", reason: failure?.reason ?? "Gmail a refusé l'envoi", tokenRejected: failure?.tokenRejected };
+}
+
+async function sendOne(token: string, sender: string, to: string, version: ContentVersion, fetchImpl: typeof fetch): Promise<RecipientResult> {
+  const raw = await buildGmailMessage({ to, subject: version.title, text: version.body, confirmed: true }, sender);
+  let response: Response;
+  try {
+    response = await fetchImpl(GMAIL_SEND_URL, {
+      method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ raw }), signal: AbortSignal.timeout(20000),
+    });
+  } catch {
+    // Sans réponse, l'envoi a pu partir : jamais de nouvel essai aveugle (§5.5).
+    return { status: "uncertain" };
+  }
+  if (response.ok) {
+    const body = (await response.json().catch(() => null)) as { id?: unknown } | null;
+    return { status: "sent", externalId: typeof body?.id === "string" ? body.id : undefined };
+  }
+  if (response.status === 401 || response.status === 403) return { status: "failed", tokenRejected: true, reason: "Gmail a refusé l'accès à votre compte : reconnectez-le, puis réessayez" };
+  if (response.status >= 500) return { status: "uncertain" };
+  return { status: "failed", reason: "Gmail a refusé cet envoi" };
 }
 
 /**
@@ -170,7 +245,7 @@ export function formatMoment(at: Date, timezone: string): string {
 /** Appel au canal et résultat enregistré et journalisé ; commun à la diffusion immédiate et à l'ordonnanceur. */
 async function deliver(publicationId: string, content: LoadedContent, version: ContentVersion, destination: Destination, fetchImpl: typeof fetch, now: Date): Promise<DiffusionResult> {
   const companyId = content.companyId;
-  const outcome = await execute(destination, content, version, fetchImpl, now);
+  const outcome = await execute(publicationId, destination, content, version, fetchImpl, now);
   const n = String(version.number);
   await prisma.$transaction(async (tx) => {
     if (outcome.status === "sent") {
@@ -179,14 +254,14 @@ async function deliver(publicationId: string, content: LoadedContent, version: C
       await writeJournal(tx, { companyId, missionId: content.missionId, code: "J-22", params: { n, canal: destination.label, destinataires } });
     } else if (outcome.status === "failed") {
       await tx.publication.update({ where: { id: publicationId }, data: { status: "failed", failureReason: outcome.reason } });
-      if (outcome.tokenRejected) await tx.channelConnection.updateMany({ where: { companyId, channel: "facebook" }, data: { status: "erreur" } });
+      if (outcome.tokenRejected && destination.channel) await tx.channelConnection.updateMany({ where: { companyId, channel: destination.channel }, data: { status: "erreur" } });
       await writeJournal(tx, { companyId, missionId: content.missionId, code: "J-28", actor: "system", params: { n, canal: destination.label, motif: outcome.reason } });
     } else {
       await tx.publication.update({ where: { id: publicationId }, data: { status: "uncertain" } });
     }
   });
 
-  if (outcome.status === "sent") return { status: "sent", url: outcome.url ?? null, message: `V${n} publiée sur ${destination.label}.` };
+  if (outcome.status === "sent") return { status: "sent", url: outcome.url ?? null, message: destination.channel === "gmail" ? `V${n} envoyée depuis ${destination.label} à ${outcome.recipientCount} destinataire${(outcome.recipientCount ?? 0) > 1 ? "s" : ""}, un e-mail chacun.` : `V${n} publiée sur ${destination.label}.` };
   if (outcome.status === "failed") return { status: "failed", url: null, message: `Rien n'a été diffusé : ${outcome.reason}. La version reste validée.` };
   return { status: "uncertain", url: null, message: `${destination.label} n'a pas confirmé la diffusion. Vérifiez sur le canal, puis dites-le.` };
 }
@@ -296,6 +371,13 @@ export async function resolveUncertainDiffusion(companyId: string, contentId: st
       data: input.sent ? { status: "sent", sentAt: pending.createdAt } : { status: "failed", failureReason: "non parti, vérifié par vous" },
     });
     if (written.count === 0) throw new MissionError("M-02");
+    // E-mail : les envois sans réponse prennent le résultat vérifié ; ceux déjà partis le restent et ne seront pas renvoyés.
+    await tx.publicationRecipient.updateMany({
+      where: { publicationId: pending.id, status: { in: ["sending", "uncertain"] } },
+      data: input.sent ? { status: "sent", sentAt: pending.createdAt } : { status: "failed", failureReason: "non parti, vérifié par vous" },
+    });
+    const delivered = await tx.publicationRecipient.count({ where: { publicationId: pending.id, status: "sent" } });
+    if (input.sent && delivered > 0) await tx.publication.update({ where: { id: pending.id }, data: { recipientCount: delivered } });
     await writeJournal(tx, { companyId, missionId: content.missionId, code: "J-25", params: { n: String(version.number), résultat: input.sent ? "diffusée" : "non diffusée" } });
   });
   return input.sent

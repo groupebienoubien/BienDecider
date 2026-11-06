@@ -7,8 +7,9 @@ import { isMissionChannel, channelLabel } from "@/lib/missions/channels";
 import type { TemplateKey } from "@/lib/missions/templates";
 import { scopeSummary } from "@/lib/missions/scope";
 import { writeJournal, type JournalCode } from "@/lib/journal";
-import { adaptContentToChannel } from "@/lib/contents/service";
+import { adaptContentToChannel, checkScopeLock, markRecipientsChanged } from "@/lib/contents/service";
 import { cancelScheduledPublications } from "@/lib/contents/publish";
+import { agencyNames, checkAgencyScope } from "@/lib/agencies/service";
 
 export class MissionNotFoundError extends Error {
   constructor() {
@@ -62,6 +63,7 @@ export async function createMissionIn(tx: Prisma.TransactionClient, companyId: s
   const validated = validateNewMission(body, openMissions);
   if (!validated.ok) throw new MissionError(validated.code, validated.params);
   const { value } = validated;
+  if (value.template === "agencies") await checkAgencyScope(companyId, value.scope, tx);
   const last = await tx.mission.aggregate({ where: { companyId }, _max: { position: true } });
   const mission = await tx.mission.create({
     data: {
@@ -114,6 +116,11 @@ export async function applyMissionTransitionIn(tx: Prisma.TransactionClient, com
     return { mission, balance: null };
   }
   if (result.noop) return { mission, balance: null };
+  if (request.action === "set_scope") {
+    // Verrouillage (§6.2) : ni programmation, ni version courante diffusée, ni résultat incertain ; agences prises dans la liste de l'entreprise.
+    await checkScopeLock(tx, mission.id);
+    if (mission.template === "agencies") await checkAgencyScope(companyId, result.patch.scope, tx);
+  }
   const written = await tx.mission.updateMany({
     where: { id: mission.id, companyId, version },
     data: { ...result.patch, scope: result.patch.scope as object | undefined, version: { increment: 1 } },
@@ -125,14 +132,19 @@ export async function applyMissionTransitionIn(tx: Prisma.TransactionClient, com
   // Écarter la priorité choisie la rend au calcul : la première mission non écartée (§2.2).
   if (request.action === "dismiss") await tx.company.updateMany({ where: { id: companyId, priorityMissionId: mission.id }, data: { priorityMissionId: null } });
   const updated = await tx.mission.findUniqueOrThrow({ where: { id: mission.id } });
-  if (request.action === "set_channel") await adaptContentToChannel(tx, updated);    if (request.action === "pause") await cancelScheduledPublications(tx, { companyId, missionId: mission.id }, "mission mise en pause", "owner");
-    if (request.action === "dismiss") await cancelScheduledPublications(tx, { companyId, missionId: mission.id }, "mission écartée du plan", "owner");  const entry = journalFor(request, updated);
+  if (request.action === "set_channel") await adaptContentToChannel(tx, updated);
+  if (request.action === "pause") await cancelScheduledPublications(tx, { companyId, missionId: mission.id }, "mission mise en pause", "owner");
+  if (request.action === "dismiss") await cancelScheduledPublications(tx, { companyId, missionId: mission.id }, "mission écartée du plan", "owner");
+  const recipientsChanged = request.action === "set_scope" && (mission.template === "agencies" || mission.template === "leads") && JSON.stringify(updated.scope) !== JSON.stringify(mission.scope);
+  if (recipientsChanged) await markRecipientsChanged(tx, updated);
+  const names = mission.template === "agencies" ? await agencyNames(companyId, updated.scope, tx) : {};
+  const entry = journalFor(request, updated, names);
   if (entry) await writeJournal(tx, { companyId, missionId: mission.id, ...entry });
   return { mission: updated, balance };
 }
 
 /** Trace de chaque transition (§15) ; la confirmation des contacts n'a pas de code propre. */
-function journalFor(request: MissionAction, mission: Mission): { code: JournalCode; params: Record<string, string> } | null {
+function journalFor(request: MissionAction, mission: Mission, names: Record<string, string>): { code: JournalCode; params: Record<string, string> } | null {
   const params = { mission: mission.title };
   switch (request.action) {
     case "launch":
@@ -147,7 +159,7 @@ function journalFor(request: MissionAction, mission: Mission): { code: JournalCo
     case "set_outcome":
       return { code: "J-11", params: { ...params, résultat: mission.outcome } };
     case "set_scope":
-      return { code: "J-12", params: { ...params, résumé: scopeSummary(mission.template as TemplateKey, mission.scope) } };
+      return { code: "J-12", params: { ...params, résumé: scopeSummary(mission.template as TemplateKey, mission.scope, names) } };
     case "set_channel":
       return { code: "J-29", params: { ...params, canal: isMissionChannel(mission.channel) ? channelLabel(mission.channel) : "hors canal" } };
     case "confirm_contacts":

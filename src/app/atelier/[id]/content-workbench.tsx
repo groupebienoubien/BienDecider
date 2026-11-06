@@ -10,6 +10,7 @@ import { BODY_MAX, REJECTION_MAX, TITLE_MAX, VARIANTS, variantLabel, type Checkl
 import type { AtelierItem, ContentDetail, VersionView } from "@/lib/contents/view";
 
 const AUTHORS: Record<VersionView["author"], string> = { owner: "vous", paul: "Paul", system: "système" };
+const RECIPIENT_STATES: Record<string, string> = { sent: "envoyé", failed: "non envoyé", uncertain: "à vérifier dans Gmail", sending: "envoi en cours" };
 
 async function send(path: string, body: Record<string, unknown>): Promise<{ error: string | null; message: string | null }> {
   const response = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -57,7 +58,9 @@ function Preview({ detail, title, body }: { detail: ContentDetail; title: string
         <article className="email-preview" aria-label="Aperçu destinataire">
           <dl>
             <dt>De</dt><dd>{detail.companyName}</dd>
-            <dt>À</dt><dd>{detail.mission.scopeSummary === "À préciser" ? "Aucun destinataire dans le périmètre" : `${detail.mission.scopeSummary} · envois séparés`}</dd>
+            <dt>À</dt><dd>{detail.recipients.length
+              ? <>{detail.recipients.map((recipient) => `${recipient.name} <${recipient.email}>`).join(", ")} · envois séparés</>
+              : detail.mission.scopeSummary === "À préciser" ? "Aucun destinataire dans le périmètre" : `${detail.mission.scopeSummary} · envois séparés`}</dd>
             <dt>Objet</dt><dd><strong>{title}</strong></dd>
           </dl>
           <div className="email-body">{body}</div>
@@ -188,7 +191,7 @@ export function ContentWorkbench({ detail, viewing, items, checklist, credits }:
     : "Votre accord est nécessaire";
   const decisionText = archive ? "Y revenir crée une nouvelle version, à relire et valider."
     : pending ? (detail.resolvable ? `${pending.channelLabel} n'a pas confirmé la diffusion. Vérifiez sur le canal, puis dites-le : rien ne sera renvoyé automatiquement.` : "Le canal n'a pas encore répondu. Rechargez la page dans un instant.")
-    : diffused && publication ? `${publication.mode === "declared" ? "Diffusée par vous" : "Publiée"} sur ${publication.channelLabel}${publication.sentAt ? ` le ${formatDay(publication.sentAt)}` : ""}${publication.mode === "declared" ? " · déclarée par vous" : ""}. Elle ne se modifie plus.`
+    : diffused && publication ? `${publication.mode === "declared" ? "Diffusée par vous" : detail.format === "email" ? "Envoyée" : "Publiée"} ${detail.format === "email" && publication.mode !== "declared" ? "depuis" : "sur"} ${publication.channelLabel}${publication.sentAt ? ` le ${formatDay(publication.sentAt)}` : ""}${publication.mode === "declared" ? " · déclarée par vous" : ""}. Elle ne se modifie plus.`
     : scheduled && publication ? `Diffusion prévue le ${publication.scheduledLabel} sur ${publication.channelLabel}, à quelques minutes près. Les contrôles sont refaits à l'heure prévue ; vous pouvez encore l'annuler.`
     : version.rejectionReason ? `Votre motif : « ${version.rejectionReason} ». Paul en tiendra compte pour les prochaines versions de cette mission.`
     : validated ? (selfPublish
@@ -236,6 +239,13 @@ export function ContentWorkbench({ detail, viewing, items, checklist, credits }:
               {lastFailure && <p className="warning small">La dernière tentative n&apos;a pas abouti : {lastFailure}. Rien n&apos;a été diffusé.</p>}
               {validated && detail.systemCancel && <p className="warning small">La programmation a été annulée : {detail.systemCancel}. La version reste validée.</p>}
               {diffused && publication?.url && <p className="small"><a href={publication.url} target="_blank" rel="noopener noreferrer">Voir la page publiée</a></p>}
+              {publication && publication.recipients.length > 0 && (
+                <ul className="small" aria-label="Envois par destinataire">
+                  {publication.recipients.map((recipient) => (
+                    <li key={recipient.name}>{recipient.name} : {RECIPIENT_STATES[recipient.status] ?? recipient.status}{recipient.failureReason ? ` (${recipient.failureReason})` : ""}</li>
+                  ))}
+                </ul>
+              )}
               {notice && <p className="small" role="status">{notice}</p>}
             </div>
             <div className="heading-actions">

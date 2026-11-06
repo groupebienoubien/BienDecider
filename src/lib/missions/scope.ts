@@ -4,12 +4,18 @@ const asObject = (value: unknown): Record<string, unknown> => (value !== null &&
 const count = (value: unknown) => (Array.isArray(value) ? value.length : 0);
 const plural = (n: number, one: string, many: string) => `${n} ${n > 1 ? many : one}`;
 
-/** Résumé du périmètre en une ligne (spécification §6.3) ; « À préciser » tant qu'il n'est pas renseigné. */
-export function scopeSummary(template: TemplateKey, scope: unknown): string {
+/**
+ * Résumé du périmètre en une ligne (spécification §6.3) ; « À préciser » tant qu'il n'est pas renseigné.
+ * `names` : noms des agences lus en base, pour « {agence 1} et {agence 2} » ; sans eux, le nombre d'agences.
+ */
+export function scopeSummary(template: TemplateKey, scope: unknown, names: Record<string, string> = {}): string {
   const value = asObject(scope);
   switch (template) {
-    case "agencies":
-      return count(value.agencyIds) ? plural(count(value.agencyIds), "agence", "agences") : "À préciser";
+    case "agencies": {
+      if (!count(value.agencyIds)) return "À préciser";
+      const named = (value.agencyIds as unknown[]).map((id) => (typeof id === "string" ? names[id] : undefined));
+      return named.every(Boolean) ? named.join(" et ") : plural(count(value.agencyIds), "agence", "agences");
+    }
     case "leads":
       return count(value.contactIds) ? plural(count(value.contactIds), "contact", "contacts") : "À préciser";
     case "proof":

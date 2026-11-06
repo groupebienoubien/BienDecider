@@ -42,6 +42,7 @@ import { LAUNCH_COST_CREDITS, checkTransition, validateNewMission, type MissionS
 import { availableTemplates, enabledChannels, MISSION_TEMPLATES } from "../src/lib/missions/templates";
 import { missionStage, missionTracker, nextStep, orderMissions, priorityMissionId, type ContentState, type StageMission } from "../src/lib/missions/stage";
 import { scopeSummary } from "../src/lib/missions/scope";
+import { AGENCY_SEARCH_MAX, newAgencies, readFoundAgency } from "../src/lib/agencies/rules";
 import { renderJournal } from "../src/lib/journal";
 import { DELEGATION_LABELS, asDelegationLevel, prepareOnlyRefusal } from "../src/lib/delegation-level";
 import { slugify } from "../src/lib/site/slug";
@@ -1529,7 +1530,8 @@ const mission = (over: Partial<MissionSnapshot> = {}): MissionSnapshot => ({ tem
 const codeOf = (result: { ok: boolean; code?: string }) => (result.ok ? "ok" : result.code);
 
 test("mission catalogue: only open models with an active channel are offered, plus Sur mesure", () => {
-  expect(availableTemplates().map((template) => template.key)).toEqual(["social_post", "site_page", "custom"]);
+  expect(availableTemplates().map((template) => template.key)).toEqual(["agencies", "social_post", "site_page", "custom"]);
+  expect(enabledChannels(MISSION_TEMPLATES.agencies)).toEqual(["gmail"]);
   expect(enabledChannels(MISSION_TEMPLATES.social_post)).toEqual(["facebook"]);
   expect(enabledChannels(MISSION_TEMPLATES.google_profile)).toEqual([]);
   expect(MISSION_TEMPLATES.custom.stopRuleDays).toBeNull();
@@ -1549,8 +1551,9 @@ test("mission creation: bounded fields, one permitted and active channel, scope 
   expect(codeOf(validateNewMission({ ...base, channel: "gmail" }, 0))).toBe("M-69");
   expect(codeOf(validateNewMission({ ...base, scope: { topic: "x" } }, 0))).toBe("M-17");
   expect(validateNewMission({ ...base, scope: undefined }, 0)).toMatchObject({ ok: true, value: { scope: {} } });
-  expect(codeOf(validateNewMission({ template: "agencies", title: "Deux agences", outcome: "Une r\u00e9ponse", finding: "Aucune agence partenaire connue" }, 0))).toBe("M-76");
+  expect(validateNewMission({ template: "agencies", title: "Deux agences", outcome: "Une r\u00e9ponse", finding: "Aucune agence partenaire connue" }, 0)).toMatchObject({ ok: true, value: { channel: "gmail", scope: {}, stopRuleDays: 30 } });
   expect(MISSION_TEMPLATES.agencies.validateScope({ agencyIds: ["a", "b", "c"] })).toEqual({ ok: false, code: "M-30" });
+  expect(MISSION_TEMPLATES.agencies.validateScope({ agencyIds: ["a", "a"] })).toEqual({ ok: false, code: "M-30" });
   expect(codeOf(validateNewMission({ template: "proof", title: "Une r\u00e9alisation", outcome: "Des demandes", finding: "Une belle r\u00e9alisation r\u00e9cente", channel: "facebook" }, 0))).toBe("M-76");
   const custom = { template: "custom", title: "Salon local", outcome: "Dix contacts", finding: "Un salon a lieu dans ma ville", scope: { description: "Tenir un stand au salon de mon quartier" } };
   expect(validateNewMission({ ...custom, stopRuleDays: 21 }, 0)).toMatchObject({ ok: true, value: { channel: null, stopRuleDays: 21 } });
@@ -1658,6 +1661,9 @@ test("scope summary, journal texts, first name and breadcrumb of the V5.2 worksp
   expect(scopeSummary("social_post", {})).toBe("À préciser");
   expect(scopeSummary("site_page", {})).toBe("Une page du site");
   expect(scopeSummary("agencies", { agencyIds: ["a", "b"] })).toBe("2 agences");
+  expect(scopeSummary("agencies", { agencyIds: ["a", "b"] }, { a: "Agence du Parc", b: "Syndic Horizon" })).toBe("Agence du Parc et Syndic Horizon");
+  expect(scopeSummary("agencies", { agencyIds: ["a"] }, { a: "Agence du Parc" })).toBe("Agence du Parc");
+  expect(scopeSummary("agencies", { agencyIds: ["a", "gone"] }, { a: "Agence du Parc" })).toBe("2 agences");
   expect(scopeSummary("custom", { description: "Un stand au salon" })).toBe("Un stand au salon");
   expect(renderJournal("J-11", { mission: "Publier", résultat: "Trois devis" })).toBe("Objectif modifié · Publier : « Trois devis ».");
   expect(renderJournal("J-17", { mission: "Publier" })).toBe("Mission lancée (ou reprise) : Publier. Paul prépare le premier contenu.");
@@ -1831,4 +1837,19 @@ test("an OAuth flow started from a Vercel alias restarts from the public address
     if (previous === undefined) delete process.env.APP_BASE_URL;
     else process.env.APP_BASE_URL = previous;
   }
+});
+
+test("story 14.1: an agency found by Paul is kept with a name, a sector, a professional address and a web source, once", () => {
+  const agency = { name: "  Agence du <b>Parc</b> ", sector: "Agence immobilière", email: " Contact@AgenceDuParc.fr ", source: "https://agenceduparc.fr/contact", reason: "Elle vend\ndes maisons à rénover." };
+  expect(readFoundAgency(agency)).toEqual({ name: "Agence du b Parc /b", sector: "Agence immobilière", email: "contact@agenceduparc.fr", source: "https://agenceduparc.fr/contact", reason: "Elle vend des maisons à rénover." });
+  expect(readFoundAgency({ ...agency, email: "pas-un-email" })).toBeNull();
+  expect(readFoundAgency({ ...agency, source: "javascript:alert(1)" })).toBeNull();
+  expect(readFoundAgency({ ...agency, source: undefined })).toBeNull();
+  expect(readFoundAgency({ ...agency, sector: "" })).toBeNull();
+  expect(readFoundAgency("Agence du Parc")).toBeNull();
+  const parc = readFoundAgency(agency)!;
+  const others = Array.from({ length: 8 }, (_, index) => ({ ...parc, name: `Agence ${index}`, email: `contact@agence${index}.fr` }));
+  expect(newAgencies([parc, { ...parc, email: "autre@parc.fr" }, { ...parc, name: "Autre nom" }], [])).toEqual([parc]);
+  expect(newAgencies([parc, ...others], [{ name: "AGENCE DU B PARC /B", email: null }]).map((item) => item.name)).toEqual(["Agence 0", "Agence 1", "Agence 2", "Agence 3", "Agence 4", "Agence 5"]);
+  expect(newAgencies(others, [{ name: "Ailleurs", email: "contact@agence0.fr" }])).toHaveLength(AGENCY_SEARCH_MAX);
 });

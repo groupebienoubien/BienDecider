@@ -6,6 +6,7 @@ import { missionStage, orderMissions, priorityMissionId, type ContentState, type
 import { asDelegationLevel } from "@/lib/delegation-level";
 import { MISSION_TEMPLATES, type TemplateKey } from "@/lib/missions/templates";
 import type { MissionStatus } from "@/lib/missions/rules";
+import { listAgencies } from "@/lib/agencies/service";
 
 export type MissionActionData = {
   id: string;
@@ -74,10 +75,10 @@ function toStageMission(mission: MissionWithContent, connected: ReadonlySet<stri
   };
 }
 
-function toView(mission: MissionWithContent, priorityId: string | null, connected: ReadonlySet<string>, delegation: Delegation): MissionView {
+function toView(mission: MissionWithContent, priorityId: string | null, connected: ReadonlySet<string>, delegation: Delegation, names: Record<string, string>): MissionView {
   const base = toStageMission(mission, connected);
   const scope = mission.scope !== null && typeof mission.scope === "object" && !Array.isArray(mission.scope) ? (mission.scope as Record<string, unknown>) : {};
-  const summary = scopeSummary(base.template, scope);
+  const summary = scopeSummary(base.template, scope, names);
   const label = base.channel ? channelLabel(base.channel) : "Hors canal, diffusion déclarée";
   return {
     ...base,
@@ -109,15 +110,17 @@ function toView(mission: MissionWithContent, priorityId: string | null, connecte
 
 /** Missions de l'entreprise, la priorité d'abord (choisie avec Paul si elle est valable) puis l'ordre du plan. */
 export async function loadMissionViews(companyId: string): Promise<MissionView[]> {
-  const [missions, connections, company] = await Promise.all([
+  const [missions, connections, company, agencies] = await Promise.all([
     prisma.mission.findMany({ where: { companyId }, orderBy: [{ position: "asc" }, { id: "asc" }], include: { content: { include: { publications: { select: { versionNumber: true, status: true } } } } } }),
     prisma.channelConnection.findMany({ where: { companyId, status: "connecte" }, select: { channel: true } }),
     prisma.company.findUniqueOrThrow({ where: { id: companyId }, select: { delegationLevel: true, priorityMissionId: true } }),
+    listAgencies(companyId),
   ]);
+  const names = Object.fromEntries(agencies.map((agency) => [agency.id, agency.name]));
   const connected = new Set(connections.map((connection) => connection.channel));
   const delegation = asDelegationLevel(company.delegationLevel);
   const priorityId = priorityMissionId(missions.map((mission) => toStageMission(mission, connected)), company.priorityMissionId);
-  return orderMissions(missions.map((mission) => toView(mission, priorityId, connected, delegation)), priorityId);
+  return orderMissions(missions.map((mission) => toView(mission, priorityId, connected, delegation, names)), priorityId);
 }
 
 /** Identifiant de la mission prioritaire parmi des vues déjà calculées. */
