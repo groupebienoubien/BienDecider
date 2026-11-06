@@ -19,7 +19,7 @@ import { latestAuditLines } from "../src/lib/agents/audit-plan-context";
 import { groupPlanItems, planItemStatusView, planTabFromParam, splitPlanItems } from "../src/lib/action-plan-view";
 import { facebookAuditSource } from "../src/lib/facebook-audit-source";
 import { businessTargetLines, clientGapLabel, clientsToMonthly, computeBusinessTarget, toMonthly } from "../src/lib/business-target";
-import { KEEP_COURSE_LABEL, KEEP_COURSE_REPLY, PROFILE_PAGE_ONLY_MESSAGE, PENDING_ACTION_TYPES, decidedText, describePendingAction, expiredMessage, launchFrameHref, mergeProfilePayloads, profileUpdateToolSchema, profileUpdateValues, readProfileToolInput, toPendingActionView, updateProfilePayloadSchema } from "../src/lib/agents/pending-action-view";
+import { KEEP_COURSE_LABEL, KEEP_COURSE_REPLY, PROFILE_PAGE_ONLY_MESSAGE, PENDING_ACTION_TYPES, decidedText, describePendingAction, expiredMessage, launchFrameHref, mergeProfilePayloads, missionCreatePayloadSchema, profileUpdateToolSchema, profileUpdateValues, readProfileToolInput, toPendingActionView, updateProfilePayloadSchema } from "../src/lib/agents/pending-action-view";
 import { CONTEXT_DISPLAYED_MESSAGES, CONTEXT_HISTORY_MESSAGES, DEFAULT_CONTEXT_KEY, contextIntro, contextKeyOf, contextSuggestions, contextTitle, defaultContextKey, nextIdeaKey, parseContextKey } from "../src/lib/paul-contexts";
 import { chatWindow, lastMessageBefore, latestOf, paulMessageTimes } from "../src/lib/agents/paul-message-times";
 import { WEEKLY_REVIEW_MARKER } from "../src/lib/weekly-review";
@@ -41,7 +41,8 @@ import { cleanErrorMessage, cleanErrorPath, errorAlertEmail, errorFingerprint } 
 import { computeCredit, creditAlertEmail, parseCreditInput } from "../src/lib/llm-credit-rules";
 import { renderMissionMessage } from "../src/lib/missions/messages";
 import { IDEA_MAX, ideaFrameHref, validateIdeaText } from "../src/lib/idea-text";
-import { LAUNCH_COST_CREDITS, checkTransition, validateNewMission, type MissionSnapshot } from "../src/lib/missions/rules";
+import { LAUNCH_COST_CREDITS, checkTransition, validateDeduction, validateNewMission, type MissionSnapshot } from "../src/lib/missions/rules";
+import { CERTAINTY_LABELS, DECLARED_LABEL, findingOrigin, formatReadDate, missionProvenance, normalizeCertainty, type MissionSourceFinding } from "../src/lib/findings/certainty";
 import { availableTemplates, enabledChannels, MISSION_TEMPLATES } from "../src/lib/missions/templates";
 import { missionStage, missionTracker, nextStep, orderMissions, priorityMissionId, type ContentState, type StageMission } from "../src/lib/missions/stage";
 import { scopeSummary } from "../src/lib/missions/scope";
@@ -562,6 +563,57 @@ test("GH-312: an idea is 1 to 200 characters without tags; its card reads « Not
     template: "custom", channel: null, title: "Salon du quartier", outcome: "Dix contacts utiles", finding: "Un salon a lieu près de chez moi", scope: { description: "Tenir un stand" }, stopRuleDays: 21, ideaId: "idee-1",
   } });
   expect(create?.lines).toContain("Elle cadre une idée notée, qui sera retirée de la liste.");
+});
+
+test("GH-168: a finding is « Observé » only when its source was read; origin, deduction and the three mission rows", () => {
+  const url = "https://www.atelier-lumen.fr/contact";
+  expect(normalizeCertainty("observe", "consultée", url)).toBe("observe");
+  // Ce que dit l'agent ne suffit pas : sans source consultée avec son adresse, « À vérifier ».
+  for (const [status, source] of [["accès limité", url], ["indisponible", url], [undefined, url], ["consultée", undefined], ["consultée", "  "], ["consultée", "ftp://atelier-lumen.fr"], ["consultée", "javascript:alert(1)"], [null, null]] as const) {
+    expect(normalizeCertainty("observe", status, source)).toBe("a_verifier");
+  }
+  expect(normalizeCertainty("piste", "accès limité", url)).toBe("piste");
+  expect(normalizeCertainty("a_verifier", "consultée", url)).toBe("a_verifier");
+  for (const bad of [undefined, null, "", "certain", 3]) expect(normalizeCertainty(bad, "consultée", url)).toBe("a_verifier");
+  expect(CERTAINTY_LABELS).toEqual({ observe: "Observé", piste: "Piste à qualifier", a_verifier: "À vérifier" });
+  expect(DECLARED_LABEL).toBe("Déclaré par vous");
+
+  expect(findingOrigin("site_web", url)).toBe("Site web · atelier-lumen.fr");
+  expect(findingOrigin("reseaux_sociaux", "https://facebook.com/atelier")).toBe("Réseaux sociaux · facebook.com");
+  expect(findingOrigin("concurrence", null)).toBe("Concurrence");
+  // Une adresse qui n'est pas en http(s) ne donne ni domaine ni lien.
+  expect(findingOrigin("site_web", "javascript:alert(1)")).toBe("Site web");
+  expect(findingOrigin("autre", undefined)).toBe("autre");
+  expect(formatReadDate("2026-11-05T23:30:00Z")).toBe("6 novembre 2026");
+
+  expect(validateDeduction(undefined)).toEqual({ ok: true, deduction: null });
+  expect(validateDeduction("  Un site sans contact perd des demandes  ")).toEqual({ ok: true, deduction: "Un site sans contact perd des demandes" });
+  for (const bad of ["court", "a".repeat(301), "<b>Un site sans contact</b>", 42]) expect(validateDeduction(bad)).toEqual({ ok: false, code: "M-20" });
+
+  const payload = { template: "social_post", channel: "facebook", title: "Publier un chantier", outcome: "Des demandes de devis", finding: "Aucune publication depuis trois mois", scope: {} };
+  expect(missionCreatePayloadSchema.safeParse({ ...payload, findingId: "cl_finding-1", deduction: "  Montrer un chantier relance les demandes  " })).toMatchObject({ success: true, data: { findingId: "cl_finding-1", deduction: "Montrer un chantier relance les demandes" } });
+  expect(missionCreatePayloadSchema.safeParse(payload).success).toBe(true);
+  for (const bad of [{ findingId: "a b" }, { findingId: "" }, { deduction: "court" }, { deduction: "<i>Montrer un chantier</i>" }, { sourceFindingId: "f-1" }]) {
+    expect(missionCreatePayloadSchema.safeParse({ ...payload, ...bad }).success).toBe(false);
+  }
+  // La carte que le dirigeant accepte dit d'où vient la mission et ce que Paul en déduit.
+  const linkedCard = describePendingAction({ type: "mission_create", payload: { ...payload, channel: null, findingId: "f-1", deduction: "Montrer un chantier relance les demandes" } });
+  expect(linkedCard?.lines).toEqual(expect.arrayContaining(["Fondée sur un constat du diagnostic", "Déduction de Paul : Montrer un chantier relance les demandes"]));
+  const plainCard = describePendingAction({ type: "mission_create", payload: { ...payload, channel: null } });
+  expect(plainCard?.lines.some((line) => line.startsWith("Déduction de Paul") || line.startsWith("Fondée sur"))).toBe(false);
+
+  const source: MissionSourceFinding = { id: "f-1", title: "Le site ne montre aucun contact", category: "site_web", content: "Aucun numéro visible.", sourceUrl: url, sourceStatus: "consultée", certainty: "observe", createdAt: "2026-11-05T10:00:00Z" };
+  expect(missionProvenance({ createdBy: "paul", finding: "Pas de contact visible sur le site", deduction: "Un contact visible donnera des demandes", source })).toMatchObject({
+    title: "Le site ne montre aucun contact", origin: "Site web · atelier-lumen.fr", certainty: "Observé", note: "Pas de contact visible sur le site", deduction: "Un contact visible donnera des demandes", source: { id: "f-1" },
+  });
+  // Un constat relié dont la source n'a pas été lue n'est jamais présenté « Observé ».
+  expect(missionProvenance({ createdBy: "paul", finding: "Pas de contact", deduction: null, source: { ...source, sourceStatus: "accès limité" } })).toMatchObject({ certainty: "À vérifier", deduction: "—" });
+  expect(missionProvenance({ createdBy: "paul", finding: "Pas de contact visible", deduction: null, source: null })).toEqual({
+    title: "Constat relevé par Paul", origin: "Conversation avec Paul", certainty: "À vérifier", tone: "orange", note: "Pas de contact visible", deduction: "—", source: null,
+  });
+  expect(missionProvenance({ createdBy: "owner", finding: "Un salon a lieu près de chez moi", deduction: null, source: null })).toEqual({
+    title: "Votre constat", origin: "Déclaré à la création de la mission", certainty: "Déclaré par vous", tone: "gray", note: "Un salon a lieu près de chez moi", deduction: "Vous avez choisi de le tester.", source: null,
+  });
 });
 
 test("GH-288: one conversation per context, keys read safely, titles and default context per page", () => {

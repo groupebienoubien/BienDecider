@@ -50,6 +50,16 @@ export function validateNewMission(body: unknown, openOwnerMissions: number): { 
   return { ok: true, value: { template: template.key, channel: channel.channel, title, outcome, finding, scope: scope.scope, stopRuleDays: stop.days } };
 }
 
+/**
+ * Déduction de Paul (#168) : facultative ; donnée, elle suit les règles du constat (10 à 300 caractères après
+ * nettoyage des espaces, sans balise), sinon M-20.
+ */
+export function validateDeduction(value: unknown): { ok: true; deduction: string | null } | MissionFailure {
+  if (value === undefined || value === null) return { ok: true, deduction: null };
+  const deduction = trimmed(value);
+  return typeof value === "string" && inRange(deduction, 10, 300) ? { ok: true, deduction } : failure("M-20");
+}
+
 export type MissionSnapshot = {
   template: TemplateKey;
   channel: MissionChannel | null;

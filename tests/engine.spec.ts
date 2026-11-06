@@ -2399,6 +2399,76 @@ test("GH-288: accepted create, scope and restore cards go through the mission se
   expect((await journalCodes(company.id, created.id)).map(([code]) => code)).toEqual(["J-01", "J-12", "J-09", "J-10"]);
 });
 
+test("GH-168: Paul links a mission only to a current finding of the company; acceptance records the link and the deduction, deletion unlinks", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { createPendingAction, decidePendingAction } = await import("../src/lib/agents/pending-actions");
+  const { loadMissionView } = await import("../src/lib/missions/view");
+  const hour = 60 * 60 * 1000;
+  const run = (companyId: string, finishedAt: Date) => prisma.agentRun.create({ data: {
+    companyId, agent: "marketing", requestKey: `audit-${randomUUID()}`, payload: {}, status: "succeeded", finishedAt,
+  } });
+  const older = await run(company.id, new Date(Date.now() - 2 * hour));
+  const latest = await run(company.id, new Date(Date.now() - hour));
+  const finding = (companyId: string, agentRunId: string, title: string, extra: Record<string, unknown> = {}) => prisma.auditFinding.create({ data: {
+    companyId, agentRunId, category: "site_web", title, content: `${title}.`, ...extra,
+  } });
+  const old = await finding(company.id, older.id, "Ancien constat");
+  const current = await finding(company.id, latest.id, "Le site ne montre aucun contact", { sourceUrl: "https://www.atelier-test.fr/", sourceStatus: "consultée", certainty: "observe" });
+  const other = await prisma.company.create({ data: { ownerEmail: `engine-other-${randomUUID()}@example.invalid`, name: "Autre", trade: "Artisan", servingArea: "Lyon" } });
+  try {
+    const foreign = await finding(other.id, (await run(other.id, new Date())).id, "Constat d'une autre entreprise");
+    const paul = await capturePaulTools(company.id);
+    const status = JSON.parse(await paul.tool("get_current_status").run({}));
+    expect(status.constats).toEqual([{ id: current.id, titre: "Le site ne montre aucun contact", categorie: "Site web", certitude: "Observé" }]);
+
+    const mission = { template: "social_post", title: "Montrer un chantier", outcome: "Des demandes de devis", finding: "Le site ne montre aucun contact", scope: { topic: "Nos chantiers" } };
+    const deduction = "Un chantier publié avec un numéro visible peut ramener des demandes.";
+    for (const findingId of [foreign.id, old.id, "inconnu"]) {
+      expect(await paul.tool("propose_mission").run({ ...mission, findingId, deduction })).toContain("ce constat n'est pas dans le diagnostic actuel");
+    }
+    expect(await paul.tool("propose_mission").run({ ...mission, findingId: current.id, deduction: "Trop bref" })).toContain("déduction");
+    expect(await prisma.paulPendingAction.count({ where: { companyId: company.id } })).toBe(0);
+
+    expect(await paul.tool("propose_mission").run({ ...mission, findingId: current.id, deduction })).toContain("Carte « Créer la mission « Montrer un chantier » »");
+    const card = await prisma.paulPendingAction.findFirstOrThrow({ where: { companyId: company.id, type: "mission_create" } });
+    expect(card.payload).toMatchObject({ findingId: current.id, deduction });
+    expect(await decidePendingAction(company.id, card.id, "confirm")).toMatchObject({ ok: true, action: { status: "confirmed" } });
+    const linked = await prisma.mission.findFirstOrThrow({ where: { companyId: company.id, title: "Montrer un chantier" } });
+    expect(linked).toMatchObject({ createdBy: "paul", sourceFindingId: current.id, deduction });
+    expect(await loadMissionView(company.id, linked.id)).toMatchObject({ deduction, source: { id: current.id, title: "Le site ne montre aucun contact", category: "site_web", certainty: "observe", sourceUrl: "https://www.atelier-test.fr/" } });
+
+    // Un constat devenu étranger ou ancien à l'acceptation : la mission est créée, sans lien.
+    for (const [title, findingId] of [["Mission sans lien ancien", old.id], ["Mission sans lien étranger", foreign.id]] as const) {
+      const stale = await createPendingAction(company.id, "mission_create", { ...mission, template: "social_post" as const, channel: null, title, findingId, deduction });
+      expect(await decidePendingAction(company.id, stale.id, "confirm")).toMatchObject({ ok: true });
+      expect(await prisma.mission.findFirstOrThrow({ where: { companyId: company.id, title } })).toMatchObject({ sourceFindingId: null, deduction });
+    }
+
+    // Constat supprimé : le lien est remis à null, la mission reste.
+    await prisma.auditFinding.delete({ where: { id: current.id } });
+    expect(await prisma.mission.findUniqueOrThrow({ where: { id: linked.id } })).toMatchObject({ sourceFindingId: null, deduction });
+    expect((await loadMissionView(company.id, linked.id))?.source).toBeNull();
+  } finally {
+    await deleteCompany(other.id);
+  }
+});
+
+test("GH-168: Martine's finding is recorded « Observé » only when its source was consulted", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { runMarketingAgent } = await import("../src/lib/agents/marketing");
+  const run = await createCapTestRun(company.id, "marketing");
+  const tool = await captureAgentTools(() => runMarketingAgent(company.id, { agentRunId: run.id }), run.id);
+  const record = tool("record_audit_finding");
+  const withoutSource = { category: "reseaux_sociaux", summary: "Résumé.", whatWorks: "Rien de particulier.", toImprove: "À améliorer.", actionItems: [] };
+  const input = { ...withoutSource, sourceUrl: "https://www.facebook.com/atelier-test" };
+  expect(await record.run({ ...input, title: "Page lue", certainty: "observe", sourceStatus: "consultée" })).toContain("Constat enregistré");
+  expect(await record.run({ ...input, title: "Page fermée", certainty: "observe", sourceStatus: "accès limité" })).toContain("Constat enregistré");
+  expect(await record.run({ ...input, title: "Piste", certainty: "piste", sourceStatus: "accès limité" })).toContain("Constat enregistré");
+  expect(await record.run({ ...withoutSource, title: "Sans source", certainty: "observe", sourceStatus: "consultée" })).toContain("Constat enregistré");
+  const saved = await prisma.auditFinding.findMany({ where: { agentRunId: run.id }, select: { title: true, certainty: true } });
+  expect(Object.fromEntries(saved.map((item) => [item.title, item.certainty]))).toEqual({ "Page lue": "observe", "Page fermée": "a_verifier", Piste: "piste", "Sans source": "a_verifier" });
+});
+
 test("GH-288: Paul has only proposal tools, names no other agent, and checks each proposal with the mission rules", async ({ company }) => {
   const { prisma } = await import("../src/lib/prisma");
   const { renderMissionMessage } = await import("../src/lib/missions/messages");

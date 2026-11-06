@@ -134,3 +134,12 @@
 - source_spec: `docs/bmad/implementation/spec-gh-41-journal-decisions-tracabilite.md`
   summary: Journaliser la perte implicite de la connexion Google (jeton refusé, statut « erreur ») avec un J-07 système.
   evidence: src/lib/oauth/google-access.ts efface les jetons et passe le statut à « erreur » sans écrire au journal ; seule la déconnexion par le dirigeant est couverte par #41.
+- source_spec: `docs/bmad/implementation/spec-gh-168-provenance-des-missions.md`
+  summary: Critères d'octobre de #168 : chaque analyse expose sa date, son état et la référence du contexte utilisé (« contexte non identifié » pour les anciennes) ; une modification du métier, de l'offre ou de la cible signale l'analyse comme à réexaminer, selon une règle explicite et testée ; un nouveau plan ne consomme pas en silence les constats remplacés.
+  evidence: Décision de Samir du 2026-11-06 de ne livrer que les critères V5.2 (provenance dans Stratégie). Le diagnostic échoué qui ne remplace pas le précédent (splitAudits) et la consultation des diagnostics précédents existent déjà.
+- source_spec: `docs/bmad/implementation/spec-gh-168-provenance-des-missions.md`
+  summary: Contrôler après déploiement la reprise de la certitude des constats (compter les constats par `certainty` face à `sourceStatus`).
+  evidence: Le CI applique la migration sur une table vide ; aucun test ne vérifie l'UPDATE sur des constats existants.
+- source_spec: `docs/bmad/implementation/spec-gh-168-provenance-des-missions.md`
+  summary: Aligner « Preuve utilisée » (Votre prochaine décision dans Stratégie, détail de mission) sur la provenance reliée : titre et certitude du constat au lieu de « Constat relevé par Paul ».
+  evidence: src/app/strategie/page.tsx:56 et src/app/missions/[id]/page.tsx:79 affichent encore « Constat relevé par Paul » pour toute mission de Paul ; la spec #168 laissait le reste de la page inchangé.

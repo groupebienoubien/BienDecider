@@ -2,7 +2,7 @@ import type { Mission, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { debitCredits } from "@/lib/credits";
 import { MissionError } from "@/lib/missions/messages";
-import { checkTransition, validateNewMission, type MissionAction, type MissionSnapshot } from "@/lib/missions/rules";
+import { checkTransition, validateDeduction, validateNewMission, type MissionAction, type MissionSnapshot } from "@/lib/missions/rules";
 import { isMissionChannel, channelLabel } from "@/lib/missions/channels";
 import type { TemplateKey } from "@/lib/missions/templates";
 import { scopeSummary } from "@/lib/missions/scope";
@@ -11,6 +11,7 @@ import { adaptContentToChannel, checkScopeLock, markRecipientsChanged } from "@/
 import { cancelScheduledPublications } from "@/lib/contents/publish";
 import { agencyNames, checkAgencyScope } from "@/lib/agencies/service";
 import { convertIdeaIn, lockOpenIdeaIn } from "@/lib/ideas";
+import { findCurrentFinding } from "@/lib/audit-findings";
 
 export class MissionNotFoundError extends Error {
   constructor() {
@@ -57,14 +58,22 @@ export async function createMission(companyId: string, body: unknown, ideaId?: s
   return prisma.$transaction((tx) => createMissionIn(tx, companyId, body, "owner", ideaId));
 }
 
+/** Provenance d'une mission proposée par Paul (#168) : constat du diagnostic courant et déduction ; absente pour le dirigeant. */
+export type MissionProvenanceInput = { sourceFindingId?: string | null; deduction?: string | null };
+
 /**
  * Création dans la transaction de l'appelant : celle du formulaire, ou celle d'une proposition de Paul acceptée
  * (mêmes contrôles, même trace J-01). `createdBy` dit d'où vient le constat : le dirigeant, ou Paul.
  * `ideaId` : idée ouverte de l'entreprise cadrée par cette mission, verrouillée d'abord ; absente, d'une autre
  * entreprise, déjà cadrée ou retirée → IdeaNotFoundError, rien n'est créé. Sinon elle est retirée et J-31 suit J-01.
+ * `provenance` (#168) : constat relié et déduction de Paul ; une déduction invalide → M-20, un constat qui n'est plus
+ * de l'entreprise ni du diagnostic courant n'est pas relié (la mission est créée sans lien).
  */
-export async function createMissionIn(tx: Prisma.TransactionClient, companyId: string, body: unknown, createdBy: "owner" | "paul" = "owner", ideaId?: string): Promise<Mission> {
+export async function createMissionIn(tx: Prisma.TransactionClient, companyId: string, body: unknown, createdBy: "owner" | "paul" = "owner", ideaId?: string, provenance: MissionProvenanceInput = {}): Promise<Mission> {
   if (ideaId !== undefined) await lockOpenIdeaIn(tx, companyId, ideaId);
+  const deduction = validateDeduction(provenance.deduction);
+  if (!deduction.ok) throw new MissionError(deduction.code, deduction.params);
+  const sourceFinding = provenance.sourceFindingId ? await findCurrentFinding(companyId, provenance.sourceFindingId, tx) : null;
   // Plafond des missions créées par le dirigeant, directement ou en acceptant une proposition de Paul (§12).
   const openMissions = await tx.mission.count({ where: { companyId, createdBy: { in: ["owner", "paul"] }, status: { not: "stopped" } } });
   const validated = validateNewMission(body, openMissions);
@@ -82,6 +91,8 @@ export async function createMissionIn(tx: Prisma.TransactionClient, companyId: s
       outcome: value.outcome,
       originalOutcome: value.outcome,
       finding: value.finding,
+      sourceFindingId: sourceFinding?.id ?? null,
+      deduction: deduction.deduction,
       scope: value.scope as object,
       createdBy,
       position: (last._max.position ?? 0) + 1,

@@ -2518,3 +2518,75 @@ test("US #258: the Studio turns a plain request into a new version, lets the own
     await prisma.$disconnect();
   }
 });
+
+test("GH-168: Stratégie shows the finding behind each mission, its certainty and Paul's deduction, and opens its source", async ({ page, company }) => {
+  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }) });
+  try {
+    await prisma.company.update({ where: { id: company.id }, data: { workspaceV52: true } });
+    const run = await prisma.agentRun.create({ data: { companyId: company.id, agent: "marketing", requestKey: `audit-${randomUUID()}`, payload: {}, status: "succeeded", finishedAt: new Date() } });
+    const finding = await prisma.auditFinding.create({ data: {
+      companyId: company.id, agentRunId: run.id, category: "site_web", title: "Le site ne montre aucun contact", content: "Aucun numéro ni formulaire sur la page d'accueil.",
+      sourceUrl: "https://www.atelier-test.fr/", sourceStatus: "consultée", certainty: "observe", createdAt: new Date("2026-11-05T10:00:00Z"),
+    } });
+    const mission = (title: string, position: number, data: { createdBy: string; sourceFindingId?: string; deduction?: string }) => prisma.mission.create({ data: {
+      companyId: company.id, template: "social_post", title, outcome: "Des demandes de devis", originalOutcome: "Des demandes de devis", finding: "Aucune publication depuis trois mois", scope: { topic: "Nos chantiers" }, position, ...data,
+    } });
+    await mission("Montrer un chantier", 1, { createdBy: "paul", sourceFindingId: finding.id, deduction: "Un chantier publié avec un numéro visible peut ramener des demandes." });
+    await mission("Mission ancienne de Paul", 2, { createdBy: "paul" });
+    await mission("Publier un chantier", 3, { createdBy: "owner" });
+
+    await page.goto(`${baseURL}/strategie`);
+    const linked = page.getByRole("article", { name: "Montrer un chantier" });
+    await expect(linked).toContainText("Le site ne montre aucun contact");
+    await expect(linked).toContainText("Site web · atelier-test.fr");
+    await expect(linked).toContainText("Observé");
+    await expect(linked).toContainText("Aucune publication depuis trois mois");
+    await expect(linked).toContainText("Un chantier publié avec un numéro visible peut ramener des demandes.");
+
+    // Mission ancienne de Paul : ni constat relié ni déduction.
+    const legacy = page.getByRole("article", { name: "Mission ancienne de Paul" });
+    await expect(legacy).toContainText("Constat relevé par Paul");
+    await expect(legacy).toContainText("Conversation avec Paul");
+    await expect(legacy).toContainText("À vérifier");
+    await expect(legacy).toContainText("—");
+    await expect(legacy.getByRole("button", { name: /Voir la source/ })).toHaveCount(0);
+
+    // Mission du dirigeant : déclarée, jamais observée.
+    const owner = page.getByRole("article", { name: "Publier un chantier" });
+    await expect(owner).toContainText("Votre constat");
+    await expect(owner).toContainText("Déclaré à la création de la mission");
+    await expect(owner).toContainText("Déclaré par vous");
+    await expect(owner).toContainText("Vous avez choisi de le tester.");
+    await expect(owner).not.toContainText("Observé");
+    await expect(owner.getByRole("button", { name: /Voir la source/ })).toHaveCount(0);
+
+    await linked.getByRole("button", { name: /Voir la source/ }).click();
+    const source = page.getByRole("dialog", { name: "Le site ne montre aucun contact" });
+    await expect(source).toContainText("Aucun numéro ni formulaire sur la page d'accueil.");
+    await expect(source).toContainText("Site web · atelier-test.fr");
+    await expect(source).toContainText("5 novembre 2026");
+    await expect(source.getByRole("link", { name: "https://www.atelier-test.fr/" })).toHaveAttribute("href", "https://www.atelier-test.fr/");
+    await page.keyboard.press("Escape");
+    await expect(source).toBeHidden();
+
+    await linked.getByRole("button", { name: /Voir la source/ }).click();
+    await source.getByRole("button", { name: "Questionner ce constat" }).click();
+    await expect(source).toBeHidden();
+    await expect(page.getByRole("dialog", { name: "Discussion avec Paul" }).locator("header")).toContainText("Fiabilité des sources");
+
+    // Téléphone : la ligne et la fenêtre tiennent sans défilement horizontal.
+    for (const width of [390, 320]) {
+      await page.setViewportSize({ width, height: 800 });
+      await page.goto(`${baseURL}/strategie`);
+      await expect(page.getByRole("article", { name: "Montrer un chantier" })).toContainText("Observé");
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      await page.getByRole("article", { name: "Montrer un chantier" }).getByRole("button", { name: /Voir la source/ }).click();
+      await expect(source).toBeVisible();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      // L'adresse de la source ne dépasse pas de la fenêtre.
+      expect(await source.evaluate((dialog) => dialog.scrollWidth <= dialog.clientWidth)).toBe(true);
+    }
+  } finally {
+    await prisma.$disconnect();
+  }
+});

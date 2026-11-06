@@ -14,7 +14,9 @@ import { nextStep } from "@/lib/missions/stage";
 import { LAUNCH_COST_CREDITS } from "@/lib/missions/rules";
 import { asDelegationLevel } from "@/lib/delegation-level";
 import { listOpenIdeas } from "@/lib/ideas";
+import { missionProvenance } from "@/lib/findings/certainty";
 import { IdeaActions } from "./idea-actions";
+import { FindingSource } from "./finding-source";
 
 export const dynamic = "force-dynamic";
 
@@ -138,14 +140,20 @@ export default async function StrategiePage() {
             <div className="finding-flow" aria-hidden="true">
               <span>1 · Ce que nous avons observé</span><span>2 · Ce que Paul en déduit</span><span>3 · La mission qui en découle</span>
             </div>
-            {missions.map((mission) => (
+            {missions.map((mission) => {
+              // Colonnes 1 et 2 (#168) : constat relié, mission de Paul sans constat, ou mission du dirigeant.
+              const provenance = missionProvenance(mission);
+              return (
               <article key={mission.id} className="finding-row" aria-label={mission.title}>
                 <div>
-                  <p>{mission.finding}</p>
-                  <Tag color="gray">{mission.createdBy === "owner" ? "Déclaré par vous" : "Observé"}</Tag>
+                  <p><strong>{provenance.title}</strong></p>
+                  <p className="small muted">{provenance.origin}</p>
+                  <Tag color={provenance.tone}>{provenance.certainty}</Tag>
+                  <p>{provenance.note}</p>
+                  {provenance.source && <FindingSource source={provenance.source} />}
                 </div>
                 <Icon name="arrow-right" className="finding-arrow" />
-                <div><p>{mission.createdBy === "owner" ? "Vous avez choisi de le tester." : "—"}</p></div>
+                <div><p>{provenance.deduction}</p></div>
                 <Icon name="arrow-right" className="finding-arrow" />
                 <div>
                   <MissionTags status={mission.status} priority={mission.priority} />
@@ -155,7 +163,8 @@ export default async function StrategiePage() {
                   <MissionActions mission={mission.actions} credits={company.creditBalance} launchCost={LAUNCH_COST_CREDITS} variant="row" />
                 </div>
               </article>
-            ))}
+              );
+            })}
             {/* Idées notées avec Paul (US #312) : après les missions, à cadrer avant tout lancement. */}
             {ideas.map((idea) => (
               <article key={idea.id} className="finding-row idea-row" aria-label={`Idée : ${idea.text}`}>

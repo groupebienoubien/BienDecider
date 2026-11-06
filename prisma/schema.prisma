@@ -320,9 +320,12 @@ model AuditFinding {
   actionItems Json? // Plan d'action suggéré, potentiellement exécutable par Pepito : { agent, title, rationale }[]
   sourceUrl   String?
   sourceStatus String?
+  // Niveau de certitude (#168, prd :101) : observe | piste | a_verifier. « Observé » seulement si la source a été consultée (src/lib/findings/certainty.ts).
+  certainty   String   @default("a_verifier")
   agentRunId  String?
   agentRun    AgentRun? @relation(fields: [agentRunId], references: [id], onDelete: SetNull)
   createdAt   DateTime @default(now())
+  missions    Mission[]
 
   // Plafonds par exécution (story 3.2) : comptés par agentRunId.
   @@index([agentRunId])
@@ -558,6 +561,10 @@ model Mission {
   outcome             String // resultat recherche
   originalOutcome     String // resultat recherche a la creation
   finding             String
+  // Provenance (#168) : constat du diagnostic d'où vient la mission, et ce que Paul en a déduit ; nuls pour les missions du dirigeant et les anciennes.
+  sourceFindingId     String?
+  sourceFinding       AuditFinding?  @relation(fields: [sourceFindingId], references: [id], onDelete: SetNull)
+  deduction           String?
   createdBy           String         @default("owner") // paul | owner
   status              String         @default("proposed") // proposed, active, paused, stopped, dismissed
   previousStatus      String? // pour « Remettre au plan »
@@ -577,6 +584,7 @@ model Mission {
   decisions           MissionDecision[]
 
   @@index([companyId, status])
+  @@index([sourceFindingId])
 }
 
 /// Idee notee avec Paul (US #312, addendum §4.5) : pas encore une mission. Ouverte tant que convertedMissionId est nul ;
