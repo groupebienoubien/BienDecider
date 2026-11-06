@@ -13,6 +13,7 @@ import {
 } from "@/lib/contents/rules";
 import { anthropicDraftWriter, type DraftRequest, type DraftWriter } from "@/lib/contents/writer";
 import { agencyNames } from "@/lib/agencies/service";
+import { cancelScheduledPublications } from "@/lib/contents/publish";
 
 export class ContentNotFoundError extends Error {
   constructor() {
@@ -177,6 +178,26 @@ export async function markRecipientsChanged(tx: Tx, mission: Mission): Promise<v
   if (mission.status !== "active" && content.validatedNumber === null) return;
   const current = await tx.contentVersion.findUniqueOrThrow({ where: { contentId_number: { contentId: content.id, number: content.currentNumber } } });
   await addVersion(tx, { ...content, mission }, { title: current.title, body: current.body, author: "system", note: "Destinataires modifiés" }, { origine: "destinataires modifiés", actor: "system" });
+}
+
+/**
+ * Profil corrigé après l'inscription (§4.5, J-02), dans la transaction de la correction : les programmations sont annulées (J-23),
+ * puis chaque contenu modifiable reçoit une nouvelle version système à relire, sans validation. Un contenu en lecture seule,
+ * diffusé ou en attente de vérification est laissé tel quel (checkNewVersion le refuse) ; J-02 est écrit dans tous les cas.
+ */
+export async function markProfileChanged(tx: Tx, companyId: string): Promise<void> {
+  await cancelScheduledPublications(tx, { companyId }, "profil corrigé", "owner");
+  const contents = await tx.missionContent.findMany({
+    where: { companyId, currentNumber: { gt: 0 } },
+    include: { mission: true, publications: { select: { versionNumber: true, status: true } } },
+    orderBy: { createdAt: "asc" },
+  });
+  for (const content of contents) {
+    if (checkNewVersion(snapshotOf(content))) continue;
+    const current = await tx.contentVersion.findUniqueOrThrow({ where: { contentId_number: { contentId: content.id, number: content.currentNumber } } });
+    await addVersion(tx, content, { title: current.title, body: current.body, author: "system", note: "Profil corrigé : informations du contenu à vérifier" }, { origine: "à vérifier après correction du profil", actor: "system" });
+  }
+  await writeJournal(tx, { companyId, code: "J-02", params: {} });
 }
 
 const ACTIONS = ["save", "restore", "variant", "accept_variant", "dismiss_variant", "validate", "reject", "next_version"] as const;

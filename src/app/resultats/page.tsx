@@ -8,7 +8,9 @@ import { requireWorkspaceCompany } from "@/lib/workspace";
 import { loadResults } from "@/lib/missions/results-view";
 import { STAGE_LABELS } from "@/lib/missions/stage";
 import { MISSION_MESSAGES } from "@/lib/missions/messages";
+import { listJournal } from "@/lib/journal";
 import { DecisionButton, ReportForm } from "./results-client";
+import { JournalSection } from "./journal-section";
 
 export const dynamic = "force-dynamic";
 
@@ -20,7 +22,7 @@ export default async function ResultatsPage({ searchParams }: { searchParams: Pr
   const company = await requireWorkspaceCompany();
   const shell = await getShellProps(company);
   const { mission: wanted } = await searchParams;
-  const { launched, publications, indicators, nextPoint } = await loadResults(company.id);
+  const [{ launched, publications, indicators, nextPoint }, journal] = await Promise.all([loadResults(company.id), listJournal(company.id)]);
   const reportable = launched.filter((mission) => mission.diffusions > 0);
   const selected = reportable.find((mission) => mission.id === wanted) ?? reportable[0] ?? null;
   const reported = launched.filter((mission) => mission.report);
@@ -121,6 +123,8 @@ export default async function ResultatsPage({ searchParams }: { searchParams: Pr
           <Link className="btn" href="/missions">Revoir les missions</Link>
         </div>
       </section>
+
+      <JournalSection rows={journal} />
     </AppShell>
   );
 }

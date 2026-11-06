@@ -4,6 +4,7 @@ import { z } from "zod";
 import { getSessionCompany } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
 import { encryptGmailToken, gmailClient, GMAIL_CALLBACK, GMAIL_SCOPE } from "@/lib/oauth/gmail";
+import { channelJournalParams, writeJournal } from "@/lib/journal";
 
 const stateSchema = z.object({ state: z.string().min(1), verifier: z.string().min(43), companyId: z.string().min(1) });
 
@@ -28,17 +29,18 @@ export async function GET(request: NextRequest) {
     if (!identity?.email || !identity.email_verified) return fail("gmail_identity");
     const info = await client.getTokenInfo(tokens.access_token);
     if (!info.scopes.includes(GMAIL_SCOPE)) return fail("gmail_scope");
-    await prisma.channelConnection.upsert({
-      where: { companyId_channel: { companyId: company.id, channel: "gmail" } },
-      create: {
-        companyId: company.id, channel: "gmail", status: "connecte",
-        accessToken: encryptGmailToken(tokens.access_token, company.id),
-        refreshToken: encryptGmailToken(JSON.stringify({ token: tokens.refresh_token, email: identity.email }), company.id), expiresAt: new Date(tokens.expiry_date),
-      },
-      update: {
-        status: "connecte", accessToken: encryptGmailToken(tokens.access_token, company.id),
-        refreshToken: encryptGmailToken(JSON.stringify({ token: tokens.refresh_token, email: identity.email }), company.id), expiresAt: new Date(tokens.expiry_date),
-      },
+    const accessToken = encryptGmailToken(tokens.access_token, company.id);
+    const refreshToken = encryptGmailToken(JSON.stringify({ token: tokens.refresh_token, email: identity.email }), company.id);
+    const expiresAt = new Date(tokens.expiry_date);
+    // La connexion et sa trace (J-07) existent ensemble, ou aucune.
+    await prisma.$transaction(async (tx) => {
+      const previous = await tx.channelConnection.findUnique({ where: { companyId_channel: { companyId: company.id, channel: "gmail" } }, select: { status: true } });
+      await tx.channelConnection.upsert({
+        where: { companyId_channel: { companyId: company.id, channel: "gmail" } },
+        create: { companyId: company.id, channel: "gmail", status: "connecte", accessToken, refreshToken, expiresAt },
+        update: { status: "connecte", accessToken, refreshToken, expiresAt },
+      });
+      if (previous?.status !== "connecte") await writeJournal(tx, { companyId: company.id, code: "J-07", params: channelJournalParams("gmail") });
     });
     return NextResponse.redirect(new URL("/connexions?connected=gmail", request.url));
   } catch {

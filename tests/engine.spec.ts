@@ -3990,3 +3990,211 @@ test("US #258: the Studio routes enforce origin, session, company, version and s
   expect((await studioCall(company, revise, prospect.id, { instruction: "Corrige", expectedVersion: 1 })).status).toBe(409);
   expect(await prisma.agentRun.count({ where: { companyId: company.id } })).toBe(1);
 });
+
+test("GH-41: the journal lists only the session's company, newest first, and its CSV export holds every entry, oldest first", async ({ company, request }) => {
+  if (!process.env.SESSION_SECRET) throw new Error("SESSION_SECRET is required for engine tests.");
+  const { prisma } = await import("../src/lib/prisma");
+  const { listJournal } = await import("../src/lib/journal");
+  const baseURL = process.env.UX_TEST_BASE_URL ?? "http://localhost:3000";
+  const headers = { Cookie: `pepito_session=${createSessionToken(company.ownerEmail, company.sessionVersion, process.env.SESSION_SECRET)}` };
+  const other = await prisma.company.create({ data: { ownerEmail: `engine-other-${randomUUID()}@example.invalid`, name: "Autre", trade: "Artisan", servingArea: "Lyon" } });
+  try {
+    const mission = await prisma.mission.create({ data: { companyId: company.id, template: "site_page", channel: "site", title: "Nos tarifs", outcome: "Des demandes", originalOutcome: "Des demandes", finding: "Un constat", scope: { page: "Nos tarifs" }, status: "active", position: 1 } });
+    const day = (n: number) => new Date(`2026-11-0${n}T09:00:00Z`);
+    await prisma.journalEntry.createMany({ data: [
+      { companyId: company.id, missionId: mission.id, code: "J-17", params: { mission: "Nos tarifs" }, createdAt: day(1) },
+      { companyId: company.id, missionId: "mission-supprimee", code: "J-19", actor: "paul", params: { n: "2", origine: "préparée avec Paul", mission: "=Ancienne" }, createdAt: day(3) },
+      { companyId: company.id, code: "J-23", actor: "system", params: { n: "1" }, createdAt: day(2) },
+      { companyId: other.id, code: "J-16", params: { idée: "Leur idée secrète" }, createdAt: day(4) },
+    ] });
+
+    const rows = await listJournal(company.id);
+    expect(rows.map((row) => [row.author, row.mission, row.text])).toEqual([
+      ["Paul", null, "V2 préparée avec Paul · =Ancienne."],
+      ["mise à jour automatique", null, "Programmation de V1 annulée : —. La version reste validée."],
+      ["vous", "Nos tarifs", "Mission lancée (ou reprise) : Nos tarifs. Paul prépare le premier contenu."],
+    ]);
+    expect((await listJournal(other.id)).map((row) => row.text)).toEqual(["Idée notée avec Paul : « Leur idée secrète ». À cadrer avant tout lancement."]);
+
+    expect((await request.get(`${baseURL}/api/journal/export`)).status()).toBe(401);
+    const exported = await request.get(`${baseURL}/api/journal/export`, { headers });
+    expect(exported.status()).toBe(200);
+    expect(exported.headers()["content-type"]).toContain("text/csv");
+    expect(exported.headers()["content-disposition"]).toBe('attachment; filename="journal-biendecider.csv"');
+    const bytes = await exported.body();
+    expect([...bytes.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
+    const lines = bytes.subarray(3).toString("utf8").split("\r\n").filter(Boolean);
+    expect(lines).toHaveLength(4);
+    expect(lines[0]).toBe('"Date";"Auteur";"Mission";"Décision"');
+    expect(lines[1]).toBe('"01/11/2026 10:00";"vous";"Nos tarifs";"Mission lancée (ou reprise) : Nos tarifs. Paul prépare le premier contenu."');
+    expect(lines[2]).toContain('"mise à jour automatique";"—";');
+    expect(lines[3]).toBe('"03/11/2026 10:00";"Paul";"—";"V2 préparée avec Paul · =Ancienne."');
+    expect(lines.join("\n")).not.toContain("Leur idée secrète");
+  } finally {
+    await deleteCompany(other.id);
+  }
+});
+
+test("GH-41: a real profile correction cancels the schedules, puts every modifiable content back to review and writes J-02; nothing for unchanged values or the first creation", async ({ company, request }) => {
+  if (!process.env.SESSION_SECRET) throw new Error("SESSION_SECRET is required for engine tests.");
+  const { prisma } = await import("../src/lib/prisma");
+  const { createPendingAction, decidePendingAction } = await import("../src/lib/agents/pending-actions");
+  const baseURL = process.env.UX_TEST_BASE_URL ?? "http://localhost:3000";
+  const headers = { Cookie: `pepito_session=${createSessionToken(company.ownerEmail, company.sessionVersion, process.env.SESSION_SECRET)}`, Origin: baseURL };
+  const seed = async (title: string, status: string, validated: boolean) => {
+    const mission = await prisma.mission.create({ data: { companyId: company.id, template: "site_page", channel: "site", title, outcome: "Des demandes", originalOutcome: "Des demandes", finding: "Un constat", scope: { page: title }, status, firstLaunchedAt: new Date(), position: 1 } });
+    const content = await prisma.missionContent.create({ data: { companyId: company.id, missionId: mission.id, channel: "site", format: "site_page", currentNumber: 1, validatedNumber: validated ? 1 : null, validatedAt: validated ? new Date() : null, versions: { create: { number: 1, title, body: "Sur devis.", author: "paul" } } } });
+    return { mission, content };
+  };
+  const publication = (target: { mission: { id: string }; content: { id: string } }, status: "scheduled" | "sent") => prisma.publication.create({ data: {
+    companyId: company.id, missionId: target.mission.id, contentId: target.content.id, versionNumber: 1, title: "V1", channel: "site", channelLabel: "Votre site vitrine", mode: "confirmed", status,
+    ...(status === "scheduled" ? { scheduledAt: new Date(Date.now() + 86_400_000), timezone: "Europe/Paris" } : { sentAt: new Date() }), idempotencyKey: `${target.content.id}:v1:1`,
+  } });
+  const scheduled = await seed("Nos tarifs", "active", true);
+  await publication(scheduled, "scheduled");
+  const diffused = await seed("Nos horaires", "active", true);
+  await publication(diffused, "sent");
+  const closed = await seed("Ancienne offre", "stopped", true);
+  const draft = await seed("Nos garanties", "proposed", false);
+  const j02 = () => prisma.journalEntry.count({ where: { companyId: company.id, code: "J-02" } });
+  const contentOf = (target: { content: { id: string } }) => prisma.missionContent.findUniqueOrThrow({ where: { id: target.content.id }, select: { currentNumber: true, validatedNumber: true } });
+
+  // Mêmes valeurs renvoyées (un champ vide reste vide) : aucune version, aucun J-02.
+  expect((await request.patch(`${baseURL}/api/companies`, { headers, data: { website: "" } })).status()).toBe(200);
+  expect(await j02()).toBe(0);
+  expect(await contentOf(scheduled)).toEqual({ currentNumber: 1, validatedNumber: 1 });
+
+  // Complément de profil (PATCH) qui change un champ : programmation annulée (J-23), nouvelle version système, validation retirée, J-02.
+  expect((await request.patch(`${baseURL}/api/companies`, { headers, data: { website: "https://atelier.example" } })).status()).toBe(200);
+  expect(await j02()).toBe(1);
+  expect(await prisma.journalEntry.findFirstOrThrow({ where: { companyId: company.id, code: "J-02" } })).toMatchObject({ actor: "owner", missionId: null });
+  expect(await prisma.publication.findFirstOrThrow({ where: { contentId: scheduled.content.id } })).toMatchObject({ status: "cancelled", cancelReason: "profil corrigé", cancelledBy: "owner" });
+  expect(await contentOf(scheduled)).toEqual({ currentNumber: 2, validatedNumber: null });
+  expect(await prisma.contentVersion.findUniqueOrThrow({ where: { contentId_number: { contentId: scheduled.content.id, number: 2 } } })).toMatchObject({ author: "system", note: "Profil corrigé : informations du contenu à vérifier", title: "Nos tarifs", body: "Sur devis." });
+  expect((await prisma.journalEntry.findMany({ where: { missionId: scheduled.mission.id }, orderBy: [{ createdAt: "asc" }, { id: "asc" }] })).map((entry) => `${entry.code}:${entry.actor}`)).toEqual(["J-23:owner", "J-19:system"]);
+  expect(await contentOf(draft)).toEqual({ currentNumber: 2, validatedNumber: null });
+  // Version courante diffusée, mission close : laissés tels quels, J-02 écrit quand même.
+  expect(await contentOf(diffused)).toEqual({ currentNumber: 1, validatedNumber: 1 });
+  expect(await contentOf(closed)).toEqual({ currentNumber: 1, validatedNumber: 1 });
+
+  // Modification depuis Entreprise (POST hors première création) : J-02 ; les mêmes valeurs renvoyées n'écrivent rien.
+  expect((await request.post(`${baseURL}/api/companies`, { headers, data: ONBOARDING_PROFILE })).status()).toBe(201);
+  expect(await j02()).toBe(2);
+  expect(await contentOf(scheduled)).toEqual({ currentNumber: 3, validatedNumber: null });
+  expect((await request.post(`${baseURL}/api/companies`, { headers, data: ONBOARDING_PROFILE })).status()).toBe(201);
+  expect(await j02()).toBe(2);
+
+  // Carte « profil » de Paul acceptée : même effet ; une carte qui ne change rien n'écrit rien.
+  const card = await createPendingAction(company.id, "update_profile", { phone: "04 72 00 00 00" });
+  expect(await decidePendingAction(company.id, card.id, "confirm")).toMatchObject({ ok: true });
+  expect(await j02()).toBe(3);
+  const same = await createPendingAction(company.id, "update_profile", { phone: "04 72 00 00 00" });
+  expect(await decidePendingAction(company.id, same.id, "confirm")).toMatchObject({ ok: true });
+  expect(await j02()).toBe(3);
+
+  // Première création du profil : aucun J-02.
+  await withSignedUpCompany(async (signedUp, signUpHeaders) => {
+    expect((await request.post(`${baseURL}/api/companies`, { headers: signUpHeaders, data: ONBOARDING_PROFILE })).status()).toBe(201);
+    expect(await prisma.journalEntry.count({ where: { companyId: signedUp.id, code: "J-02" } })).toBe(0);
+  });
+});
+
+test("GH-41: disconnecting a channel cancels its schedules and writes J-07 with their number, LinkedIn included", async ({ company, request }) => {
+  if (!process.env.SESSION_SECRET) throw new Error("SESSION_SECRET is required for engine tests.");
+  const { prisma } = await import("../src/lib/prisma");
+  const { renderJournal } = await import("../src/lib/journal");
+  const baseURL = process.env.UX_TEST_BASE_URL ?? "http://localhost:3000";
+  const headers = { Cookie: `pepito_session=${createSessionToken(company.ownerEmail, company.sessionVersion, process.env.SESSION_SECRET)}`, Origin: baseURL };
+  await prisma.channelConnection.createMany({ data: [
+    { companyId: company.id, channel: "linkedin", status: "connecte", accessToken: "test-token-never-used" },
+    { companyId: company.id, channel: "facebook", status: "connecte", accessToken: "test-token-never-used" },
+  ] });
+  const mission = await prisma.mission.create({ data: { companyId: company.id, template: "social_post", channel: "linkedin", title: "Chantier livré", outcome: "Des demandes", originalOutcome: "Des demandes", finding: "Un constat", scope: { topic: "Un chantier" }, status: "active", position: 1 } });
+  const content = await prisma.missionContent.create({ data: { companyId: company.id, missionId: mission.id, channel: "linkedin", format: "social_post", currentNumber: 1, validatedNumber: 1, versions: { create: { number: 1, title: "Chantier livré", body: "Texte.", author: "paul" } } } });
+  await prisma.publication.create({ data: { companyId: company.id, missionId: mission.id, contentId: content.id, versionNumber: 1, title: "Chantier livré", channel: "linkedin", channelLabel: "Profil LinkedIn", mode: "confirmed", status: "scheduled", scheduledAt: new Date("2030-01-07T08:00:00Z"), timezone: "Europe/Paris", idempotencyKey: `${content.id}:v1:1` } });
+  const j07 = async () => (await prisma.journalEntry.findMany({ where: { companyId: company.id, code: "J-07" }, orderBy: [{ createdAt: "asc" }, { id: "asc" }] })).map((entry) => renderJournal("J-07", entry.params as Record<string, string>));
+
+  expect((await request.post(`${baseURL}/api/linkedin/disconnect`, { headers, data: { confirmed: true } })).status()).toBe(200);
+  expect(await prisma.publication.findFirstOrThrow({ where: { contentId: content.id } })).toMatchObject({ status: "cancelled", cancelReason: "LinkedIn déconnecté", cancelledBy: "owner" });
+  expect((await prisma.journalEntry.findMany({ where: { missionId: mission.id } })).map((entry) => entry.code)).toEqual(["J-23"]);
+  expect(await j07()).toEqual(["Profil LinkedIn déconnecté : 1 programmation(s) annulée(s)."]);
+
+  expect((await request.post(`${baseURL}/api/facebook/disconnect`, { headers, data: { confirmed: true } })).status()).toBe(200);
+  expect(await j07()).toEqual(["Profil LinkedIn déconnecté : 1 programmation(s) annulée(s).", "Page Facebook déconnectée : 0 programmation(s) annulée(s)."]);
+  // Rien à déconnecter : aucune trace.
+  expect((await request.post(`${baseURL}/api/linkedin/disconnect`, { headers, data: { confirmed: true } })).status()).toBe(200);
+  expect(await j07()).toHaveLength(2);
+
+  // Une autorisation Facebook restée en attente de choix de Page n'était pas connectée : effacée sans J-07.
+  await prisma.channelConnection.create({ data: { companyId: company.id, channel: "facebook", status: "selection_requise", accessToken: "test-token-never-used", expiresAt: new Date(Date.now() + 600_000) } });
+  expect((await request.post(`${baseURL}/api/facebook/disconnect`, { headers, data: { confirmed: true } })).status()).toBe(200);
+  expect(await prisma.channelConnection.count({ where: { companyId: company.id, channel: "facebook" } })).toBe(0);
+  expect(await j07()).toHaveLength(2);
+
+  // Gmail : le jeton illisible n'est pas révoqué (aucun appel réseau), la programmation est annulée, un seul J-07.
+  await prisma.channelConnection.create({ data: { companyId: company.id, channel: "gmail", status: "connecte", accessToken: "test-token-never-used", refreshToken: "test-token-never-used" } });
+  const emailMission = await prisma.mission.create({ data: { companyId: company.id, template: "agencies", channel: "gmail", title: "Agences du quartier", outcome: "Une réponse", originalOutcome: "Une réponse", finding: "Un constat", scope: { agencyIds: [] }, status: "active", position: 2 } });
+  const email = await prisma.missionContent.create({ data: { companyId: company.id, missionId: emailMission.id, channel: "gmail", format: "email", currentNumber: 1, validatedNumber: 1, versions: { create: { number: 1, title: "Bonjour", body: "Texte.", author: "paul" } } } });
+  await prisma.publication.create({ data: { companyId: company.id, missionId: emailMission.id, contentId: email.id, versionNumber: 1, title: "Bonjour", channel: "gmail", channelLabel: "Email avec Gmail", mode: "confirmed", status: "scheduled", scheduledAt: new Date("2030-01-07T08:00:00Z"), timezone: "Europe/Paris", idempotencyKey: `${email.id}:v1:1` } });
+  const gmailOut = await request.post(`${baseURL}/api/gmail/disconnect`, { headers });
+  expect(gmailOut.status()).toBe(200);
+  expect(await gmailOut.json()).toEqual({ disconnected: true, revoked: false });
+  expect(await prisma.publication.findFirstOrThrow({ where: { contentId: email.id } })).toMatchObject({ status: "cancelled", cancelReason: "Gmail déconnecté", cancelledBy: "owner" });
+  const gmailLines = (await j07()).filter((line) => line.startsWith("Email avec Gmail"));
+  expect(gmailLines).toEqual(["Email avec Gmail déconnecté : 1 programmation(s) annulée(s)."]);
+  expect((await request.post(`${baseURL}/api/gmail/disconnect`, { headers })).status()).toBe(200);
+  expect(await j07()).toHaveLength(3);
+});
+
+test("GH-41: a profile correction that fails writes nothing: the schedule, the version, the validation and the journal stay as they were", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { markProfileChanged } = await import("../src/lib/contents/service");
+  const mission = await prisma.mission.create({ data: { companyId: company.id, template: "site_page", channel: "site", title: "Nos tarifs", outcome: "Des demandes", originalOutcome: "Des demandes", finding: "Un constat", scope: { page: "Nos tarifs" }, status: "active", firstLaunchedAt: new Date(), position: 1 } });
+  const content = await prisma.missionContent.create({ data: { companyId: company.id, missionId: mission.id, channel: "site", format: "site_page", currentNumber: 1, validatedNumber: 1, validatedAt: new Date(), versions: { create: { number: 1, title: "Nos tarifs", body: "Sur devis.", author: "paul" } } } });
+  await prisma.publication.create({ data: { companyId: company.id, missionId: mission.id, contentId: content.id, versionNumber: 1, title: "Nos tarifs", channel: "site", channelLabel: "Votre site vitrine", mode: "confirmed", status: "scheduled", scheduledAt: new Date(Date.now() + 86_400_000), timezone: "Europe/Paris", idempotencyKey: `${content.id}:v1:1` } });
+
+  await expect(prisma.$transaction(async (tx) => {
+    await markProfileChanged(tx, company.id);
+    throw new Error("échec après la correction");
+  })).rejects.toThrow("échec après la correction");
+
+  expect(await prisma.publication.findFirstOrThrow({ where: { contentId: content.id } })).toMatchObject({ status: "scheduled", cancelReason: null });
+  expect(await prisma.missionContent.findUniqueOrThrow({ where: { id: content.id } })).toMatchObject({ currentNumber: 1, validatedNumber: 1 });
+  expect(await prisma.contentVersion.count({ where: { contentId: content.id } })).toBe(1);
+  expect(await prisma.journalEntry.count({ where: { companyId: company.id, code: { in: ["J-02", "J-19", "J-23"] } } })).toBe(0);
+});
+
+test("GH-41: connecting the Google business listing writes one J-07 in the same transaction, with or without a refresh token", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { renderJournal } = await import("../src/lib/journal");
+  const { persistGoogleBusinessProfileConnection } = await import("../src/lib/oauth/google-connection");
+  const previousKey = process.env.GOOGLE_TOKEN_ENCRYPTION_KEY;
+  process.env.GOOGLE_TOKEN_ENCRYPTION_KEY = "c".repeat(64);
+  try {
+    const j07 = async () => (await prisma.journalEntry.findMany({ where: { companyId: company.id, code: "J-07" }, orderBy: [{ createdAt: "asc" }, { id: "asc" }] }))
+      .map((entry) => `${entry.actor}:${renderJournal("J-07", entry.params as Record<string, string>)}`);
+
+    // Avec refresh token : branche directe, sans appel réseau.
+    await persistGoogleBusinessProfileConnection(company.id, { access_token: "first-access", refresh_token: "first-refresh", expires_in: 3600 });
+    expect(await j07()).toEqual(["owner:Fiche établissement Google connectée."]);
+
+    // Réautorisation d'un canal déjà connecté : aucune nouvelle trace.
+    await persistGoogleBusinessProfileConnection(company.id, { access_token: "again-access", refresh_token: "again-refresh", expires_in: 3600 });
+    expect(await j07()).toHaveLength(1);
+
+    // Sans refresh token, canal en erreur et sans ancien refresh token à vérifier : branche verrouillée, sans appel réseau, J-07.
+    const where = { companyId_channel: { companyId: company.id, channel: "google_business_profile" } };
+    await prisma.channelConnection.update({ where, data: { refreshToken: null, status: "erreur" } });
+    const noNetwork = (async () => { throw new Error("aucun appel réseau attendu"); }) as typeof fetch;
+    await persistGoogleBusinessProfileConnection(company.id, { access_token: "second-access", expires_in: 3600 }, { fetchImpl: noNetwork });
+    expect(await j07()).toEqual(["owner:Fiche établissement Google connectée.", "owner:Fiche établissement Google connectée."]);
+    expect(await prisma.channelConnection.findUniqueOrThrow({ where })).toMatchObject({ status: "connecte" });
+    // Même branche, déjà connecté : rien de plus.
+    await prisma.channelConnection.update({ where, data: { refreshToken: null } });
+    await persistGoogleBusinessProfileConnection(company.id, { access_token: "third-access", expires_in: 3600 }, { fetchImpl: noNetwork });
+    expect(await j07()).toHaveLength(2);
+  } finally {
+    if (previousKey === undefined) delete process.env.GOOGLE_TOKEN_ENCRYPTION_KEY;
+    else process.env.GOOGLE_TOKEN_ENCRYPTION_KEY = previousKey;
+  }
+});

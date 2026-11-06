@@ -622,12 +622,34 @@ test("V5.2 bilan: a report after a diffusion, a decision to continue or stop, an
     };
     const tarifs = await seed("Nos tarifs", "Deux demandes de devis", 1);
     const horaires = await seed("Nos horaires", "Un rendez-vous qualifié", 2);
+    const daysAgo = (days: number) => new Date(Date.now() - days * 86_400_000);
+    await prisma.journalEntry.createMany({ data: [
+      { companyId: company.id, missionId: tarifs.mission.id, code: "J-20", params: { n: "1", titre: "Nos tarifs" }, createdAt: daysAgo(46) },
+      { companyId: company.id, missionId: horaires.mission.id, code: "J-20", params: { n: "1", titre: "Nos horaires" }, createdAt: daysAgo(45) },
+      { companyId: company.id, missionId: tarifs.mission.id, code: "J-22", params: { n: "1", canal: "Votre site vitrine", destinataires: "" }, createdAt: daysAgo(44) },
+      { companyId: company.id, missionId: horaires.mission.id, code: "J-22", params: { n: "1", canal: "Votre site vitrine", destinataires: "" }, createdAt: daysAgo(43) },
+      { companyId: company.id, missionId: horaires.mission.id, code: "J-17", params: { mission: "Nos horaires" }, createdAt: daysAgo(42) },
+      { companyId: company.id, missionId: tarifs.mission.id, code: "J-17", params: { mission: "Nos tarifs" }, createdAt: daysAgo(41) },
+    ] });
 
     // Résultats : la diffusion est listée ; « Poursuivre » reste indisponible sans bilan.
     await page.goto(`${baseURL}/resultats`);
     await expect(page.getByRole("heading", { level: 1, name: "L'activité n'est pas le résultat." })).toBeVisible();
+    // Décisions & traçabilité (#41) : quoi, quand, par qui et pour quelle mission ; 5 entrées, puis le reste se déplie ; export du journal entier.
+    const journal = page.getByRole("region", { name: "Décisions & traçabilité" });
+    await expect(journal.locator("table").first().locator("tbody tr")).toHaveCount(5);
+    const more = journal.locator("details.journal-more > summary");
+    await expect(more).toHaveText("Tout le journal (6)");
+    await expect(journal.getByText("V1 validée : Nos tarifs. Aucun envoi effectué.")).toBeHidden();
+    await more.click();
+    await expect(journal.getByText("V1 validée : Nos tarifs. Aucun envoi effectué.")).toBeVisible();
+    const launchRow = journal.getByRole("row", { name: /Mission lancée \(ou reprise\) : Nos tarifs/ });
+    await expect(launchRow.getByRole("cell")).toHaveText([/\d{4}/, "vous", "Nos tarifs", "Mission lancée (ou reprise) : Nos tarifs. Paul prépare le premier contenu."]);
+    await expect(journal.getByRole("link", { name: "Exporter le journal (CSV)" })).toHaveAttribute("href", "/api/journal/export");
+    await expect(journal).not.toContainText("{");
+    const byMission = page.getByRole("region", { name: "Résultats par mission" });
     await expect(page.getByRole("region", { name: "La diffusion et son suivi" })).toContainText("Nos tarifs · V1 · Votre site vitrine");
-    await page.getByRole("row", { name: /Nos tarifs/ }).getByRole("button", { name: "Décider la suite" }).click();
+    await byMission.getByRole("row", { name: /Nos tarifs/ }).getByRole("button", { name: "Décider la suite" }).click();
     const decide = page.getByRole("dialog", { name: "Décider la suite de la mission" });
     await expect(decide.getByRole("button", { name: "Poursuivre" })).toBeDisabled();
     await expect(decide).toContainText("Sans bilan, Paul ne peut pas comparer au résultat recherché");
@@ -664,22 +686,42 @@ test("V5.2 bilan: a report after a diffusion, a decision to continue or stop, an
 
     // Poursuivre ouvre l'atelier pour la série suivante ; arrêter clôt la mission.
     await page.goto(`${baseURL}/resultats`);
-    await page.getByRole("row", { name: /Nos tarifs/ }).getByRole("button", { name: "Décider la suite" }).click();
+    await byMission.getByRole("row", { name: /Nos tarifs/ }).getByRole("button", { name: "Décider la suite" }).click();
     await page.getByRole("dialog", { name: "Décider la suite de la mission" }).getByRole("button", { name: "Poursuivre" }).click();
     await expect(page).toHaveURL(new RegExp(`/atelier/${tarifs.content.id}$`));
     await page.goto(`${baseURL}/resultats`);
-    await expect(page.getByRole("row", { name: /Nos tarifs/ })).toContainText("Poursuivie, mêmes limites");
-    await page.getByRole("row", { name: /Nos horaires/ }).getByRole("button", { name: "Décider la suite" }).click();
+    await expect(byMission.getByRole("row", { name: /Nos tarifs/ })).toContainText("Poursuivie, mêmes limites");
+    await byMission.getByRole("row", { name: /Nos horaires/ }).getByRole("button", { name: "Décider la suite" }).click();
     await page.getByRole("dialog", { name: "Décider la suite de la mission" }).getByRole("button", { name: "Arrêter la mission" }).click();
-    await expect(page.getByRole("row", { name: /Nos horaires/ })).toContainText("Arrêtée");
-    await expect(page.getByRole("row", { name: /Nos horaires/ }).getByRole("button", { name: "Décider la suite" })).toHaveCount(0);
+    await expect(byMission.getByRole("row", { name: /Nos horaires/ })).toContainText("Arrêtée");
+    await expect(byMission.getByRole("row", { name: /Nos horaires/ }).getByRole("button", { name: "Décider la suite" })).toHaveCount(0);
     expect(await prisma.mission.findUniqueOrThrow({ where: { id: horaires.mission.id } })).toMatchObject({ status: "stopped" });
     await page.screenshot({ path: testInfo.outputPath("resultats-1440.png"), fullPage: true });
     await page.setViewportSize({ width: 390, height: 800 });
     await page.goto(`${baseURL}/resultats`);
     await expect(page.getByRole("heading", { level: 1, name: "L'activité n'est pas le résultat." })).toBeVisible();
+    // Au-delà de 5 entrées, les plus anciennes se déplient avec « Tout le journal (n) ».
+    const phoneJournal = page.getByRole("region", { name: "Décisions & traçabilité" });
+    const phoneMore = phoneJournal.locator("details.journal-more > summary");
+    await expect(phoneMore).toHaveText(/^Tout le journal \(\d+\)$/);
+    await phoneMore.click();
+    await expect(phoneJournal.getByText("Mission lancée (ou reprise) : Nos tarifs. Paul prépare le premier contenu.")).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    for (const wrap of await phoneJournal.locator(".table-wrap").all()) expect(await wrap.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
     await page.screenshot({ path: testInfo.outputPath("resultats-390.png"), fullPage: true });
+  } finally { await prisma.$disconnect(); }
+});
+
+test("GH-41: an empty journal says so on Résultats and offers no export", async ({ page, company }) => {
+  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }) });
+  try {
+    await prisma.company.update({ where: { id: company.id }, data: { workspaceV52: true } });
+    expect(await prisma.journalEntry.count({ where: { companyId: company.id } })).toBe(0);
+    await page.goto(`${baseURL}/resultats`);
+    const journal = page.getByRole("region", { name: "Décisions & traçabilité" });
+    await expect(journal).toContainText("Aucune décision enregistrée pour l'instant.");
+    await expect(journal.getByRole("link", { name: "Exporter le journal (CSV)" })).toHaveCount(0);
+    await expect(journal.locator("table")).toHaveCount(0);
   } finally { await prisma.$disconnect(); }
 });
 

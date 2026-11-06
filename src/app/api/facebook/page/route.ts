@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSessionCompany } from "@/lib/session";
+import { channelJournalParams, writeJournal } from "@/lib/journal";
 import { decryptFacebookAccount, encryptFacebookAccount, verifyFacebookPage } from "@/lib/oauth/meta";
 
 /**
@@ -34,9 +35,14 @@ export async function POST(request: NextRequest) {
 
   const accessToken = encryptFacebookAccount({ ...account, pages: [{ ...page, name: verified.name }], selectedPageId: page.id }, company.id);
   // Condition sur l'état en attente : deux choix simultanés ne peuvent pas s'écraser.
-  const updated = await prisma.channelConnection.updateMany({
-    where: { ...where, id: pending.id, accessToken: pending.accessToken },
-    data: { status: "connecte", accessToken, expiresAt: null },
+  // La connexion et sa trace (J-07) existent ensemble, ou aucune.
+  const updated = await prisma.$transaction(async (tx) => {
+    const written = await tx.channelConnection.updateMany({
+      where: { ...where, id: pending.id, accessToken: pending.accessToken },
+      data: { status: "connecte", accessToken, expiresAt: null },
+    });
+    if (written.count === 1) await writeJournal(tx, { companyId: company.id, code: "J-07", params: channelJournalParams("facebook") });
+    return written;
   });
   if (updated.count !== 1) return NextResponse.json({ error: "Cette autorisation a déjà été traitée. Rechargez la page." }, { status: 409 });
   return NextResponse.json({ connected: true, pageName: verified.name });
