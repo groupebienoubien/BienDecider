@@ -2,7 +2,8 @@ import { Prisma, type Company, type ContentVersion, type Mission, type MissionCo
 import { prisma } from "@/lib/prisma";
 import { writeJournal } from "@/lib/journal";
 import { MissionError, renderMissionMessage } from "@/lib/missions/messages";
-import { channelLabel, isChannelEnabled, type MissionChannel } from "@/lib/missions/channels";
+import { channelLabel, type MissionChannel } from "@/lib/missions/channels";
+import { canUseChannel, readChannelAccess } from "@/lib/channel-access";
 import { asDelegationLevel } from "@/lib/delegation-level";
 import { decryptFacebookAccount, publishFacebookPagePost } from "@/lib/oauth/meta";
 import { slugify } from "@/lib/site/slug";
@@ -34,7 +35,7 @@ function refuse(refusal: Refusal): never {
 /** Destination d'un contenu : canal actif, connexion utilisable et libellé en clair (la Page choisie, le site vitrine…). */
 export async function readDestination(companyId: string, channel: MissionChannel | null): Promise<Destination> {
   if (!channel) return { channel, enabled: false, connected: false, label: "Hors canal" };
-  const enabled = isChannelEnabled(channel);
+  const enabled = canUseChannel(await readChannelAccess(companyId, channel));
   if (channel === "site") return { channel, enabled, connected: true, label: "Votre site vitrine" };
   const connection = await prisma.channelConnection.findUnique({ where: { companyId_channel: { companyId, channel } } });
   const live = connection?.status === "connecte" && Boolean(connection.accessToken);

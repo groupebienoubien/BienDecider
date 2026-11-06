@@ -253,7 +253,7 @@ export function ContentWorkbench({ detail, viewing, items, checklist, credits }:
                   ? <button type="button" className="primary" onClick={() => void copy()}><Icon name="copy" />{copied ? "Texte copié" : "Récupérer le texte"}</button>
                   : detail.publishRefusal === null
                     ? <button type="button" className="primary" disabled={busy || dirty} onClick={() => openDialog("publish")}><Icon name="megaphone" />{lastFailure ? "Réessayer" : detail.format === "email" ? "Préparer l'envoi" : "Préparer la publication"}</button>
-                    : !detail.destination.connected && detail.destination.enabled && <Link className="btn primary" href="/connexions">Connecter {detail.mission.channelLabel}</Link>}
+                    : !detail.destination.connected && detail.destination.enabled && <Link className="btn primary" href={`/connexions?retour=/atelier/${detail.id}`}>Connecter {detail.mission.channelLabel}</Link>}
                 <button type="button" disabled={busy || dirty} onClick={() => openDialog("declare")}><Icon name="check" />Je l&apos;ai diffusé moi-même</button>
               </>}
               {scheduled && !detail.readOnly && <button type="button" disabled={busy} onClick={() => openDialog("cancel")}><Icon name="x" />Annuler la programmation</button>}
@@ -355,7 +355,7 @@ export function ContentWorkbench({ detail, viewing, items, checklist, credits }:
             <h3 id="frame-title">Cadre de diffusion</h3>
             <dl className="atelier-frame small">
               <dt>Canal</dt>
-              <dd>{detail.mission.channel ? detail.destination.label : detail.mission.channelLabel}{detail.mission.channel && detail.mission.channel !== "site" && (detail.channelConnected ? <span className="tag green">Connecté</span> : <> · <Link href="/connexions">Connecter</Link></>)}</dd>
+              <dd>{detail.mission.channel ? detail.destination.label : detail.mission.channelLabel}{detail.mission.channel && detail.mission.channel !== "site" && (detail.channelConnected ? <span className="tag green">Connecté</span> : <> · <Link href={`/connexions?retour=/atelier/${detail.id}`}>Connecter</Link></>)}</dd>
               <dt>Délégation</dt><dd>{detail.delegationLabel} · <Link href="/connexions#delegation">Modifier</Link></dd>
               {detail.format === "email" && <><dt>Destinataires</dt><dd>{detail.mission.scopeSummary}</dd></>}
             </dl>

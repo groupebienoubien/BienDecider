@@ -17,6 +17,8 @@ import { UsageAlertsPanel } from "./usage-alerts-panel";
 import { FeedbackList } from "./feedback-list";
 import { ErrorsPanel } from "./errors-panel";
 import { LlmCreditPanel } from "./llm-credit-panel";
+import { ChannelAccessPanel } from "./channel-access-panel";
+import { readAccessOverview } from "@/lib/channel-access";
 import { readCreditStatus, readLlmSpend } from "@/lib/llm-credit";
 import { readUsageAlertThresholds } from "@/lib/usage-alerts";
 import { parisDateKey } from "@/lib/agents/personas";
@@ -115,6 +117,7 @@ export default async function AdminPage() {
   const [alertThresholds, recentAlerts] = await Promise.all([readUsageAlertThresholds(), prisma.usageAlert.findMany({ orderBy: { createdAt: "desc" }, take: 10 })]);
   const alertDay = parisDateKey(now);
   const [creditStatus, llmSpend] = await Promise.all([readCreditStatus(now), readLlmSpend(now)]);
+  const channelAccess = await readAccessOverview();
 
   return (
     <AppShell {...await getShellPropsForEmail(ownerEmail)}>
@@ -150,6 +153,8 @@ export default async function AdminPage() {
         />
 
         <ErrorsPanel now={now} />
+
+        <ChannelAccessPanel overview={channelAccess} companies={companies.map((company) => ({ id: company.id, name: company.name }))} />
 
         <FeedbackList />
         {isExplicitAdminEmail(ownerEmail) && (

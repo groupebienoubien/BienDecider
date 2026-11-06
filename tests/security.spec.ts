@@ -31,6 +31,8 @@ const GUARDED_ROUTES: Guarded[] = [
   { method: "PATCH", path: "/api/admin/companies/[id]/suspension", denied: 403 },
   { method: "PATCH", path: "/api/admin/usage-alerts", denied: 403 },
   { method: "PATCH", path: "/api/admin/llm-credit", denied: 403 },
+  { method: "PATCH", path: "/api/admin/channel-access", denied: 403 },
+  { method: "POST", path: "/api/channel-access", denied: 401 },
   { method: "GET", path: "/api/missions", denied: 401 },
   { method: "POST", path: "/api/missions", denied: 401 },
   { method: "GET", path: "/api/missions/catalogue", denied: 401 },
@@ -1233,6 +1235,70 @@ test("diffusion is decided by the server for the session company, and « Prépar
     }
   } finally {
     await prisma.company.deleteMany({ where: { id: { in: [a.id, b.id] } } });
+    await prisma.$disconnect();
+  }
+});
+
+test("a channel reserved to authorized companies is requested, granted by an administrator, and refused before any provider flow otherwise", async ({ request, page }) => {
+  const admins = (process.env.ADMIN_EMAILS ?? "").split(",").map((email) => email.trim()).filter(Boolean);
+  test.skip(admins.length === 0, "Requires ADMIN_EMAILS on the server, as configured in CI.");
+  const prisma = openDatabase();
+  const adminEmail = admins[0];
+  const marker = randomUUID().slice(0, 8);
+  let createdAdmin = false;
+  let adminCompany = await prisma.company.findUnique({ where: { ownerEmail: adminEmail } });
+  if (!adminCompany) {
+    adminCompany = await prisma.company.create({ data: { ownerEmail: adminEmail, name: "Admin canaux", trade: "Artisan", servingArea: "Paris" } });
+    createdAdmin = true;
+  }
+  const a = await prisma.company.create({ data: { ownerEmail: `security-access-a-${marker}@example.invalid`, name: `Accès A ${marker}`, trade: "Artisan", servingArea: "Paris" } });
+  const b = await prisma.company.create({ data: { ownerEmail: `security-access-b-${marker}@example.invalid`, name: `Accès B ${marker}`, trade: "Artisan", servingArea: "Paris" } });
+  const headers = (company: typeof a) => ({ Cookie: sessionCookie(company.ownerEmail, company.sessionVersion), Origin: baseURL });
+  const admin = { Cookie: sessionCookie(adminEmail, adminCompany.sessionVersion), Origin: baseURL };
+  const path = `${baseURL}/api/admin/channel-access`;
+  const previous = await prisma.channelRollout.findUnique({ where: { channel: "gmail" } });
+  try {
+    // Ouvert à tous par défaut : la demande ne change rien.
+    expect(await (await request.post(`${baseURL}/api/channel-access`, { headers: headers(a), data: { channel: "gmail" } })).json()).toEqual({ state: "open" });
+    expect((await request.post(`${baseURL}/api/channel-access`, { headers: headers(a), data: { channel: "site" } })).status()).toBe(400);
+    expect((await request.post(`${baseURL}/api/channel-access`, { headers: { ...headers(a), Origin: "https://attacker.invalid" }, data: { channel: "gmail" } })).status()).toBe(403);
+
+    // Réservé par un administrateur seulement.
+    expect((await request.patch(path, { headers: headers(a), data: { channel: "gmail", openToAll: false } })).status()).toBe(403);
+    expect((await request.patch(path, { headers: { ...admin, Origin: "https://attacker.invalid" }, data: { channel: "gmail", openToAll: false } })).status()).toBe(403);
+    expect((await request.patch(path, { headers: admin, data: { channel: "site", openToAll: false } })).status()).toBe(400);
+    expect((await request.patch(path, { headers: admin, data: { channel: "gmail", openToAll: false } })).status()).toBe(200);
+
+    // Non autorisée : aucun flux fournisseur, une demande visible en administration.
+    const start = await request.get(`${baseURL}/api/oauth/gmail/start`, { headers: { Cookie: headers(a).Cookie }, maxRedirects: 0 });
+    expect(start.status()).toBe(307);
+    expect(start.headers().location).toMatch(/\/connexions\?error=(channel_unavailable|gmail_config)$/);
+    expect(await (await request.post(`${baseURL}/api/channel-access`, { headers: headers(a), data: { channel: "gmail" } })).json()).toEqual({ state: "requested" });
+    expect(await prisma.channelAccess.findUniqueOrThrow({ where: { companyId_channel: { companyId: a.id, channel: "gmail" } } })).toMatchObject({ status: "requested" });
+    expect(await prisma.channelAccess.count({ where: { companyId: b.id } })).toBe(0);
+    expect((await request.patch(path, { headers: admin, data: { channel: "gmail", companyId: "inconnue", granted: true } })).status()).toBe(404);
+    expect((await request.patch(path, { headers: admin, data: { channel: "gmail", companyId: a.id, granted: true } })).status()).toBe(200);
+    expect(await (await request.post(`${baseURL}/api/channel-access`, { headers: headers(a), data: { channel: "gmail" } })).json()).toEqual({ state: "granted" });
+    expect(await (await request.post(`${baseURL}/api/channel-access`, { headers: headers(b), data: { channel: "gmail" } })).json()).toEqual({ state: "requested" });
+
+    // Canaux désactivés : aucun démarrage, quelle que soit l'entreprise.
+    const linkedin = await request.get(`${baseURL}/api/oauth/linkedin/start`, { headers: { Cookie: headers(a).Cookie }, maxRedirects: 0 });
+    expect(linkedin.headers().location).toMatch(/\/connexions\?error=(channel_unavailable|linkedin_config)$/);
+
+    // Administration : la demande apparaît et s'accorde en un clic.
+    await page.context().addCookies([{ name: "pepito_session", value: admin.Cookie.slice(admin.Cookie.indexOf("=") + 1), url: baseURL }]);
+    await page.goto(`${baseURL}/admin`);
+    const panel = page.getByRole("region", { name: "Accès aux canaux" });
+    await expect(panel).toContainText("Email avec Gmail · entreprises autorisées seulement");
+    await panel.getByRole("button", { name: `Autoriser Accès B ${marker} sur Email avec Gmail` }).click();
+    await expect(panel.getByRole("button", { name: `Retirer Accès B ${marker} sur Email avec Gmail` })).toBeVisible();
+    expect(await prisma.channelAccess.findUniqueOrThrow({ where: { companyId_channel: { companyId: b.id, channel: "gmail" } } })).toMatchObject({ status: "granted", grantedBy: adminEmail });
+  } finally {
+    await page.context().clearCookies();
+    if (previous) await prisma.channelRollout.update({ where: { channel: "gmail" }, data: { openToAll: previous.openToAll } });
+    else await prisma.channelRollout.deleteMany({ where: { channel: "gmail" } });
+    await prisma.company.deleteMany({ where: { id: { in: [a.id, b.id] } } });
+    if (createdAdmin) await prisma.company.delete({ where: { id: adminCompany.id } });
     await prisma.$disconnect();
   }
 });

@@ -483,6 +483,32 @@ test("story 12.4: a scheduled diffusion leaves once at its time after the checks
   expect(await prisma.publication.findFirstOrThrow({ where: { contentId: stuck.content.id } })).toMatchObject({ status: "uncertain" });
 });
 
+test("story 13.2: a channel reserved by an administrator is usable only by authorized companies, at connection and at diffusion", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { readChannelAccess, requestChannelAccess, setChannelRollout, setCompanyChannelAccess } = await import("../src/lib/channel-access");
+  const { readDestination } = await import("../src/lib/contents/publish");
+  const previous = await prisma.channelRollout.findUnique({ where: { channel: "facebook" } });
+  try {
+    await prisma.channelRollout.deleteMany({ where: { channel: "facebook" } });
+    expect(await readChannelAccess(company.id, "facebook")).toBe("open");
+    expect(await readChannelAccess(company.id, "linkedin")).toBe("disabled");
+    expect(await readChannelAccess(company.id, "site")).toBe("open");
+    await setChannelRollout("facebook", false, "admin@example.invalid");
+    expect(await readChannelAccess(company.id, "facebook")).toBe("none");
+    expect(await readDestination(company.id, "facebook")).toMatchObject({ enabled: false });
+    expect(await requestChannelAccess(company.id, "facebook")).toBe("requested");
+    expect(await requestChannelAccess(company.id, "facebook")).toBe("requested");
+    await setCompanyChannelAccess(company.id, "facebook", true, "admin@example.invalid");
+    expect(await readChannelAccess(company.id, "facebook")).toBe("granted");
+    expect(await readDestination(company.id, "facebook")).toMatchObject({ enabled: true });
+    await setCompanyChannelAccess(company.id, "facebook", false, "admin@example.invalid");
+    expect(await readChannelAccess(company.id, "facebook")).toBe("none");
+  } finally {
+    if (previous) await prisma.channelRollout.update({ where: { channel: "facebook" }, data: { openToAll: previous.openToAll } });
+    else await prisma.channelRollout.deleteMany({ where: { channel: "facebook" } });
+  }
+});
+
 test("story 9.1 to 9.3: missions and credits follow the transitions of the specification, in one transaction each", async ({ company }) => {
   const { prisma } = await import("../src/lib/prisma");
   const { readCredits } = await import("../src/lib/credits");
