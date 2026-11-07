@@ -33,7 +33,7 @@ function toJson(state: DraftState): { step: number; profile: Prisma.InputJsonObj
   return {
     step: state.step,
     profile: { ...state.profile },
-    ambition: state.ambition === null ? undefined : { text: state.ambition },
+    ambition: state.ambition === null ? undefined : { text: state.ambition.text, terms: { ...state.ambition.terms } },
     profileConfirmed: state.profileConfirmed,
     diagnosticReady: state.diagnosticReady,
   };

@@ -86,7 +86,7 @@ export default async function WelcomePage() {
   }
   return (
     <WelcomeFrame step={3} intro={<p>Dites, avec vos mots, ce que vous voulez voir changer pour {state.profile.companyName}.</p>}>
-      <AmbitionForm key="ambition" ambition={state.ambition ?? ""} />
+      <AmbitionForm key="ambition" ambition={state.ambition?.text ?? ""} />
     </WelcomeFrame>
   );
 }

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { TradeCombobox } from "@/components/trade-combobox";
+import { AmbitionEditor } from "@/components/ambition-editor";
 import { LIMITS, type DraftProfile, type ProfileOrigin, type ProfilePrefill } from "@/lib/onboarding/draft-rules";
 import type { AnalysisView } from "@/lib/onboarding/analysis-rules";
 import { FieldError, FormError, INPUT_CLASS, PRIMARY_BUTTON, SECONDARY_BUTTON, useDraftAction, type FieldErrors } from "./journey-client";
@@ -206,28 +207,9 @@ export function ProfileForm({ prefill }: { prefill: ProfilePrefill }) {
   );
 }
 
-/** Étape 3 : l'ambition en texte libre, conservée telle quelle. */
+/** Étape 3 (#282) : l'ambition dite avec vos mots, reformulée par Paul, puis confirmée telle quelle. */
 export function AmbitionForm({ ambition }: { ambition: string }) {
-  const { busy, error, errors, send } = useDraftAction();
-  const [value, setValue] = useState(ambition);
-  const describedBy = ["ambition-hint", errors.ambition ? "ambition-error" : null].filter(Boolean).join(" ");
-  return (
-    <form noValidate className="flex flex-col gap-5" onSubmit={(event) => { event.preventDefault(); void send({ action: "confirm_ambition", ambition: value }); }}>
-      <div className="flex flex-col gap-1.5">
-        <label htmlFor="ambition" className={LABEL}>Votre ambition</label>
-        <p id="ambition-hint" className={HINT}>En une ou deux phrases. Par exemple : « +20 % de chiffre d&apos;affaires en 12 mois, sans embaucher ».</p>
-        <textarea
-          id="ambition" name="ambition" rows={4} maxLength={LIMITS.ambitionMax} required value={value}
-          aria-invalid={errors.ambition ? true : undefined} aria-describedby={describedBy}
-          onChange={(event) => setValue(event.target.value)} className={INPUT_CLASS}
-        />
-        <FieldError id="ambition-error" message={errors.ambition} />
-      </div>
-      <p className={HINT}>C&apos;est une cible, pas une promesse de résultat. Vous pourrez la corriger à tout moment.</p>
-      <FormError error={error} errors={errors} />
-      <div><button type="submit" className={PRIMARY_BUTTON} disabled={busy}>C&apos;est bien ça</button></div>
-    </form>
-  );
+  return <AmbitionEditor target="bienvenue" initialText={ambition} />;
 }
 
 /** Étape 4 : « Ça m'intéresse » ouvre la création du compte. */

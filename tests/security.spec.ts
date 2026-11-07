@@ -95,6 +95,7 @@ const GUARDED_ROUTES: Guarded[] = [
   { method: "POST", path: "/api/proposals/[id]/revise", denied: 401 },
   { method: "GET", path: "/api/proposals/[id]/versions", denied: 401 },
   { method: "POST", path: "/api/onboarding/interpret", denied: 401 },
+  { method: "POST", path: "/api/entreprise/ambition", denied: 401 },
   { method: "GET", path: "/api/site/photos", denied: 401 },
   { method: "POST", path: "/api/site/photos", denied: 401 },
   { method: "DELETE", path: "/api/site/photos/[id]", denied: 401 },
@@ -1768,6 +1769,87 @@ test("GH-280: the global daily cap refuses everyone and refunds the per-IP attem
     else await prisma.authThrottle.deleteMany({ where: { key: ANALYSIS_GLOBAL_KEY } });
     await prisma.authThrottle.deleteMany({ where: { key: ipKey } });
     if (draftToken) await prisma.onboardingDraft.deleteMany({ where: { tokenHash: createHash("sha256").update(draftToken).digest("hex") } });
+    await visitor.dispose();
+    await prisma.$disconnect();
+  }
+});
+
+test("GH-282: the ambition is confirmed only with the token of the exact interpreted text, and a spent model quota falls back silently", async ({ playwright }) => {
+  const prisma = openDatabase();
+  const draft = await createTestDraft(prisma, { step: 3 });
+  const ip = `test-${randomUUID()}`;
+  const ipKey = `ambition:${createHmac("sha256", requireSecret()).update(ip).digest("hex")}`;
+  const visitor = await playwright.request.newContext();
+  const post = (data: Record<string, unknown>, origin = baseURL) => visitor.post(`${baseURL}/api/bienvenue`, { headers: { Origin: origin, Cookie: draft.cookie, "x-real-ip": ip }, data });
+  const text = "+20 % de CA en 12 mois, sans embaucher, 300 € de pub par mois";
+  const reinterpret = "Interprétez de nouveau votre ambition avant de la confirmer.";
+  try {
+    // 9 caractères : M-06 ; une autre origine : refusée.
+    const short = await post({ action: "interpret_ambition", ambition: "123456789" });
+    expect(short.status()).toBe(422);
+    expect(await short.json()).toMatchObject({ code: "M-06" });
+    expect((await post({ action: "interpret_ambition", ambition: text }, "https://attacker.invalid")).status()).toBe(403);
+
+    // Quota du modèle épuisé pour cette IP : l'analyseur de secours répond, sans erreur.
+    await prisma.authThrottle.upsert({ where: { key: ipKey }, create: { key: ipKey, count: 10, windowStart: new Date() }, update: { count: 10, windowStart: new Date() } });
+    const interpreted = await post({ action: "interpret_ambition", ambition: text });
+    expect(interpreted.status()).toBe(200);
+    const { interpretation, token } = await interpreted.json();
+    expect(interpretation).toMatchObject({ text, terms: { gainPercent: 20, horizonMonths: 12, mediaBudgetPerMonth: 300, recruitment: "no" } });
+    expect(interpretation.reformulation).toContain("n'autorise aucune dépense");
+    expect(typeof token).toBe("string");
+    // L'interprétation n'est jamais enregistrée seule.
+    expect(await prisma.onboardingDraft.findUniqueOrThrow({ where: { id: draft.id } })).toMatchObject({ step: 3, ambition: null, diagnosticReady: false });
+
+    // Jeton falsifié, texte modifié d'un caractère, éléments changés ou absents : 422 et rien n'est enregistré.
+    for (const forged of [
+      { ambition: text, terms: interpretation.terms, token: "jeton-falsifie" },
+      { ambition: `${text}!`, terms: interpretation.terms, token },
+      { ambition: text, terms: { ...interpretation.terms, gainPercent: 50 }, token },
+      { ambition: text, token },
+      { ambition: text, terms: interpretation.terms },
+    ]) {
+      const refused = await post({ action: "confirm_ambition", ...forged });
+      expect(refused.status(), JSON.stringify(forged)).toBe(422);
+      expect(await refused.json()).toMatchObject({ code: "reinterpret", error: reinterpret, errors: { ambition: reinterpret } });
+    }
+    expect(await prisma.onboardingDraft.findUniqueOrThrow({ where: { id: draft.id } })).toMatchObject({ step: 3, ambition: null, diagnosticReady: false });
+
+    // Le bon jeton : le texte tel quel et les éléments retenus, étape 4.
+    const confirmed = await post({ action: "confirm_ambition", ambition: text, terms: interpretation.terms, token });
+    expect(confirmed.status()).toBe(200);
+    expect(await confirmed.json()).toMatchObject({ step: 4, href: "/bienvenue/missions" });
+    expect(await prisma.onboardingDraft.findUniqueOrThrow({ where: { id: draft.id } })).toMatchObject({ step: 4, diagnosticReady: true, ambition: { text, terms: interpretation.terms } });
+    // Étape 4 : plus d'interprétation possible depuis le brouillon.
+    expect((await post({ action: "interpret_ambition", ambition: text })).status()).toBe(409);
+
+    // Entreprise : sans session 401, autre origine 403 ; un jeton du parcours ne vaut que pour le même texte et les mêmes éléments.
+    const anonymous = await visitor.post(`${baseURL}/api/entreprise/ambition`, { headers: { Origin: baseURL }, data: { action: "interpret", ambition: text } });
+    expect(anonymous.status()).toBe(401);
+    const email = `security-ambition-${randomUUID()}@example.invalid`;
+    const company = await prisma.company.create({ data: { ownerEmail: email, name: "Atelier Ambition", trade: "Artisan", servingArea: "Lyon", workspaceV52: true, objective: "Ancien cap" } });
+    try {
+      const session = sessionCookie(email, company.sessionVersion);
+      const entreprise = (data: Record<string, unknown>, origin = baseURL) => visitor.post(`${baseURL}/api/entreprise/ambition`, { headers: { Origin: origin, Cookie: session }, data });
+      expect((await entreprise({ action: "interpret", ambition: text }, "https://attacker.invalid")).status()).toBe(403);
+      expect((await entreprise({ action: "launch", ambition: text })).status()).toBe(400);
+      expect((await entreprise({ action: "confirm", ambition: `${text}!`, terms: interpretation.terms, token })).status()).toBe(422);
+      expect((await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).objective).toBe("Ancien cap");
+      const read = await entreprise({ action: "interpret", ambition: "Doubler mon CA en 5 ans" });
+      expect(read.status()).toBe(200);
+      const outOfBounds = await read.json();
+      expect(outOfBounds.interpretation.terms).toMatchObject({ gainPercent: null, horizonMonths: null });
+      const saved = await entreprise({ action: "confirm", ambition: "Doubler mon CA en 5 ans", terms: outOfBounds.interpretation.terms, token: outOfBounds.token });
+      expect(saved.status()).toBe(200);
+      const after = await prisma.company.findUniqueOrThrow({ where: { id: company.id }, include: { journalEntries: true } });
+      expect(after).toMatchObject({ ambitionText: "Doubler mon CA en 5 ans", objective: "Doubler mon CA en 5 ans" });
+      expect(after.journalEntries.map((entry) => [entry.code, entry.actor, entry.params])).toEqual([["J-03", "owner", { cap: "Doubler mon CA en 5 ans" }]]);
+    } finally {
+      await prisma.company.deleteMany({ where: { ownerEmail: email } });
+    }
+  } finally {
+    await prisma.authThrottle.deleteMany({ where: { key: ipKey } });
+    await prisma.onboardingDraft.deleteMany({ where: { id: draft.id } });
     await visitor.dispose();
     await prisma.$disconnect();
   }

@@ -1,5 +1,10 @@
 import { MISSION_TEMPLATES, availableTemplates, enabledChannels, type TemplateKey } from "@/lib/missions/templates";
 import { ANALYSIS_MESSAGES, analysisFinished, analysisRunning, readAnalysis, type DraftAnalysis, type Provenance } from "@/lib/onboarding/analysis-rules";
+import { EMPTY_TERMS, REINTERPRET_MESSAGE, readAmbitionTerms, type AmbitionTerms } from "@/lib/ambition-rules";
+
+/** Vérifie le jeton d'une interprétation (`verifyInterpretation` côté serveur) ; injecté, car ce module est aussi lu par le client. */
+export type InterpretationVerifier = (text: string, terms: AmbitionTerms, token: unknown) => boolean;
+const refuseAll: InterpretationVerifier = () => false;
 
 /**
  * Règles pures du parcours d'entrée en cinq étapes (#279, spécification §1.1, §1.2, §11, §12, §14).
@@ -21,10 +26,13 @@ export type DraftProfile = {
   offers: string;
 };
 
+/** Ambition confirmée à l'étape 3 (#282) : le texte tel quel et les éléments retenus avec Paul. */
+export type DraftAmbition = { text: string; terms: AmbitionTerms };
+
 export type DraftState = {
   step: DraftStep;
   profile: DraftProfile;
-  ambition: string | null;
+  ambition: DraftAmbition | null;
   profileConfirmed: boolean;
   diagnosticReady: boolean;
   /** Analyse publique de l'étape 1 (#280), écrite à part : jamais enregistrée par `saveDraft`. */
@@ -63,7 +71,7 @@ export const ONBOARDING_MESSAGES = {
   "M-12": "Le mot de passe doit contenir au moins 8 caractères.",
   "M-13": "Les deux mots de passe ne correspondent pas.",
 } as const;
-export type OnboardingCode = keyof typeof ONBOARDING_MESSAGES | "M-16" | "markup" | "analysis";
+export type OnboardingCode = keyof typeof ONBOARDING_MESSAGES | "M-16" | "markup" | "analysis" | "reinterpret";
 
 /** Adresse déjà utilisée (FR-9 prévaut sur M-14) : le message ne dit pas qu'un compte existe. */
 export const ADDRESS_UNAVAILABLE_MESSAGE = "Nous ne pouvons pas créer de compte avec cette adresse. Si vous avez déjà un compte, retrouvez-le avec la connexion.";
@@ -213,12 +221,13 @@ export type DraftAction =
   | { action: "discover"; firstName?: unknown; companyName?: unknown; location?: unknown; website?: unknown }
   | { action: "see_findings" }
   | { action: "confirm_profile"; trade?: unknown; servingArea?: unknown; targetClients?: unknown; offers?: unknown }
-  | { action: "confirm_ambition"; ambition?: unknown }
+  | { action: "interpret_ambition"; ambition?: unknown }
+  | { action: "confirm_ambition"; ambition?: unknown; terms?: unknown; token?: unknown }
   | { action: "interested" }
   | { action: "back"; step: unknown }
   | { action: "goto"; step: unknown };
 
-export const DRAFT_ACTIONS = ["discover", "see_findings", "confirm_profile", "confirm_ambition", "interested", "back", "goto"] as const;
+export const DRAFT_ACTIONS = ["discover", "see_findings", "confirm_profile", "interpret_ambition", "confirm_ambition", "interested", "back", "goto"] as const;
 
 /** Demande lisible, ou null (400). */
 export function parseDraftAction(body: Record<string, unknown>): DraftAction | null {
@@ -251,7 +260,7 @@ function previousConfirmed(state: DraftState, step: DraftStep, now: Date): boole
  * Transitions de la spécification §1.2. Chaque étape ne s'ouvre que si la précédente est confirmée ;
  * une action demandée depuis une autre étape renvoie à l'étape courante (`wrong_step`).
  */
-export function applyDraftAction(state: DraftState, request: DraftAction, now = new Date()): TransitionResult {
+export function applyDraftAction(state: DraftState, request: DraftAction, now = new Date(), verify: InterpretationVerifier = refuseAll): TransitionResult {
   switch (request.action) {
     case "discover": {
       if (state.step !== 1) return { ok: false, kind: "wrong_step", step: state.step };
@@ -277,12 +286,19 @@ export function applyDraftAction(state: DraftState, request: DraftAction, now = 
       if (!checked.ok) return invalid(checked);
       return { ok: true, state: { ...state, step: 3, profile: { ...state.profile, ...checked.values }, profileConfirmed: true } };
     }
+    case "interpret_ambition": {
+      // L'interprétation n'est jamais enregistrée : la route renvoie la reformulation et son jeton, le brouillon reste tel quel.
+      const checked = checkInterpretation(state, request);
+      return checked.ok ? { ok: true, state } : checked;
+    }
     case "confirm_ambition": {
       if (state.step !== 3) return { ok: false, kind: "wrong_step", step: state.step };
       if (!state.profileConfirmed) return invalidCode("M-07");
       const checked = checkAmbition(request.ambition);
       if (!checked.ok) return invalid(checked);
-      return { ok: true, state: { ...state, step: 4, ambition: checked.ambition, diagnosticReady: true } };
+      const confirmed = checkConfirmation(checked.ambition, request.terms, request.token, verify);
+      if (!confirmed.ok) return invalid(confirmed);
+      return { ok: true, state: { ...state, step: 4, ambition: { text: checked.ambition, terms: confirmed.terms }, diagnosticReady: true } };
     }
     case "interested": {
       if (state.step !== 4 || !state.diagnosticReady) return state.step === 4 ? invalidCode("M-08") : { ok: false, kind: "wrong_step", step: state.step };
@@ -300,6 +316,27 @@ export function applyDraftAction(state: DraftState, request: DraftAction, now = 
       return { ok: false, kind: "wrong_step", step: state.step };
     }
   }
+}
+
+type Refusal = Exclude<TransitionResult, { ok: true }>;
+
+/** « Interpréter » (§1.2) : étape 3, profil confirmé (M-07), texte de 10 à 600 caractères sans balise (M-06, M-16). */
+export function checkInterpretation(state: DraftState, request: { ambition?: unknown }): { ok: true; text: string } | Refusal {
+  if (state.step !== 3) return { ok: false, kind: "wrong_step", step: state.step };
+  if (!state.profileConfirmed) return invalidCode("M-07") as Refusal;
+  const checked = checkAmbition(request.ambition);
+  if (!checked.ok) return { ok: false, kind: "invalid", code: checked.code, error: checked.error, errors: checked.errors };
+  return { ok: true, text: checked.ambition };
+}
+
+/**
+ * « C'est bien ça » : le jeton de l'interprétation doit porter sur ce texte exact et ces éléments.
+ * Un texte modifié après l'interprétation, des éléments changés ou un jeton falsifié : « Interprétez de nouveau… ».
+ */
+export function checkConfirmation(text: string, terms: unknown, token: unknown, verify: InterpretationVerifier): { ok: true; terms: AmbitionTerms } | { ok: false; code: OnboardingCode; error: string; errors: FieldErrors } {
+  const read = readAmbitionTerms(terms);
+  if (!read || !verify(text, read, token)) return { ok: false, code: "reinterpret", error: REINTERPRET_MESSAGE, errors: { ambition: REINTERPRET_MESSAGE } };
+  return { ok: true, terms: read };
 }
 
 /** Adresse e-mail de l'étape 5 (§12 : 120 caractères, format valide). */
@@ -377,11 +414,12 @@ export function readDraftState(row: { step: number; profile: unknown; ambition: 
   const raw = row.profile !== null && typeof row.profile === "object" && !Array.isArray(row.profile) ? (row.profile as Record<string, unknown>) : {};
   const profile = emptyProfile();
   for (const key of Object.keys(profile) as (keyof DraftProfile)[]) profile[key] = typeof raw[key] === "string" ? (raw[key] as string) : "";
-  const ambitionRaw = row.ambition !== null && typeof row.ambition === "object" && !Array.isArray(row.ambition) ? (row.ambition as Record<string, unknown>).text : undefined;
+  const ambitionRaw = row.ambition !== null && typeof row.ambition === "object" && !Array.isArray(row.ambition) ? (row.ambition as Record<string, unknown>) : {};
   return {
     step: isDraftStep(row.step) ? row.step : 1,
     profile,
-    ambition: typeof ambitionRaw === "string" ? ambitionRaw : null,
+    // Une ambition d'avant #282 (texte seul) garde des éléments vides.
+    ambition: typeof ambitionRaw.text === "string" ? { text: ambitionRaw.text, terms: readAmbitionTerms(ambitionRaw.terms) ?? { ...EMPTY_TERMS } } : null,
     profileConfirmed: row.profileConfirmed,
     diagnosticReady: row.diagnosticReady,
     analysis: readAnalysis(row.analysis ?? null),

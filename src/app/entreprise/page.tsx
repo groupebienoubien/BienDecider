@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
 import { CompanyProfileForm } from "@/components/company-profile-form";
+import { AmbitionEditor } from "@/components/ambition-editor";
 import { OpenPaulButton } from "@/components/open-paul-button";
 import { PageHeading } from "@/components/mockup-ui";
 import { PersonaAvatar } from "@/components/persona-avatar";
@@ -53,10 +54,10 @@ export default async function EntreprisePage({ searchParams }: { searchParams: P
         <section className="setting-section">
           <h2>{company.name}</h2>
           <p>{[company.trade, company.servingArea].filter(Boolean).join(" · ")}</p>
-          <label className="field">Objectif de ce mois
-            <input value={company.objective ?? ""} placeholder="Aucun objectif renseigné" readOnly />
-          </label>
-          <Link className="btn" href="/entreprise?tab=objectifs#modifier">Modifier l’objectif</Link>
+          <section id="modifier" aria-labelledby="ambition-title" className="flex flex-col gap-3">
+            <h3 id="ambition-title">Votre ambition</h3>
+            <AmbitionEditor target="entreprise" initialText={company.ambitionText ?? company.objective ?? ""} />
+          </section>
           {company.googlePlaceId && <GooglePlaceLine link={placeMapsLink(company.googlePlaceId)} />}
           {company.facebookPageUrl && <FacebookPageLine url={company.facebookPageUrl} />}
           <h2>Votre équipe</h2>

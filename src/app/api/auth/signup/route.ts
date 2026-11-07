@@ -94,9 +94,11 @@ export async function POST(request: NextRequest) {
           targetClients: profile.targetClients,
           offers: profile.offers,
           profileConfirmedAt: now,
-          ambitionText: ambition,
+          ambitionText: ambition?.text ?? null,
+          ambitionTerms: ambition ? { ...ambition.terms } : undefined,
+          ambitionConfirmedAt: ambition ? now : null,
           // « Votre cap » de la navigation lit l'objectif déclaré.
-          objective: ambition,
+          objective: ambition?.text ?? null,
           // Seule l'inscription crée un compte non confirmé (le défaut de la colonne confirme les autres) ; le lien part après la réponse.
           emailVerifiedAt: null,
           loginCount: 1,
@@ -105,7 +107,7 @@ export async function POST(request: NextRequest) {
       });
       await ensureCreditGrant(tx, created.id);
       await writeJournal(tx, { companyId: created.id, code: "J-04", params: {}, actor: "owner" });
-      for (const mission of starterMissions(profile, ambition ?? "")) await createMissionIn(tx, created.id, mission, "paul");
+      for (const mission of starterMissions(profile, ambition?.text ?? "")) await createMissionIn(tx, created.id, mission, "paul");
       return created;
     }, { maxWait: 5000, timeout: 20000 });
   } catch (error) {

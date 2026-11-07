@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import Loading from "../src/app/loading";
 import ErrorPage from "../src/app/error";
 import { BrandLogo } from "../src/components/brand-logo";
-import { discoverThenSeeFindings } from "./support/onboarding-draft";
+import { discoverThenSeeFindings, interpretThenConfirmAmbition } from "./support/onboarding-draft";
 
 const baseURL = process.env.UX_TEST_BASE_URL ?? "http://localhost:3000";
 
@@ -109,11 +109,9 @@ test("BienDecider public identity, metadata, contact and responsive pages", asyn
 async function reachAccountStep(page: Page) {
   const post = (data: Record<string, unknown>) => page.request.post(`${baseURL}/api/bienvenue`, { headers: { Origin: baseURL }, data });
   await discoverThenSeeFindings(page.request, baseURL, { firstName: "Claire", companyName: "Atelier Lumen", location: "Lyon" });
-  for (const data of [
-    { action: "confirm_profile", trade: "Électricien", servingArea: "Lyon", targetClients: "Particuliers", offers: "Rénovation électrique" },
-    { action: "confirm_ambition", ambition: "Plus de chantiers cette année" },
-    { action: "interested" },
-  ]) expect((await post(data)).status(), String(data.action)).toBe(200);
+  expect((await post({ action: "confirm_profile", trade: "Électricien", servingArea: "Lyon", targetClients: "Particuliers", offers: "Rénovation électrique" })).status(), "confirm_profile").toBe(200);
+  expect((await interpretThenConfirmAmbition(page.request, baseURL, "Plus de chantiers cette année")).confirmed.status(), "confirm_ambition").toBe(200);
+  expect((await post({ action: "interested" })).status(), "interested").toBe(200);
 }
 
 test("login and signup fields have permanent labels, autocomplete and a password toggle", async ({ page }) => {

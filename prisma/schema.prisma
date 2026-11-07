@@ -71,6 +71,8 @@ model Company {
   offers             String? // offres (étape 2)
   profileConfirmedAt DateTime? // profil confirmé à l'étape 2
   ambitionText       String? // ambition en texte libre, conservée telle quelle (étape 3, spec §11)
+  ambitionTerms      Json? // éléments retenus avec Paul : gain, horizon, budget média, recrutement (#282, spec §11)
+  ambitionConfirmedAt DateTime? // dernière confirmation de l'ambition (« C'est bien ça »)
   channels        ChannelConnection[]
   proposals       AgentProposal[]
   auditFindings   AuditFinding[]
@@ -803,7 +805,7 @@ model OnboardingDraft {
   tokenHash         String   @unique
   step              Int      @default(1) // étape courante, 1 à 5
   profile           Json // prénom, entreprise, localisation, site, activité, zone, clients, offres
-  ambition          Json? // { text }
+  ambition          Json? // { text, terms } (#282)
   profileConfirmed  Boolean  @default(false)
   diagnosticReady   Boolean  @default(false)
   analysis          Json? // analyse publique avant compte (#280) : rubriques, constats et leur provenance, coût estimé

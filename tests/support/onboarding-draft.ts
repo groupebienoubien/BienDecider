@@ -38,6 +38,21 @@ export const DRAFT_PROFILE = {
   offers: "Rénovation électrique",
 };
 export const DRAFT_AMBITION = "+20 % de chiffre d'affaires en 12 mois, sans embaucher";
+/** Éléments retenus de `DRAFT_AMBITION` (#282). */
+export const DRAFT_AMBITION_TERMS = { gainPercent: 20, horizonMonths: 12, mediaBudgetPerMonth: null, recruitment: "no" };
+
+/**
+ * Étape 3 par l'API du parcours (#282) : « Interpréter », puis « C'est bien ça » avec le jeton reçu.
+ * Renvoie la réponse de la confirmation et l'interprétation.
+ */
+export async function interpretThenConfirmAmbition(request: APIRequestContext, baseURL: string, ambition: string, headers: Record<string, string> = {}) {
+  const post = (body: Record<string, unknown>) => request.post(`${baseURL}/api/bienvenue`, { headers: { Origin: baseURL, ...headers }, data: body });
+  const interpreted = await post({ action: "interpret_ambition", ambition });
+  expect(interpreted.status(), "interpret_ambition").toBe(200);
+  const { interpretation, token } = await interpreted.json();
+  const confirmed = await post({ action: "confirm_ambition", ambition, terms: interpretation.terms, token });
+  return { confirmed, interpretation, token };
+}
 
 export type TestDraft = { id: string; token: string; cookie: string };
 
@@ -53,7 +68,7 @@ export async function createTestDraft(prisma: PrismaClient, options: { step?: nu
       tokenHash: createHash("sha256").update(token).digest("hex"),
       step,
       profile: { ...DRAFT_PROFILE, ...options.profile },
-      ambition: step >= 4 ? { text: DRAFT_AMBITION } : undefined,
+      ambition: step >= 4 ? { text: DRAFT_AMBITION, terms: DRAFT_AMBITION_TERMS } : undefined,
       profileConfirmed: step >= 3,
       diagnosticReady: step >= 4,
       expiresAt: options.expiresAt ?? new Date(Date.now() + 24 * 3_600_000),
