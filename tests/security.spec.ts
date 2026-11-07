@@ -1,7 +1,7 @@
 import { test, expect, type APIRequestContext } from "@playwright/test";
 import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import { readdirSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { config } from "dotenv";
@@ -9,7 +9,8 @@ import { createSessionToken, SESSION_MAX_AGE_SECONDS } from "../src/lib/session-
 import { hashPassword } from "../src/lib/password";
 import { signupDayKey } from "../src/lib/signup-rules";
 import { startSmtpSink } from "./support/smtp-sink";
-import { createTestDraft } from "./support/onboarding-draft";
+import { createTestDraft, waitForAnalysis } from "./support/onboarding-draft";
+import { newAnalysis } from "../src/lib/onboarding/analysis-rules";
 
 config({ quiet: true });
 
@@ -107,6 +108,7 @@ const PUBLIC_ROUTES: Record<string, string> = {
   "/api/auth/logout": "revoque les sessions et efface le cookie de l'appelant (POST même origine)",
   "/api/auth/signup": "inscription publique avec création explicite de compte, à l'étape 5 du brouillon anonyme",
   "/api/bienvenue": "parcours d'entrée anonyme : brouillon lié au cookie pepito_draft, sans compte ni session (POST même origine)",
+  "/api/bienvenue/analyse": "progression de l'analyse publique du brouillon (#280), lue avec le cookie pepito_draft, sans session (GET, état des rubriques seulement)",
   "/api/auth/forgot-password": "demande de lien de réinitialisation : réponse identique que le compte existe ou non (POST même origine)",
   "/api/auth/reset-password": "le jeton à usage unique du lien reçu par e-mail fait foi, sans session (POST même origine)",
   "/api/auth/verify-email": "le jeton à usage unique du lien reçu par e-mail fait foi, sans session (POST même origine)",
@@ -380,11 +382,14 @@ test("one IP cannot flood login or signup, and other IPs and successful logins a
     const createdDrafts: string[] = [];
     for (let attempt = 1; attempt <= 20; attempt++) {
       const response = await discover(starter);
-      expect(response.status(), `draft ${attempt}`).toBe(200);
+      // Au-delà de 3 analyses par IP (#280), le brouillon est créé sans analyse : 429, mais l'étape 2 reste ouverte.
+      expect(response.status(), `draft ${attempt}`).toBe(attempt <= 3 ? 200 : 429);
       createdDrafts.push(/pepito_draft=([^;]+)/.exec(response.headers()["set-cookie"] ?? "")?.[1] ?? "");
     }
+    expect(createdDrafts.every(Boolean)).toBe(true);
     const draftBlocked = await discover(starter);
     expect(draftBlocked.status()).toBe(429);
+    expect(draftBlocked.headers()["set-cookie"] ?? "").not.toContain("pepito_draft=");
     expect(Number(draftBlocked.headers()["retry-after"])).toBeGreaterThan(0);
     expect((await discover({ "x-real-ip": `test-${randomUUID()}`, Origin: baseURL })).status()).toBe(200);
     const hashes = createdDrafts.map((token) => createHash("sha256").update(token).digest("hex"));
@@ -1646,6 +1651,148 @@ test("a mission report and its decision belong to the session company, are valid
     expect(await prisma.missionReport.count({ where: { missionId: mission.id } })).toBe(1);
   } finally {
     await prisma.company.deleteMany({ where: { id: { in: [a.id, b.id] } } });
+    await prisma.$disconnect();
+  }
+});
+
+test("GH-280: the public analysis refuses internal sites, a second launch and a fourth daily run, and step 2 stays open", async ({ playwright }) => {
+  test.setTimeout(90000);
+  const prisma = openDatabase();
+  const ip = { "x-real-ip": `test-${randomUUID()}` };
+  const visitors: APIRequestContext[] = [];
+  const draftIds: string[] = [];
+  const visitor = async () => {
+    const context = await playwright.request.newContext();
+    visitors.push(context);
+    return context;
+  };
+  const post = (context: APIRequestContext, data: Record<string, unknown>) => context.post(`${baseURL}/api/bienvenue`, { headers: { Origin: baseURL, ...ip }, data });
+  const draftOf = async (context: APIRequestContext) => {
+    const token = (await context.storageState()).cookies.find((cookie) => cookie.name === "pepito_draft")!.value;
+    const draft = await prisma.onboardingDraft.findUniqueOrThrow({ where: { tokenHash: createHash("sha256").update(token).digest("hex") } });
+    draftIds.push(draft.id);
+    return draft;
+  };
+  const identity = { firstName: "Claire", companyName: `Atelier Sécurité ${randomUUID().slice(0, 8)}`, location: "Lyon" };
+  try {
+    const companiesBefore = await prisma.company.count();
+    // Site interne : aucune lecture, « Non disponible (accès refusé) », la suite continue.
+    for (const website of ["http://127.0.0.1", "http://10.0.0.5", "http://[::1]"]) {
+      const first = await visitor();
+      const launched = await post(first, { action: "discover", ...identity, website });
+      expect(launched.status(), website).toBe(200);
+      expect((await launched.json()).analysis).toMatchObject({ status: "running", finished: false });
+      const view = await waitForAnalysis(first, baseURL, ip);
+      expect(view.rubrics.find((rubric) => rubric.key === "site")?.label, website).toBe("Non disponible (accès refusé)");
+      expect(view.rubrics.find((rubric) => rubric.key === "identity")?.label, website).toBe("Non disponible (accès refusé)");
+      const draft = await draftOf(first);
+      expect(draft.analysis).toMatchObject({ status: "done", cost: { usd: expect.any(Number) }, rubrics: { site: { reason: "refused" } } });
+      expect(draft.step).toBe(1);
+      // Relancer la même entreprise ne relance rien : les constats restent.
+      expect((await post(first, { action: "discover", ...identity, website })).status()).toBe(200);
+      expect((await prisma.onboardingDraft.findUniqueOrThrow({ where: { id: draft.id } })).analysis).toMatchObject({ runId: (draft.analysis as { runId: string }).runId });
+      const seen = await post(first, { action: "see_findings" });
+      expect(seen.status()).toBe(200);
+      expect(await seen.json()).toMatchObject({ step: 2, href: "/bienvenue" });
+      expect((await prisma.onboardingDraft.findUniqueOrThrow({ where: { id: draft.id } })).profileConfirmed).toBe(false);
+    }
+
+    // Quatrième analyse du jour pour cette IP : pas d'analyse, « revenez plus tard », l'étape 2 reste ouverte.
+    const fourth = await visitor();
+    const limited = await post(fourth, { action: "discover", ...identity, website: "" });
+    expect(limited.status()).toBe(429);
+    expect(Number(limited.headers()["retry-after"])).toBeGreaterThan(0);
+    const limitedBody = await limited.json();
+    expect(limitedBody).toMatchObject({ code: "limited", analysis: { status: "limited", finished: true } });
+    expect(limitedBody.error).toContain("revenez plus tard");
+    expect((await post(fourth, { action: "see_findings" })).status()).toBe(200);
+    expect((await draftOf(fourth)).step).toBe(2);
+    expect(await prisma.company.count()).toBe(companiesBefore);
+
+    // Double clic : une analyse en cours refuse un second lancement et l'étape 2 ; elle continue.
+    const busyDraft = await createTestDraft(prisma, { step: 1, profile: { website: "" } });
+    draftIds.push(busyDraft.id);
+    const running = { runId: "run-en-cours", status: "running", startedAt: new Date().toISOString(), finishedAt: null, input: { companyName: "Atelier Lumen", location: "Lyon", website: "" },
+      rubrics: { site: { status: "unavailable", reason: "no_site" }, google: { status: "pending" }, zone: { status: "pending" }, identity: { status: "unavailable", reason: "no_site" } },
+      findings: { trade: null, servingArea: null, targetClients: null, offers: null, tone: null, contacts: [], palette: null, logo: null, google: null, pages: [] }, cost: { usd: 0, inputTokens: 0, outputTokens: 0 } };
+    await prisma.onboardingDraft.update({ where: { id: busyDraft.id }, data: { analysis: running } });
+    const headers = { Origin: baseURL, Cookie: busyDraft.cookie, "x-real-ip": `test-${randomUUID()}` };
+    const again = await playwright.request.newContext();
+    visitors.push(again);
+    const second = await again.post(`${baseURL}/api/bienvenue`, { headers, data: { action: "discover", firstName: "Claire", companyName: "Atelier Lumen", location: "Lyon", website: "https://autre.invalid" } });
+    expect(second.status()).toBe(409);
+    expect(await second.json()).toMatchObject({ code: "busy", analysis: { finished: false } });
+    expect((await again.post(`${baseURL}/api/bienvenue`, { headers, data: { action: "see_findings" } })).status()).toBe(409);
+    const progress = await again.get(`${baseURL}/api/bienvenue/analyse`, { headers: { Cookie: busyDraft.cookie } });
+    expect(progress.status()).toBe(200);
+    const progressBody = await progress.json();
+    expect(progressBody).toMatchObject({ step: 1, analysis: { status: "running", finished: false } });
+    expect(JSON.stringify(progressBody)).not.toMatch(/inputTokens|companyName|usd/);
+    const kept = await prisma.onboardingDraft.findUniqueOrThrow({ where: { id: busyDraft.id } });
+    expect(kept.analysis).toMatchObject({ runId: "run-en-cours" });
+    expect(kept.profile).toMatchObject({ website: "" });
+
+    // Sans brouillon, la progression renvoie à l'étape 1 ; l'entrée et le coût ne sont jamais exposés.
+    const stranger = await playwright.request.newContext();
+    visitors.push(stranger);
+    const none = await stranger.get(`${baseURL}/api/bienvenue/analyse`);
+    expect(none.status()).toBe(404);
+    expect(await none.json()).toMatchObject({ href: "/bienvenue" });
+  } finally {
+    for (const context of visitors) await context.dispose();
+    await prisma.onboardingDraft.deleteMany({ where: { id: { in: draftIds } } });
+    await prisma.$disconnect();
+  }
+});
+
+test("GH-280: the global daily cap refuses everyone and refunds the per-IP attempt", async ({ playwright }) => {
+  // Import différé : ces modules ouvrent la base dès leur chargement, après la lecture de .env.
+  const { ANALYSIS_GLOBAL_KEY } = await import("../src/lib/auth-throttle");
+  const prisma = openDatabase();
+  const original = await prisma.authThrottle.findUnique({ where: { key: ANALYSIS_GLOBAL_KEY } });
+  const ip = `test-${randomUUID()}`;
+  const ipKey = `analysis:${createHmac("sha256", requireSecret()).update(ip).digest("hex")}`;
+  const visitor = await playwright.request.newContext();
+  let draftToken = "";
+  try {
+    // Le compteur global est au-delà de tout plafond : la prochaine analyse est refusée pour tout le monde.
+    await prisma.authThrottle.upsert({ where: { key: ANALYSIS_GLOBAL_KEY }, create: { key: ANALYSIS_GLOBAL_KEY, count: 1_000_000, windowStart: new Date() }, update: { count: 1_000_000, windowStart: new Date() } });
+    const response = await visitor.post(`${baseURL}/api/bienvenue`, { headers: { Origin: baseURL, "x-real-ip": ip }, data: { action: "discover", firstName: "Claire", companyName: "Atelier Plafond", location: "Lyon" } });
+    expect(response.status()).toBe(429);
+    expect(await response.json()).toMatchObject({ code: "limited", analysis: { status: "limited", finished: true } });
+    draftToken = (await visitor.storageState()).cookies.find((cookie) => cookie.name === "pepito_draft")?.value ?? "";
+    // La tentative de l'IP a été rendue : le refus vient du plafond global, pas d'elle.
+    expect((await prisma.authThrottle.findUnique({ where: { key: ipKey } }))?.count ?? 0).toBe(0);
+  } finally {
+    if (original) await prisma.authThrottle.update({ where: { key: ANALYSIS_GLOBAL_KEY }, data: { count: original.count, windowStart: original.windowStart } });
+    else await prisma.authThrottle.deleteMany({ where: { key: ANALYSIS_GLOBAL_KEY } });
+    await prisma.authThrottle.deleteMany({ where: { key: ipKey } });
+    if (draftToken) await prisma.onboardingDraft.deleteMany({ where: { tokenHash: createHash("sha256").update(draftToken).digest("hex") } });
+    await visitor.dispose();
+    await prisma.$disconnect();
+  }
+});
+
+test("GH-280: background writes need the current run, and two launches on one draft never both start", async () => {
+  const { saveAnalysis, startAnalysis } = await import("../src/lib/onboarding/draft");
+  const prisma = openDatabase();
+  const draft = await createTestDraft(prisma, { step: 1 });
+  try {
+    const input = { companyName: "Atelier Lumen", location: "Lyon", website: "" };
+    const first = newAnalysis(input, "run-a");
+    expect(await startAnalysis(draft.id, first)).toBe("started");
+    // Un second lancement pendant que la première analyse court : refusé.
+    expect(await startAnalysis(draft.id, newAnalysis(input, "run-b"))).toBe("busy");
+    // L'analyse se termine, une nouvelle (run-b) la remplace ; une écriture tardive de run-a ne l'écrase pas.
+    await prisma.onboardingDraft.update({ where: { id: draft.id }, data: { analysis: { ...first, status: "done" } } });
+    const second = newAnalysis(input, "run-b");
+    expect(await startAnalysis(draft.id, second)).toBe("started");
+    expect(await saveAnalysis(draft.id, { ...first, status: "done" })).toBe(false);
+    expect((await prisma.onboardingDraft.findUniqueOrThrow({ where: { id: draft.id } })).analysis).toMatchObject({ runId: "run-b", status: "running" });
+    expect(await saveAnalysis(draft.id, { ...second, status: "done" })).toBe(true);
+    expect(await startAnalysis("brouillon-inexistant", newAnalysis(input, "run-c"))).toBe("missing");
+  } finally {
+    await prisma.onboardingDraft.deleteMany({ where: { id: draft.id } });
     await prisma.$disconnect();
   }
 });

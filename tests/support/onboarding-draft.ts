@@ -1,5 +1,30 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { expect, type APIRequestContext } from "@playwright/test";
 import type { PrismaClient } from "@prisma/client";
+
+/** Adresse IP propre à un test : chaque test a ses 3 analyses du jour (#280). */
+export function testIpHeader(): Record<string, string> {
+  return { "x-real-ip": `test-${randomUUID()}` };
+}
+
+/** Attend la fin de l'analyse publique du brouillon de `request` (#280), et renvoie sa vue. */
+export async function waitForAnalysis(request: APIRequestContext, baseURL: string, headers: Record<string, string> = {}) {
+  const last: { view: { finished: boolean; status: string; notice: string | null; rubrics: { key: string; name: string; label: string }[] } | null } = { view: null };
+  await expect.poll(async () => {
+    const response = await request.get(`${baseURL}/api/bienvenue/analyse`, { headers });
+    last.view = response.ok() ? (await response.json()).analysis : null;
+    return last.view?.finished ?? false;
+  }, { timeout: 30_000, intervals: [300, 600, 1200] }).toBe(true);
+  return last.view!;
+}
+
+/** Étape 1 par l'API du parcours : « Découvrir », fin de l'analyse, puis « Voir les constats » (étape 2). */
+export async function discoverThenSeeFindings(request: APIRequestContext, baseURL: string, data: Record<string, string>, headers: Record<string, string> = testIpHeader()) {
+  const post = (body: Record<string, unknown>) => request.post(`${baseURL}/api/bienvenue`, { headers: { Origin: baseURL, ...headers }, data: body });
+  expect([200, 429], "discover").toContain((await post({ action: "discover", ...data })).status());
+  await waitForAnalysis(request, baseURL, headers);
+  expect((await post({ action: "see_findings" })).status(), "see_findings").toBe(200);
+}
 
 /** Profil complet d'un brouillon de test (#279). */
 export const DRAFT_PROFILE = {

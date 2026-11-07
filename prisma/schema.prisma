@@ -806,6 +806,7 @@ model OnboardingDraft {
   ambition          Json? // { text }
   profileConfirmed  Boolean  @default(false)
   diagnosticReady   Boolean  @default(false)
+  analysis          Json? // analyse publique avant compte (#280) : rubriques, constats et leur provenance, coût estimé
   createdAt         DateTime @default(now())
   expiresAt         DateTime
 

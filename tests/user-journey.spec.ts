@@ -7,6 +7,7 @@ import { encryptGmailToken } from "../src/lib/oauth/gmail";
 import { companyProfileLines, objectiveLine } from "../src/lib/agents/personas";
 import { getRejectionContext } from "../src/lib/agents/rejection-context";
 import { createSessionToken } from "../src/lib/session-token";
+import { createTestDraft, discoverThenSeeFindings, testIpHeader } from "./support/onboarding-draft";
 
 config({ quiet: true });
 
@@ -2624,10 +2625,10 @@ function journeyDatabase(): PrismaClient {
 const noHorizontalScroll = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
 const stepHeading = (page: Page, name: string) => page.getByRole("heading", { level: 1, name, exact: true });
 
-/** Étapes 1 à 4 par l'API du parcours, avec les cookies de la page. */
+/** Étapes 1 à 4 par l'API du parcours, avec les cookies de la page (#280 : la fin de l'analyse avant l'étape 2). */
 async function draftToAccountStep(page: Page) {
+  await discoverThenSeeFindings(page.request, baseURL, { firstName: "Claire", companyName: "Atelier Lumen", location: "Lyon" });
   for (const data of [
-    { action: "discover", firstName: "Claire", companyName: "Atelier Lumen", location: "Lyon" },
     { action: "confirm_profile", trade: "Électricien", servingArea: "Lyon", targetClients: "Particuliers", offers: "Rénovation électrique" },
     { action: "confirm_ambition", ambition: "Plus de chantiers cette année" },
     { action: "interested" },
@@ -2640,6 +2641,7 @@ test("GH-279: five anonymous steps, back and reload keep the answers, and the ac
   const email = `ux-bienvenue-${randomUUID()}@example.invalid`;
   try {
     await page.setViewportSize({ width: 360, height: 800 });
+    await page.setExtraHTTPHeaders(testIpHeader());
     await page.goto(`${baseURL}/bienvenue`);
     await expect(stepHeading(page, "Votre entreprise. Notre point de départ.")).toBeFocused();
     await expect(page.getByText("1 sur 5", { exact: true })).toBeVisible();
@@ -2652,14 +2654,18 @@ test("GH-279: five anonymous steps, back and reload keep the answers, and the ac
     await page.getByLabel("Le nom de votre entreprise").fill("Atelier Lumen");
     await page.getByLabel("Sa localisation").fill("Lyon");
     await page.getByLabel("Votre site (facultatif)").fill("ftp://x");
-    await page.getByRole("button", { name: "Continuer" }).click();
+    await page.getByRole("button", { name: "Découvrir mon entreprise" }).click();
     await expect(page.locator("main").getByRole("alert")).toHaveText("Utilisez une adresse commençant par https:// ou http://.");
     await expect(page.getByLabel("Votre site (facultatif)")).toHaveAttribute("aria-invalid", "true");
     expect((await page.context().cookies()).some((cookie) => cookie.name === "pepito_draft")).toBe(false);
 
-    // Clavier : le site corrigé, la validation se fait au clavier et le focus va sur le titre de l'étape suivante.
-    await page.getByLabel("Votre site (facultatif)").fill("https://atelier-lumen.fr");
+    // Clavier : le site corrigé, la découverte se lance au clavier ; un site illisible ne bloque pas la suite (#280).
+    await page.getByLabel("Votre site (facultatif)").fill("https://atelier-lumen.invalid");
     await page.getByLabel("Votre site (facultatif)").press("Enter");
+    const seeFindings = page.getByRole("button", { name: "Voir mes premiers constats" });
+    await expect(seeFindings).toBeFocused({ timeout: 30000 });
+    await expect(page.getByRole("region", { name: "Ce que Paul lit" }).getByRole("listitem").first()).toContainText("Non disponible (site illisible)");
+    await page.keyboard.press("Enter");
     await expect(stepHeading(page, "Paul semble avoir compris votre entreprise.")).toBeFocused();
     await expect(page.getByText("2 sur 5", { exact: true })).toBeVisible();
     const draftCookie = (await page.context().cookies()).find((cookie) => cookie.name === "pepito_draft");
@@ -2726,7 +2732,7 @@ test("GH-279: five anonymous steps, back and reload keep the answers, and the ac
 
     const company = await prisma.company.findUniqueOrThrow({ where: { ownerEmail: email }, include: { missions: true, journalEntries: true } });
     expect(company).toMatchObject({
-      name: "Atelier Lumen", firstName: "Claire", location: "Lyon", website: "https://atelier-lumen.fr", trade: "Électricien", servingArea: "Lyon",
+      name: "Atelier Lumen", firstName: "Claire", location: "Lyon", website: "https://atelier-lumen.invalid", trade: "Électricien", servingArea: "Lyon",
       targetClients: "Particuliers propriétaires", offers: "Rénovation électrique", ambitionText: "+20 % de chiffre d'affaires en 12 mois, sans embaucher",
       objective: "+20 % de chiffre d'affaires en 12 mois, sans embaucher",
     });
@@ -2813,6 +2819,94 @@ test("GH-279: an expired draft starts over at step 1, and existing accounts neve
   } finally {
     await prisma.onboardingDraft.deleteMany({ where: { tokenHash: createHash("sha256").update(token).digest("hex") } });
     await prisma.company.deleteMany({ where: { ownerEmail: { in: [named, unnamed] } } });
+    await prisma.$disconnect();
+  }
+});
+
+test("GH-280: « Je n'ai pas de site » reads no web page, announces the four rubrics, then opens step 2 « À renseigner par vous »", async ({ page }) => {
+  test.setTimeout(90000);
+  const prisma = journeyDatabase();
+  const companyName = `Atelier Sans Site ${randomUUID().slice(0, 8)}`;
+  let tokenHash = "";
+  try {
+    const before = { companies: await prisma.company.count(), usage: await prisma.usageEvent.count(), reads: await prisma.sourceRead.count(), findings: await prisma.auditFinding.count() };
+    await page.setViewportSize({ width: 360, height: 800 });
+    await page.setExtraHTTPHeaders(testIpHeader());
+    await page.goto(`${baseURL}/bienvenue`);
+    await expect(page.getByText("Aucun mot de passe ni accès privé nécessaire.", { exact: false })).toBeVisible();
+    await page.getByLabel("Votre prénom").fill("Claire");
+    await page.getByLabel("Le nom de votre entreprise").fill(companyName);
+    await page.getByLabel("Sa localisation").fill("Lyon");
+    await page.getByLabel("Votre site (facultatif)").fill("https://atelier-sans-site.invalid");
+    await page.getByRole("button", { name: "Je n'ai pas de site" }).click();
+    const rubrics = page.getByRole("region", { name: "Ce que Paul lit" });
+    await expect(rubrics.getByRole("list")).toHaveAttribute("aria-live", "polite");
+    await expect(page.getByRole("button", { name: "Voir mes premiers constats" })).toBeFocused({ timeout: 30000 });
+    await expect(page.getByLabel("Votre site (facultatif)")).toHaveValue("");
+    const items = rubrics.getByRole("listitem");
+    await expect(items).toHaveCount(4);
+    await expect(items.nth(0)).toHaveText(/Site et offres\s*Non disponible \(pas de site\)/);
+    await expect(items.nth(1)).toContainText("Informations publiques");
+    await expect(items.nth(3)).toHaveText(/Identité visuelle\s*Non disponible \(pas de site\)/);
+    // Un seul bouton principal : « Découvrir » passe en secondaire une fois les constats prêts.
+    await expect(page.getByRole("button", { name: "Découvrir mon entreprise" })).not.toHaveClass(/bg-\[var\(--bd-brand\)\]/);
+    expect(await noHorizontalScroll(page)).toBe(true);
+
+    // Le brouillon garde l'état des rubriques et le coût ; aucune ligne liée à une entreprise n'est écrite.
+    const token = (await page.context().cookies()).find((cookie) => cookie.name === "pepito_draft")!.value;
+    tokenHash = createHash("sha256").update(token).digest("hex");
+    const draft = await prisma.onboardingDraft.findUniqueOrThrow({ where: { tokenHash } });
+    expect(draft.analysis).toMatchObject({ status: "done", input: { companyName, website: "" }, rubrics: { site: { status: "unavailable", reason: "no_site" }, identity: { status: "unavailable", reason: "no_site" } }, cost: { usd: 0 } });
+    expect({ companies: await prisma.company.count(), usage: await prisma.usageEvent.count(), reads: await prisma.sourceRead.count(), findings: await prisma.auditFinding.count() }).toEqual(before);
+
+    await page.getByRole("button", { name: "Voir mes premiers constats" }).click();
+    await expect(stepHeading(page, "Paul semble avoir compris votre entreprise.")).toBeFocused();
+    await expect(page.getByText("À renseigner par vous.")).toHaveCount(3);
+    await expect(page.getByLabel("Votre zone d'intervention")).toHaveValue("Lyon");
+    expect((await prisma.onboardingDraft.findUniqueOrThrow({ where: { tokenHash } })).profileConfirmed).toBe(false);
+    expect(await noHorizontalScroll(page)).toBe(true);
+  } finally {
+    if (tokenHash) await prisma.onboardingDraft.deleteMany({ where: { tokenHash } });
+    await prisma.$disconnect();
+  }
+});
+
+test("GH-280: step 2 shows Paul's hypotheses and what was observed, with its source and date", async ({ page }) => {
+  const prisma = journeyDatabase();
+  const draft = await createTestDraft(prisma, { step: 2, profile: { website: "https://atelier-lumen.test", trade: "", servingArea: "", targetClients: "", offers: "" } });
+  const readAt = "2026-11-07T10:00:00.000Z";
+  const observed = (source: string) => ({ kind: "observed", source, readAt });
+  try {
+    await prisma.onboardingDraft.update({ where: { id: draft.id }, data: { profileConfirmed: false, analysis: {
+      runId: "run-vue", status: "done", startedAt: readAt, finishedAt: readAt,
+      input: { companyName: "Atelier Lumen", location: "Lyon", website: "https://atelier-lumen.test" },
+      rubrics: { site: { status: "read" }, google: { status: "read" }, zone: { status: "read" }, identity: { status: "read" } },
+      findings: {
+        trade: { value: "Électricien", provenance: { kind: "hypothesis" } }, servingArea: { value: "Lyon et Villeurbanne", provenance: { kind: "hypothesis" } },
+        targetClients: { value: "Particuliers", provenance: { kind: "hypothesis" } }, offers: null, tone: null,
+        contacts: [{ value: "contact@atelier-lumen.test", provenance: observed("https://atelier-lumen.test/contact") }],
+        palette: { value: ["#176b50", "#e06a30"], provenance: observed("https://atelier-lumen.test/") }, logo: null,
+        google: { value: "https://maps.google.com/?cid=42", provenance: observed("https://maps.google.com/?cid=42") },
+        pages: [{ url: "https://atelier-lumen.test/", readAt }],
+      },
+      cost: { usd: 0.008, inputTokens: 3000, outputTokens: 200 },
+    } } });
+    await page.context().addCookies([{ name: "pepito_draft", value: draft.token, url: baseURL }]);
+    await page.setViewportSize({ width: 360, height: 800 });
+    await page.goto(`${baseURL}/bienvenue`);
+    await expect(stepHeading(page, "Paul semble avoir compris votre entreprise.")).toBeVisible();
+    await expect(page.getByText("voici ce que Paul a compris de Atelier Lumen", { exact: false })).toBeVisible();
+    await expect(page.getByText("Hypothèse de Paul, à vérifier.")).toHaveCount(3);
+    await expect(page.getByText("À renseigner par vous.")).toHaveCount(1);
+    await expect(page.getByLabel("Votre activité")).toHaveValue("Électricien");
+    const seen = page.getByRole("region", { name: "Ce que Paul a observé" });
+    await expect(seen).toContainText("Les champs ci-dessous sont des hypothèses de Paul");
+    const contact = seen.getByRole("listitem").filter({ hasText: "contact@atelier-lumen.test" });
+    await expect(contact).toContainText("Observé sur atelier-lumen.test le 7 novembre 2026");
+    await expect(seen.getByRole("link", { name: "Votre fiche Google" })).toHaveAttribute("href", "https://maps.google.com/?cid=42");
+    expect(await noHorizontalScroll(page)).toBe(true);
+  } finally {
+    await prisma.onboardingDraft.deleteMany({ where: { id: draft.id } });
     await prisma.$disconnect();
   }
 });

@@ -2,7 +2,7 @@ import { createHmac } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 
-export type ThrottleScope = "login" | "signup" | "token" | "reset" | "draft";
+export type ThrottleScope = "login" | "signup" | "token" | "reset" | "draft" | "analysis";
 
 export const MAX_ATTEMPTS = 5;
 const LOCK_DURATION_MS = 15 * 60 * 1000;
@@ -32,7 +32,22 @@ const POLICY: Record<ThrottleScope, { limit: number; windowSeconds: number }> = 
   reset: { limit: 5, windowSeconds: 60 * 60 },
   // Brouillons anonymes du parcours d'entrée (#279) : chacun garde des saisies 24 h ; la limite borne le stockage.
   draft: { limit: 20, windowSeconds: 24 * 60 * 60 },
+  // Analyses publiques avant compte (#280, décision D2) : chacune lit un site et appelle le modèle une fois.
+  analysis: { limit: 3, windowSeconds: 24 * 60 * 60 },
 };
+
+/** Ligne unique du compteur global des analyses anonymes (#280), toutes IP confondues. */
+export const ANALYSIS_GLOBAL_KEY = "analysis:global";
+const ANALYSIS_GLOBAL_WINDOW_SECONDS = 24 * 60 * 60;
+export const DEFAULT_ANONYMOUS_ANALYSIS_DAILY_LIMIT = 300;
+
+/** Plafond global du jour, réglable par `ANONYMOUS_ANALYSIS_DAILY_LIMIT` (entier positif ; 300 sinon). */
+export function anonymousAnalysisDailyLimit(env: Record<string, string | undefined> = process.env): number {
+  const raw = env.ANONYMOUS_ANALYSIS_DAILY_LIMIT?.trim();
+  if (!raw || !/^\d+$/.test(raw)) return DEFAULT_ANONYMOUS_ANALYSIS_DAILY_LIMIT;
+  const value = Number(raw);
+  return Number.isSafeInteger(value) && value > 0 ? value : DEFAULT_ANONYMOUS_ANALYSIS_DAILY_LIMIT;
+}
 
 export type ThrottleResult = { key: string; limited: false } | { key: string; limited: true; retryAfterSeconds: number } | null;
 
@@ -58,7 +73,16 @@ export async function consumeIpAttempt(request: Request, scope: ThrottleScope): 
   const ip = clientIp(request);
   if (!ip) return null;
   const { limit, windowSeconds } = POLICY[scope];
-  const key = throttleKey(scope, ip);
+  return consumeKey(throttleKey(scope, ip), limit, windowSeconds);
+}
+
+/** Consomme une analyse sur le compteur global du jour (#280) : au-delà du plafond, tout le monde est refusé. */
+export async function consumeGlobalAnalysis(limit = anonymousAnalysisDailyLimit()): Promise<ThrottleResult> {
+  return consumeKey(ANALYSIS_GLOBAL_KEY, limit, ANALYSIS_GLOBAL_WINDOW_SECONDS);
+}
+
+/** Incrément atomique d'un compteur à fenêtre fixe (un seul UPSERT). */
+async function consumeKey(key: string, limit: number, windowSeconds: number): Promise<Exclude<ThrottleResult, null>> {
   const utcNow = Prisma.sql`(now() AT TIME ZONE 'UTC')`;
   const expired = Prisma.sql`"AuthThrottle"."windowStart" <= ${utcNow} - (${windowSeconds}::int * interval '1 second')`;
   const rows = await prisma.$queryRaw<{ count: number; elapsed: number }[]>`
