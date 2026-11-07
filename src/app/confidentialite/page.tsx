@@ -139,7 +139,11 @@ export default function ConfidentialitePage() {
         <p className="mt-1">
           Un cookie technique maintient votre session connectée. Lors d&apos;une autorisation
           OAuth, un cookie temporaire protège le retour de Google/Meta contre la falsification
-          de requête et est supprimé au retour. Aucun cookie publicitaire ou de traçage tiers
+          de requête et est supprimé au retour. Pendant le parcours d&apos;entrée, avant la création
+          du compte, un cookie technique relie votre navigateur à vos réponses (prénom, entreprise,
+          localisation, site, activité, zone, clients, offres, ambition) : elles sont gardées au plus
+          24 heures, reprises dans votre compte à sa création puis effacées, ou sinon ignorées puis
+          effacées. Aucun cookie publicitaire ou de traçage tiers
           n&apos;est ajouté par BienDecider.
         </p>
       </div>

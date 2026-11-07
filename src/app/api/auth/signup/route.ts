@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse, after } from "next/server";
-import { setSessionEmail } from "@/lib/session";
+import { getSessionEmail, setSessionEmail } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
 import { hashPassword } from "@/lib/password";
 import { consumeIpAttempt } from "@/lib/auth-throttle";
@@ -8,25 +8,44 @@ import { readSignupControl, releaseSignupSlot, reserveSignupSlot, todaySignupCou
 import { sendVerificationEmail } from "@/lib/email-verification";
 import { passwordPolicyError } from "@/lib/password-policy";
 import { SIGNUP_CLOSED_MESSAGE, SIGNUP_FULL_MESSAGE, secondsUntilNextSignupDay, signupAvailability } from "@/lib/signup-rules";
+import { ADDRESS_UNAVAILABLE_MESSAGE, ONBOARDING_MESSAGES, RECOVER_ACCOUNT_HREF, checkDraftForAccount, isValidEmail, starterMissions, stepHref } from "@/lib/onboarding/draft-rules";
+import { clearDraftCookie, loadDraft } from "@/lib/onboarding/draft";
+import { createMissionIn } from "@/lib/missions/service";
+import { writeJournal } from "@/lib/journal";
+import { ensureCreditGrant } from "@/lib/credits";
+import { startOnboardingAudit } from "@/lib/agents/onboarding-audit";
+import { AgentRunConflictError, AgentRunQuotaError } from "@/lib/agents/agent-errors";
 
 function signupFull() {
   return NextResponse.json({ error: SIGNUP_FULL_MESSAGE }, { status: 429, headers: { "Retry-After": String(secondsUntilNextSignupDay(new Date())) } });
 }
 
+/** Adresse déjà utilisée : message neutre (FR-9), le brouillon est conservé et aucun compte n'est créé. */
+function addressUnavailable() {
+  return NextResponse.json({ error: ADDRESS_UNAVAILABLE_MESSAGE, code: "address_unavailable", recoverHref: RECOVER_ACCOUNT_HREF }, { status: 409 });
+}
+
+function isUniqueViolation(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "P2002";
+}
+
+/**
+ * Étape 5 du parcours d'entrée (#279) : le compte est créé en dernier, à partir du brouillon arrivé à l'étape 5
+ * avec le diagnostic prêt. Une transaction crée l'entreprise, ses trois missions « À décider » et J-04, puis efface le brouillon.
+ */
 export async function POST(request: NextRequest) {
+  // Une session ouverte ne crée jamais un second compte ni ne bascule de session.
+  if (await getSessionEmail()) return NextResponse.json({ error: "Vous êtes déjà connecté.", href: "/strategie" }, { status: 409 });
   const body = await readJsonObject(request);
   if (!body) return NextResponse.json({ error: "Requête invalide" }, { status: 400 });
 
   const email = typeof body.email === "string" ? body.email.trim() : "";
-  const { password } = body;
+  const { password, passwordConfirmation } = body;
 
-  if (!email || !email.includes("@") || email.length > 254) {
-    return NextResponse.json({ error: "Email invalide" }, { status: 400 });
-  }
+  if (!isValidEmail(email)) return NextResponse.json({ error: ONBOARDING_MESSAGES["M-11"], code: "M-11", field: "email" }, { status: 400 });
   const passwordError = passwordPolicyError(password);
-  if (passwordError) {
-    return NextResponse.json({ error: passwordError }, { status: 400 });
-  }
+  if (passwordError) return NextResponse.json({ error: passwordError, code: "M-12", field: "password" }, { status: 400 });
+  if (passwordConfirmation !== password) return NextResponse.json({ error: ONBOARDING_MESSAGES["M-13"], code: "M-13", field: "passwordConfirmation" }, { status: 400 });
 
   const control = await readSignupControl();
   const availability = signupAvailability(control, await todaySignupCount());
@@ -41,41 +60,77 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const existing = await prisma.company.findUnique({ where: { ownerEmail: email } });
-  if (existing) {
-    return NextResponse.json({ error: "Un compte existe déjà avec cet email. Connectez-vous." }, { status: 409 });
-  }
+  const draft = await loadDraft();
+  if (!draft) return NextResponse.json({ error: ONBOARDING_MESSAGES["M-10"], code: "M-10", step: 1, href: stepHref(1) }, { status: 409 });
+  const ready = checkDraftForAccount(draft.state);
+  if (!ready.ok) return NextResponse.json({ error: ready.error, code: ready.code, step: ready.step, href: stepHref(ready.step) }, { status: 409 });
 
-  // Un e-mail déjà inscrit (409) ne consomme pas d'emplacement : la réservation vient après ce contrôle.
+  if (await prisma.company.findUnique({ where: { ownerEmail: email }, select: { id: true } })) return addressUnavailable();
+
+  // Une adresse déjà utilisée ne consomme pas d'emplacement : la réservation vient après ce contrôle.
   const slotDay = await reserveSignupSlot(control.dailyCap);
   if (!slotDay) return signupFull();
 
+  const { profile, ambition } = draft.state;
+  const passwordHash = await hashPassword(password as string);
   let company;
   try {
-    company = await prisma.company.create({
-      data: {
-        ownerEmail: email,
-        passwordHash: await hashPassword(password as string),
-        name: "",
-        trade: "",
-        servingArea: "",
-        // Story 6.4 : seule l'inscription crée un compte non confirmé (le défaut de la colonne confirme les autres).
-        emailVerifiedAt: null,
-      },
-    });
+    company = await prisma.$transaction(async (tx) => {
+      // Le brouillon est effacé dans la transaction : deux envois simultanés ne créent qu'un compte.
+      const claimed = await tx.onboardingDraft.deleteMany({ where: { id: draft.id, step: 5, diagnosticReady: true, profileConfirmed: true } });
+      if (claimed.count === 0) return null;
+      const now = new Date();
+      const created = await tx.company.create({
+        data: {
+          ownerEmail: email,
+          passwordHash,
+          name: profile.companyName,
+          trade: profile.trade,
+          servingArea: profile.servingArea,
+          website: profile.website || null,
+          firstName: profile.firstName,
+          ownerName: profile.firstName,
+          location: profile.location,
+          targetClients: profile.targetClients,
+          offers: profile.offers,
+          profileConfirmedAt: now,
+          ambitionText: ambition,
+          // « Votre cap » de la navigation lit l'objectif déclaré.
+          objective: ambition,
+          // Seule l'inscription crée un compte non confirmé (le défaut de la colonne confirme les autres) ; le lien part après la réponse.
+          emailVerifiedAt: null,
+          loginCount: 1,
+          lastLoginAt: now,
+        },
+      });
+      await ensureCreditGrant(tx, created.id);
+      await writeJournal(tx, { companyId: created.id, code: "J-04", params: {}, actor: "owner" });
+      for (const mission of starterMissions(profile, ambition ?? "")) await createMissionIn(tx, created.id, mission, "paul");
+      return created;
+    }, { maxWait: 5000, timeout: 20000 });
   } catch (error) {
     await releaseSignupSlot(slotDay);
-    if (typeof error === "object" && error !== null && "code" in error && error.code === "P2002") {
-      return NextResponse.json({ error: "Un compte existe déjà avec cet email. Connectez-vous." }, { status: 409 });
-    }
+    if (isUniqueViolation(error)) return addressUnavailable();
     throw error;
   }
+  if (!company) {
+    await releaseSignupSlot(slotDay);
+    return NextResponse.json({ error: ONBOARDING_MESSAGES["M-10"], code: "M-10", step: 1, href: stepHref(1) }, { status: 409 });
+  }
 
-  company = await prisma.company.update({
-    where: { id: company.id },
-    data: { loginCount: { increment: 1 }, lastLoginAt: new Date() },
-  });
   await setSessionEmail(email);
+  await clearDraftCookie();
+
+  // Premier audit, au mieux : un refus (quota, adresse à confirmer, conflit) ne bloque pas l'inscription.
+  try {
+    await startOnboardingAudit(company.id);
+  } catch (error) {
+    if (error instanceof AgentRunQuotaError || error instanceof AgentRunConflictError) {
+      console.error(`Premier audit refusé au lancement (${error.reason ?? "conflit"}) : ${error.message}`);
+    } else {
+      console.error("Erreur inattendue à la création du premier audit :", error);
+    }
+  }
 
   // Le lien part après la réponse : un envoi lent ou impossible ne retarde ni ne fait échouer l'inscription (le bandeau permet de le renvoyer).
   const recipient = { id: company.id, ownerEmail: company.ownerEmail };
@@ -83,5 +138,5 @@ export async function POST(request: NextRequest) {
     try { await sendVerificationEmail(recipient); } catch { console.warn("Lien de confirmation non envoyé après l'inscription."); }
   });
 
-  return NextResponse.json({ hasCompany: Boolean(company.name), companyId: company.id }, { status: 201 });
+  return NextResponse.json({ hasCompany: true, companyId: company.id, href: "/strategie" }, { status: 201 });
 }

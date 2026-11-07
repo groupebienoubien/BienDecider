@@ -58,6 +58,8 @@ import { firstNameOf } from "../src/lib/workspace";
 import { workspacePageLabel } from "../src/components/workspace-nav";
 import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH, passwordPolicyError } from "../src/lib/password-policy";
 import { startSmtpSink } from "./support/smtp-sink";
+import { ADDRESS_UNAVAILABLE_MESSAGE, STARTER_TEMPLATE_ORDER, applyDraftAction, checkAmbition, checkDiscovery, checkDraftForAccount, clip, emptyDraft, isValidEmail, isValidWebsite, parseDraftAction, pickStarterTemplates, readDraftState, starterMissions, stepHref } from "../src/lib/onboarding/draft-rules";
+import { emailVerificationGateOpen } from "../src/lib/email-verification-policy";
 import { BetaToolRunner } from "@anthropic-ai/sdk/lib/tools/BetaToolRunner";
 
 type UsageLike = Partial<UsageTotal> | undefined;
@@ -2047,4 +2049,132 @@ test("GH-41: a profile correction counts only the fields that really change", ()
   expect(profileChanges(before, { targetDate: null })).toBe(true);
   expect(profileChanges(before, { targetDate: new Date("2027-02-01T00:00:00Z") })).toBe(true);
   expect(profileChanges(before, { monthlyRevenue: 2000 })).toBe(true);
+});
+
+const filledProfile = { firstName: "Claire", companyName: "Atelier Lumen", location: "Lyon", website: "", trade: "Électricien", servingArea: "Lyon et alentours", targetClients: "Particuliers propriétaires", offers: "Rénovation électrique" };
+
+test("GH-279: each step of the entry journey opens only once the previous one is confirmed", () => {
+  // Étape 1 : prénom, entreprise et localisation obligatoires ; site vide ou en http(s).
+  const empty = applyDraftAction(emptyDraft(), { action: "discover", firstName: " ", companyName: "", location: "", website: "ftp://x" });
+  expect(empty).toMatchObject({ ok: false, kind: "invalid", code: "M-01", error: "Indiquez votre prénom." });
+  if (!empty.ok && empty.kind === "invalid") {
+    expect(empty.errors).toEqual({
+      firstName: "Indiquez votre prénom.",
+      companyName: "Renseignez le nom de votre entreprise.",
+      location: "Indiquez la localisation de votre entreprise.",
+      website: "Utilisez une adresse commençant par https:// ou http://.",
+    });
+  }
+  expect(applyDraftAction(emptyDraft(), { action: "discover", firstName: "Claire", companyName: "Atelier", location: "Lyon", website: "ftp://x" })).toMatchObject({ ok: false, code: "M-04", errors: { website: "Utilisez une adresse commençant par https:// ou http://." } });
+  expect(applyDraftAction(emptyDraft(), { action: "discover", firstName: "x".repeat(41), companyName: "Atelier", location: "Lyon" })).toMatchObject({ ok: false, code: "M-16" });
+  expect(applyDraftAction(emptyDraft(), { action: "discover", firstName: "<b>", companyName: "Atelier", location: "Lyon" })).toMatchObject({ ok: false, code: "markup" });
+  expect(isValidWebsite("")).toBe(true);
+  expect(isValidWebsite("https://atelier-lumen.fr")).toBe(true);
+  expect(isValidWebsite("http://")).toBe(false);
+  expect(isValidWebsite("atelier-lumen.fr")).toBe(false);
+  expect(checkDiscovery({ firstName: " Claire ", companyName: "Atelier", location: "Lyon", website: "" })).toEqual({ ok: true, values: { firstName: "Claire", companyName: "Atelier", location: "Lyon", website: "" } });
+
+  const discovered = applyDraftAction(emptyDraft(), { action: "discover", firstName: "Claire", companyName: "Atelier Lumen", location: "Lyon", website: "https://atelier-lumen.fr" });
+  expect(discovered).toMatchObject({ ok: true, state: { step: 2, profileConfirmed: false, profile: { firstName: "Claire", website: "https://atelier-lumen.fr" } } });
+  if (!discovered.ok) throw new Error("discover");
+
+  // Étape 2 : activité, zone, clients et offres (M-05) ; une autre action renvoie à l'étape courante.
+  expect(applyDraftAction(discovered.state, { action: "confirm_profile", trade: "Électricien", servingArea: "", targetClients: "x", offers: "y" })).toMatchObject({ ok: false, code: "M-05", errors: { servingArea: "Complétez chaque information avant de confirmer." } });
+  expect(applyDraftAction(discovered.state, { action: "confirm_ambition", ambition: "Plus de chantiers cette année" })).toEqual({ ok: false, kind: "wrong_step", step: 2 });
+  expect(applyDraftAction(discovered.state, { action: "interested" })).toEqual({ ok: false, kind: "wrong_step", step: 2 });
+  expect(applyDraftAction(discovered.state, { action: "goto", step: 3 })).toEqual({ ok: false, kind: "wrong_step", step: 2 });
+  const confirmed = applyDraftAction(discovered.state, { action: "confirm_profile", trade: "Électricien", servingArea: "Lyon", targetClients: "Particuliers", offers: "Rénovation" });
+  expect(confirmed).toMatchObject({ ok: true, state: { step: 3, profileConfirmed: true } });
+  if (!confirmed.ok) throw new Error("confirm_profile");
+
+  // Étape 3 : 10 caractères au moins (M-06), 600 au plus ; profil confirmé exigé (M-07).
+  expect(applyDraftAction(confirmed.state, { action: "confirm_ambition", ambition: "court" })).toMatchObject({ ok: false, code: "M-06" });
+  expect(checkAmbition("x".repeat(601))).toMatchObject({ ok: false, code: "M-16" });
+  expect(applyDraftAction({ ...confirmed.state, profileConfirmed: false }, { action: "confirm_ambition", ambition: "Plus de chantiers cette année" })).toMatchObject({ ok: false, code: "M-07" });
+  const ambitious = applyDraftAction(confirmed.state, { action: "confirm_ambition", ambition: "  +20 % de chiffre d'affaires en 12 mois  " });
+  expect(ambitious).toMatchObject({ ok: true, state: { step: 4, diagnosticReady: true, ambition: "+20 % de chiffre d'affaires en 12 mois" } });
+  if (!ambitious.ok) throw new Error("confirm_ambition");
+
+  // Étape 4 : « Ça m'intéresse » exige le diagnostic prêt (M-08).
+  expect(applyDraftAction({ ...ambitious.state, diagnosticReady: false }, { action: "interested" })).toMatchObject({ ok: false, code: "M-08" });
+  const interested = applyDraftAction(ambitious.state, { action: "interested" });
+  expect(interested).toMatchObject({ ok: true, state: { step: 5 } });
+  if (!interested.ok) throw new Error("interested");
+  expect(checkDraftForAccount(interested.state)).toEqual({ ok: true });
+  // L'ambition ne se confirme qu'à l'étape 3 : ni l'étape 4 ni l'étape 5 ne reculent par là.
+  expect(applyDraftAction(ambitious.state, { action: "confirm_ambition", ambition: "Plus de chantiers cette année" })).toEqual({ ok: false, kind: "wrong_step", step: 4 });
+  expect(applyDraftAction(interested.state, { action: "confirm_ambition", ambition: "Plus de chantiers cette année" })).toEqual({ ok: false, kind: "wrong_step", step: 5 });
+  expect(checkDraftForAccount(ambitious.state)).toMatchObject({ ok: false, code: "M-10", step: 4 });
+  expect(checkDraftForAccount({ ...interested.state, profile: { ...interested.state.profile, firstName: "" } })).toMatchObject({ ok: false, code: "M-09" });
+
+  // Revenir avant l'ambition : le diagnostic n'est plus prêt, les saisies restent.
+  const back = applyDraftAction(interested.state, { action: "back", step: 2 });
+  expect(back).toMatchObject({ ok: true, state: { step: 2, diagnosticReady: false, ambition: "+20 % de chiffre d'affaires en 12 mois", profileConfirmed: true } });
+  expect(applyDraftAction(interested.state, { action: "back", step: 4 })).toMatchObject({ ok: true, state: { step: 4, diagnosticReady: true } });
+  expect(applyDraftAction(interested.state, { action: "back", step: 5 })).toEqual({ ok: false, kind: "wrong_step", step: 5 });
+  expect(applyDraftAction(interested.state, { action: "back", step: 0 })).toEqual({ ok: false, kind: "wrong_step", step: 5 });
+  if (!back.ok) throw new Error("back");
+  // Aller à l'étape suivante : seulement si la précédente est confirmée ; l'ambition reste à reconfirmer.
+  const reopened = applyDraftAction(back.state, { action: "goto", step: 3 });
+  expect(reopened).toMatchObject({ ok: true, state: { step: 3, diagnosticReady: false } });
+  if (!reopened.ok) throw new Error("goto");
+  expect(applyDraftAction(reopened.state, { action: "goto", step: 4 })).toEqual({ ok: false, kind: "wrong_step", step: 3 });
+  expect(applyDraftAction(reopened.state, { action: "interested" })).toEqual({ ok: false, kind: "wrong_step", step: 3 });
+  expect(applyDraftAction(back.state, { action: "goto", step: 5 })).toEqual({ ok: false, kind: "wrong_step", step: 2 });
+  // Un profil modifié à l'étape 1 se reconfirme à l'étape 2.
+  const edited = applyDraftAction({ ...back.state, step: 1 }, { action: "discover", firstName: "Claire", companyName: "Atelier Lumen et fils", location: "Lyon", website: "https://atelier-lumen.fr" });
+  expect(edited).toMatchObject({ ok: true, state: { step: 2, profileConfirmed: false } });
+
+  expect(parseDraftAction({ action: "launch" })).toBeNull();
+  expect(parseDraftAction({ action: "back", step: 2, extra: true })).toEqual({ action: "back", step: 2 });
+  expect(([1, 2, 3, 4, 5] as const).map((step) => stepHref(step))).toEqual(["/bienvenue", "/bienvenue", "/bienvenue", "/bienvenue/missions", "/bienvenue/compte"]);
+  expect(readDraftState({ step: 9, profile: { firstName: 3, companyName: "Atelier" }, ambition: { text: "Plus de chantiers" }, profileConfirmed: true, diagnosticReady: false })).toMatchObject({ step: 1, ambition: "Plus de chantiers", profile: { firstName: "", companyName: "Atelier", offers: "" } });
+  expect(isValidEmail("claire@atelier-lumen.fr")).toBe(true);
+  expect(isValidEmail("claire@atelier")).toBe(false);
+  expect(isValidEmail(`${"x".repeat(110)}@exemple.fr`)).toBe(false);
+  // Adresse déjà utilisée : le message ne dit pas qu'un compte existe (FR-9).
+  expect(ADDRESS_UNAVAILABLE_MESSAGE).not.toMatch(/existe|a déjà un compte/);
+});
+
+test("GH-279: step 4 offers the first three available templates in the fixed order, as valid « À décider » missions", () => {
+  expect(STARTER_TEMPLATE_ORDER).toEqual(["google_profile", "social_post", "site_page", "review_reply", "custom"]);
+  expect(pickStarterTemplates(["agencies", "social_post", "site_page", "custom"])).toEqual(["social_post", "site_page", "custom"]);
+  expect(pickStarterTemplates(["google_profile", "social_post", "site_page", "review_reply", "custom"])).toEqual(["google_profile", "social_post", "site_page"]);
+  expect(pickStarterTemplates(["custom"])).toEqual(["custom"]);
+  const available = availableTemplates().map((template) => template.key);
+  expect(pickStarterTemplates()).toEqual(STARTER_TEMPLATE_ORDER.filter((key) => available.includes(key)).slice(0, 3));
+
+  const longProfile = { ...filledProfile, offers: "o".repeat(100), targetClients: "c ".repeat(50).trim(), servingArea: "z".repeat(100) };
+  const ambition = "Doubler le nombre de chantiers en douze mois sans embaucher, ".repeat(9).trim();
+  for (const profile of [filledProfile, longProfile]) {
+    const missions = starterMissions(profile, ambition, ["social_post", "site_page", "custom"]);
+    expect(missions.map((mission) => mission.template)).toEqual(["social_post", "site_page", "custom"]);
+    for (const mission of missions) {
+      expect(validateNewMission(mission, 0), mission.template).toMatchObject({ ok: true });
+      expect(mission.finding.length).toBeLessThanOrEqual(300);
+    }
+  }
+  // Le catalogue réel : chaque mission proposée est créable telle quelle.
+  for (const mission of starterMissions(filledProfile, "Plus de chantiers cette année")) expect(validateNewMission(mission, 0), mission.template).toMatchObject({ ok: true });
+  expect(clip("un deux trois quatre", 10)).toBe("un deux…");
+  expect(clip("court", 10)).toBe("court");
+});
+
+test("GH-279: e-mail verification blocks nothing during the POC, unless REQUIRE_EMAIL_VERIFICATION is true", () => {
+  expect(emailVerificationGateOpen(null, {})).toBe(true);
+  expect(emailVerificationGateOpen(null, { REQUIRE_EMAIL_VERIFICATION: "false" })).toBe(true);
+  expect(emailVerificationGateOpen(null, { REQUIRE_EMAIL_VERIFICATION: "true" })).toBe(false);
+  expect(emailVerificationGateOpen(new Date(), { REQUIRE_EMAIL_VERIFICATION: "true" })).toBe(true);
+  // Un seul point de contrôle : plus aucun test direct de la colonne, hors du bandeau.
+  const files: string[] = [];
+  const walk = (dir: string) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) walk(path);
+      else if (/\.(ts|tsx)$/.test(entry.name)) files.push(path);
+    }
+  };
+  walk(join(process.cwd(), "src"));
+  const offenders = files.filter((file) => !file.endsWith("shell-data.ts") && /!\s*company\.emailVerifiedAt\b|emailVerifiedAt\s*!==\s*null/.test(readFileSync(file, "utf8")));
+  expect(offenders).toEqual([]);
 });

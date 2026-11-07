@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { emailVerificationGateOpen } from "@/lib/email-verification-policy";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { getSessionCompany } from "@/lib/session";
@@ -16,7 +17,7 @@ export async function POST(request: NextRequest) {
   if (!company) return NextResponse.json({ error: "Non connecté." }, { status: 401 });
   const prepareOnly = prepareOnlyRefusal(company);
   if (prepareOnly) return NextResponse.json(prepareOnly, { status: 403 });
-  if (!company.emailVerifiedAt) return NextResponse.json({ error: EMAIL_NOT_VERIFIED_MESSAGE }, { status: 403 });
+  if (!emailVerificationGateOpen(company.emailVerifiedAt)) return NextResponse.json({ error: EMAIL_NOT_VERIFIED_MESSAGE }, { status: 403 });
   if (!isGmailConfigured()) return NextResponse.json({ error: "Gmail non configuré côté serveur." }, { status: 503 });
   const input = inputSchema.safeParse(await request.json().catch(() => null));
   if (!input.success) return NextResponse.json({ error: "Destinataire, objet, message et confirmation requis." }, { status: 400 });

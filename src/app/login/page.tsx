@@ -89,7 +89,7 @@ export default function LoginPage() {
           <Link className="underline" href="/mot-de-passe-oublie">Mot de passe oublié ?</Link>
         </p>
         <p className="text-sm text-gray-600">
-          Pas encore de compte ? <Link className="underline" href="/signup">Créer un compte</Link>
+          Pas encore de compte ? <Link className="underline" href="/bienvenue">Créer un compte</Link>
         </p>
       </form>
     </main>

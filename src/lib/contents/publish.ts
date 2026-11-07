@@ -1,4 +1,5 @@
 import { Prisma, type Company, type ContentVersion, type Mission, type MissionContent } from "@prisma/client";
+import { emailVerificationGateOpen } from "@/lib/email-verification-policy";
 import { prisma } from "@/lib/prisma";
 import { writeJournal } from "@/lib/journal";
 import { MissionError, renderMissionMessage } from "@/lib/missions/messages";
@@ -232,7 +233,7 @@ export async function publishContentNow(
 }
 
 function contextOf(company: Company, destination: Destination) {
-  return { emailVerified: company.emailVerifiedAt !== null, delegation: asDelegationLevel(company.delegationLevel), channelEnabled: destination.enabled, channelConnected: destination.connected };
+  return { emailVerified: emailVerificationGateOpen(company.emailVerifiedAt), delegation: asDelegationLevel(company.delegationLevel), channelEnabled: destination.enabled, channelConnected: destination.connected };
 }
 
 /** « le 7 novembre vers 09:05 » dans le fuseau choisi par le dirigeant. */

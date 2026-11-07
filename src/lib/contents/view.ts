@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { emailVerificationGateOpen } from "@/lib/email-verification-policy";
 import { channelLabel } from "@/lib/missions/channels";
 import { loadMissionViews, type MissionView } from "@/lib/missions/view";
 import {
@@ -92,7 +93,7 @@ export async function loadContentDetail(companyId: string, contentId: string): P
   const editRefusal = checkNewVersion(snapshot);
   const delegation = asDelegationLevel(content.company.delegationLevel);
   const destination = await readDestination(companyId, snapshot.channel);
-  const publishRefusal = checkDiffusion(snapshot, { emailVerified: content.company.emailVerifiedAt !== null, delegation, channelEnabled: destination.enabled, channelConnected: destination.connected }, { number: content.currentNumber, confirmed: true });
+  const publishRefusal = checkDiffusion(snapshot, { emailVerified: emailVerificationGateOpen(content.company.emailVerifiedAt), delegation, channelEnabled: destination.enabled, channelConnected: destination.connected }, { number: content.currentNumber, confirmed: true });
   const latest = content.publications.find((publication) => publication.versionNumber === content.currentNumber && publication.status !== "cancelled") ?? null;
   const newest = content.publications.find((publication) => publication.versionNumber === content.currentNumber) ?? null;
   const sentVersions = new Set(content.publications.filter((publication) => publication.status === "sent").map((publication) => publication.versionNumber));
