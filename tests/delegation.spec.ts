@@ -2587,6 +2587,7 @@ test("GH-280: charset from <meta>, unknown encodings, DNS within the delay, long
 
   // Balises du modèle retirées entières.
   expect(cleanValue("Rénovation <b>électrique</b> et <i>dépannage</i> <")).toBe("Rénovation électrique et dépannage");
+  expect(cleanValue("Plomberie <<b>script>alert(1)<</b>/script>")).toBe("Plomberie alert(1)");
 });
 
 test("GH-280: a phone is observed only if written as a phone on the page, not rebuilt from prices or postcodes", () => {

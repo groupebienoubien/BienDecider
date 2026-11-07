@@ -47,7 +47,13 @@ export type AnalysisDeps = {
 
 /** Valeur courte, sans balise ni caractère de contrôle. */
 export function cleanValue(value: string, max = FIELD_MAX): string {
-  const clean = value.replace(/<[^<>]*>/g, "").replace(/[\p{Cc}<>]+/gu, " ").replace(/\s+/g, " ").trim();
+  // Retire les balises jusqu'à stabilité (balises imbriquées comme « <<b>script> »), puis tout chevron restant.
+  let stripped = value.slice(0, max * 8);
+  for (let previous = ""; previous !== stripped; ) {
+    previous = stripped;
+    stripped = stripped.replace(/<[^<>]*>/g, "");
+  }
+  const clean = stripped.replace(/[\p{Cc}<>]+/gu, " ").replace(/\s+/g, " ").trim();
   return clean.length <= max ? clean : `${clean.slice(0, max - 1).trimEnd()}…`;
 }
 
