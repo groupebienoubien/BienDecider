@@ -61,7 +61,8 @@ export type DraftAnalysis = {
   input: AnalysisInput;
   rubrics: Record<RubricKey, Rubric>;
   findings: AnalysisFindings;
-  cost: { usd: number; inputTokens: number; outputTokens: number };
+  /** `model` : modèle réellement appelé, repris dans le `UsageEvent` du compte à l'inscription (#281) ; absent d'un brouillon ancien. */
+  cost: { usd: number; inputTokens: number; outputTokens: number; model?: string };
 };
 
 /** Une analyse « en cours » plus vieille que ce délai a été interrompue (durée maximale de la route : 60 s). */
@@ -172,13 +173,26 @@ const analysisSchema = z.object({
     tone: findingSchema.nullable(), contacts: z.array(findingSchema).max(10), palette: z.object({ value: z.array(z.string().regex(/^#[0-9a-f]{6}$/)).max(10), provenance: provenanceSchema }).nullable(),
     logo: findingSchema.nullable(), google: findingSchema.nullable(), pages: z.array(z.object({ url: z.string().max(600), readAt: z.string().max(40) })).max(5),
   }),
-  cost: z.object({ usd: z.number(), inputTokens: z.number(), outputTokens: z.number() }),
+  cost: z.object({ usd: z.number(), inputTokens: z.number(), outputTokens: z.number(), model: z.string().max(100).optional() }),
 });
 
 /** Lecture défensive de la colonne `analysis` : toute valeur illisible vaut « pas d'analyse ». */
 export function readAnalysis(raw: unknown): DraftAnalysis | null {
   const parsed = analysisSchema.safeParse(raw);
   return parsed.success ? (parsed.data as DraftAnalysis) : null;
+}
+
+export const ANALYSIS_USAGE_AGENT = "onboarding_analysis";
+
+/**
+ * Coût de l'analyse anonyme à reprendre au compte créé (#281) : seulement s'il est supérieur à 0 et que le modèle réellement
+ * appelé est connu (un brouillon d'avant #281 n'en garde pas). Sinon null, et rien n'est écrit.
+ */
+export function analysisUsage(analysis: DraftAnalysis | null): { agent: string; model: string; inputTokens: number; outputTokens: number; costUsd: number } | null {
+  const cost = analysis?.cost;
+  if (!cost || !cost.model || !Number.isFinite(cost.usd) || cost.usd <= 0) return null;
+  const tokens = (value: number) => (Number.isFinite(value) && value > 0 ? Math.round(value) : 0);
+  return { agent: ANALYSIS_USAGE_AGENT, model: cost.model, inputTokens: tokens(cost.inputTokens), outputTokens: tokens(cost.outputTokens), costUsd: cost.usd };
 }
 
 /** Vue publique de la progression (GET), sans l'entrée ni le coût. */

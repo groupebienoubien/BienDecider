@@ -3,6 +3,7 @@ import { betaZodTool } from "@anthropic-ai/sdk/helpers/beta/zod";
 import type { AgentProposal } from "@prisma/client";
 import { anthropic, AGENT_MODEL } from "@/lib/anthropic";
 import { prisma } from "@/lib/prisma";
+import { companyContextLine } from "@/lib/company-profile";
 import { enqueueRevisionRun, type RevisionRunPayload } from "@/lib/agent-runs";
 import { AgentRunConflictError, AgentRunQuotaError, RevisionConflictError, classifyRunError, ensureAgentProduced, failureMessage, isRunFailureReason, type RevisionConflictKind } from "@/lib/agents/agent-errors";
 import { isPlanAgent, type PlanAgent } from "@/lib/agents/plan-items";
@@ -158,7 +159,7 @@ export async function runRevision(companyId: string, payload: RevisionRunPayload
 
   // Persona, entreprise et règles : stables, mis en cache. Date du jour et nom du dirigeant : hors du bloc mis en cache.
   const stableSystem = `Tu es ${persona.name}, ${persona.role} de BienDecider, un copilote IA pour indépendants et TPE. ${persona.trait}
-Entreprise : ${company.name} (métier : ${company.trade}), zone de chalandise : ${company.servingArea}.
+${companyContextLine(company)}
 ${companyProfileLines(company)}
 ${directionLine(company.direction)}
 

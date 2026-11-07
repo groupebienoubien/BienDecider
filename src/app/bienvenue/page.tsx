@@ -1,6 +1,6 @@
 import { currentSignupAvailability } from "@/lib/signup-control";
 import { SIGNUP_CLOSED_MESSAGE, SIGNUP_FULL_MESSAGE } from "@/lib/signup-rules";
-import { prefillProfile } from "@/lib/onboarding/draft-rules";
+import { prefillFromPaul, prefillProfile } from "@/lib/onboarding/draft-rules";
 import { analysisView, type DraftAnalysis, type Finding } from "@/lib/onboarding/analysis-rules";
 import { requireDraftPage } from "./guard";
 import { WelcomeFrame } from "./welcome-frame";
@@ -52,7 +52,7 @@ function ObservedFindings({ analysis, guessed }: { analysis: DraftAnalysis; gues
           </li>
         )}
       </ul>
-      {guessed && <p className="text-sm text-[var(--bd-muted)]">Les champs ci-dessous sont des hypothèses de Paul : rien n&apos;est retenu avant votre confirmation.</p>}
+      {guessed && <p className="text-sm text-[var(--bd-muted)]">Chaque champ ci-dessous indique d&apos;où vient sa valeur : rien n&apos;est retenu avant votre confirmation.</p>}
     </section>
   );
 }
@@ -76,7 +76,7 @@ export default async function WelcomePage() {
   }
   if (state.step === 2) {
     const prefill = prefillProfile(state);
-    const guessed = Object.values(prefill.origins).some((origin) => origin === "hypothesis");
+    const guessed = prefillFromPaul(prefill);
     return (
       <WelcomeFrame step={2} intro={<p>{state.profile.firstName}, {guessed ? `voici ce que Paul a compris de ${state.profile.companyName}. Vérifiez, corrigez ou complétez, puis confirmez.` : `décrivez en quelques mots l'activité de ${state.profile.companyName}. Complétez ou corrigez, puis confirmez.`}</p>}>
         {state.analysis && <ObservedFindings analysis={state.analysis} guessed={guessed} />}

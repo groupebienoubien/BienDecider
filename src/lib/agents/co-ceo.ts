@@ -8,6 +8,7 @@ import type { BetaToolRunnerParams } from "@anthropic-ai/sdk/lib/tools/BetaToolR
 import type { Mission } from "@prisma/client";
 import { anthropic, AGENT_MODEL } from "@/lib/anthropic";
 import { prisma } from "@/lib/prisma";
+import { companyContextLine } from "@/lib/company-profile";
 import { getRejectionContext } from "@/lib/agents/rejection-context";
 import { ensureAgentProduced } from "@/lib/agents/agent-errors";
 import { PERSONAS, objectiveLine, directionLine, companyProfileLines, runtimeContextLines, formatParisTime, formatParisDate } from "@/lib/agents/personas";
@@ -441,7 +442,7 @@ async function runCoCeoTurnImpl(
         type: "text",
         cache_control: { type: "ephemeral" },
         text: `Tu es ${PERSONA.name}, ${PERSONA.role} de BienDecider pour indépendants et TPE. Tu es le seul interlocuteur du dirigeant : tu analyses, proposes, prépares et coordonnes. Direct et synthétique, tu ne promets rien que tu ne peux tenir.
-Entreprise : ${company.name} (métier : ${company.trade}), zone de chalandise : ${company.servingArea}.
+${companyContextLine(company)}
 Site : ${company.website ?? "non renseigné"}
 Réseaux sociaux : ${company.socialHandles ?? "non renseignés"}
 ${companyProfileLines(company)}
@@ -586,7 +587,7 @@ async function runCoCeoPlanningImpl(companyId: string, agentRunId?: string) {
   // plan existant, actions écartées) est recalculé à chaque appel et reste
   // donc hors cache, en toute fin de system (cf. doc prompt caching).
   const stableSystem = `Tu es ${PERSONA.name} de BienDecider. Tu dois être force de proposition et donner une direction claire — pas attendre des questions.
-Entreprise : ${company.name} (métier : ${company.trade}), zone de chalandise : ${company.servingArea}. Site web : ${company.website ?? (company.siteSlug ? `publié par BienDecider (/site/${company.siteSlug})` : "aucun")}.
+${companyContextLine(company)} Site web : ${company.website ?? (company.siteSlug ? `publié par BienDecider (/site/${company.siteSlug})` : "aucun")}.
 ${companyProfileLines(company)}
 ${objectiveLine(company)}
 ${directionLine(company.direction)}

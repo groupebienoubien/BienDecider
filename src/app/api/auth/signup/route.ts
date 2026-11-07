@@ -10,6 +10,7 @@ import { passwordPolicyError } from "@/lib/password-policy";
 import { SIGNUP_CLOSED_MESSAGE, SIGNUP_FULL_MESSAGE, secondsUntilNextSignupDay, signupAvailability } from "@/lib/signup-rules";
 import { ADDRESS_UNAVAILABLE_MESSAGE, ONBOARDING_MESSAGES, RECOVER_ACCOUNT_HREF, checkDraftForAccount, isValidEmail, starterMissions, stepHref } from "@/lib/onboarding/draft-rules";
 import { clearDraftCookie, loadDraft } from "@/lib/onboarding/draft";
+import { analysisUsage } from "@/lib/onboarding/analysis-rules";
 import { createMissionIn } from "@/lib/missions/service";
 import { writeJournal } from "@/lib/journal";
 import { ensureCreditGrant } from "@/lib/credits";
@@ -106,6 +107,9 @@ export async function POST(request: NextRequest) {
         },
       });
       await ensureCreditGrant(tx, created.id);
+      // Le coût de l'analyse anonyme revient au compte, une seule fois : le brouillon vient d'être effacé dans cette transaction.
+      const usage = analysisUsage(draft.state.analysis);
+      if (usage) await tx.usageEvent.create({ data: { companyId: created.id, ...usage } });
       await writeJournal(tx, { companyId: created.id, code: "J-04", params: {}, actor: "owner" });
       for (const mission of starterMissions(profile, ambition?.text ?? "")) await createMissionIn(tx, created.id, mission, "paul");
       return created;

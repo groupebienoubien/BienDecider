@@ -170,7 +170,7 @@ const hypothesis = (value: string): Finding | null => {
 function addUsage(analysis: DraftAnalysis, usage: UsageLike, model: string | undefined): DraftAnalysis {
   if (!usage || !model) return analysis;
   const tokens = { input: usage.input_tokens ?? 0, output: usage.output_tokens ?? 0, cacheWrite: usage.cache_creation_input_tokens ?? 0, cacheRead: usage.cache_read_input_tokens ?? 0 };
-  return { ...analysis, cost: { usd: estimateCostUsd(model, tokens), inputTokens: tokens.input + tokens.cacheWrite + tokens.cacheRead, outputTokens: tokens.output } };
+  return { ...analysis, cost: { usd: estimateCostUsd(model, tokens), inputTokens: tokens.input + tokens.cacheWrite + tokens.cacheRead, outputTokens: tokens.output, model: model.slice(0, 100) } };
 }
 
 /**

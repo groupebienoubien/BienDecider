@@ -2,6 +2,7 @@ import { z } from "zod";
 import { betaZodTool } from "@anthropic-ai/sdk/helpers/beta/zod";
 import { anthropic, AGENT_MODEL } from "@/lib/anthropic";
 import { prisma } from "@/lib/prisma";
+import { companyContextLine } from "@/lib/company-profile";
 import { getRejectionContext, rejectedDuplicateNotice } from "@/lib/agents/rejection-context";
 import { getCompetitionContextForProspecting } from "@/lib/agents/findings-context";
 import { ensureAgentProduced } from "@/lib/agents/agent-errors";
@@ -201,7 +202,7 @@ export async function runDemarchageAgent(
   // marketing.ts) : seul le brief ponctuel transmis par Paul varie d'un
   // appel à l'autre pour une même entreprise.
   const stableSystem = `Tu es ${PERSONA.name}, l'agent "${PERSONA.role}" de BienDecider, un copilote IA pour indépendants et TPE.
-Entreprise : ${company.name} (métier : ${company.trade}), zone de chalandise : ${company.servingArea}.
+${companyContextLine(company)}
 ${companyProfileLines(company)}
 ${objectiveLine(company)}
 ${directionLine(company.direction)}
