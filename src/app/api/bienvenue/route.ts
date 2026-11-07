@@ -3,7 +3,9 @@ import { after, NextRequest, NextResponse } from "next/server";
 import { getSessionEmail } from "@/lib/session";
 import { readJsonObject } from "@/lib/request-body";
 import { consumeGlobalAnalysis, consumeIpAttempt, refundIpAttempt, type ThrottleResult } from "@/lib/auth-throttle";
-import { applyDraftAction, emptyDraft, parseDraftAction, stepHref, type DraftState } from "@/lib/onboarding/draft-rules";
+import { applyDraftAction, checkInterpretation, emptyDraft, parseDraftAction, stepHref, type DraftState } from "@/lib/onboarding/draft-rules";
+import { signInterpretation, verifyInterpretation } from "@/lib/ambition-token";
+import { anonymousAmbitionModel, interpretAmbition } from "@/lib/ambition";
 import { ANALYSIS_MESSAGES, analysisView, needsNewAnalysis, newAnalysis } from "@/lib/onboarding/analysis-rules";
 import { createDraft, loadDraft, saveAnalysis, saveDraft, startAnalysis } from "@/lib/onboarding/draft";
 import { errorLabel, runDraftAnalysis } from "@/lib/onboarding/analysis";
@@ -16,6 +18,7 @@ export const maxDuration = 60;
  * Le serveur contrôle chaque transition ; refus → 422 avec le code M, autre étape → 409 avec la page de l'étape courante.
  * « Découvrir » (#280) enregistre les saisies et lance l'analyse publique, plafonnée par IP et pour tous ;
  * une analyse en cours refuse un second lancement (409) ; au-delà du plafond, 429 et l'étape 2 reste ouverte.
+ * « Interpréter » (#282) répond sans rien enregistrer ; « C'est bien ça » exige le jeton de cette interprétation.
  */
 export async function POST(request: NextRequest) {
   if (request.headers.get("origin") !== request.nextUrl.origin) return NextResponse.json({ error: "Origine refusée." }, { status: 403 });
@@ -31,7 +34,8 @@ export async function POST(request: NextRequest) {
   if (!draft && action.action !== "discover") return NextResponse.json({ error: "Reprenez à la première étape.", step: 1, href: stepHref(1) }, { status: 409 });
 
   const now = new Date();
-  const result = applyDraftAction(draft?.state ?? emptyDraft(), action, now);
+  if (action.action === "interpret_ambition" && draft) return interpret(request, draft.state, action);
+  const result = applyDraftAction(draft?.state ?? emptyDraft(), action, now, verifyInterpretation);
   if (!result.ok) {
     if (result.kind === "wrong_step") return NextResponse.json({ error: "Cette étape n'est pas encore ouverte.", step: result.step, href: stepHref(result.step) }, { status: 409 });
     if (result.kind === "busy") return NextResponse.json({ error: result.error, code: "busy", analysis: analysisView(draft?.state.analysis ?? null, now) }, { status: 409 });
@@ -54,6 +58,22 @@ export async function POST(request: NextRequest) {
   }
   if (action.action === "discover") return launchAnalysis(request, draftId, result.state, now);
   return NextResponse.json({ step: result.state.step, href: stepHref(result.state.step) });
+}
+
+/**
+ * « Interpréter » (#282) : jamais enregistré. Le modèle sert 10 fois par IP et par 24 h (portée `ambition`) ;
+ * sans clé ou au-delà, l'analyseur de secours répond, sans message d'erreur. Réponse : l'interprétation et son jeton.
+ */
+async function interpret(request: NextRequest, state: DraftState, action: { ambition?: unknown }) {
+  const checked = checkInterpretation(state, action);
+  if (!checked.ok) {
+    if (checked.kind === "wrong_step") return NextResponse.json({ error: "Cette étape n'est pas encore ouverte.", step: checked.step, href: stepHref(checked.step) }, { status: 409 });
+    if (checked.kind === "busy") return NextResponse.json({ error: checked.error }, { status: 409 });
+    return NextResponse.json({ error: checked.error, code: checked.code, errors: checked.errors }, { status: 422 });
+  }
+  const model = await anonymousAmbitionModel(() => consumeIpAttempt(request, "ambition"));
+  const { interpretation } = await interpretAmbition(checked.text, { model });
+  return NextResponse.json({ interpretation, token: signInterpretation(interpretation.text, interpretation.terms) });
 }
 
 async function refund(...attempts: ThrottleResult[]) {

@@ -6,13 +6,13 @@ import { starterMissions } from "@/lib/onboarding/draft-rules";
 /** Étape 4 (#279) : le cap et trois missions tirées du catalogue ; rien n'est lancé. */
 export default async function WelcomeMissionsPage() {
   const state = await requireDraftPage("/bienvenue/missions");
-  const missions = starterMissions(state.profile, state.ambition ?? "");
+  const missions = starterMissions(state.profile, state.ambition?.text ?? "");
   return (
     <WelcomeFrame step={4} intro={<p>Voici trois premières missions pour {state.profile.companyName}. Elles arriveront « À décider » dans votre stratégie : aucune n&apos;est lancée sans vous.</p>}>
       <div className="flex flex-col gap-6">
         <div className="rounded-lg border-l-4 border-[var(--bd-accent)] bg-[var(--bd-cream)] p-4">
           <h2 className="text-sm font-semibold text-[var(--bd-ink)]">Votre cap</h2>
-          <p className="mt-1 break-words text-base text-[var(--bd-ink)]">{state.ambition}</p>
+          <p className="mt-1 break-words text-base text-[var(--bd-ink)]">{state.ambition?.text}</p>
         </div>
         <ol className="flex flex-col gap-3" aria-label="Trois premières pistes">
           {missions.map((mission) => (

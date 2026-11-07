@@ -59,6 +59,9 @@ import { workspacePageLabel } from "../src/components/workspace-nav";
 import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH, passwordPolicyError } from "../src/lib/password-policy";
 import { startSmtpSink } from "./support/smtp-sink";
 import { ADDRESS_UNAVAILABLE_MESSAGE, STARTER_TEMPLATE_ORDER, applyDraftAction, checkAmbition, checkDiscovery, checkDraftForAccount, clip, emptyDraft, isValidEmail, isValidWebsite, parseDraftAction, pickStarterTemplates, prefillProfile, readDraftState, starterMissions, stepHref } from "../src/lib/onboarding/draft-rules";
+import { AMBITION_TARGET_NOTICE, EMPTY_TERMS, GAIN_QUESTION, HORIZON_QUESTION, RECRUITMENT_UNSPECIFIED_NOTE, REINTERPRET_MESSAGE, boundAmbition, capLabel, interpretationFrom, parseAmbition, readAmbitionTerms, reformulation, type AmbitionTerms } from "../src/lib/ambition-rules";
+import { signInterpretation, verifyInterpretation } from "../src/lib/ambition-token";
+import { anonymousAmbitionModel, interpretAmbition, type AmbitionModel } from "../src/lib/ambition";
 import { ANALYSIS_MESSAGES, ANALYSIS_STALE_MS, analysisFinished, analysisNotice, analysisView, effectiveAnalysis, needsNewAnalysis, newAnalysis, readAnalysis, rubricLabel, rubricsFor, type DraftAnalysis } from "../src/lib/onboarding/analysis-rules";
 import { MAX_LINKS, SITE_READ_LIMITS, checkSiteUrl, decode, extractTitle, extractLogo, extractPalette, htmlToText, isPublicAddress, pickInternalPages, extractLinks, pinnedTransport, readPage, readPublicSite, type SiteTransport } from "../src/lib/onboarding/site-reader";
 import { EXTRACTION_TEXT_MAX, cleanValue, extractionPrompt, normalizePhone, observedContacts, runDraftAnalysis, type Extractor } from "../src/lib/onboarding/analysis";
@@ -2057,6 +2060,7 @@ test("GH-41: a profile correction counts only the fields that really change", ()
   expect(profileChanges(before, { monthlyRevenue: 2000 })).toBe(true);
 });
 
+const TEST_SECRET = "secret-de-test-ambition";
 const filledProfile = { firstName: "Claire", companyName: "Atelier Lumen", location: "Lyon", website: "", trade: "Électricien", servingArea: "Lyon et alentours", targetClients: "Particuliers propriétaires", offers: "Rénovation électrique" };
 
 test("GH-279: each step of the entry journey opens only once the previous one is confirmed", () => {
@@ -2102,8 +2106,13 @@ test("GH-279: each step of the entry journey opens only once the previous one is
   expect(applyDraftAction(confirmed.state, { action: "confirm_ambition", ambition: "court" })).toMatchObject({ ok: false, code: "M-06" });
   expect(checkAmbition("x".repeat(601))).toMatchObject({ ok: false, code: "M-16" });
   expect(applyDraftAction({ ...confirmed.state, profileConfirmed: false }, { action: "confirm_ambition", ambition: "Plus de chantiers cette année" })).toMatchObject({ ok: false, code: "M-07" });
-  const ambitious = applyDraftAction(confirmed.state, { action: "confirm_ambition", ambition: "  +20 % de chiffre d'affaires en 12 mois  " });
-  expect(ambitious).toMatchObject({ ok: true, state: { step: 4, diagnosticReady: true, ambition: "+20 % de chiffre d'affaires en 12 mois" } });
+  // #282 : « C'est bien ça » exige le jeton de l'interprétation du texte exact.
+  const read = interpretationFrom("+20 % de chiffre d'affaires en 12 mois", parseAmbition("+20 % de chiffre d'affaires en 12 mois"));
+  const token = signInterpretation(read.text, read.terms, TEST_SECRET);
+  const verify = (text: string, terms: AmbitionTerms, given: unknown) => verifyInterpretation(text, terms, given, TEST_SECRET);
+  expect(applyDraftAction(confirmed.state, { action: "confirm_ambition", ambition: read.text, terms: read.terms, token })).toMatchObject({ ok: false, code: "reinterpret" });
+  const ambitious = applyDraftAction(confirmed.state, { action: "confirm_ambition", ambition: "  +20 % de chiffre d'affaires en 12 mois  ", terms: read.terms, token }, new Date(), verify);
+  expect(ambitious).toMatchObject({ ok: true, state: { step: 4, diagnosticReady: true, ambition: { text: "+20 % de chiffre d'affaires en 12 mois", terms: { gainPercent: 20, horizonMonths: 12 } } } });
   if (!ambitious.ok) throw new Error("confirm_ambition");
 
   // Étape 4 : « Ça m'intéresse » exige le diagnostic prêt (M-08).
@@ -2120,7 +2129,7 @@ test("GH-279: each step of the entry journey opens only once the previous one is
 
   // Revenir avant l'ambition : le diagnostic n'est plus prêt, les saisies restent.
   const back = applyDraftAction(interested.state, { action: "back", step: 2 });
-  expect(back).toMatchObject({ ok: true, state: { step: 2, diagnosticReady: false, ambition: "+20 % de chiffre d'affaires en 12 mois", profileConfirmed: true } });
+  expect(back).toMatchObject({ ok: true, state: { step: 2, diagnosticReady: false, ambition: { text: "+20 % de chiffre d'affaires en 12 mois" }, profileConfirmed: true } });
   expect(applyDraftAction(interested.state, { action: "back", step: 4 })).toMatchObject({ ok: true, state: { step: 4, diagnosticReady: true } });
   expect(applyDraftAction(interested.state, { action: "back", step: 5 })).toEqual({ ok: false, kind: "wrong_step", step: 5 });
   expect(applyDraftAction(interested.state, { action: "back", step: 0 })).toEqual({ ok: false, kind: "wrong_step", step: 5 });
@@ -2139,7 +2148,10 @@ test("GH-279: each step of the entry journey opens only once the previous one is
   expect(parseDraftAction({ action: "launch" })).toBeNull();
   expect(parseDraftAction({ action: "back", step: 2, extra: true })).toEqual({ action: "back", step: 2 });
   expect(([1, 2, 3, 4, 5] as const).map((step) => stepHref(step))).toEqual(["/bienvenue", "/bienvenue", "/bienvenue", "/bienvenue/missions", "/bienvenue/compte"]);
-  expect(readDraftState({ step: 9, profile: { firstName: 3, companyName: "Atelier" }, ambition: { text: "Plus de chantiers" }, profileConfirmed: true, diagnosticReady: false })).toMatchObject({ step: 1, ambition: "Plus de chantiers", profile: { firstName: "", companyName: "Atelier", offers: "" } });
+  // Une ambition d'avant #282 (texte seul) se relit avec des éléments vides ; des éléments hors bornes sont ignorés.
+  expect(readDraftState({ step: 9, profile: { firstName: 3, companyName: "Atelier" }, ambition: { text: "Plus de chantiers" }, profileConfirmed: true, diagnosticReady: false })).toMatchObject({ step: 1, ambition: { text: "Plus de chantiers", terms: EMPTY_TERMS }, profile: { firstName: "", companyName: "Atelier", offers: "" } });
+  expect(readDraftState({ step: 4, profile: {}, ambition: { text: "Plus de chantiers", terms: { ...EMPTY_TERMS, gainPercent: 80 } }, profileConfirmed: true, diagnosticReady: true }).ambition).toEqual({ text: "Plus de chantiers", terms: EMPTY_TERMS });
+  expect(readDraftState({ step: 4, profile: {}, ambition: { text: "Plus de chantiers", terms: { gainPercent: 20, horizonMonths: 12, mediaBudgetPerMonth: 300, recruitment: "no" } }, profileConfirmed: true, diagnosticReady: true }).ambition?.terms).toEqual({ gainPercent: 20, horizonMonths: 12, mediaBudgetPerMonth: 300, recruitment: "no" });
   expect(isValidEmail("claire@atelier-lumen.fr")).toBe(true);
   expect(isValidEmail("claire@atelier")).toBe(false);
   expect(isValidEmail(`${"x".repeat(110)}@exemple.fr`)).toBe(false);
@@ -2602,4 +2614,150 @@ test("GH-280: a phone is observed only if written as a phone on the page, not re
   }
   expect(normalizePhone("+33 4 78 00 00 00")).toBe("0478000000");
   expect(normalizePhone("0033478000000")).toBe("0478000000");
+});
+
+// Ambition dite avec ses mots et reformulée par Paul (#282, spécification §11).
+test("GH-282: the I/O matrix — complete, missing, out of bounds, budget too high — with notes and questions", () => {
+  const interpret = (text: string) => interpretationFrom(text, parseAmbition(text));
+  const complete = interpret("+20 % de CA en 12 mois, sans embaucher, 300 € de pub par mois");
+  expect(complete.terms).toEqual({ gainPercent: 20, horizonMonths: 12, mediaBudgetPerMonth: 300, recruitment: "no" });
+  expect(complete.questions).toEqual([]);
+  expect(complete.notes).toEqual([]);
+  expect(complete.found).toHaveLength(4);
+  expect(complete.reformulation).toBe("Vous visez +20 % de chiffre d'affaires en 12 mois, sans embaucher, avec un budget média indicatif de 300 € par mois, qui n'autorise aucune dépense");
+
+  const missing = interpret("Avoir plus de clients pros");
+  expect(missing.terms).toEqual(EMPTY_TERMS);
+  expect(missing.questions).toEqual([GAIN_QUESTION, HORIZON_QUESTION]);
+  expect(missing.notes).toEqual([RECRUITMENT_UNSPECIFIED_NOTE]);
+  expect(missing.reformulation).toBe("Votre ambition : « Avoir plus de clients pros »");
+
+  const outOfBounds = interpret("Doubler mon CA en 5 ans");
+  expect(outOfBounds.text).toBe("Doubler mon CA en 5 ans");
+  expect(outOfBounds.terms).toMatchObject({ gainPercent: null, horizonMonths: null });
+  expect(outOfBounds.notes.filter((note) => note.includes("sans le convertir"))).toHaveLength(2);
+  expect(outOfBounds.notes.join(" ")).toContain("100 %");
+  expect(outOfBounds.notes.join(" ")).toContain("60 mois");
+  // Un élément trouvé hors bornes a sa note, pas de question en plus.
+  expect(outOfBounds.questions).toEqual([]);
+
+  const expensive = interpret("Plus de clients, avec 5 000 € de pub par mois");
+  expect(expensive.terms.mediaBudgetPerMonth).toBe(2000);
+  expect(expensive.notes).toContain("Le budget média est ramené à 2 000 € par mois, le maximum retenu.");
+  expect(expensive.reformulation).toContain("n'autorise aucune dépense");
+  expect(AMBITION_TARGET_NOTICE).toBe("C'est une cible, pas une promesse de résultat. Vous pourrez la corriger à tout moment.");
+});
+
+test("GH-282: bounds apply the same way to any raw reading, and the fallback parser reads §11 horizons", () => {
+  const raw = { gainPercent: null, horizonMonths: null, mediaBudgetPerMonth: null, recruitment: "unspecified" as const, goal: null };
+  expect(boundAmbition({ ...raw, gainPercent: 1, horizonMonths: 3, mediaBudgetPerMonth: 0 }).terms).toMatchObject({ gainPercent: 1, horizonMonths: 3, mediaBudgetPerMonth: 0 });
+  expect(boundAmbition({ ...raw, gainPercent: 50, horizonMonths: 36, mediaBudgetPerMonth: 2000 }).terms).toMatchObject({ gainPercent: 50, horizonMonths: 36, mediaBudgetPerMonth: 2000 });
+  expect(boundAmbition({ ...raw, gainPercent: 0.4, horizonMonths: 2 }).terms).toMatchObject({ gainPercent: null, horizonMonths: null });
+  expect(boundAmbition({ ...raw, gainPercent: 51, horizonMonths: 37, mediaBudgetPerMonth: 2001 }).terms).toMatchObject({ gainPercent: null, horizonMonths: null, mediaBudgetPerMonth: 2000 });
+  expect(boundAmbition({ ...raw, mediaBudgetPerMonth: -5 }).terms.mediaBudgetPerMonth).toBeNull();
+  expect(boundAmbition({ ...raw, recruitment: "possible" }).notes).toEqual([]);
+  expect(boundAmbition({ ...raw, gainPercent: Number.NaN }).terms.gainPercent).toBeNull();
+
+  expect(parseAmbition("Gagner 15% cette année").horizonMonths).toBe(12);
+  expect(parseAmbition("Plus de devis ce semestre").horizonMonths).toBe(6);
+  expect(parseAmbition("Plus de devis ce trimestre").horizonMonths).toBe(3);
+  expect(parseAmbition("+10 % en deux ans").horizonMonths).toBe(24);
+  expect(parseAmbition("+10 % en 18 mois").horizonMonths).toBe(18);
+  expect(parseAmbition("Plus de clients, sans budget").mediaBudgetPerMonth).toBe(0);
+  expect(parseAmbition("+20 % avec 2 400 € de publicité par an").mediaBudgetPerMonth).toBe(200);
+  expect(parseAmbition("+20 % de CA, soit 20 000 € de plus").mediaBudgetPerMonth).toBeNull();
+  expect(parseAmbition("Grandir et recruter un apprenti").recruitment).toBe("possible");
+  expect(parseAmbition("Grandir sans recruter").recruitment).toBe("no");
+  expect(parseAmbition("Grandir sans avoir à embaucher").recruitment).toBe("no");
+  expect(parseAmbition("Grandir, pas besoin d'embaucher").recruitment).toBe("no");
+  expect(parseAmbition("Grandir, pas besoin de recruter").recruitment).toBe("no");
+  // Décimales d'un pourcentage, au point comme à la virgule ; un pourcentage négatif n'est pas un gain.
+  expect(parseAmbition("+12.5 % de CA en 12 mois").gainPercent).toBe(12.5);
+  expect(parseAmbition("+12,5 % de CA en 12 mois").gainPercent).toBe(12.5);
+  expect(parseAmbition("Éviter -10 % de CA en 12 mois").gainPercent).toBeNull();
+  expect(parseAmbition("Rattraper -10 %, puis +15 % en 12 mois").gainPercent).toBe(15);
+  // Une durée n'est lue qu'introduite par une préposition de temps.
+  expect(parseAmbition("Artisan depuis 30 ans, +10 % de CA").horizonMonths).toBeNull();
+  expect(parseAmbition("30 ans d'expérience, +10 % d'ici 18 mois").horizonMonths).toBe(18);
+  expect(parseAmbition("+10 % sur 2 ans").horizonMonths).toBe(24);
+  // « k€ » avec une décimale ; le point sépare les milliers ailleurs.
+  expect(parseAmbition("Plus de clients avec 1.5k€ de pub par mois").mediaBudgetPerMonth).toBe(1500);
+  expect(parseAmbition("Plus de clients avec 1,5 k€ de pub par mois").mediaBudgetPerMonth).toBe(1500);
+  expect(parseAmbition("Plus de clients avec 2.000 € de pub par mois").mediaBudgetPerMonth).toBe(2000);
+  // Texte long et répétitif : lecture rapide (expressions bornées).
+  const started = Date.now();
+  parseAmbition(`${"9".repeat(300)} ${"€ ".repeat(140)}`);
+  expect(Date.now() - started).toBeLessThan(200);
+
+  // Le modèle passe par les mêmes bornes ; son objectif reformulé est nettoyé de toute balise.
+  const model = interpretationFrom("Avoir plus de clients pros", { gainPercent: 80, horizonMonths: 6, mediaBudgetPerMonth: 9000, recruitment: "no", goal: "gagner des clients <b>professionnels</b>." });
+  expect(model.terms).toEqual({ gainPercent: null, horizonMonths: 6, mediaBudgetPerMonth: 2000, recruitment: "no" });
+  expect(model.reformulation).toMatch(/^Vous voulez gagner des clients .*professionnels.* en 6 mois, sans embaucher/);
+  expect(model.reformulation).not.toMatch(/[<>]/);
+  expect(reformulation("Plus de clients", { ...EMPTY_TERMS, mediaBudgetPerMonth: 0 })).toBe("Votre ambition : « Plus de clients », sans budget média");
+});
+
+test("GH-282: the cap label, the terms schema and the HMAC token over the exact text and terms", () => {
+  expect(capLabel("  +20 % en 12 mois  ", EMPTY_TERMS)).toBe("+20 % en 12 mois");
+  expect(capLabel("", { ...EMPTY_TERMS, gainPercent: 20, horizonMonths: 12 })).toBe("+20 % de chiffre d'affaires en 12 mois");
+  expect(capLabel(null, { ...EMPTY_TERMS, gainPercent: 20 })).toBe("Cap à définir avec Paul");
+  expect(capLabel(undefined, null)).toBe("Cap à définir avec Paul");
+
+  expect(readAmbitionTerms({ gainPercent: 20, horizonMonths: 12, mediaBudgetPerMonth: 300, recruitment: "no" })).not.toBeNull();
+  expect(readAmbitionTerms({ gainPercent: 20, horizonMonths: 12, mediaBudgetPerMonth: 300, recruitment: "no", extra: 1 })).toBeNull();
+  expect(readAmbitionTerms({ gainPercent: 60, horizonMonths: 12, mediaBudgetPerMonth: 300, recruitment: "no" })).toBeNull();
+  expect(readAmbitionTerms("n'importe quoi")).toBeNull();
+
+  const terms: AmbitionTerms = { gainPercent: 20, horizonMonths: 12, mediaBudgetPerMonth: 300, recruitment: "no" };
+  const token = signInterpretation("+20 % en 12 mois", terms, TEST_SECRET);
+  expect(verifyInterpretation("+20 % en 12 mois", terms, token, TEST_SECRET)).toBe(true);
+  expect(verifyInterpretation("+20 % en 12 moi", terms, token, TEST_SECRET)).toBe(false);
+  expect(verifyInterpretation("+20 % en 12 mois", { ...terms, gainPercent: 30 }, token, TEST_SECRET)).toBe(false);
+  expect(verifyInterpretation("+20 % en 12 mois", terms, `x${token.slice(1)}`, TEST_SECRET)).toBe(token.startsWith("x"));
+  expect(verifyInterpretation("+20 % en 12 mois", terms, token, "autre-secret")).toBe(false);
+  expect(verifyInterpretation("+20 % en 12 mois", terms, undefined, TEST_SECRET)).toBe(false);
+  expect(verifyInterpretation("+20 % en 12 mois", terms, token, "")).toBe(false);
+
+  // Le parcours : texte modifié après l'interprétation → message de réinterprétation, rien n'avance.
+  const state = { ...emptyDraft(), step: 3 as const, profile: filledProfile, profileConfirmed: true };
+  const verify = (text: string, given: AmbitionTerms, value: unknown) => verifyInterpretation(text, given, value, TEST_SECRET);
+  const edited = applyDraftAction(state, { action: "confirm_ambition", ambition: "+20 % en 12 mois!", terms, token }, new Date(), verify);
+  expect(edited).toEqual({ ok: false, kind: "invalid", code: "reinterpret", error: REINTERPRET_MESSAGE, errors: { ambition: REINTERPRET_MESSAGE } });
+  expect(applyDraftAction(state, { action: "confirm_ambition", ambition: "+20 % en 12 mois", terms, token }, new Date(), verify)).toMatchObject({ ok: true, state: { step: 4, ambition: { text: "+20 % en 12 mois", terms } } });
+  // « Interpréter » : 9 caractères refusés (M-06), rien n'est écrit dans le brouillon.
+  expect(applyDraftAction(state, { action: "interpret_ambition", ambition: "123456789" })).toMatchObject({ ok: false, code: "M-06" });
+  expect(applyDraftAction(state, { action: "interpret_ambition", ambition: "Plus de chantiers" })).toEqual({ ok: true, state });
+  expect(applyDraftAction({ ...state, step: 2 }, { action: "interpret_ambition", ambition: "Plus de chantiers" })).toEqual({ ok: false, kind: "wrong_step", step: 2 });
+  expect(applyDraftAction({ ...state, profileConfirmed: false }, { action: "interpret_ambition", ambition: "Plus de chantiers" })).toMatchObject({ ok: false, code: "M-07" });
+  expect(parseDraftAction({ action: "interpret_ambition", ambition: "x" })).toEqual({ action: "interpret_ambition", ambition: "x" });
+});
+
+test("GH-282: the model reading is optional — no key, failure or quota fall back to the parser without error", async () => {
+  const text = "+20 % de CA en 12 mois, sans embaucher, 300 € de pub par mois";
+  const fallback = await interpretAmbition(text, { model: null });
+  expect(fallback.source).toBe("fallback");
+  expect(fallback.interpretation.terms).toEqual({ gainPercent: 20, horizonMonths: 12, mediaBudgetPerMonth: 300, recruitment: "no" });
+  expect((await interpretAmbition(text, { model: async () => ({ ok: false }) })).source).toBe("fallback");
+  expect((await interpretAmbition(text, { model: async () => { throw new Error("réseau"); } })).source).toBe("fallback");
+  const model = await interpretAmbition(text, { model: async () => ({ ok: true, raw: { gainPercent: 120, horizonMonths: 12, mediaBudgetPerMonth: 300, recruitment: "no", goal: null }, usage: { input_tokens: 10, output_tokens: 5 }, model: "claude-sonnet-5-5" }) });
+  expect(model.source).toBe("model");
+  // Sortie du modèle bornée comme celle du secours.
+  expect(model.interpretation.terms.gainPercent).toBeNull();
+  expect(model.interpretation.notes.some((note) => note.includes("120 %"))).toBe(true);
+});
+
+test("GH-282: the anonymous model quota — limited or throttle in error means fallback, never the model", async () => {
+  const configured = { ANTHROPIC_API_KEY: "cle-de-test" };
+  const model: AmbitionModel = async () => ({ ok: false });
+  let calls = 0;
+  const throttle = (result: { limited: boolean } | null) => async () => { calls += 1; return result; };
+  expect(await anonymousAmbitionModel(throttle({ limited: false }), configured, model)).toBe(model);
+  expect(await anonymousAmbitionModel(throttle({ limited: true }), configured, model)).toBeNull();
+  expect(await anonymousAmbitionModel(async () => { throw new Error("base indisponible"); }, configured, model)).toBeNull();
+  // Sans IP, la limite par IP est ignorée, comme pour les autres portées.
+  expect(await anonymousAmbitionModel(throttle(null), configured, model)).toBe(model);
+  expect(calls).toBe(3);
+  // Sans clé : secours direct, aucun quota consommé.
+  expect(await anonymousAmbitionModel(throttle({ limited: false }), {}, model)).toBeNull();
+  expect(calls).toBe(3);
 });

@@ -7,7 +7,7 @@ import { encryptGmailToken } from "../src/lib/oauth/gmail";
 import { companyProfileLines, objectiveLine } from "../src/lib/agents/personas";
 import { getRejectionContext } from "../src/lib/agents/rejection-context";
 import { createSessionToken } from "../src/lib/session-token";
-import { createTestDraft, discoverThenSeeFindings, testIpHeader } from "./support/onboarding-draft";
+import { createTestDraft, discoverThenSeeFindings, interpretThenConfirmAmbition, testIpHeader } from "./support/onboarding-draft";
 
 config({ quiet: true });
 
@@ -739,6 +739,55 @@ test("GH-41: an empty journal says so on Résultats and offers no export", async
     await expect(journal).toContainText("Aucune décision enregistrée pour l'instant.");
     await expect(journal.getByRole("link", { name: "Exporter le journal (CSV)" })).toHaveCount(0);
     await expect(journal.locator("table")).toHaveCount(0);
+  } finally { await prisma.$disconnect(); }
+});
+
+test("GH-282: the ambition is changed with Paul from Entreprise, traced as J-03, and no mission moves", async ({ page, company }) => {
+  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }) });
+  try {
+    await prisma.company.update({ where: { id: company.id }, data: { workspaceV52: true, ambitionText: "Plus de devis", objective: "Plus de devis" } });
+    const mission = (status: string, position: number) => ({ companyId: company.id, template: "social_post", channel: "facebook", title: `Mission ${position}`, outcome: "Des demandes", originalOutcome: "Des demandes", finding: "Un constat", scope: { topic: "Un chantier" }, status, position });
+    await prisma.mission.createMany({ data: [mission("proposed", 1), mission("active", 2), mission("paused", 3)] });
+    const before = await prisma.mission.findMany({ where: { companyId: company.id }, orderBy: { position: "asc" }, select: { id: true, status: true, updatedAt: true } });
+
+    await page.setViewportSize({ width: 360, height: 900 });
+    // Les liens existants « Modifier l'objectif » mènent au bloc « Votre ambition ».
+    await page.goto(`${baseURL}/entreprise?tab=objectifs#modifier`);
+    const block = page.locator("#modifier");
+    await expect(block.getByRole("heading", { name: "Votre ambition" })).toBeVisible();
+    await expect(page.getByText("Objectif de ce mois")).toHaveCount(0);
+    const field = block.getByLabel("Votre ambition");
+    await expect(field).toHaveValue("Plus de devis");
+
+    // Hors bornes : texte gardé, notes de Paul, rien d'enregistré avant « C'est bien ça ».
+    await field.fill("Doubler mon CA en 5 ans");
+    await block.getByRole("button", { name: "Interpréter" }).click();
+    const understood = block.getByRole("region", { name: "Ce que Paul comprend" });
+    await expect(understood).toContainText("Voici ce que je comprends.");
+    await expect(understood).toContainText("C'est une cible, pas une promesse de résultat.");
+    await expect(understood).toContainText("sans le convertir");
+    expect(await noHorizontalScroll(page)).toBe(true);
+    expect((await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).ambitionText).toBe("Plus de devis");
+
+    // Texte modifié après l'interprétation : la reformulation disparaît.
+    await field.fill("+20 % de CA en 12 mois, sans embaucher, 300 € de pub par mois");
+    await expect(understood).toHaveCount(0);
+    await expect(block.getByRole("button", { name: "C'est bien ça" })).toHaveCount(0);
+    await block.getByRole("button", { name: "Interpréter" }).click();
+    await expect(understood).toContainText("n'autorise aucune dépense");
+    await block.getByRole("button", { name: "C'est bien ça" }).click();
+    await expect(block.getByRole("status")).toHaveText("Votre ambition est enregistrée.");
+
+    const saved = await prisma.company.findUniqueOrThrow({ where: { id: company.id } });
+    expect(saved.ambitionText).toBe("+20 % de CA en 12 mois, sans embaucher, 300 € de pub par mois");
+    expect(saved.objective).toBe(saved.ambitionText);
+    expect(saved.ambitionConfirmedAt).not.toBeNull();
+    expect(saved.ambitionTerms).toMatchObject({ gainPercent: 20, horizonMonths: 12, mediaBudgetPerMonth: 300, recruitment: "no" });
+    const after = await prisma.mission.findMany({ where: { companyId: company.id }, orderBy: { position: "asc" }, select: { id: true, status: true, updatedAt: true } });
+    expect(after).toEqual(before);
+
+    await page.goto(`${baseURL}/resultats`);
+    await expect(page.getByRole("region", { name: "Décisions & traçabilité" })).toContainText("Cap mis à jour avec Paul : +20 % de CA en 12 mois, sans embaucher, 300 € de pub par mois.");
   } finally { await prisma.$disconnect(); }
 });
 
@@ -1487,7 +1536,6 @@ test("clearing optional company profile fields removes them from storage and age
   const previousProfile = {
     website: "https://old.example.invalid",
     socialHandles: "@old_profile",
-    objective: "Ancien objectif à remplacer",
     description: "Ancienne description de test",
     phone: "+33102030405",
     certifications: "Ancien label de test",
@@ -1495,13 +1543,14 @@ test("clearing optional company profile fields removes them from storage and age
   };
 
   try {
-    await prisma.company.update({ where: { id: company.id }, data: previousProfile });
+    await prisma.company.update({ where: { id: company.id }, data: { ...previousProfile, objective: "Objectif gardé par Paul" } });
     await page.goto(`${baseURL}/entreprise`);
     await expect(page.getByPlaceholder("Site web (optionnel — beaucoup de TPE n'en ont pas)")).toHaveValue(previousProfile.website);
     await expect(page.locator('input[placeholder^="Compte Instagram/Facebook"]')).toHaveValue(previousProfile.socialHandles);
 
+    // #282 : l'onglet « Objectifs » n'a plus de champ objectif ; l'ambition se modifie avec Paul.
     await page.getByRole("button", { name: "Objectifs", exact: true }).click();
-    await page.getByPlaceholder("ex: 10 nouveaux clients par mois").fill("");
+    await expect(page.getByPlaceholder("ex: 10 nouveaux clients par mois")).toHaveCount(0);
     await page.getByRole("button", { name: "Informations", exact: true }).click();
     await page.locator("#profile-description").fill("");
     await page.getByPlaceholder("Téléphone affiché aux clients (optionnel)").fill("");
@@ -1516,6 +1565,8 @@ test("clearing optional company profile fields removes them from storage and age
     for (const field of Object.keys(previousProfile) as (keyof typeof previousProfile)[]) {
       expect(cleared[field], `${field} should be cleared`).toBeNull();
     }
+    // Le formulaire n'envoie plus l'objectif : il reste inchangé, jamais vidé.
+    expect(cleared.objective).toBe("Objectif gardé par Paul");
     const agentContext = `${companyProfileLines(cleared)}\n${objectiveLine(cleared)}`;
     for (const value of Object.values(previousProfile)) {
       expect(agentContext).not.toContain(value);
@@ -2628,11 +2679,10 @@ const stepHeading = (page: Page, name: string) => page.getByRole("heading", { le
 /** Étapes 1 à 4 par l'API du parcours, avec les cookies de la page (#280 : la fin de l'analyse avant l'étape 2). */
 async function draftToAccountStep(page: Page) {
   await discoverThenSeeFindings(page.request, baseURL, { firstName: "Claire", companyName: "Atelier Lumen", location: "Lyon" });
-  for (const data of [
-    { action: "confirm_profile", trade: "Électricien", servingArea: "Lyon", targetClients: "Particuliers", offers: "Rénovation électrique" },
-    { action: "confirm_ambition", ambition: "Plus de chantiers cette année" },
-    { action: "interested" },
-  ]) expect((await page.request.post(`${baseURL}/api/bienvenue`, { headers: { Origin: baseURL }, data })).status(), String(data.action)).toBe(200);
+  const post = (data: Record<string, unknown>) => page.request.post(`${baseURL}/api/bienvenue`, { headers: { Origin: baseURL }, data });
+  expect((await post({ action: "confirm_profile", trade: "Électricien", servingArea: "Lyon", targetClients: "Particuliers", offers: "Rénovation électrique" })).status(), "confirm_profile").toBe(200);
+  expect((await interpretThenConfirmAmbition(page.request, baseURL, "Plus de chantiers cette année")).confirmed.status(), "confirm_ambition").toBe(200);
+  expect((await post({ action: "interested" })).status(), "interested").toBe(200);
 }
 
 test("GH-279: five anonymous steps, back and reload keep the answers, and the account comes last", async ({ page }) => {
@@ -2689,12 +2739,28 @@ test("GH-279: five anonymous steps, back and reload keep the answers, and the ac
 
     // Rechargement : l'étape 3 est réaffichée avec ses saisies.
     await page.getByLabel("Votre ambition").fill("court");
-    await page.getByRole("button", { name: "C'est bien ça" }).click();
+    await page.getByRole("button", { name: "Interpréter" }).click();
     await expect(page.locator("main").getByRole("alert")).toHaveText("Décrivez votre ambition en une ou deux phrases (10 caractères au moins).");
+    await expect(page.getByRole("button", { name: "C'est bien ça" })).toHaveCount(0);
     await page.reload();
     await expect(stepHeading(page, "Qu'aimeriez-vous changer ?")).toBeVisible();
     await expect(page.getByText("3 sur 5", { exact: true })).toBeVisible();
-    await page.getByLabel("Votre ambition").fill("+20 % de chiffre d'affaires en 12 mois, sans embaucher");
+    // #282 : Paul reformule, sans rien enregistrer ; la mention de cible accompagne toujours la reformulation.
+    const ambitionText = "+20 % de chiffre d'affaires en 12 mois, sans embaucher";
+    await page.getByLabel("Votre ambition").fill(ambitionText);
+    await page.getByRole("button", { name: "Interpréter" }).click();
+    const understood = page.getByRole("region", { name: "Ce que Paul comprend" });
+    await expect(understood).toContainText("Voici ce que je comprends.");
+    await expect(understood).toContainText("+20 % de chiffre d'affaires");
+    await expect(understood).toContainText("C'est une cible, pas une promesse de résultat. Vous pourrez la corriger à tout moment.");
+    expect(await noHorizontalScroll(page)).toBe(true);
+    // Modifier le texte après l'interprétation retire la reformulation et « C'est bien ça » : il faut interpréter de nouveau.
+    await page.getByLabel("Votre ambition").fill(`${ambitionText} !`);
+    await expect(understood).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "C'est bien ça" })).toHaveCount(0);
+    await page.getByLabel("Votre ambition").fill(ambitionText);
+    await page.getByRole("button", { name: "Interpréter" }).click();
+    await expect(understood).toBeVisible();
     await page.getByRole("button", { name: "C'est bien ça" }).click();
     await expect(page).toHaveURL(`${baseURL}/bienvenue/missions`);
     await expect(stepHeading(page, "Un cap. Trois premières pistes.")).toBeFocused();
@@ -2713,6 +2779,7 @@ test("GH-279: five anonymous steps, back and reload keep the answers, and the ac
     await expect(page).toHaveURL(`${baseURL}/bienvenue`);
     await page.getByRole("button", { name: "Oui, c'est bien moi" }).click();
     await expect(page.getByLabel("Votre ambition")).toHaveValue("+20 % de chiffre d'affaires en 12 mois, sans embaucher");
+    await page.getByRole("button", { name: "Interpréter" }).click();
     await page.getByRole("button", { name: "C'est bien ça" }).click();
     await page.getByRole("button", { name: "Ça m'intéresse" }).click();
     await expect(page).toHaveURL(`${baseURL}/bienvenue/compte`);
@@ -2735,7 +2802,10 @@ test("GH-279: five anonymous steps, back and reload keep the answers, and the ac
       name: "Atelier Lumen", firstName: "Claire", location: "Lyon", website: "https://atelier-lumen.invalid", trade: "Électricien", servingArea: "Lyon",
       targetClients: "Particuliers propriétaires", offers: "Rénovation électrique", ambitionText: "+20 % de chiffre d'affaires en 12 mois, sans embaucher",
       objective: "+20 % de chiffre d'affaires en 12 mois, sans embaucher",
+      // #282 : le texte tel quel et les éléments retenus avec Paul.
+      ambitionTerms: { gainPercent: 20, horizonMonths: 12, recruitment: "no" },
     });
+    expect(company.ambitionConfirmedAt).not.toBeNull();
     // Le premier audit est mis au plan après la création du compte, une seule fois.
     expect(await prisma.actionPlanItem.count({ where: { companyId: company.id, agent: "marketing", timing: "Dès l'inscription" } })).toBe(1);
     expect(company.profileConfirmedAt).not.toBeNull();

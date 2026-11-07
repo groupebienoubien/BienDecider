@@ -68,7 +68,7 @@ export default async function RapportPage() {
             <div className="metric"><div className="metric-label">Écart à combler</div><div className="metric-value">{formatEuros(Math.max(0, target.gap))}</div></div>
             <div className="metric"><div className="metric-label">Clients supplémentaires / {clientGap?.period === "year" ? "an" : "mois"}</div><div className="metric-value">{clientGap ? (clientGap.count === 0 ? "moins de 0,1" : formatDecimal(clientGap.count)) : "Non renseigné"}</div></div>
           </div>
-        ) : <EmptyState agent="co_ceo" title="Aucun objectif chiffré renseigné" says="Donnez-moi un chiffre d’affaires à atteindre et je suivrai l’écart avec vous."><Link className="btn primary" href="/entreprise?tab=objectifs#modifier">Renseigner mon objectif chiffré</Link></EmptyState>}
+        ) : <EmptyState agent="co_ceo" title="Aucun objectif chiffré renseigné" says="Donnez-moi un chiffre d’affaires à atteindre et je suivrai l’écart avec vous."><Link className="btn primary" href="/entreprise?tab=objectifs#chiffres">Renseigner mon objectif chiffré</Link></EmptyState>}
       </section>
       <section aria-label="Semaine par semaine">
         <SectionTitle title="Semaine par semaine">{company.siteSlug && <Link href={`/site/${company.siteSlug}`} target="_blank" rel="noopener noreferrer">Voir le site publié →</Link>}</SectionTitle>

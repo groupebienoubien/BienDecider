@@ -49,7 +49,7 @@ export function parisQuotaWindows(now: Date): QuotaWindows {
 }
 
 /** Réservations qui comptent comme messages à Paul (« Préremplir mon profil » compris) ; toute autre réservation, mise en ligne du site comprise, est un lancement. */
-export const CHAT_USAGE_PURPOSES = ["co_ceo_chat", "onboarding_interpret"] as const;
+export const CHAT_USAGE_PURPOSES = ["co_ceo_chat", "onboarding_interpret", "ambition_interpret"] as const;
 
 /** Compteur vérifié par un appel : messages à Paul ou lancements d'agents. Le budget est commun aux deux. */
 export type UsageCounter = "chat" | "runs";

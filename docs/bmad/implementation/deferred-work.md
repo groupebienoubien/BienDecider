@@ -173,3 +173,9 @@
 - source_spec: `docs/bmad/implementation/spec-gh-280-decouverte-entreprise.md`
   summary: Cumuler le coût des analyses anonymes (y compris des brouillons qui n'aboutissent pas à un compte) dans la trace des visites et une vue d'administration.
   evidence: Le coût n'est gardé que dans OnboardingDraft.analysis, effacé avec le brouillon ; à faire avec #311 (analysisCostUsd de VisitTrace).
+- source_spec: none
+  summary: Carte de Paul « Ajuster ma limite » (`propose_ambition_limit`, §16.3), séparée de #282.
+  evidence: Découpage choisi par Samir le 2026-11-07 : #282 livre l'étape 3 et la modification depuis Entreprise ; la carte reste rattachée à #288.
+- source_spec: `docs/bmad/implementation/spec-gh-282-ambition-reformulee-par-paul.md`
+  summary: Tester le repli d'Entreprise quand le budget est atteint (`AgentRunQuotaError` → analyseur de secours, 200) et l'enregistrement d'usage sous `ambition_interpret`.
+  evidence: En CI, aucune clé de modèle n'est posée, donc `modelFor` sort avant `reserveUsageBudget` ; il faudrait rendre la réservation injectable au niveau de la route.

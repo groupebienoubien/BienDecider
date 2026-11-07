@@ -124,7 +124,8 @@ export function CompanyProfileForm({ guided = false, embedded = false, initialTa
           servingArea,
           website: website.trim(),
           socialHandles: socialHandles.trim(),
-          objective: objective.trim(),
+          // Absent, l'objectif reste tel qu'en base : seul l'ancien formulaire guidé le saisit encore.
+          ...(guided ? { objective: objective.trim() } : {}),
           description: description.trim(),
           phone: phone.trim(),
           certifications: certifications.trim(),
@@ -150,7 +151,7 @@ export function CompanyProfileForm({ guided = false, embedded = false, initialTa
   }
 
   const content = (
-      <div id="modifier">
+      <div>
         {guided ? (
           <PageHeading kicker="BIENVENUE" title="Parlez-nous de votre activité" description="Moins de 5 minutes. Vous pourrez tout modifier plus tard." />
         ) : (
@@ -210,9 +211,10 @@ export function CompanyProfileForm({ guided = false, embedded = false, initialTa
           requestAnimationFrame(() => field.focus());
         }} className="mt-6 flex flex-col gap-3">
           <fieldset disabled={!profileLoaded || loading} className="flex min-w-0 flex-col gap-3">
-          <div data-profile-section="objectifs" hidden={!guided && profileTab !== "objectifs"}>
+          <div id="chiffres" data-profile-section="objectifs" hidden={!guided && profileTab !== "objectifs"}>
           <div className="flex flex-col gap-3">
-          {(!guided || profileInterpreted) && <>
+          {/* Dans Entreprise, l'ambition se modifie avec Paul (bloc « Votre ambition », #282) : plus de champ objectif ici. */}
+          {guided && profileInterpreted && <>
             <label htmlFor="profile-objective" className="field">Quel est votre objectif principal ?</label>
             <input
               id="profile-objective"
