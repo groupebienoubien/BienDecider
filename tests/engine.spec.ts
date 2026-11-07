@@ -2584,6 +2584,9 @@ test("Martine launched after a confirmed profile card reads the new values", asy
   const { createPendingAction, decidePendingAction } = await import("../src/lib/agents/pending-actions");
   const { anthropic } = await import("../src/lib/anthropic");
   const { runMarketingAgent } = await import("../src/lib/agents/marketing");
+  const { prisma } = await import("../src/lib/prisma");
+  // #281 : clients prioritaires et offres principales confirmés à l'étape 2.
+  await prisma.company.update({ where: { id: company.id }, data: { targetClients: "Syndics de copropriété", offers: "Mise aux normes électriques" } });
   const action = await createPendingAction(company.id, "update_profile", { socialHandles: "@atelierlumen.nantes", website: "https://atelierlumen.fr" });
   await decidePendingAction(company.id, action.id, "confirm");
 
@@ -2602,6 +2605,7 @@ test("Martine launched after a confirmed profile card reads the new values", asy
   }
   const context = captured.params!;
   expect(context.system.map((block) => block.text).join(" ")).toContain("Réseaux sociaux déclarés : @atelierlumen.nantes.");
+  expect(context.system.map((block) => block.text).join(" ")).toContain("Clients prioritaires : Syndics de copropriété. Offres principales : Mise aux normes électriques.");
   expect(context.messages[0].content).toContain("https://atelierlumen.fr");
 });
 
@@ -2658,9 +2662,10 @@ test("an expired profile card is refused by the route with a profile wording", a
 
 test("Paul's profile tool creates one card per reply and answers refusals in plain words", async ({ company }) => {
   const { prisma } = await import("../src/lib/prisma");
-  await prisma.company.update({ where: { id: company.id }, data: { website: "https://deja.fr", socialHandles: "@deja" } });
+  await prisma.company.update({ where: { id: company.id }, data: { website: "https://deja.fr", socialHandles: "@deja", targetClients: "Syndics de copropriété", offers: "Mise aux normes électriques" } });
 
   const paul = await capturePaulTools(company.id);
+  expect(paul.system).toContain("Clients prioritaires : Syndics de copropriété. Offres principales : Mise aux normes électriques.");
   expect(paul.system).toContain("Site : https://deja.fr");
   expect(paul.system).toContain("Réseaux sociaux : @deja");
   const tool = paul.tool("propose_profile_update");

@@ -3,11 +3,12 @@ import { anthropic, AGENT_MODEL } from "@/lib/anthropic";
 import { reserveUsageBudget } from "@/lib/agent-runs";
 import { recordUsage, type UsageLike } from "@/lib/usage";
 import { AGENCY_SEARCH_MAX } from "@/lib/agencies/rules";
+import { companyFocusText } from "@/lib/company-profile";
 
 /** Ce que Paul reçoit pour chercher des prescripteurs : l'entreprise et les agences déjà connues, à ne pas reproposer. */
 export type AgencySearchRequest = {
   companyId: string;
-  company: { name: string; trade: string; servingArea: string; description: string | null };
+  company: { name: string; trade: string; servingArea: string; description: string | null; targetClients?: string | null; offers?: string | null };
   known: string[];
 };
 
@@ -15,8 +16,9 @@ export type AgencySearchRequest = {
 export type AgencyFinder = (request: AgencySearchRequest) => Promise<unknown[]>;
 
 export function buildAgencySearchPrompt(request: AgencySearchRequest): string {
+  const focus = companyFocusText(request.company);
   const lines = [
-    `Entreprise : ${request.company.name} — ${request.company.trade}, zone : ${request.company.servingArea}.${request.company.description ? ` Activité : ${request.company.description.slice(0, 500)}.` : ""}`,
+    `Entreprise : ${request.company.name} — ${request.company.trade}, zone : ${request.company.servingArea}.${request.company.description ? ` Activité : ${request.company.description.slice(0, 500)}.` : ""}${focus ? ` ${focus}` : ""}`,
     `Cherche sur le web jusqu'à ${AGENCY_SEARCH_MAX} agences de cette zone qui peuvent recommander cette entreprise à leurs clients (agences immobilières, syndics, architectes, maîtres d'œuvre, gestionnaires de biens… selon le métier).`,
     "Pour chacune : son nom, son secteur, son e-mail professionnel tel qu'il est publié par l'agence elle-même (par exemple contact@ ou agence@), la page web où tu l'as lu, et en une phrase pourquoi elle peut recommander l'entreprise.",
     "Règles : uniquement des organisations réelles et des informations publiques et professionnelles, jamais l'adresse personnelle d'une personne. N'invente aucune agence ni aucune adresse : une agence sans e-mail publié est laissée de côté.",

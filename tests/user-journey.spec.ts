@@ -2732,8 +2732,8 @@ test("GH-279: five anonymous steps, back and reload keep the answers, and the ac
     await expect(page.locator("main").getByRole("alert").first()).toHaveText("Complétez chaque information avant de confirmer.");
     await page.getByLabel("Votre activité").fill("Électricien");
     await expect(page.getByLabel("Votre zone d'intervention")).toHaveValue("Lyon");
-    await page.getByLabel("Vos clients").fill("Particuliers propriétaires");
-    await page.getByLabel("Vos offres").fill("Rénovation électrique");
+    await page.getByLabel("Vos clients prioritaires").fill("Particuliers propriétaires");
+    await page.getByLabel("Vos offres principales").fill("Rénovation électrique");
     await page.getByRole("button", { name: "Oui, c'est bien moi" }).click();
     await expect(stepHeading(page, "Qu'aimeriez-vous changer ?")).toBeFocused();
 
@@ -2774,7 +2774,7 @@ test("GH-279: five anonymous steps, back and reload keep the answers, and the ac
     await expect(stepHeading(page, "Qu'aimeriez-vous changer ?")).toBeFocused();
     await page.getByRole("button", { name: "Retour" }).click();
     await expect(stepHeading(page, "Paul semble avoir compris votre entreprise.")).toBeFocused();
-    await expect(page.getByLabel("Vos offres")).toHaveValue("Rénovation électrique");
+    await expect(page.getByLabel("Vos offres principales")).toHaveValue("Rénovation électrique");
     await page.goto(`${baseURL}/bienvenue/missions`);
     await expect(page).toHaveURL(`${baseURL}/bienvenue`);
     await page.getByRole("button", { name: "Oui, c'est bien moi" }).click();
@@ -2931,8 +2931,9 @@ test("GH-280: « Je n'ai pas de site » reads no web page, announces the four ru
 
     await page.getByRole("button", { name: "Voir mes premiers constats" }).click();
     await expect(stepHeading(page, "Paul semble avoir compris votre entreprise.")).toBeFocused();
-    await expect(page.getByText("À renseigner par vous.")).toHaveCount(3);
+    await expect(page.getByText("À renseigner par vous", { exact: true })).toHaveCount(3);
     await expect(page.getByLabel("Votre zone d'intervention")).toHaveValue("Lyon");
+    await expect(page.getByLabel("Votre zone d'intervention")).toHaveAccessibleDescription("À confirmer");
     expect((await prisma.onboardingDraft.findUniqueOrThrow({ where: { tokenHash } })).profileConfirmed).toBe(false);
     expect(await noHorizontalScroll(page)).toBe(true);
   } finally {
@@ -2966,15 +2967,73 @@ test("GH-280: step 2 shows Paul's hypotheses and what was observed, with its sou
     await page.goto(`${baseURL}/bienvenue`);
     await expect(stepHeading(page, "Paul semble avoir compris votre entreprise.")).toBeVisible();
     await expect(page.getByText("voici ce que Paul a compris de Atelier Lumen", { exact: false })).toBeVisible();
-    await expect(page.getByText("Hypothèse de Paul, à vérifier.")).toHaveCount(3);
-    await expect(page.getByText("À renseigner par vous.")).toHaveCount(1);
+    await expect(page.getByText("À confirmer", { exact: true })).toHaveCount(3);
+    await expect(page.getByText("À renseigner par vous", { exact: true })).toHaveCount(1);
     await expect(page.getByLabel("Votre activité")).toHaveValue("Électricien");
     const seen = page.getByRole("region", { name: "Ce que Paul a observé" });
-    await expect(seen).toContainText("Les champs ci-dessous sont des hypothèses de Paul");
+    await expect(seen).toContainText("Chaque champ ci-dessous indique d'où vient sa valeur");
     const contact = seen.getByRole("listitem").filter({ hasText: "contact@atelier-lumen.test" });
     await expect(contact).toContainText("Observé sur atelier-lumen.test le 7 novembre 2026");
     await expect(seen.getByRole("link", { name: "Votre fiche Google" })).toHaveAttribute("href", "https://maps.google.com/?cid=42");
     expect(await noHorizontalScroll(page)).toBe(true);
+  } finally {
+    await prisma.onboardingDraft.deleteMany({ where: { id: draft.id } });
+    await prisma.$disconnect();
+  }
+});
+
+test("GH-281: step 2 says where each field comes from, and « Non, corriger mes informations » goes back to step 1 without a new analysis", async ({ page }) => {
+  const prisma = journeyDatabase();
+  const website = "https://atelier-lumen.test";
+  const draft = await createTestDraft(prisma, { step: 2, profile: { website, trade: "", servingArea: "", targetClients: "", offers: "" } });
+  const readAt = "2026-11-07T10:00:00.000Z";
+  try {
+    await prisma.onboardingDraft.update({ where: { id: draft.id }, data: { profileConfirmed: false, analysis: {
+      runId: "run-corriger", status: "done", startedAt: readAt, finishedAt: readAt,
+      input: { companyName: "Atelier Lumen", location: "Lyon", website },
+      rubrics: { site: { status: "read" }, google: { status: "not_found" }, zone: { status: "read" }, identity: { status: "read" } },
+      findings: {
+        trade: { value: "Électricien", provenance: { kind: "hypothesis" } }, servingArea: null,
+        targetClients: { value: "Particuliers", provenance: { kind: "hypothesis" } },
+        offers: { value: "Rénovation électrique", provenance: { kind: "observed", source: `${website}/`, readAt } },
+        tone: null, contacts: [], palette: null, logo: null, google: null, pages: [{ url: `${website}/`, readAt }],
+      },
+      cost: { usd: 0.008, inputTokens: 3000, outputTokens: 200, model: "claude-sonnet-5-5" },
+    } } });
+    await page.context().addCookies([{ name: "pepito_draft", value: draft.token, url: baseURL }]);
+    await page.setViewportSize({ width: 360, height: 800 });
+    await page.goto(`${baseURL}/bienvenue`);
+    await expect(stepHeading(page, "Paul semble avoir compris votre entreprise.")).toBeVisible();
+    // Les offres lues sur le site, les hypothèses du modèle à confirmer ; la zone reprend la localisation, à confirmer aussi.
+    await expect(page.getByText("Lu sur le site", { exact: true })).toHaveCount(1);
+    await expect(page.getByText("À confirmer", { exact: true })).toHaveCount(3);
+    await expect(page.getByLabel("Vos offres principales")).toHaveValue("Rénovation électrique");
+    await expect(page.getByLabel("Vos offres principales")).toHaveAccessibleDescription("Lu sur le site");
+    await expect(page.getByLabel("Vos clients prioritaires")).toHaveAccessibleDescription("À confirmer");
+    await expect(page.getByLabel("Votre zone d'intervention")).toHaveValue("Lyon");
+    await expect(page.getByLabel("Votre zone d'intervention")).toHaveAccessibleDescription("À confirmer");
+    // Une valeur modifiée par le dirigeant n'a plus d'étiquette ; la remettre telle quelle la fait revenir.
+    await page.getByLabel("Votre zone d'intervention").fill("Lyon et Villeurbanne");
+    await expect(page.getByLabel("Votre zone d'intervention")).toHaveAccessibleDescription("");
+    await page.getByLabel("Votre zone d'intervention").fill("Lyon");
+    await expect(page.getByLabel("Votre zone d'intervention")).toHaveAccessibleDescription("À confirmer");
+    await expect(page.getByRole("button", { name: "Oui, c'est bien moi" })).toHaveClass(/bg-\[var\(--bd-brand\)\]/);
+    await expect(page.getByRole("button", { name: "Non, corriger mes informations" })).not.toHaveClass(/bg-\[var\(--bd-brand\)\]/);
+    expect(await noHorizontalScroll(page)).toBe(true);
+
+    await page.getByRole("button", { name: "Non, corriger mes informations" }).click();
+    await expect(stepHeading(page, "Votre entreprise. Notre point de départ.")).toBeFocused();
+    await expect(page.getByLabel("Votre prénom")).toHaveValue("Claire");
+    await expect(page.getByLabel("Le nom de votre entreprise")).toHaveValue("Atelier Lumen");
+    await expect(page.getByLabel("Sa localisation")).toHaveValue("Lyon");
+    await expect(page.getByLabel("Votre site (facultatif)")).toHaveValue(website);
+    expect(await prisma.onboardingDraft.findUniqueOrThrow({ where: { id: draft.id } })).toMatchObject({ step: 1, analysis: { runId: "run-corriger" } });
+
+    // Rien n'a changé : retour à l'étape 2 avec la même analyse, sans en relancer une.
+    await page.getByRole("button", { name: "Voir mes premiers constats" }).click();
+    await expect(stepHeading(page, "Paul semble avoir compris votre entreprise.")).toBeFocused();
+    await expect(page.getByText("Lu sur le site", { exact: true })).toHaveCount(1);
+    expect(await prisma.onboardingDraft.findUniqueOrThrow({ where: { id: draft.id } })).toMatchObject({ step: 2, analysis: { runId: "run-corriger" } });
   } finally {
     await prisma.onboardingDraft.deleteMany({ where: { id: draft.id } });
     await prisma.$disconnect();

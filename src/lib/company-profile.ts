@@ -38,6 +38,33 @@ export function cleanOwnerName(value: string): string {
   return value.replace(/[\s\p{Cc}«»]+/gu, " ").trim();
 }
 
+/** Valeur du profil reprise sur une ligne de consigne : texte brut, retours à la ligne et caractères de contrôle ramenés à une espace. */
+function oneLine(value: string | null | undefined): string {
+  return (value ?? "").replace(/[\s\p{Cc}]+/gu, " ").replace(/^\s+|[\s.]+$/g, "");
+}
+
+/**
+ * Clients prioritaires et offres principales confirmés à l'étape 2 (#281), repris dans toute consigne qui présente
+ * l'entreprise : « Clients prioritaires : …. Offres principales : …. », seulement ce qui est renseigné ("" sinon).
+ */
+export function companyFocusText(company: { targetClients?: string | null; offers?: string | null }): string {
+  const parts: string[] = [];
+  const targetClients = oneLine(company.targetClients);
+  const offers = oneLine(company.offers);
+  if (targetClients) parts.push(`Clients prioritaires : ${targetClients}.`);
+  if (offers) parts.push(`Offres principales : ${offers}.`);
+  return parts.join(" ");
+}
+
+/**
+ * Ligne « Entreprise » des consignes de Paul et des agents (#281) : nom, métier et zone de chalandise, puis les clients
+ * prioritaires et les offres principales confirmés à l'étape 2, seulement s'ils sont renseignés.
+ */
+export function companyContextLine(company: { name: string; trade: string; servingArea: string; targetClients?: string | null; offers?: string | null }): string {
+  const focus = companyFocusText(company);
+  return `Entreprise : ${company.name} (métier : ${company.trade}), zone de chalandise : ${company.servingArea}.${focus ? ` ${focus}` : ""}`;
+}
+
 /** Nettoyage d'un champ du profil à l'enregistrement (page Entreprise, compléments, carte de Paul). */
 export function cleanProfileText(field: ProfileTextField, value: unknown): string | null | undefined {
   const text = clearableText(value);

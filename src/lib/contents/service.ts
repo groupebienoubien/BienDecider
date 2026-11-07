@@ -77,7 +77,7 @@ async function rejectionsOf(client: Tx | typeof prisma, contentId: string): Prom
 }
 
 async function draftRequest(companyId: string, mission: Mission, channel: MissionChannel | null, format: ContentFormat, base: DraftRequest["base"], variant: VariantRequest | null, rejections: string[]): Promise<DraftRequest> {
-  const company = await prisma.company.findUniqueOrThrow({ where: { id: companyId }, select: { name: true, trade: true, servingArea: true, ownerName: true, website: true } });
+  const company = await prisma.company.findUniqueOrThrow({ where: { id: companyId }, select: { name: true, trade: true, servingArea: true, ownerName: true, website: true, targetClients: true, offers: true } });
   const names = mission.template === "agencies" ? await agencyNames(companyId, mission.scope) : {};
   return {
     companyId,

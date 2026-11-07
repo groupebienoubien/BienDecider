@@ -4,12 +4,13 @@ import { anthropic, AGENT_MODEL } from "@/lib/anthropic";
 import { reserveUsageBudget } from "@/lib/agent-runs";
 import { recordUsage } from "@/lib/usage";
 import { channelLabel, type MissionChannel } from "@/lib/missions/channels";
+import { companyFocusText } from "@/lib/company-profile";
 import { BODY_MAX, TITLE_MAX, channelBodyLimit, titleLabel, variantLabel, type ContentFormat, type VariantRequest } from "@/lib/contents/rules";
 
 /** Ce que Paul reçoit pour écrire : l'entreprise, la mission, le canal, la version de départ et les refus motivés à respecter. */
 export type DraftRequest = {
   companyId: string;
-  company: { name: string; trade: string; servingArea: string; ownerName: string | null; website: string | null };
+  company: { name: string; trade: string; servingArea: string; ownerName: string | null; website: string | null; targetClients?: string | null; offers?: string | null };
   mission: { title: string; outcome: string; finding: string; scopeSummary: string };
   channel: MissionChannel | null;
   format: ContentFormat;
@@ -33,9 +34,10 @@ const draftSchema = z.object({ title: z.string().trim().min(1).max(TITLE_MAX), b
 
 export function buildDraftPrompt(request: DraftRequest): string {
   const limit = Math.min(channelBodyLimit(request.channel), BODY_MAX);
+  const focus = companyFocusText(request.company);
   const lines = [
     `Tu es Paul, l'associé IA d'une petite entreprise. Écris ${FORMAT_GUIDE[request.format]}.`,
-    `Entreprise : ${request.company.name} — ${request.company.trade}, ${request.company.servingArea}.${request.company.ownerName ? ` Dirigeant : ${request.company.ownerName}.` : ""}${request.company.website ? ` Site : ${request.company.website}.` : ""}`,
+    `Entreprise : ${request.company.name} — ${request.company.trade}, ${request.company.servingArea}.${request.company.ownerName ? ` Dirigeant : ${request.company.ownerName}.` : ""}${request.company.website ? ` Site : ${request.company.website}.` : ""}${focus ? ` ${focus}` : ""}`,
     `Mission : ${request.mission.title}. Résultat recherché : ${request.mission.outcome}. Constat : ${request.mission.finding}. Périmètre : ${request.mission.scopeSummary}.`,
     `Canal : ${request.channel ? channelLabel(request.channel) : "hors canal, diffusé par le dirigeant"}.`,
     `Règles : en français, au nom de l'entreprise (jamais au nom de Paul). N'invente aucun prix, aucune date, aucun chiffre, aucune promesse ni aucune coordonnée absents des informations ci-dessus : laisse plutôt un repère entre crochets à compléter, par exemple [prix] ou [date]. ${titleLabel(request.format)} de ${TITLE_MAX} caractères au plus ; texte de ${limit} caractères au plus.`,

@@ -2,6 +2,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import type { Company } from "@prisma/client";
 import { anthropic, AGENT_MODEL } from "@/lib/anthropic";
 import { companyProfileLines } from "@/lib/agents/personas";
+import { companyFocusText } from "@/lib/company-profile";
 import { prisma } from "@/lib/prisma";
 import { recordUsage } from "@/lib/usage";
 import { PublishRefusedError } from "@/lib/execution-error";
@@ -61,7 +62,7 @@ async function generateSiteHtml(company: Company, brief: string, acknowledgedRev
     messages: [
       {
         role: "user",
-        content: `Entreprise : ${company.name} (${company.trade}), zone : ${company.servingArea}.
+        content: `Entreprise : ${company.name} (${company.trade}), zone : ${company.servingArea}.${companyFocusText(company) ? ` ${companyFocusText(company)}` : ""}
 ${companyProfileLines(company)}
 ${sitePhotoPromptLines(photos)}
 Brief validé par le dirigeant :

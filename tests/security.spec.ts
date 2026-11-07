@@ -260,6 +260,40 @@ test("login does not create unknown accounts; signup is explicit", async ({ requ
   }
 });
 
+test("GH-281: the anonymous analysis cost becomes exactly one usage event of the new account, none when it cost nothing", async ({ request }) => {
+  const prisma = openDatabase();
+  const paidEmail = `security-analysis-cost-${randomUUID()}@example.invalid`;
+  const freeEmail = `security-analysis-free-${randomUUID()}@example.invalid`;
+  const password = "mot-de-passe-valide";
+  const now = new Date().toISOString();
+  const analysis = (cost: { usd: number; inputTokens: number; outputTokens: number; model?: string }) => ({
+    runId: `run-${randomUUID()}`, status: "done", startedAt: now, finishedAt: now, input: { companyName: "Atelier Lumen", location: "Lyon", website: "" },
+    rubrics: { site: { status: "unavailable", reason: "no_site" }, google: { status: "read" }, zone: { status: "read" }, identity: { status: "unavailable", reason: "no_site" } },
+    findings: { trade: null, servingArea: null, targetClients: null, offers: null, tone: null, contacts: [], palette: null, logo: null, google: null, pages: [] }, cost,
+  });
+  try {
+    const paid = await createTestDraft(prisma);
+    await prisma.onboardingDraft.update({ where: { id: paid.id }, data: { analysis: analysis({ usd: 0.02, inputTokens: 3000, outputTokens: 200, model: "claude-sonnet-5-5" }) } });
+    const paidSignup = await request.post(`${baseURL}/api/auth/signup`, { headers: { "x-real-ip": `test-${randomUUID()}`, Cookie: paid.cookie }, data: { email: paidEmail, password, passwordConfirmation: password } });
+    expect(paidSignup.status()).toBe(201);
+    const paidCompany = await prisma.company.findUniqueOrThrow({ where: { ownerEmail: paidEmail } });
+    const events = await prisma.usageEvent.findMany({ where: { companyId: paidCompany.id, agent: "onboarding_analysis" } });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ model: "claude-sonnet-5-5", inputTokens: 3000, outputTokens: 200, costUsd: 0.02 });
+    expect(await prisma.onboardingDraft.count({ where: { id: paid.id } })).toBe(0);
+
+    const free = await createTestDraft(prisma);
+    await prisma.onboardingDraft.update({ where: { id: free.id }, data: { analysis: analysis({ usd: 0, inputTokens: 0, outputTokens: 0 }) } });
+    const freeSignup = await request.post(`${baseURL}/api/auth/signup`, { headers: { "x-real-ip": `test-${randomUUID()}`, Cookie: free.cookie }, data: { email: freeEmail, password, passwordConfirmation: password } });
+    expect(freeSignup.status()).toBe(201);
+    const freeCompany = await prisma.company.findUniqueOrThrow({ where: { ownerEmail: freeEmail } });
+    expect(await prisma.usageEvent.count({ where: { companyId: freeCompany.id, agent: "onboarding_analysis" } })).toBe(0);
+  } finally {
+    await prisma.company.deleteMany({ where: { ownerEmail: { in: [paidEmail, freeEmail] } } });
+    await prisma.$disconnect();
+  }
+});
+
 test("sessions expire and logout or password changes revoke every active cookie", async ({ request }) => {
   const prisma = openDatabase();
   const email = `security-session-${randomUUID()}@example.invalid`;

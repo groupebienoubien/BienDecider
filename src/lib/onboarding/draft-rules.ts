@@ -429,8 +429,23 @@ export function readDraftState(row: { step: number; profile: unknown; ambition: 
 export type ProfileOrigin = Provenance["kind"] | "missing";
 export type ProfilePrefill = { values: Pick<DraftProfile, "trade" | "servingArea" | "targetClients" | "offers">; origins: Record<"trade" | "servingArea" | "targetClients" | "offers", ProfileOrigin> };
 
+const PROFILE_ORIGIN_LABELS: Record<ProfileOrigin, string | null> = {
+  declared: null,
+  observed: "Lu sur le site",
+  hypothesis: "À confirmer",
+  missing: "À renseigner par vous",
+};
+
 /**
- * Préremplissage de l'étape 2 (#280) : ce que le dirigeant a déjà saisi (déclaré), sinon l'hypothèse de l'analyse,
+ * Étiquette d'origine d'un champ de l'étape 2 (FR-5, #281). Seule une valeur observée, avec sa source, est « Lu sur le site »
+ * (FR-4) ; une valeur proposée par le modèle sans source est « À confirmer ». Une valeur saisie par le dirigeant n'en a pas.
+ */
+export function profileOriginLabel(origin: ProfileOrigin): string | null {
+  return PROFILE_ORIGIN_LABELS[origin] ?? null;
+}
+
+/**
+ * Préremplissage de l'étape 2 (#280) : ce que le dirigeant a déjà saisi (déclaré), sinon la valeur de l'analyse avec sa provenance,
  * sinon « À renseigner par vous ». La zone reprend à défaut la localisation déclarée. Rien n'est confirmé ici.
  */
 export function prefillProfile(state: DraftState): ProfilePrefill {
@@ -441,7 +456,13 @@ export function prefillProfile(state: DraftState): ProfilePrefill {
     const found = state.analysis?.findings[field];
     if (state.profile[field]) [values[field], origins[field]] = [state.profile[field], "declared"];
     else if (found?.value) [values[field], origins[field]] = [clip(found.value, LIMITS[field]), found.provenance.kind];
-    else if (field === "servingArea" && state.profile.location) [values[field], origins[field]] = [state.profile.location, "declared"];
+    // Une localisation n'est pas une zone d'intervention : la reprendre est une proposition de Paul, à confirmer.
+    else if (field === "servingArea" && state.profile.location) [values[field], origins[field]] = [state.profile.location, "hypothesis"];
   }
   return { values, origins };
+}
+
+/** L'étape 2 présente-t-elle au moins un champ venu de l'analyse ou proposé par Paul (lu sur le site ou à confirmer) ? */
+export function prefillFromPaul(prefill: ProfilePrefill): boolean {
+  return Object.values(prefill.origins).some((origin) => origin === "hypothesis" || origin === "observed");
 }

@@ -2,6 +2,7 @@ import { z } from "zod";
 import { betaZodTool } from "@anthropic-ai/sdk/helpers/beta/zod";
 import { anthropic, AGENT_MODEL } from "@/lib/anthropic";
 import { prisma } from "@/lib/prisma";
+import { companyContextLine } from "@/lib/company-profile";
 import { getRejectionContext, rejectedDuplicateNotice } from "@/lib/agents/rejection-context";
 import { ensureAgentProduced } from "@/lib/agents/agent-errors";
 import { RUN_CAPS, withRunCapWrite } from "@/lib/agents/run-caps";
@@ -201,7 +202,7 @@ export async function runMarketingAgent(
   // sur le dernier bloc met aussi en cache les définitions d'outils
   // (tools -> system -> messages, dans cet ordre de rendu).
   const stableSystem = `Tu es ${PERSONA.name}, ${PERSONA.role} de BienDecider, un copilote IA pour indépendants et TPE. ${PERSONA.trait}
-Entreprise : ${company.name} (métier : ${company.trade}), zone de chalandise : ${company.servingArea}.
+${companyContextLine(company)}
 Réseaux sociaux déclarés : ${company.socialHandles ?? "aucun"}.
 ${companyProfileLines(company)}
 ${objectiveLine(company)}

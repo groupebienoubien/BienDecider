@@ -24,7 +24,9 @@ import { CONTEXT_DISPLAYED_MESSAGES, CONTEXT_HISTORY_MESSAGES, DEFAULT_CONTEXT_K
 import { chatWindow, lastMessageBefore, latestOf, paulMessageTimes } from "../src/lib/agents/paul-message-times";
 import { WEEKLY_REVIEW_MARKER } from "../src/lib/weekly-review";
 import { RUN_CAPS, capGroup, runCapReachedMessage, withRunCap } from "../src/lib/agents/run-caps";
-import { PROFILE_TEXT_LIMITS, clearableText, profileChanges, profileTextIssue } from "../src/lib/company-profile";
+import { PROFILE_TEXT_LIMITS, clearableText, companyContextLine, companyFocusText, profileChanges, profileTextIssue } from "../src/lib/company-profile";
+import { buildAgencySearchPrompt } from "../src/lib/agencies/finder";
+import { buildDraftPrompt } from "../src/lib/contents/writer";
 import { parisQuotaWindows, usageCounterFor } from "../src/lib/quota-windows";
 import { SITE_PHOTO_BAD_TYPE, SITE_PHOTO_MAX_BYTES, SITE_PHOTO_TOO_LARGE, SITE_PHOTO_TOO_WIDE, checkSitePhoto, cleanSitePhotoAlt, detectSitePhotoType, keepOnlyCompanyPhotos, sitePhotoPathname, sitePhotoPromptLines } from "../src/lib/site/photos";
 import { runStreamingToolLoop, runToolLoop, type ToolLoopOptions, type UsageTotal } from "../src/lib/usage";
@@ -58,11 +60,11 @@ import { firstNameOf } from "../src/lib/workspace";
 import { workspacePageLabel } from "../src/components/workspace-nav";
 import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH, passwordPolicyError } from "../src/lib/password-policy";
 import { startSmtpSink } from "./support/smtp-sink";
-import { ADDRESS_UNAVAILABLE_MESSAGE, STARTER_TEMPLATE_ORDER, applyDraftAction, checkAmbition, checkDiscovery, checkDraftForAccount, clip, emptyDraft, isValidEmail, isValidWebsite, parseDraftAction, pickStarterTemplates, prefillProfile, readDraftState, starterMissions, stepHref } from "../src/lib/onboarding/draft-rules";
+import { ADDRESS_UNAVAILABLE_MESSAGE, STARTER_TEMPLATE_ORDER, applyDraftAction, checkAmbition, checkDiscovery, checkDraftForAccount, clip, emptyDraft, isValidEmail, isValidWebsite, parseDraftAction, pickStarterTemplates, prefillFromPaul, prefillProfile, profileOriginLabel, readDraftState, starterMissions, stepHref } from "../src/lib/onboarding/draft-rules";
 import { AMBITION_TARGET_NOTICE, EMPTY_TERMS, GAIN_QUESTION, HORIZON_QUESTION, RECRUITMENT_UNSPECIFIED_NOTE, REINTERPRET_MESSAGE, boundAmbition, capLabel, interpretationFrom, parseAmbition, readAmbitionTerms, reformulation, type AmbitionTerms } from "../src/lib/ambition-rules";
 import { signInterpretation, verifyInterpretation } from "../src/lib/ambition-token";
 import { anonymousAmbitionModel, interpretAmbition, type AmbitionModel } from "../src/lib/ambition";
-import { ANALYSIS_MESSAGES, ANALYSIS_STALE_MS, analysisFinished, analysisNotice, analysisView, effectiveAnalysis, needsNewAnalysis, newAnalysis, readAnalysis, rubricLabel, rubricsFor, type DraftAnalysis } from "../src/lib/onboarding/analysis-rules";
+import { ANALYSIS_MESSAGES, ANALYSIS_STALE_MS, ANALYSIS_USAGE_AGENT, analysisFinished, analysisUsage, analysisNotice, analysisView, effectiveAnalysis, needsNewAnalysis, newAnalysis, readAnalysis, rubricLabel, rubricsFor, type DraftAnalysis } from "../src/lib/onboarding/analysis-rules";
 import { MAX_LINKS, SITE_READ_LIMITS, checkSiteUrl, decode, extractTitle, extractLogo, extractPalette, htmlToText, isPublicAddress, pickInternalPages, extractLinks, pinnedTransport, readPage, readPublicSite, type SiteTransport } from "../src/lib/onboarding/site-reader";
 import { EXTRACTION_TEXT_MAX, cleanValue, extractionPrompt, normalizePhone, observedContacts, runDraftAnalysis, type Extractor } from "../src/lib/onboarding/analysis";
 import { DEFAULT_ANONYMOUS_ANALYSIS_DAILY_LIMIT, anonymousAnalysisDailyLimit } from "../src/lib/auth-throttle";
@@ -2396,7 +2398,7 @@ test("GH-280: the analysis fills the four rubrics as it goes, keeps provenance a
     expect(result.findings.google).toEqual({ value: "https://maps.google.com/?cid=42", provenance: { kind: "observed", source: "https://maps.google.com/?cid=42", readAt: "2026-11-07T10:00:05.000Z" } });
     // Seul le lien de la fiche est gardé, ni adresse ni avis.
     expect(JSON.stringify(result)).not.toContain("rue des Lampes");
-    expect(result.cost).toEqual({ usd: (3000 * 2 + 200 * 10) / 1_000_000, inputTokens: 3000, outputTokens: 200 });
+    expect(result.cost).toEqual({ usd: (3000 * 2 + 200 * 10) / 1_000_000, inputTokens: 3000, outputTokens: 200, model: "claude-sonnet-5-5" });
     expect(readAnalysis(JSON.parse(JSON.stringify(result)))).toEqual(result);
 
     // Étape 2 préremplie en hypothèses ; rien n'est confirmé.
@@ -2422,7 +2424,7 @@ test("GH-280: without a site, a model or Google, the rubrics say why and nothing
   expect(noSite.findings.trade).toBeNull();
   expect(prefillProfile({ ...emptyDraft(), profile: { ...emptyDraft().profile, location: "Lyon" }, analysis: noSite })).toEqual({
     values: { trade: "", servingArea: "Lyon", targetClients: "", offers: "" },
-    origins: { trade: "missing", servingArea: "declared", targetClients: "missing", offers: "missing" },
+    origins: { trade: "missing", servingArea: "hypothesis", targetClients: "missing", offers: "missing" },
   });
   expect(analysisView(noSite)?.rubrics.map((rubric) => `${rubric.name} : ${rubric.label}`)).toEqual([
     "Site et offres : Non disponible (pas de site)", "Informations publiques : Non disponible (service indisponible)", "Zone et clients : Non disponible (pas de site)", "Identité visuelle : Non disponible (pas de site)",
@@ -2760,4 +2762,102 @@ test("GH-282: the anonymous model quota — limited or throttle in error means f
   // Sans clé : secours direct, aucun quota consommé.
   expect(await anonymousAmbitionModel(throttle({ limited: false }), {}, model)).toBeNull();
   expect(calls).toBe(3);
+});
+
+test("GH-281: each field of step 2 says where it comes from, and only an observed value reads « Lu sur le site »", () => {
+  expect(profileOriginLabel("observed")).toBe("Lu sur le site");
+  expect(profileOriginLabel("hypothesis")).toBe("À confirmer");
+  expect(profileOriginLabel("missing")).toBe("À renseigner par vous");
+  expect(profileOriginLabel("declared")).toBeNull();
+
+  const readAt = "2026-11-07T10:00:00.000Z";
+  const base = newAnalysis(analysisInput, "r", new Date(readAt), "done");
+  const analysis: DraftAnalysis = {
+    ...base,
+    findings: {
+      ...base.findings,
+      trade: { value: "Électricien", provenance: { kind: "hypothesis" } },
+      offers: { value: "Rénovation électrique", provenance: { kind: "observed", source: "https://atelier-lumen.test/", readAt } },
+      targetClients: { value: "Particuliers", provenance: { kind: "hypothesis" } },
+    },
+  };
+  const profile = { ...emptyDraft().profile, firstName: "Claire", companyName: "Atelier Lumen", location: "Lyon", website: analysisInput.website, servingArea: "Lyon et alentours" };
+  const prefill = prefillProfile({ ...emptyDraft(), step: 2, profile, analysis });
+  expect(prefill.origins).toEqual({ trade: "hypothesis", servingArea: "declared", targetClients: "hypothesis", offers: "observed" });
+  expect(Object.fromEntries(Object.entries(prefill.origins).map(([field, origin]) => [field, profileOriginLabel(origin)]))).toEqual({
+    trade: "À confirmer", servingArea: null, targetClients: "À confirmer", offers: "Lu sur le site",
+  });
+  // Sans zone saisie ni trouvée, la localisation est reprise comme proposition de Paul, « À confirmer ».
+  const fromLocation = prefillProfile({ ...emptyDraft(), step: 2, profile: { ...profile, servingArea: "" }, analysis });
+  expect(fromLocation.values.servingArea).toBe("Lyon");
+  expect(profileOriginLabel(fromLocation.origins.servingArea)).toBe("À confirmer");
+
+  // Introduction de l'étape 2 : dès qu'un champ vient de Paul, lu sur le site ou à confirmer.
+  const prefillWith = (origins: Partial<ReturnType<typeof prefillProfile>["origins"]>) => ({
+    values: { trade: "", servingArea: "", targetClients: "", offers: "" },
+    origins: { trade: "missing", servingArea: "missing", targetClients: "missing", offers: "missing", ...origins } as ReturnType<typeof prefillProfile>["origins"],
+  });
+  expect(prefillFromPaul(prefillWith({ offers: "observed" }))).toBe(true);
+  expect(prefillFromPaul(prefillWith({ trade: "hypothesis" }))).toBe(true);
+  expect(prefillFromPaul(prefillWith({ trade: "declared", servingArea: "declared" }))).toBe(false);
+  expect(prefillFromPaul(prefillWith({}))).toBe(false);
+});
+
+test("GH-281: « Non, corriger mes informations » goes back to step 1 keeping the answers and the analysis", () => {
+  const now = new Date("2026-11-07T10:00:00.000Z");
+  const profile = { ...emptyDraft().profile, firstName: "Claire", companyName: "Atelier Lumen", location: "Lyon", website: analysisInput.website };
+  const done = { ...newAnalysis(analysisInput, "r", now), status: "done" as const, finishedAt: now.toISOString() };
+  const atStep2 = { ...emptyDraft(), step: 2 as const, profile, analysis: done };
+  const back = applyDraftAction(atStep2, { action: "back", step: 1 }, now);
+  expect(back).toEqual({ ok: true, state: { ...atStep2, step: 1 } });
+  if (!back.ok) throw new Error("retour refusé");
+  // Rien n'a changé : « Voir mes premiers constats » rouvre l'étape 2 sans nouvelle analyse.
+  expect(needsNewAnalysis(back.state.analysis, analysisInput, now)).toBe(false);
+  expect(applyDraftAction(back.state, { action: "see_findings" }, now)).toEqual({ ok: true, state: { ...atStep2, step: 2 } });
+  // Un profil déjà confirmé le reste si la découverte est renvoyée à l'identique, pas si elle change.
+  const confirmed = { ...back.state, profileConfirmed: true };
+  expect(applyDraftAction(confirmed, { action: "discover", ...profile }, now)).toMatchObject({ ok: true, state: { profileConfirmed: true } });
+  expect(applyDraftAction(confirmed, { action: "discover", ...profile, location: "Villeurbanne" }, now)).toMatchObject({ ok: true, state: { profileConfirmed: false } });
+});
+
+test("GH-281: the « Entreprise » line of Paul and the agents adds the priority clients and main offers when known", () => {
+  const company = { name: "Atelier Lumen", trade: "Électricien", servingArea: "Lyon" };
+  const head = "Entreprise : Atelier Lumen (métier : Électricien), zone de chalandise : Lyon.";
+  expect(companyContextLine(company)).toBe(head);
+  expect(companyContextLine({ ...company, targetClients: null, offers: "  " })).toBe(head);
+  expect(companyContextLine({ ...company, targetClients: "Particuliers\npropriétaires", offers: "Rénovation électrique." })).toBe(
+    `${head} Clients prioritaires : Particuliers propriétaires. Offres principales : Rénovation électrique.`,
+  );
+  expect(companyContextLine({ ...company, offers: "Dépannage" })).toBe(`${head} Offres principales : Dépannage.`);
+  expect(companyContextLine({ ...company, offers: "Dépannage . ", targetClients: " Syndics.. " })).toBe(`${head} Clients prioritaires : Syndics. Offres principales : Dépannage.`);
+  expect(companyFocusText({ targetClients: " . ", offers: null })).toBe("");
+  // Le contenu d'une mission, le site et la recherche d'agences reprennent aussi clients et offres.
+  const focus = "Clients prioritaires : Syndics. Offres principales : Dépannage.";
+  expect(buildAgencySearchPrompt({ companyId: "c", company: { ...company, description: null, targetClients: "Syndics", offers: "Dépannage" }, known: [] })).toContain(`zone : Lyon. ${focus}`);
+  expect(buildAgencySearchPrompt({ companyId: "c", company: { ...company, description: null }, known: [] })).not.toContain("Clients prioritaires");
+  const draft = { companyId: "c", mission: { title: "T", outcome: "O", finding: "F", scopeSummary: "S" }, channel: null, format: "text" as const, base: null, variant: null, rejections: [] };
+  expect(buildDraftPrompt({ ...draft, company: { ...company, ownerName: null, website: null, targetClients: "Syndics", offers: "Dépannage" } })).toContain(`Entreprise : Atelier Lumen — Électricien, Lyon. ${focus}`);
+  expect(buildDraftPrompt({ ...draft, company: { ...company, ownerName: null, website: null } })).not.toContain("Clients prioritaires");
+  expect(readFileSync(join(process.cwd(), "src/lib/site/publish.ts"), "utf8")).toContain("companyFocusText(company)");
+  // Paul et chaque agent passent par la fonction partagée.
+  for (const file of ["co-ceo", "contenu", "demarchage", "marketing", "revision"]) {
+    const source = readFileSync(join(process.cwd(), "src/lib/agents", `${file}.ts`), "utf8");
+    expect(source, file).toContain("${companyContextLine(company)}");
+    expect(source, file).not.toContain("zone de chalandise : ${company.servingArea}");
+  }
+});
+
+test("GH-281: the analysis cost is read with or without its model, and kept for the account only when it cost something", () => {
+  const now = new Date("2026-11-07T10:00:00.000Z");
+  const base = { ...newAnalysis(analysisInput, "r", now), status: "done" as const, finishedAt: now.toISOString() };
+  // Un brouillon d'avant #281 (sans modèle) reste lisible ; son coût n'est pas repris faute de modèle connu.
+  const old = readAnalysis(JSON.parse(JSON.stringify({ ...base, cost: { usd: 0.02, inputTokens: 3000, outputTokens: 200 } })));
+  expect(old?.cost).toEqual({ usd: 0.02, inputTokens: 3000, outputTokens: 200 });
+  expect(analysisUsage(old)).toBeNull();
+  const paid = readAnalysis(JSON.parse(JSON.stringify({ ...base, cost: { usd: 0.02, inputTokens: 3000, outputTokens: 200, model: "claude-sonnet-5-5" } })));
+  expect(analysisUsage(paid)).toEqual({ agent: ANALYSIS_USAGE_AGENT, model: "claude-sonnet-5-5", inputTokens: 3000, outputTokens: 200, costUsd: 0.02 });
+  expect(ANALYSIS_USAGE_AGENT).toBe("onboarding_analysis");
+  expect(analysisUsage({ ...paid!, cost: { ...paid!.cost, usd: 0 } })).toBeNull();
+  expect(analysisUsage(null)).toBeNull();
+  expect(readAnalysis({ ...base, cost: { usd: 0, inputTokens: 0, outputTokens: 0, model: "m".repeat(101) } })).toBeNull();
 });

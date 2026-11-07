@@ -47,7 +47,7 @@ export async function checkAgencyScope(companyId: string, scope: unknown, client
  */
 export async function searchAgencies(companyId: string, finder: AgencyFinder = anthropicAgencyFinder): Promise<{ added: number; total: number }> {
   if (finder === anthropicAgencyFinder && !process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_AUTH_TOKEN) throw new MissionError("M-91");
-  const company = await prisma.company.findUniqueOrThrow({ where: { id: companyId }, select: { name: true, trade: true, servingArea: true, description: true } });
+  const company = await prisma.company.findUniqueOrThrow({ where: { id: companyId }, select: { name: true, trade: true, servingArea: true, description: true, targetClients: true, offers: true } });
   const known = await prisma.lead.findMany({ where: { companyId, segment: AGENCY_SEGMENT }, orderBy: [{ createdAt: "asc" }, { id: "asc" }], select: { name: true, email: true } });
   let found: FoundAgency[];
   try {

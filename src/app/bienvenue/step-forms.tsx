@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { TradeCombobox } from "@/components/trade-combobox";
 import { AmbitionEditor } from "@/components/ambition-editor";
-import { LIMITS, type DraftProfile, type ProfileOrigin, type ProfilePrefill } from "@/lib/onboarding/draft-rules";
+import { LIMITS, profileOriginLabel, type DraftProfile, type ProfilePrefill } from "@/lib/onboarding/draft-rules";
 import type { AnalysisView } from "@/lib/onboarding/analysis-rules";
 import { FieldError, FormError, INPUT_CLASS, PRIMARY_BUTTON, SECONDARY_BUTTON, useDraftAction, type FieldErrors } from "./journey-client";
 
@@ -177,20 +177,19 @@ export function DiscoveryStep({ profile, analysis: initial }: { profile: DraftPr
   );
 }
 
-const ORIGIN_HINTS: Record<ProfileOrigin, string | null> = {
-  declared: null,
-  observed: "Observé par Paul, à vérifier.",
-  hypothesis: "Hypothèse de Paul, à vérifier.",
-  missing: "À renseigner par vous.",
-};
-
-/** Étape 2 : activité, zone, clients et offres, préremplis par l'analyse (hypothèses), à vérifier puis confirmer. */
+/**
+ * Étape 2 : activité, zone, clients prioritaires et offres principales, préremplis par l'analyse, chacun avec son origine
+ * (FR-5), à vérifier puis confirmer. « Non, corriger mes informations » revient à la découverte sans rien effacer (#281).
+ */
 export function ProfileForm({ prefill }: { prefill: ProfilePrefill }) {
   const { busy, error, errors, send } = useDraftAction();
+  const correct = useDraftAction();
   const [values, setValues] = useState(prefill.values);
   const set = (key: keyof typeof values) => (value: string) => setValues((current) => ({ ...current, [key]: value }));
-  const origin = (key: keyof typeof values) => ORIGIN_HINTS[prefill.origins[key]] ?? undefined;
+  // Une valeur modifiée par le dirigeant est la sienne : l'étiquette d'origine disparaît.
+  const origin = (key: keyof typeof values) => (values[key] === prefill.values[key] ? profileOriginLabel(prefill.origins[key]) ?? undefined : undefined);
   const tradeOrigin = origin("trade");
+  const pending = busy || correct.busy;
   return (
     <form noValidate className="flex flex-col gap-5" onSubmit={(event) => { event.preventDefault(); void send({ action: "confirm_profile", ...values }); }}>
       <div className="flex flex-col gap-1.5">
@@ -199,10 +198,13 @@ export function ProfileForm({ prefill }: { prefill: ProfilePrefill }) {
         <FieldError id="trade-error" message={errors.trade} />
       </div>
       <TextField id="servingArea" label="Votre zone d'intervention" hint={origin("servingArea")} value={values.servingArea} onChange={set("servingArea")} errors={errors} max={LIMITS.servingArea} />
-      <TextField id="targetClients" label="Vos clients" hint={origin("targetClients") ?? "Par exemple : des particuliers propriétaires de maisons anciennes."} value={values.targetClients} onChange={set("targetClients")} errors={errors} max={LIMITS.targetClients} />
-      <TextField id="offers" label="Vos offres" hint={origin("offers") ?? "Par exemple : rénovation de salles de bain, dépannage."} value={values.offers} onChange={set("offers")} errors={errors} max={LIMITS.offers} />
-      <FormError error={error} errors={errors} />
-      <div><button type="submit" className={PRIMARY_BUTTON} disabled={busy}>Oui, c&apos;est bien moi</button></div>
+      <TextField id="targetClients" label="Vos clients prioritaires" hint={origin("targetClients") ?? "Par exemple : des particuliers propriétaires de maisons anciennes."} value={values.targetClients} onChange={set("targetClients")} errors={errors} max={LIMITS.targetClients} />
+      <TextField id="offers" label="Vos offres principales" hint={origin("offers") ?? "Par exemple : rénovation de salles de bain, dépannage."} value={values.offers} onChange={set("offers")} errors={errors} max={LIMITS.offers} />
+      <FormError error={error ?? correct.error} errors={errors} />
+      <div className="flex flex-wrap items-center gap-3">
+        <button type="submit" className={PRIMARY_BUTTON} disabled={pending}>Oui, c&apos;est bien moi</button>
+        <button type="button" className={SECONDARY_BUTTON} disabled={pending} onClick={() => correct.send({ action: "back", step: 1 })}>Non, corriger mes informations</button>
+      </div>
     </form>
   );
 }

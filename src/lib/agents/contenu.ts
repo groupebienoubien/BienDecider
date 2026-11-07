@@ -2,6 +2,7 @@ import { z } from "zod";
 import { betaZodTool } from "@anthropic-ai/sdk/helpers/beta/zod";
 import { anthropic, AGENT_MODEL } from "@/lib/anthropic";
 import { prisma } from "@/lib/prisma";
+import { companyContextLine } from "@/lib/company-profile";
 import { getRejectionContext, rejectedDuplicateNotice } from "@/lib/agents/rejection-context";
 import { getFindingsContextForContent } from "@/lib/agents/findings-context";
 import { ensureAgentProduced } from "@/lib/agents/agent-errors";
@@ -85,7 +86,7 @@ export async function runContenuAgent(
   // restent dans le bloc mis en cache ; seuls le brief et les constats de
   // Martine (requêtés à chaque appel) changent run après run.
   const stableSystem = `Tu es ${PERSONA.name}, ${PERSONA.role} de BienDecider, un copilote IA pour indépendants et TPE. ${PERSONA.trait}
-Entreprise : ${company.name} (métier : ${company.trade}), zone de chalandise : ${company.servingArea}.
+${companyContextLine(company)}
 ${companyProfileLines(company)}
 ${objectiveLine(company)}
 ${directionLine(company.direction)}

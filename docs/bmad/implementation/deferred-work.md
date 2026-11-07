@@ -179,3 +179,9 @@
 - source_spec: `docs/bmad/implementation/spec-gh-282-ambition-reformulee-par-paul.md`
   summary: Tester le repli d'Entreprise quand le budget est atteint (`AgentRunQuotaError` → analyseur de secours, 200) et l'enregistrement d'usage sous `ambition_interpret`.
   evidence: En CI, aucune clé de modèle n'est posée, donc `modelFor` sort avant `reserveUsageBudget` ; il faudrait rendre la réservation injectable au niveau de la route.
+- source_spec: none
+  summary: À l'inscription, reprendre ce que l'analyse anonyme a lu en constats (`AuditFinding`, `SourceRead`), au format des premiers constats sourcés.
+  evidence: Choix de Samir du 2026-11-07 : séparé de #281 et laissé à #292, qui définit les constats (certitude, fait, conséquence, source, date).
+- source_spec: `docs/bmad/implementation/spec-gh-281-corriger-ce-que-paul-a-compris.md`
+  summary: Cumuler le coût de toutes les analyses d'un même brouillon (chaque relance de la découverte remet le coût à 0) avant de le reprendre au compte.
+  evidence: `newAnalysis` crée un coût nul à chaque relance ; seule la dernière analyse devient un `UsageEvent` à l'inscription. À traiter avec le cumul des coûts anonymes de #311.
