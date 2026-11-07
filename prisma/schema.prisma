@@ -64,6 +64,13 @@ model Company {
   emailVerifiedAt DateTime? @default(now()) // adresse confirmée par le lien envoyé (story 6.4). Défaut = confirmée (comptes antérieurs et fixtures de tests) ; seule l'inscription (src/app/api/auth/signup) crée un compte avec null
   suspendedAt     DateTime? // compte bloqué par un administrateur (story 7.1) : données et site public conservés, plus de session ni de lancement
   createdAt       DateTime  @default(now())
+  // Parcours d'entrée en cinq étapes (#279, addendum §4.1) : repris du brouillon anonyme à la création du compte.
+  firstName          String? // prénom du dirigeant (étape 1)
+  location           String? // localisation de l'entreprise (étape 1)
+  targetClients      String? // clients visés (étape 2)
+  offers             String? // offres (étape 2)
+  profileConfirmedAt DateTime? // profil confirmé à l'étape 2
+  ambitionText       String? // ambition en texte libre, conservée telle quelle (étape 3, spec §11)
   channels        ChannelConnection[]
   proposals       AgentProposal[]
   auditFindings   AuditFinding[]
@@ -788,4 +795,19 @@ model ChannelAccess {
   company     Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
   @@unique([companyId, channel])
+}
+
+/// Brouillon anonyme du parcours d'entrée (#279, addendum §6) : lié au cookie `pepito_draft` (24 h) dont seule l'empreinte SHA-256 est gardée. Aucune entreprise ni mission n'existe avant l'étape 5.
+model OnboardingDraft {
+  id                String   @id @default(cuid())
+  tokenHash         String   @unique
+  step              Int      @default(1) // étape courante, 1 à 5
+  profile           Json // prénom, entreprise, localisation, site, activité, zone, clients, offres
+  ambition          Json? // { text }
+  profileConfirmed  Boolean  @default(false)
+  diagnosticReady   Boolean  @default(false)
+  createdAt         DateTime @default(now())
+  expiresAt         DateTime
+
+  @@index([expiresAt])
 }

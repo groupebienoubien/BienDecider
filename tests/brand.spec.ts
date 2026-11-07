@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import Loading from "../src/app/loading";
@@ -58,7 +58,7 @@ test("BienDecider public identity, metadata, contact and responsive pages", asyn
   // Page de découverte (#310, FR-1) : « C'est parti » en haut et en bas, « Retrouver mon compte » en accès secondaire.
   const starts = page.getByRole("link", { name: "C'est parti", exact: true });
   await expect(starts).toHaveCount(2);
-  for (const link of await starts.all()) await expect(link).toHaveAttribute("href", "/signup");
+  for (const link of await starts.all()) await expect(link).toHaveAttribute("href", "/bienvenue");
   const accounts = page.getByRole("link", { name: "Retrouver mon compte", exact: true });
   await expect(accounts).toHaveCount(2);
   for (const link of await accounts.all()) await expect(link).toHaveAttribute("href", "/login");
@@ -79,7 +79,7 @@ test("BienDecider public identity, metadata, contact and responsive pages", asyn
   await expect(page.getByRole("link", { name: "Contact", exact: true })).toHaveAttribute("href", "mailto:contact@biendecider.com");
   for (const width of [320, 390, 1440]) {
     await page.setViewportSize({ width, height: 900 });
-    for (const path of ["/", "/login", "/signup", "/canaux", "/cgu", "/confidentialite", "/mentions-legales"]) {
+    for (const path of ["/", "/login", "/bienvenue", "/canaux", "/cgu", "/confidentialite", "/mentions-legales"]) {
       await page.goto(`${baseURL}${path}`);
       await expect(page.locator("h1").filter({ hasNotText: /^Chargement en cours$/ })).toBeVisible();
       await expect(page).toHaveTitle("BienDecider");
@@ -95,15 +95,32 @@ test("BienDecider public identity, metadata, contact and responsive pages", asyn
     await expect(page.locator("main").getByRole("link", { name: "contact@biendecider.com", exact: true }).first()).toHaveAttribute("href", "mailto:contact@biendecider.com");
   }
   await page.goto(`${baseURL}/login`);
-  await expect(page.getByRole("link", { name: "Créer un compte", exact: true })).toHaveAttribute("href", "/signup");
+  await expect(page.getByRole("link", { name: "Créer un compte", exact: true })).toHaveAttribute("href", "/bienvenue");
+  // L'ancienne inscription mène au parcours d'entrée (#279).
   await page.goto(`${baseURL}/signup`);
-  await expect(page.getByRole("heading", { name: "Créer un compte", exact: true })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Se connecter", exact: true })).toHaveAttribute("href", "/login");
+  await expect(page).toHaveURL(`${baseURL}/bienvenue`);
+  await expect(page.getByRole("heading", { level: 1, name: "Votre entreprise. Notre point de départ.", exact: true })).toBeVisible();
+  await expect(page.getByText("1 sur 5", { exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Revoir le concept", exact: true })).toHaveAttribute("href", "/");
 });
+
+/** Brouillon mené jusqu'à l'étape 5 par l'API du parcours, avec les cookies de la page. */
+async function reachAccountStep(page: Page) {
+  const post = (data: Record<string, unknown>) => page.request.post(`${baseURL}/api/bienvenue`, { headers: { Origin: baseURL }, data });
+  for (const data of [
+    { action: "discover", firstName: "Claire", companyName: "Atelier Lumen", location: "Lyon" },
+    { action: "confirm_profile", trade: "Électricien", servingArea: "Lyon", targetClients: "Particuliers", offers: "Rénovation électrique" },
+    { action: "confirm_ambition", ambition: "Plus de chantiers cette année" },
+    { action: "interested" },
+  ]) expect((await post(data)).status(), String(data.action)).toBe(200);
+}
+
 test("login and signup fields have permanent labels, autocomplete and a password toggle", async ({ page }) => {
-  for (const [path, autocomplete] of [["/login", "current-password"], ["/signup", "new-password"]] as const) {
+  for (const [path, autocomplete] of [["/login", "current-password"], ["/bienvenue/compte", "new-password"]] as const) {
     await page.setViewportSize({ width: 320, height: 900 });
+    if (path === "/bienvenue/compte") await reachAccountStep(page);
     await page.goto(`${baseURL}${path}`);
+    await expect(page).toHaveURL(`${baseURL}${path}`);
     const email = page.getByLabel("Adresse e-mail", { exact: true });
     const password = page.getByLabel("Mot de passe", { exact: true });
     await expect(email).toHaveAttribute("autocomplete", "email");
@@ -127,7 +144,7 @@ test("the privacy policy distinguishes processing from publication and is reacha
 test("public pages keep named fields, a visible focus ring and readable text", async ({ page }) => {
   for (const width of [320, 1440]) {
     await page.setViewportSize({ width, height: 900 });
-    for (const path of ["/", "/login", "/signup", "/canaux", "/cgu", "/confidentialite", "/mentions-legales"]) {
+    for (const path of ["/", "/login", "/bienvenue", "/canaux", "/cgu", "/confidentialite", "/mentions-legales"]) {
       await page.goto(`${baseURL}${path}`);
       const unnamed = await page.evaluate(() => [...document.querySelectorAll("input:not([type=hidden]), select, textarea")]
         .filter((field) => !(field.getAttribute("aria-label") || field.getAttribute("aria-labelledby") || (field as HTMLInputElement).labels?.length))

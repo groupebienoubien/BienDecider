@@ -9,6 +9,7 @@ import { createSessionToken, SESSION_MAX_AGE_SECONDS } from "../src/lib/session-
 import { hashPassword } from "../src/lib/password";
 import { signupDayKey } from "../src/lib/signup-rules";
 import { startSmtpSink } from "./support/smtp-sink";
+import { createTestDraft } from "./support/onboarding-draft";
 
 config({ quiet: true });
 
@@ -104,7 +105,8 @@ const GUARDED_ROUTES: Guarded[] = [
 const PUBLIC_ROUTES: Record<string, string> = {
   "/api/auth/login": "point d'entrée de la connexion",
   "/api/auth/logout": "revoque les sessions et efface le cookie de l'appelant (POST même origine)",
-  "/api/auth/signup": "inscription publique avec création explicite de compte",
+  "/api/auth/signup": "inscription publique avec création explicite de compte, à l'étape 5 du brouillon anonyme",
+  "/api/bienvenue": "parcours d'entrée anonyme : brouillon lié au cookie pepito_draft, sans compte ni session (POST même origine)",
   "/api/auth/forgot-password": "demande de lien de réinitialisation : réponse identique que le compte existe ou non (POST même origine)",
   "/api/auth/reset-password": "le jeton à usage unique du lien reçu par e-mail fait foi, sans session (POST même origine)",
   "/api/auth/verify-email": "le jeton à usage unique du lien reçu par e-mail fait foi, sans session (POST même origine)",
@@ -215,17 +217,40 @@ test("login does not create unknown accounts; signup is explicit", async ({ requ
     expect((await missingLogin.json()).error).toContain("Aucun compte associé à cet email");
     expect(await prisma.company.count({ where: { ownerEmail: email } })).toBe(0);
 
-    const signup = await request.post(`${baseURL}/api/auth/signup`, { data: { email, password } });
+    // Sans brouillon arrivé à l'étape 5, aucun compte (#279).
+    const withoutDraft = await request.post(`${baseURL}/api/auth/signup`, { data: { email, password, passwordConfirmation: password } });
+    expect(withoutDraft.status()).toBe(409);
+    expect(await withoutDraft.json()).toMatchObject({ code: "M-10", href: "/bienvenue" });
+    const early = await createTestDraft(prisma, { step: 4 });
+    const earlySignup = await request.post(`${baseURL}/api/auth/signup`, { headers: { Cookie: early.cookie }, data: { email, password, passwordConfirmation: password } });
+    expect(earlySignup.status()).toBe(409);
+    expect(await earlySignup.json()).toMatchObject({ code: "M-10", href: "/bienvenue/missions" });
+    const expired = await createTestDraft(prisma, { expiresAt: new Date(Date.now() - 1000) });
+    expect((await request.post(`${baseURL}/api/auth/signup`, { headers: { Cookie: expired.cookie }, data: { email, password, passwordConfirmation: password } })).status()).toBe(409);
+    expect(await prisma.company.count({ where: { ownerEmail: email } })).toBe(0);
+
+    const draft = await createTestDraft(prisma);
+    expect((await request.post(`${baseURL}/api/auth/signup`, { headers: { Cookie: draft.cookie }, data: { email, password, passwordConfirmation: "autre-mot-de-passe" } })).status()).toBe(400);
+    const signup = await request.post(`${baseURL}/api/auth/signup`, { headers: { Cookie: draft.cookie }, data: { email, password, passwordConfirmation: password } });
     expect(signup.status()).toBe(201);
     expect(signup.headers()["set-cookie"]).toContain("pepito_session=");
     expect(signup.headers()["set-cookie"].toLowerCase()).toContain("httponly");
     expect(signup.headers()["set-cookie"].toLowerCase()).toContain("expires=");
-    expect(await signup.json()).toMatchObject({ hasCompany: false });
+    expect(await signup.json()).toMatchObject({ hasCompany: true, href: "/strategie" });
     expect(await prisma.company.count({ where: { ownerEmail: email } })).toBe(1);
+    expect(await prisma.onboardingDraft.count({ where: { id: draft.id } })).toBe(0);
 
-    const duplicateSignup = await request.post(`${baseURL}/api/auth/signup`, { data: { email, password } });
+    // Adresse déjà utilisée : message neutre, brouillon conservé, aucun second compte.
+    const other = await createTestDraft(prisma);
+    const duplicateSignup = await request.post(`${baseURL}/api/auth/signup`, { headers: { Cookie: other.cookie }, data: { email, password, passwordConfirmation: password } });
     expect(duplicateSignup.status()).toBe(409);
+    const duplicate = await duplicateSignup.json();
+    expect(duplicate).toMatchObject({ code: "address_unavailable", recoverHref: "/login" });
+    expect(duplicate.error).not.toMatch(/existe|a déjà un compte/);
+    expect(duplicateSignup.headers()["set-cookie"]).toBeUndefined();
+    expect(await prisma.onboardingDraft.count({ where: { id: other.id } })).toBe(1);
     expect(await prisma.company.count({ where: { ownerEmail: email } })).toBe(1);
+    await prisma.onboardingDraft.deleteMany({ where: { id: { in: [early.id, expired.id, other.id] } } });
   } finally {
     await prisma.company.deleteMany({ where: { ownerEmail: email } });
     await prisma.$disconnect();
@@ -279,7 +304,8 @@ test("five wrong passwords lock the account, even for the right password", async
   const password = "mot-de-passe-correct";
   const login = (candidate: string) => request.post(`${baseURL}/api/auth/login`, { data: { email, password: candidate } });
   try {
-    expect((await request.post(`${baseURL}/api/auth/signup`, { data: { email, password } })).status()).toBe(201);
+    const draft = await createTestDraft(prisma);
+    expect((await request.post(`${baseURL}/api/auth/signup`, { headers: { Cookie: draft.cookie }, data: { email, password, passwordConfirmation: password } })).status()).toBe(201);
     for (let attempt = 1; attempt <= 4; attempt++) {
       const wrong = await login("mauvais-mot-de-passe");
       expect(wrong.status(), `attempt ${attempt}`).toBe(401);
@@ -301,7 +327,7 @@ test("five wrong passwords lock the account, even for the right password", async
   }
 });
 
-test("one IP cannot flood login or signup, and other IPs and successful logins are unaffected", async ({ request }) => {
+test("one IP cannot flood login or signup, and other IPs and successful logins are unaffected", async ({ request, playwright }) => {
   const prisma = openDatabase();
   const email = `security-ip-${randomUUID()}@example.invalid`;
   const password = "mot-de-passe-correct";
@@ -310,7 +336,8 @@ test("one IP cannot flood login or signup, and other IPs and successful logins a
   const login = (address: Record<string, string>, who = `absent-${randomUUID()}@example.invalid`, candidate = "mauvais-mot-de-passe") =>
     request.post(`${baseURL}/api/auth/login`, { headers: address, data: { email: who, password: candidate } });
   try {
-    expect((await request.post(`${baseURL}/api/auth/signup`, { headers: bystander, data: { email, password } })).status()).toBe(201);
+    const draft = await createTestDraft(prisma);
+    expect((await request.post(`${baseURL}/api/auth/signup`, { headers: { ...bystander, Cookie: draft.cookie }, data: { email, password, passwordConfirmation: password } })).status()).toBe(201);
     for (let attempt = 1; attempt <= 20; attempt++) {
       expect((await login(flooder)).status(), `attempt ${attempt}`).toBe(404);
     }
@@ -327,14 +354,42 @@ test("one IP cannot flood login or signup, and other IPs and successful logins a
       expect((await login(regular, email, password)).status(), `success ${attempt}`).toBe(200);
     }
 
-    const registrar = { "x-real-ip": `test-${randomUUID()}` };
+    // Le brouillon est conservé quand l'adresse est déjà utilisée : le même sert à chaque essai.
+    const registrar = { "x-real-ip": `test-${randomUUID()}`, Cookie: (await createTestDraft(prisma)).cookie };
     for (let attempt = 1; attempt <= 10; attempt++) {
-      expect((await request.post(`${baseURL}/api/auth/signup`, { headers: registrar, data: { email, password } })).status(), `signup ${attempt}`).toBe(409);
+      expect((await request.post(`${baseURL}/api/auth/signup`, { headers: registrar, data: { email, password, passwordConfirmation: password } })).status(), `signup ${attempt}`).toBe(409);
     }
-    const signupBlocked = await request.post(`${baseURL}/api/auth/signup`, { headers: registrar, data: { email, password } });
+    const signupBlocked = await request.post(`${baseURL}/api/auth/signup`, { headers: registrar, data: { email, password, passwordConfirmation: password } });
     expect(signupBlocked.status()).toBe(429);
     expect(Number(signupBlocked.headers()["retry-after"])).toBeGreaterThan(0);
     expect(await prisma.company.count({ where: { ownerEmail: email } })).toBe(1);
+
+    // Brouillons anonymes : 20 par IP et par jour ; une autre IP n'est pas touchée.
+    // Un contexte neuf par visiteur : ni la session ni le brouillon d'un appel précédent ne sont renvoyés.
+    const starter = { "x-real-ip": `test-${randomUUID()}`, Origin: baseURL };
+    const discover = async (headers: Record<string, string>) => {
+      const visitor = await playwright.request.newContext();
+      try {
+        const response = await visitor.post(`${baseURL}/api/bienvenue`, { headers, data: { action: "discover", firstName: "Claire", companyName: "Atelier", location: "Lyon" } });
+        const [status, responseHeaders] = [response.status(), response.headers()];
+        return { status: () => status, headers: () => responseHeaders };
+      } finally {
+        await visitor.dispose();
+      }
+    };
+    const createdDrafts: string[] = [];
+    for (let attempt = 1; attempt <= 20; attempt++) {
+      const response = await discover(starter);
+      expect(response.status(), `draft ${attempt}`).toBe(200);
+      createdDrafts.push(/pepito_draft=([^;]+)/.exec(response.headers()["set-cookie"] ?? "")?.[1] ?? "");
+    }
+    const draftBlocked = await discover(starter);
+    expect(draftBlocked.status()).toBe(429);
+    expect(Number(draftBlocked.headers()["retry-after"])).toBeGreaterThan(0);
+    expect((await discover({ "x-real-ip": `test-${randomUUID()}`, Origin: baseURL })).status()).toBe(200);
+    const hashes = createdDrafts.map((token) => createHash("sha256").update(token).digest("hex"));
+    expect(await prisma.onboardingDraft.count({ where: { tokenHash: { in: hashes } } })).toBe(20);
+    await prisma.onboardingDraft.deleteMany({ where: { tokenHash: { in: hashes } } });
   } finally {
     await prisma.company.deleteMany({ where: { ownerEmail: email } });
     await prisma.$disconnect();
@@ -362,6 +417,7 @@ test("malformed or oversized input gets a clear 4xx, never a server error", asyn
     const targets: [string, string, boolean?][] = [
       ["POST", "/api/auth/login", false],
       ["POST", "/api/auth/signup", false],
+      ["POST", "/api/bienvenue", false],
       ["POST", "/api/auth/verify-email", false],
       ["POST", "/api/auth/forgot-password", false],
       ["POST", "/api/auth/reset-password", false],
@@ -408,6 +464,10 @@ test("malformed or oversized input gets a clear 4xx, never a server error", asyn
     // Une carte de Paul ne se confirme pas depuis une autre origine.
     const forged = await request.post(`${baseURL}/api/co-ceo/pending-actions/${card.id}`, { headers: { Cookie: cookie, Origin: "https://attacker.invalid" }, data: { decision: "confirm" } });
     expect(forged.status()).toBe(403);
+    // Le parcours d'entrée ne crée aucun brouillon depuis une autre origine (#279).
+    const forgedDraft = await request.post(`${baseURL}/api/bienvenue`, { headers: { Origin: "https://attacker.invalid" }, data: { action: "discover", firstName: "Claire", companyName: "Atelier", location: "Lyon" } });
+    expect(forgedDraft.status()).toBe(403);
+    expect(forgedDraft.headers()["set-cookie"] ?? "").not.toContain("pepito_draft=");
     expect((await prisma.paulPendingAction.findUniqueOrThrow({ where: { id: card.id } })).status).toBe("pending");
   } finally {
     await prisma.company.delete({ where: { id: company.id } });
@@ -511,7 +571,13 @@ test("an explicit administrator closes or caps signups, and the server enforces 
   const created: string[] = [];
   const fresh = () => { const email = `security-cap-${randomUUID()}@example.invalid`; created.push(email); return email; };
   // Une adresse IP distincte par appel : la limite par IP ne doit pas masquer ce que ce test vérifie.
-  const signup = (email: string) => request.post(`${baseURL}/api/auth/signup`, { headers: { "x-real-ip": `test-${randomUUID()}` }, data: { email, password } });
+  // Et un brouillon à l'étape 5 par appel (#279).
+  const signup = async (email: string) => request.post(`${baseURL}/api/auth/signup`, { headers: { "x-real-ip": `test-${randomUUID()}`, Cookie: (await createTestDraft(prisma)).cookie }, data: { email, password, passwordConfirmation: password } });
+  const openAccountStep = async () => {
+    await page.context().clearCookies();
+    await page.context().addCookies([{ name: "pepito_draft", value: (await createTestDraft(prisma)).token, url: baseURL }]);
+    await page.goto(`${baseURL}/bienvenue/compte`);
+  };
   const today = signupDayKey(new Date());
   const controlPath = `${baseURL}/api/admin/signup-control`;
   let createdAdmin = false;
@@ -541,7 +607,7 @@ test("an explicit administrator closes or caps signups, and the server enforces 
     expect((await closed.json()).error).toContain("fermées");
     expect(closed.headers()["set-cookie"]).toBeUndefined();
     expect(await prisma.company.count({ where: { ownerEmail: closedEmail } })).toBe(0);
-    await page.goto(`${baseURL}/signup`);
+    await openAccountStep();
     await expect(page.getByText("Les inscriptions sont fermées pour le moment.")).toBeVisible();
     await expect(page.getByLabel("Adresse e-mail")).toHaveCount(0);
     const login = await request.post(`${baseURL}/api/auth/login`, { headers: { "x-real-ip": `test-${randomUUID()}` }, data: { email: existing, password } });
@@ -558,7 +624,7 @@ test("an explicit administrator closes or caps signups, and the server enforces 
     expect(Number(refused.headers()["retry-after"])).toBeGreaterThan(0);
     expect(await prisma.company.count({ where: { ownerEmail: { in: [first, second] } } })).toBe(1);
     expect((await prisma.signupDay.findUniqueOrThrow({ where: { day: today } })).count).toBe(1);
-    await page.goto(`${baseURL}/signup`);
+    await openAccountStep();
     await expect(page.getByText("Inscriptions complètes aujourd'hui, revenez demain.")).toBeVisible();
 
     // Un e-mail déjà inscrit ne consomme pas d'emplacement ; le compteur du jour et l'alerte s'affichent dans l'administration.
@@ -634,7 +700,10 @@ test("an unverified address blocks Paul and every send until the emailed link is
   const headers = (cookie: string) => ({ Cookie: cookie, Origin: baseURL });
   const verify = (token: string) => request.post(`${baseURL}/api/auth/verify-email`, { headers: { Origin: baseURL, "x-real-ip": `test-${randomUUID()}` }, data: { token } });
   try {
-    expect((await request.post(`${baseURL}/api/auth/signup`, { headers: { "x-real-ip": `test-${randomUUID()}` }, data: { email, password: "mot-de-passe-valide" } })).status()).toBe(201);
+    // Le blocage n'existe que si REQUIRE_EMAIL_VERIFICATION=true est posée sur le serveur, comme en CI (#279).
+    test.skip(process.env.REQUIRE_EMAIL_VERIFICATION !== "true", "Requires REQUIRE_EMAIL_VERIFICATION=true on the server, as configured in CI.");
+    const draft = await createTestDraft(prisma);
+    expect((await request.post(`${baseURL}/api/auth/signup`, { headers: { "x-real-ip": `test-${randomUUID()}`, Cookie: draft.cookie }, data: { email, password: "mot-de-passe-valide", passwordConfirmation: "mot-de-passe-valide" } })).status()).toBe(201);
     await expect.poll(() => sink.messages.length, { timeout: 15000 }).toBe(1);
     expect(sink.messages[0]).toMatchObject({ to: [email], subject: "Confirmez votre adresse e-mail BienDecider" });
     const first = tokenIn(sink.messages[0]);
@@ -729,7 +798,8 @@ test("password recovery: a one-hour single-use link replaces the password, close
   try {
     // Un mot de passe existant de 6 caractères continue de fonctionner à la connexion ; la règle de 8 caractères ne vaut que pour les nouveaux.
     expect((await login(shortEmail, "abc123")).status()).toBe(200);
-    expect((await request.post(`${baseURL}/api/auth/signup`, { headers: ip(), data: { email: `security-pw-${randomUUID()}@example.invalid`, password: "1234567" } })).status()).toBe(400);
+    // Cookie explicite : la session ouverte par la connexion ci-dessus n'est pas renvoyée (une session refuse l'inscription, 409).
+    expect((await request.post(`${baseURL}/api/auth/signup`, { headers: { ...ip(), Cookie: "pepito_draft=absent" }, data: { email: `security-pw-${randomUUID()}@example.invalid`, password: "1234567" } })).status()).toBe(400);
     const change = await request.post(`${baseURL}/api/auth/password`, { headers: { Cookie: sessionCookie(shortEmail, legacy.sessionVersion), Origin: baseURL }, data: { currentPassword: "abc123", newPassword: "1234567" } });
     expect(change.status()).toBe(400);
     expect((await change.json()).error).toBe("Le mot de passe doit contenir au moins 8 caractères.");

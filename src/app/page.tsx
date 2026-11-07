@@ -11,8 +11,8 @@ import { getSessionEmail } from "@/lib/session";
  * Paul est le seul personnage présenté (D3). Le détail par canal est sur /canaux (#224).
  */
 
-// Parcours d'entrée : l'inscription actuelle, en attendant /bienvenue (#279).
-const START_HREF = "/signup";
+// Parcours d'entrée en cinq étapes, compte créé en dernier (#279).
+const START_HREF = "/bienvenue";
 const SPACE_HREF = "/strategie";
 
 // Exemple d'illustration : données inventées, aucune entreprise cliente (#88).

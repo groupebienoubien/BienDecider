@@ -6,6 +6,7 @@ import { channelLabel, type MissionChannel } from "@/lib/missions/channels";
 export const JOURNAL_TEXTS = {
   "J-01": "Mission créée avec Paul : {titre}. Périmètre et brouillon à vérifier avant lancement.",
   "J-02": "Profil corrigé. Les contenus doivent être relus et les programmations ont été annulées.",
+  "J-04": "Profil et ambition confirmés. Aucune mission lancée.",
   "J-07": "{canal} {suite}.",
   "J-08": "Priorité confirmée avec Paul : {mission}. Aucune mission lancée automatiquement.",
   "J-09": "Mission écartée du plan : {mission}.",

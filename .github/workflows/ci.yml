@@ -39,6 +39,8 @@ jobs:
       DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/ci
       # Dummy value, only meaningful for the throwaway database above.
       SESSION_SECRET: ci-only-session-secret-not-used-anywhere-else
+      # Le POC laisse tout utiliser avant la confirmation de l'adresse (#279) ; la CI garde le blocage pour que les tests de sécurité le vérifient.
+      REQUIRE_EMAIL_VERIFICATION: "true"
       UX_TEST_BASE_URL: http://localhost:3000
       # Closes the admin area to an explicit list, as required before opening to external users.
       ADMIN_EMAILS: ci-admin@example.invalid

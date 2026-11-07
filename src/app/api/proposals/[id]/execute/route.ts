@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { emailVerificationGateOpen } from "@/lib/email-verification-policy";
 import { prisma } from "@/lib/prisma";
 import { PublishRefusedError } from "@/lib/execution-error";
 import { publishSiteFromProposal } from "@/lib/site/publish";
@@ -33,7 +34,7 @@ export async function POST(
   }
   const prepareOnly = prepareOnlyRefusal(company);
   if (prepareOnly) return NextResponse.json(prepareOnly, { status: 403 });
-  if (!company.emailVerifiedAt) {
+  if (!emailVerificationGateOpen(company.emailVerifiedAt)) {
     return NextResponse.json({ error: EMAIL_NOT_VERIFIED_MESSAGE }, { status: 403 });
   }
 

@@ -2,7 +2,7 @@ import { createHmac } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 
-export type ThrottleScope = "login" | "signup" | "token" | "reset";
+export type ThrottleScope = "login" | "signup" | "token" | "reset" | "draft";
 
 export const MAX_ATTEMPTS = 5;
 const LOCK_DURATION_MS = 15 * 60 * 1000;
@@ -30,6 +30,8 @@ const POLICY: Record<ThrottleScope, { limit: number; windowSeconds: number }> = 
   token: { limit: 30, windowSeconds: 60 * 60 },
   // Demandes de lien de réinitialisation : chacune peut envoyer un e-mail à un tiers.
   reset: { limit: 5, windowSeconds: 60 * 60 },
+  // Brouillons anonymes du parcours d'entrée (#279) : chacun garde des saisies 24 h ; la limite borne le stockage.
+  draft: { limit: 20, windowSeconds: 24 * 60 * 60 },
 };
 
 export type ThrottleResult = { key: string; limited: false } | { key: string; limited: true; retryAfterSeconds: number } | null;

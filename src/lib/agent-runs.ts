@@ -1,4 +1,5 @@
 import { after } from "next/server";
+import { emailVerificationGateOpen } from "@/lib/email-verification-policy";
 import { Prisma, type AgentRun, type ActionPlanItem } from "@prisma/client";
 import { createHash, randomUUID } from "node:crypto";
 import { publicRun } from "@/lib/agent-run-types";
@@ -437,7 +438,7 @@ async function assertRunQuota(tx: Prisma.TransactionClient, companyId: string, c
   // Story 7.1 : un compte suspendu ne lance rien (la session est déjà coupée ; ce garde-fou couvre les chemins internes).
   if (company.suspendedAt) throw new AgentRunQuotaError(ACCOUNT_SUSPENDED_MESSAGE, "suspended");
   // Story 6.4 : une adresse non confirmée ne consomme ni lancement ni budget IA (inscription ouverte).
-  if (!company.emailVerifiedAt) throw new EmailNotVerifiedError();
+  if (!emailVerificationGateOpen(company.emailVerifiedAt)) throw new EmailNotVerifiedError();
   const { dayStart, monthStart, nextMonthName } = parisQuotaWindows(now);
   const chatPurposes = [...CHAT_USAGE_PURPOSES];
 

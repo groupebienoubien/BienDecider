@@ -7,19 +7,30 @@ import { searchTrades } from "@/lib/trades";
 export function TradeCombobox({
   value,
   onChange,
+  id = "profile-trade",
+  label = "Métier",
+  invalid,
+  describedBy,
 }: {
   value: string;
   onChange: (value: string) => void;
+  /** Parcours d'entrée (#279) : « Votre activité », avec son message d'erreur. */
+  id?: string;
+  label?: string;
+  invalid?: boolean;
+  describedBy?: string;
 }) {
   const [open, setOpen] = useState(false);
   const suggestions = searchTrades(value);
 
   return (
     <div className="relative flex flex-col gap-3">
-      <label htmlFor="profile-trade" className="text-sm font-medium">Métier</label>
+      <label htmlFor={id} className="text-sm font-medium">{label}</label>
       <input
-        id="profile-trade"
+        id={id}
         required
+        aria-invalid={invalid ? true : undefined}
+        aria-describedby={describedBy}
         placeholder="Votre métier (ex: plombier, restaurant...)"
         value={value}
         onChange={(e) => {

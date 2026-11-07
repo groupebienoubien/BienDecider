@@ -1,7 +1,7 @@
 import { test as base, expect, type Page } from "@playwright/test";
 import { PrismaClient, type Company } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
-import { randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { config } from "dotenv";
 import { encryptGmailToken } from "../src/lib/oauth/gmail";
 import { companyProfileLines, objectiveLine } from "../src/lib/agents/personas";
@@ -1361,7 +1361,7 @@ test("story 5.2: the diagnostic prepares the plan on a click, then links to it o
     await expect(prepare).toHaveClass(/primary/);
     await expect(page.getByRole("button", { name: /Actualiser le diagnostic/ })).not.toHaveClass(/primary/);
     await prepare.click();
-    await expect(page.getByRole("alert").filter({ hasText: "limite de lancements" })).toBeVisible();
+    await expect(page.locator("main").getByRole("alert").filter({ hasText: "limite de lancements" })).toBeVisible();
     await page.unroute("**/api/co-ceo/plan");
 
     // Préparation : le bouton dit qu'elle est en cours, puis mène au plan.
@@ -2607,6 +2607,212 @@ test("GH-168: Stratégie shows the finding behind each mission, its certainty an
       expect(await source.evaluate((dialog) => dialog.scrollWidth <= dialog.clientWidth)).toBe(true);
     }
   } finally {
+    await prisma.$disconnect();
+  }
+});
+
+// Parcours d'entrée en cinq étapes, compte créé en dernier (#279).
+function journeyDatabase(): PrismaClient {
+  if (!process.env.DATABASE_URL || !process.env.SESSION_SECRET) throw new Error("DATABASE_URL and SESSION_SECRET are required for UX tests.");
+  const databaseHost = new URL(process.env.DATABASE_URL).hostname;
+  if (!["localhost", "127.0.0.1", "[::1]"].includes(databaseHost) && process.env.UX_TEST_ALLOW_REMOTE_DB !== "1") {
+    throw new Error("UX tests refuse a non-local DATABASE_URL. Set UX_TEST_ALLOW_REMOTE_DB=1 only for a dedicated development database, never the prototype one.");
+  }
+  return new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }) });
+}
+
+const noHorizontalScroll = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
+const stepHeading = (page: Page, name: string) => page.getByRole("heading", { level: 1, name, exact: true });
+
+/** Étapes 1 à 4 par l'API du parcours, avec les cookies de la page. */
+async function draftToAccountStep(page: Page) {
+  for (const data of [
+    { action: "discover", firstName: "Claire", companyName: "Atelier Lumen", location: "Lyon" },
+    { action: "confirm_profile", trade: "Électricien", servingArea: "Lyon", targetClients: "Particuliers", offers: "Rénovation électrique" },
+    { action: "confirm_ambition", ambition: "Plus de chantiers cette année" },
+    { action: "interested" },
+  ]) expect((await page.request.post(`${baseURL}/api/bienvenue`, { headers: { Origin: baseURL }, data })).status(), String(data.action)).toBe(200);
+}
+
+test("GH-279: five anonymous steps, back and reload keep the answers, and the account comes last", async ({ page }) => {
+  test.setTimeout(120000);
+  const prisma = journeyDatabase();
+  const email = `ux-bienvenue-${randomUUID()}@example.invalid`;
+  try {
+    await page.setViewportSize({ width: 360, height: 800 });
+    await page.goto(`${baseURL}/bienvenue`);
+    await expect(stepHeading(page, "Votre entreprise. Notre point de départ.")).toBeFocused();
+    await expect(page.getByText("1 sur 5", { exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Revoir le concept" })).toHaveAttribute("href", "/");
+    await expect(page.getByRole("navigation", { name: "Étapes du parcours" }).getByRole("listitem")).toHaveCount(5);
+    expect(await noHorizontalScroll(page)).toBe(true);
+
+    // Site invalide : rien n'est enregistré, le message est sous le champ et annoncé.
+    await page.getByLabel("Votre prénom").fill("Claire");
+    await page.getByLabel("Le nom de votre entreprise").fill("Atelier Lumen");
+    await page.getByLabel("Sa localisation").fill("Lyon");
+    await page.getByLabel("Votre site (facultatif)").fill("ftp://x");
+    await page.getByRole("button", { name: "Continuer" }).click();
+    await expect(page.locator("main").getByRole("alert")).toHaveText("Utilisez une adresse commençant par https:// ou http://.");
+    await expect(page.getByLabel("Votre site (facultatif)")).toHaveAttribute("aria-invalid", "true");
+    expect((await page.context().cookies()).some((cookie) => cookie.name === "pepito_draft")).toBe(false);
+
+    // Clavier : le site corrigé, la validation se fait au clavier et le focus va sur le titre de l'étape suivante.
+    await page.getByLabel("Votre site (facultatif)").fill("https://atelier-lumen.fr");
+    await page.getByLabel("Votre site (facultatif)").press("Enter");
+    await expect(stepHeading(page, "Paul semble avoir compris votre entreprise.")).toBeFocused();
+    await expect(page.getByText("2 sur 5", { exact: true })).toBeVisible();
+    const draftCookie = (await page.context().cookies()).find((cookie) => cookie.name === "pepito_draft");
+    expect(draftCookie).toMatchObject({ httpOnly: true, sameSite: "Lax" });
+    expect(draftCookie!.expires * 1000 - Date.now()).toBeGreaterThan(23 * 3_600_000);
+    expect(await prisma.company.count({ where: { ownerEmail: email } })).toBe(0);
+
+    // Saut d'étape : l'étape 5 renvoie à l'étape courante.
+    await page.goto(`${baseURL}/bienvenue/compte`);
+    await expect(page).toHaveURL(`${baseURL}/bienvenue`);
+    await expect(stepHeading(page, "Paul semble avoir compris votre entreprise.")).toBeVisible();
+
+    await page.getByRole("button", { name: "Oui, c'est bien moi" }).click();
+    await expect(page.locator("main").getByRole("alert").first()).toHaveText("Complétez chaque information avant de confirmer.");
+    await page.getByLabel("Votre activité").fill("Électricien");
+    await expect(page.getByLabel("Votre zone d'intervention")).toHaveValue("Lyon");
+    await page.getByLabel("Vos clients").fill("Particuliers propriétaires");
+    await page.getByLabel("Vos offres").fill("Rénovation électrique");
+    await page.getByRole("button", { name: "Oui, c'est bien moi" }).click();
+    await expect(stepHeading(page, "Qu'aimeriez-vous changer ?")).toBeFocused();
+
+    // Rechargement : l'étape 3 est réaffichée avec ses saisies.
+    await page.getByLabel("Votre ambition").fill("court");
+    await page.getByRole("button", { name: "C'est bien ça" }).click();
+    await expect(page.locator("main").getByRole("alert")).toHaveText("Décrivez votre ambition en une ou deux phrases (10 caractères au moins).");
+    await page.reload();
+    await expect(stepHeading(page, "Qu'aimeriez-vous changer ?")).toBeVisible();
+    await expect(page.getByText("3 sur 5", { exact: true })).toBeVisible();
+    await page.getByLabel("Votre ambition").fill("+20 % de chiffre d'affaires en 12 mois, sans embaucher");
+    await page.getByRole("button", { name: "C'est bien ça" }).click();
+    await expect(page).toHaveURL(`${baseURL}/bienvenue/missions`);
+    await expect(stepHeading(page, "Un cap. Trois premières pistes.")).toBeFocused();
+    const pistes = page.getByRole("list", { name: "Trois premières pistes" }).getByRole("listitem");
+    await expect(pistes).toHaveCount(3);
+    await expect(pistes.first()).toContainText("Résultat recherché");
+    expect(await noHorizontalScroll(page)).toBe(true);
+
+    // Retour jusqu'à l'étape 2 : l'ambition est gardée mais à reconfirmer.
+    await page.getByRole("button", { name: "Retour" }).click();
+    await expect(stepHeading(page, "Qu'aimeriez-vous changer ?")).toBeFocused();
+    await page.getByRole("button", { name: "Retour" }).click();
+    await expect(stepHeading(page, "Paul semble avoir compris votre entreprise.")).toBeFocused();
+    await expect(page.getByLabel("Vos offres")).toHaveValue("Rénovation électrique");
+    await page.goto(`${baseURL}/bienvenue/missions`);
+    await expect(page).toHaveURL(`${baseURL}/bienvenue`);
+    await page.getByRole("button", { name: "Oui, c'est bien moi" }).click();
+    await expect(page.getByLabel("Votre ambition")).toHaveValue("+20 % de chiffre d'affaires en 12 mois, sans embaucher");
+    await page.getByRole("button", { name: "C'est bien ça" }).click();
+    await page.getByRole("button", { name: "Ça m'intéresse" }).click();
+    await expect(page).toHaveURL(`${baseURL}/bienvenue/compte`);
+    await expect(stepHeading(page, "Retrouvez votre stratégie.")).toBeFocused();
+    expect(await prisma.company.count({ where: { ownerEmail: email } })).toBe(0);
+
+    // Étape 5 : deux mots de passe identiques, puis l'arrivée sur la stratégie.
+    await page.getByLabel("Adresse e-mail").fill(email);
+    await page.getByLabel("Mot de passe", { exact: true }).fill("mot-de-passe-valide");
+    await page.getByLabel("Confirmez le mot de passe").fill("autre-mot-de-passe");
+    await page.getByRole("button", { name: "Créer mon compte" }).click();
+    await expect(page.locator("main").getByRole("alert")).toHaveText("Les deux mots de passe ne correspondent pas.");
+    await page.getByLabel("Confirmez le mot de passe").fill("mot-de-passe-valide");
+    await page.getByRole("button", { name: "Créer mon compte" }).click();
+    await expect(page).toHaveURL(`${baseURL}/strategie`);
+    await expect(page.getByRole("heading", { name: "Bonjour Claire." })).toBeVisible();
+
+    const company = await prisma.company.findUniqueOrThrow({ where: { ownerEmail: email }, include: { missions: true, journalEntries: true } });
+    expect(company).toMatchObject({
+      name: "Atelier Lumen", firstName: "Claire", location: "Lyon", website: "https://atelier-lumen.fr", trade: "Électricien", servingArea: "Lyon",
+      targetClients: "Particuliers propriétaires", offers: "Rénovation électrique", ambitionText: "+20 % de chiffre d'affaires en 12 mois, sans embaucher",
+      objective: "+20 % de chiffre d'affaires en 12 mois, sans embaucher",
+    });
+    // Le premier audit est mis au plan après la création du compte, une seule fois.
+    expect(await prisma.actionPlanItem.count({ where: { companyId: company.id, agent: "marketing", timing: "Dès l'inscription" } })).toBe(1);
+    expect(company.profileConfirmedAt).not.toBeNull();
+    expect(company.missions).toHaveLength(3);
+    expect(company.missions.every((mission) => mission.status === "proposed" && mission.firstLaunchedAt === null)).toBe(true);
+    expect(company.journalEntries.filter((entry) => entry.code === "J-04")).toHaveLength(1);
+    expect((await page.context().cookies()).some((cookie) => cookie.name === "pepito_draft")).toBe(false);
+
+    // Session ouverte : le parcours mène à la stratégie.
+    await page.goto(`${baseURL}/bienvenue`);
+    await expect(page).toHaveURL(`${baseURL}/strategie`);
+    await page.goto(`${baseURL}/signup`);
+    await expect(page).toHaveURL(`${baseURL}/strategie`);
+  } finally {
+    await prisma.company.deleteMany({ where: { ownerEmail: email } });
+    await prisma.$disconnect();
+  }
+});
+
+test("GH-279: an address already in use keeps the draft and points to « Retrouver mon compte » without saying the account exists", async ({ page }) => {
+  const prisma = journeyDatabase();
+  const email = `ux-bienvenue-taken-${randomUUID()}@example.invalid`;
+  try {
+    await prisma.company.create({ data: { ownerEmail: email, name: "Déjà inscrit", trade: "Artisan", servingArea: "Paris" } });
+    await draftToAccountStep(page);
+    await page.goto(`${baseURL}/bienvenue/compte`);
+    await page.getByLabel("Adresse e-mail").fill(email);
+    await page.getByLabel("Mot de passe", { exact: true }).fill("mot-de-passe-valide");
+    await page.getByLabel("Confirmez le mot de passe").fill("mot-de-passe-valide");
+    await page.getByRole("button", { name: "Créer mon compte" }).click();
+    const alert = page.locator("main").getByRole("alert");
+    await expect(alert).toContainText("Nous ne pouvons pas créer de compte avec cette adresse.");
+    await expect(alert).not.toContainText(/existe|a déjà un compte/);
+    await expect(alert.getByRole("link", { name: "Retrouver mon compte" })).toHaveAttribute("href", "/login");
+    expect(await prisma.company.count({ where: { ownerEmail: email } })).toBe(1);
+    await page.reload();
+    await expect(stepHeading(page, "Retrouvez votre stratégie.")).toBeVisible();
+  } finally {
+    await prisma.company.deleteMany({ where: { ownerEmail: email } });
+    await prisma.$disconnect();
+  }
+});
+
+test("GH-279: an expired draft starts over at step 1, and existing accounts never re-enter the journey", async ({ page }) => {
+  const prisma = journeyDatabase();
+  const named = `ux-bienvenue-named-${randomUUID()}@example.invalid`;
+  const unnamed = `ux-bienvenue-unnamed-${randomUUID()}@example.invalid`;
+  const token = randomBytes(32).toString("base64url");
+  try {
+    await prisma.onboardingDraft.create({ data: {
+      tokenHash: createHash("sha256").update(token).digest("hex"), step: 3, profileConfirmed: true,
+      profile: { firstName: "Claire", companyName: "Atelier Lumen", location: "Lyon" }, expiresAt: new Date(Date.now() - 1000),
+    } });
+    await page.context().addCookies([{ name: "pepito_draft", value: token, url: baseURL }]);
+    await page.goto(`${baseURL}/bienvenue`);
+    await expect(stepHeading(page, "Votre entreprise. Notre point de départ.")).toBeVisible();
+    await expect(page.getByLabel("Votre prénom")).toHaveValue("");
+
+    // Sans session, l'ancienne étape de profil mène au parcours.
+    await page.context().clearCookies();
+    await page.goto(`${baseURL}/onboarding`);
+    await expect(page).toHaveURL(`${baseURL}/bienvenue`);
+
+    const withName = await prisma.company.create({ data: { ownerEmail: named, name: "Atelier existant", trade: "Artisan", servingArea: "Paris" } });
+    await page.context().addCookies([{ name: "pepito_session", value: createSessionToken(named, withName.sessionVersion, process.env.SESSION_SECRET!), url: baseURL }]);
+    for (const path of ["/bienvenue", "/bienvenue/missions", "/bienvenue/compte", "/onboarding"]) {
+      await page.goto(`${baseURL}${path}`);
+      await expect(page, path).toHaveURL(`${baseURL}/strategie`);
+    }
+    const refused = await page.request.post(`${baseURL}/api/bienvenue`, { headers: { Origin: baseURL }, data: { action: "discover", firstName: "Claire", companyName: "Atelier", location: "Lyon" } });
+    expect(refused.status()).toBe(409);
+    expect(await refused.json()).toMatchObject({ href: "/strategie" });
+
+    // Un ancien compte sans nom garde le formulaire de /onboarding, jamais /bienvenue.
+    const withoutName = await prisma.company.create({ data: { ownerEmail: unnamed, name: "", trade: "", servingArea: "" } });
+    await page.context().clearCookies();
+    await page.context().addCookies([{ name: "pepito_session", value: createSessionToken(unnamed, withoutName.sessionVersion, process.env.SESSION_SECRET!), url: baseURL }]);
+    await page.goto(`${baseURL}/bienvenue`);
+    await expect(page).toHaveURL(`${baseURL}/onboarding`);
+    await expect(page.getByRole("button", { name: "Valider et lancer mon audit" })).toBeVisible();
+  } finally {
+    await prisma.onboardingDraft.deleteMany({ where: { tokenHash: createHash("sha256").update(token).digest("hex") } });
+    await prisma.company.deleteMany({ where: { ownerEmail: { in: [named, unnamed] } } });
     await prisma.$disconnect();
   }
 });
