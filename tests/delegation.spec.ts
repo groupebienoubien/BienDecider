@@ -58,7 +58,13 @@ import { firstNameOf } from "../src/lib/workspace";
 import { workspacePageLabel } from "../src/components/workspace-nav";
 import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH, passwordPolicyError } from "../src/lib/password-policy";
 import { startSmtpSink } from "./support/smtp-sink";
-import { ADDRESS_UNAVAILABLE_MESSAGE, STARTER_TEMPLATE_ORDER, applyDraftAction, checkAmbition, checkDiscovery, checkDraftForAccount, clip, emptyDraft, isValidEmail, isValidWebsite, parseDraftAction, pickStarterTemplates, readDraftState, starterMissions, stepHref } from "../src/lib/onboarding/draft-rules";
+import { ADDRESS_UNAVAILABLE_MESSAGE, STARTER_TEMPLATE_ORDER, applyDraftAction, checkAmbition, checkDiscovery, checkDraftForAccount, clip, emptyDraft, isValidEmail, isValidWebsite, parseDraftAction, pickStarterTemplates, prefillProfile, readDraftState, starterMissions, stepHref } from "../src/lib/onboarding/draft-rules";
+import { ANALYSIS_MESSAGES, ANALYSIS_STALE_MS, analysisFinished, analysisNotice, analysisView, effectiveAnalysis, needsNewAnalysis, newAnalysis, readAnalysis, rubricLabel, rubricsFor, type DraftAnalysis } from "../src/lib/onboarding/analysis-rules";
+import { MAX_LINKS, SITE_READ_LIMITS, checkSiteUrl, decode, extractTitle, extractLogo, extractPalette, htmlToText, isPublicAddress, pickInternalPages, extractLinks, pinnedTransport, readPage, readPublicSite, type SiteTransport } from "../src/lib/onboarding/site-reader";
+import { EXTRACTION_TEXT_MAX, cleanValue, extractionPrompt, normalizePhone, observedContacts, runDraftAnalysis, type Extractor } from "../src/lib/onboarding/analysis";
+import { DEFAULT_ANONYMOUS_ANALYSIS_DAILY_LIMIT, anonymousAnalysisDailyLimit } from "../src/lib/auth-throttle";
+import { createServer as createHttpServer } from "node:http";
+import { gzipSync } from "node:zlib";
 import { emailVerificationGateOpen } from "../src/lib/email-verification-policy";
 import { BetaToolRunner } from "@anthropic-ai/sdk/lib/tools/BetaToolRunner";
 
@@ -2074,9 +2080,14 @@ test("GH-279: each step of the entry journey opens only once the previous one is
   expect(isValidWebsite("atelier-lumen.fr")).toBe(false);
   expect(checkDiscovery({ firstName: " Claire ", companyName: "Atelier", location: "Lyon", website: "" })).toEqual({ ok: true, values: { firstName: "Claire", companyName: "Atelier", location: "Lyon", website: "" } });
 
-  const discovered = applyDraftAction(emptyDraft(), { action: "discover", firstName: "Claire", companyName: "Atelier Lumen", location: "Lyon", website: "https://atelier-lumen.fr" });
-  expect(discovered).toMatchObject({ ok: true, state: { step: 2, profileConfirmed: false, profile: { firstName: "Claire", website: "https://atelier-lumen.fr" } } });
-  if (!discovered.ok) throw new Error("discover");
+  const launched = applyDraftAction(emptyDraft(), { action: "discover", firstName: "Claire", companyName: "Atelier Lumen", location: "Lyon", website: "https://atelier-lumen.fr" });
+  // #280 : « Découvrir » reste à l'étape 1 le temps de l'analyse ; l'étape 2 s'ouvre par « Voir les constats ».
+  expect(launched).toMatchObject({ ok: true, state: { step: 1, profileConfirmed: false, profile: { firstName: "Claire", website: "https://atelier-lumen.fr" } } });
+  if (!launched.ok) throw new Error("discover");
+  const analysed = { ...launched.state, analysis: { ...newAnalysis({ companyName: "Atelier Lumen", location: "Lyon", website: "https://atelier-lumen.fr" }, "run-1"), status: "done" as const } };
+  const discovered = applyDraftAction(analysed, { action: "see_findings" });
+  expect(discovered).toMatchObject({ ok: true, state: { step: 2, profileConfirmed: false } });
+  if (!discovered.ok) throw new Error("see_findings");
 
   // Étape 2 : activité, zone, clients et offres (M-05) ; une autre action renvoie à l'étape courante.
   expect(applyDraftAction(discovered.state, { action: "confirm_profile", trade: "Électricien", servingArea: "", targetClients: "x", offers: "y" })).toMatchObject({ ok: false, code: "M-05", errors: { servingArea: "Complétez chaque information avant de confirmer." } });
@@ -2123,7 +2134,7 @@ test("GH-279: each step of the entry journey opens only once the previous one is
   expect(applyDraftAction(back.state, { action: "goto", step: 5 })).toEqual({ ok: false, kind: "wrong_step", step: 2 });
   // Un profil modifié à l'étape 1 se reconfirme à l'étape 2.
   const edited = applyDraftAction({ ...back.state, step: 1 }, { action: "discover", firstName: "Claire", companyName: "Atelier Lumen et fils", location: "Lyon", website: "https://atelier-lumen.fr" });
-  expect(edited).toMatchObject({ ok: true, state: { step: 2, profileConfirmed: false } });
+  expect(edited).toMatchObject({ ok: true, state: { step: 1, profileConfirmed: false } });
 
   expect(parseDraftAction({ action: "launch" })).toBeNull();
   expect(parseDraftAction({ action: "back", step: 2, extra: true })).toEqual({ action: "back", step: 2 });
@@ -2177,4 +2188,418 @@ test("GH-279: e-mail verification blocks nothing during the POC, unless REQUIRE_
   walk(join(process.cwd(), "src"));
   const offenders = files.filter((file) => !file.endsWith("shell-data.ts") && /!\s*company\.emailVerifiedAt\b|emailVerifiedAt\s*!==\s*null/.test(readFileSync(file, "utf8")));
   expect(offenders).toEqual([]);
+});
+
+// Découverte de l'entreprise avant le compte (#280).
+const PUBLIC_IP = { address: "93.184.216.34", family: 4 as const };
+const analysisInput = { companyName: "Atelier Lumen", location: "Lyon", website: "https://atelier-lumen.test" };
+
+test("GH-280: the site reader refuses private, loopback, link-local and reserved addresses, in IPv4 and IPv6", async () => {
+  for (const ip of ["127.0.0.1", "10.0.0.5", "172.16.3.4", "192.168.1.1", "169.254.169.254", "100.64.0.1", "0.0.0.0", "224.0.0.1", "255.255.255.255", "198.18.0.1", "192.0.2.10"]) expect(isPublicAddress(ip), ip).toBe(false);
+  for (const ip of ["::1", "::", "fe80::1", "fc00::1", "fd12:3456::1", "ff02::1", "::ffff:127.0.0.1", "::ffff:7f00:1", "64:ff9b::a00:5", "2001:db8::1", "2002:a00:5::1", "fe80::1%eth0"]) expect(isPublicAddress(ip), ip).toBe(false);
+  for (const ip of ["93.184.216.34", "8.8.8.8", "2606:4700:4700::1111", "2a01:cb00::1"]) expect(isPublicAddress(ip), ip).toBe(true);
+  expect(isPublicAddress("pas-une-ip")).toBe(false);
+
+  const resolve = async (hostname: string) => {
+    const table: Record<string, { address: string; family: 4 | 6 }[]> = {
+      "atelier-lumen.test": [PUBLIC_IP],
+      "interne.test": [{ address: "10.0.0.5", family: 4 }],
+      "mixte.test": [PUBLIC_IP, { address: "fd00::1", family: 6 }],
+      "v6.test": [{ address: "::1", family: 6 }],
+    };
+    if (!table[hostname]) throw new Error("ENOTFOUND");
+    return table[hostname];
+  };
+  const check = (url: string) => checkSiteUrl(new URL(url), resolve);
+  expect(await check("https://atelier-lumen.test/")).toEqual({ ok: true, address: PUBLIC_IP });
+  for (const url of ["http://127.0.0.1/", "http://10.0.0.5/", "http://2130706433/", "http://0x7f.0.0.1/", "http://[::1]/", "http://[::ffff:127.0.0.1]/", "http://interne.test/", "http://mixte.test/", "http://v6.test/", "http://localhost/", "http://atelier-lumen.test:8080/", "ftp://atelier-lumen.test/", "http://claire:secret@atelier-lumen.test/"]) {
+    expect(await check(url), url).toEqual({ ok: false, reason: "refused" });
+  }
+  expect(await check("https://inconnu.test/")).toEqual({ ok: false, reason: "unreadable" });
+  expect(await check("http://atelier-lumen.test:443/")).toMatchObject({ ok: true });
+
+  // Aucune requête n'est faite vers une adresse refusée.
+  const calls: string[] = [];
+  const transport: SiteTransport = async (url) => { calls.push(url.toString()); return new Response("<p>ok</p>", { headers: { "content-type": "text/html" } }); };
+  expect(await readPage(new URL("http://127.0.0.1/"), { resolve, fetchImpl: transport })).toEqual({ ok: false, reason: "refused" });
+  expect(await readPublicSite("http://interne.test/", { resolve, fetchImpl: transport })).toEqual({ ok: false, reason: "refused" });
+  expect(calls).toEqual([]);
+});
+
+test("GH-280: redirects are re-checked (private target, other host, more than three), and size, type, status and delay are bounded", async () => {
+  test.setTimeout(30000);
+  const hits: string[] = [];
+  const server = createHttpServer((request, response) => {
+    hits.push(request.url ?? "");
+    const path = request.url ?? "/";
+    if (path === "/vers-prive") { response.writeHead(302, { Location: "http://www.atelier-lumen.test/" }); response.end(); return; }
+    if (path === "/vers-ailleurs") { response.writeHead(301, { Location: "https://autre-site.test/" }); response.end(); return; }
+    if (path.startsWith("/boucle")) { response.writeHead(302, { Location: `/boucle${path.length}` }); response.end(); return; }
+    if (path === "/une-redirection") { response.writeHead(302, { Location: "/" }); response.end(); return; }
+    if (path === "/gros") { response.writeHead(200, { "Content-Type": "text/html" }); response.end(`<p>${"x".repeat(SITE_READ_LIMITS.maxBytes + 10)}</p>`); return; }
+    if (path === "/json") { response.writeHead(200, { "Content-Type": "application/json" }); response.end("{}"); return; }
+    if (path === "/erreur") { response.writeHead(500, { "Content-Type": "text/html" }); response.end("<p>Erreur</p>"); return; }
+    if (path === "/lent") return; // ne répond jamais
+    response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    response.end("<title>Accueil</title><p>Bonjour</p>");
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as { port: number }).port;
+  const resolve = async (hostname: string) => {
+    if (hostname === "atelier-lumen.test") return [PUBLIC_IP];
+    if (hostname === "www.atelier-lumen.test") return [{ address: "127.0.0.1", family: 4 as const }];
+    if (hostname === "autre-site.test") return [{ address: "8.8.8.8", family: 4 as const }];
+    throw new Error("ENOTFOUND");
+  };
+  const transport: SiteTransport = (url, init) => fetch(`http://127.0.0.1:${port}${url.pathname}${url.search}`, { signal: init.signal, headers: init.headers, redirect: "manual" });
+  const deps = { resolve, fetchImpl: transport };
+  const read = (path: string) => readPage(new URL(`https://atelier-lumen.test${path}`), deps);
+  try {
+    expect(await read("/une-redirection")).toMatchObject({ ok: true });
+    expect(await read("/vers-prive")).toEqual({ ok: false, reason: "refused" });
+    // Quitter le site rend la page illisible ; « accès refusé » reste réservé à la garde SSRF.
+    expect(await read("/vers-ailleurs")).toEqual({ ok: false, reason: "unreadable" });
+    hits.length = 0;
+    expect(await read("/boucle")).toEqual({ ok: false, reason: "unreadable" });
+    expect(hits).toHaveLength(1 + SITE_READ_LIMITS.maxRedirects);
+    expect(await read("/gros")).toEqual({ ok: false, reason: "unreadable" });
+    expect(await read("/json")).toEqual({ ok: false, reason: "unreadable" });
+    expect(await read("/erreur")).toEqual({ ok: false, reason: "unreadable" });
+    const started = Date.now();
+    expect(await read("/lent")).toEqual({ ok: false, reason: "unreadable" });
+    expect(Date.now() - started).toBeLessThan(SITE_READ_LIMITS.timeoutMs + 3000);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+const HOME_HTML = `<!doctype html><html><head><title>Atelier Lumen · Électricien à Lyon</title>
+<meta name="description" content="Électricien à Lyon et Villeurbanne depuis 2009.">
+<meta name="theme-color" content="#176B50"><meta property="og:image" content="/img/chantier.jpg">
+<link rel="icon" href="/favicon.png"><style>.btn{background:#e06a30;color:#fff}.t{color:#e06a30}h1{color:#176b50}</style>
+<script>window.secret = "ne pas lire";</script></head>
+<body><h1>Atelier Lumen</h1><p>Rénovation électrique &amp; dépannage pour les particuliers.</p>
+<a href="/contact">Nous contacter</a> <a href="/nos-prestations">Nos prestations</a> <a href="/tarifs">Tarifs</a>
+<a href="https://autre-site.test/services">Services ailleurs</a> <a href="mailto:contact@atelier-lumen.test">Écrire</a></body></html>`;
+const PAGES: Record<string, string> = {
+  "/": HOME_HTML,
+  "/contact": "<title>Contact</title><p>Écrivez à contact@atelier-lumen.test ou appelez le 04 78 00 00 00.</p>",
+  "/nos-prestations": "<title>Prestations</title><ul><li>Mise aux normes</li><li>Dépannage</li></ul>",
+  "/tarifs": "<title>Tarifs</title><p>Devis gratuit</p>",
+};
+
+async function startFakeSite() {
+  const hits: string[] = [];
+  const server = createHttpServer((request, response) => {
+    hits.push(request.url ?? "");
+    const page = PAGES[request.url ?? ""];
+    if (!page) { response.writeHead(404, { "Content-Type": "text/html" }); response.end("<p>Introuvable</p>"); return; }
+    response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    response.end(page);
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as { port: number }).port;
+  const resolve = async (hostname: string) => {
+    if (hostname === "atelier-lumen.test") return [PUBLIC_IP];
+    throw new Error("ENOTFOUND");
+  };
+  const fetchImpl: SiteTransport = (url, init) => fetch(`http://127.0.0.1:${port}${url.pathname}${url.search}`, { signal: init.signal, headers: init.headers, redirect: "manual" });
+  return { hits, deps: { resolve, fetchImpl, now: () => new Date("2026-11-07T10:00:00.000Z") }, close: () => new Promise<void>((done) => { server.closeAllConnections(); server.close(() => done()); }) };
+}
+
+test("GH-280: the home page and at most two internal pages of the same host are read, with text, palette and logo", async () => {
+  const site = await startFakeSite();
+  try {
+    const result = await readPublicSite("https://atelier-lumen.test/", site.deps);
+    expect(result).toMatchObject({ ok: true, url: "https://atelier-lumen.test/", readAt: "2026-11-07T10:00:00.000Z" });
+    if (!result.ok) throw new Error("site");
+    // Trois requêtes au plus : l'accueil, contact et prestations ; ni les tarifs (troisième page), ni l'autre site.
+    expect(site.hits.sort()).toEqual(["/", "/contact", "/nos-prestations"]);
+    expect(result.pages.map((page) => page.url)).toEqual(["https://atelier-lumen.test/", "https://atelier-lumen.test/contact", "https://atelier-lumen.test/nos-prestations"]);
+    expect(result.pages[0].title).toBe("Atelier Lumen · Électricien à Lyon");
+    expect(result.pages[0].text).toContain("Électricien à Lyon et Villeurbanne depuis 2009.");
+    expect(result.pages[0].text).toContain("Rénovation électrique & dépannage pour les particuliers.");
+    expect(result.pages[0].text).not.toContain("ne pas lire");
+    expect(result.palette).toEqual(["#176b50", "#e06a30"]);
+    expect(result.logo).toBe("https://atelier-lumen.test/favicon.png");
+  } finally {
+    await site.close();
+  }
+  const base = new URL("https://atelier-lumen.test/");
+  expect(pickInternalPages(extractLinks('<a href="/tarifs">Tarifs</a><a href="/services">Services</a><a href="/contact#form">Contact</a><a href="/contact">Contact</a>', base), base).map(String))
+    .toEqual(["https://atelier-lumen.test/contact", "https://atelier-lumen.test/services"]);
+  expect(extractPalette('<div style="color:#fff;background:#000;border-color:#ccc"></div>')).toEqual([]);
+  expect(extractLogo('<meta property="og:image" content="https://atelier-lumen.test/og.jpg"><link rel="apple-touch-icon" href="/apple.png">', base)).toBe("https://atelier-lumen.test/apple.png");
+  expect(extractLogo('<link rel="icon" href="javascript:alert(1)">', base)).toBeNull();
+  expect(htmlToText("<p>A&nbsp;&lt;b&gt;</p><!-- caché --><style>p{}</style>")).toBe("A b");
+});
+
+const placesDeps = {
+  apiKey: "test-key",
+  fetchImpl: (async (url: string | URL | Request) => {
+    const href = String(url);
+    if (href.endsWith("places:searchText")) return new Response(JSON.stringify({ places: [{ id: "ChIJatelierLumen01" }] }), { headers: { "content-type": "application/json" } });
+    return new Response(JSON.stringify({ id: "ChIJatelierLumen01", displayName: { text: "Atelier Lumen" }, formattedAddress: "3 rue des Lampes, 69003 Lyon", googleMapsUri: "https://maps.google.com/?cid=42", rating: 4.8, userRatingCount: 31, reviews: [{ rating: 5, text: { text: "Travail soigné" } }] }), { headers: { "content-type": "application/json" } });
+  }) as typeof fetch,
+};
+
+test("GH-280: the analysis fills the four rubrics as it goes, keeps provenance and cost, and calls the model once", async () => {
+  const site = await startFakeSite();
+  const saves: DraftAnalysis[] = [];
+  const prompts: string[] = [];
+  let calls = 0;
+  const extract: Extractor = async (input) => {
+    calls++;
+    prompts.push(extractionPrompt(input));
+    return {
+      ok: true, model: "claude-sonnet-5-5", usage: { input_tokens: 3000, output_tokens: 200 },
+      value: { trade: "Électricien", servingArea: "Lyon et Villeurbanne", targetClients: "Particuliers propriétaires", offers: "Rénovation électrique <b>et</b> dépannage", emails: ["contact@atelier-lumen.test", "inventee@exemple.fr"], phones: ["04 78 00 00 00", "01 02 03 04 05"], visualIdentity: "Vert profond et corail" },
+    };
+  };
+  try {
+    const initial = newAnalysis(analysisInput, "run-1", new Date("2026-11-07T10:00:00.000Z"));
+    expect(Object.values(initial.rubrics).every((rubric) => rubric.status === "pending")).toBe(true);
+    const result = await runDraftAnalysis("draft-1", analysisInput, {
+      analysis: initial, save: async (next) => { saves.push(next); return true; },
+      readSite: (url) => readPublicSite(url, site.deps), places: placesDeps, extract, now: () => new Date("2026-11-07T10:00:05.000Z"),
+    });
+    expect(calls).toBe(1);
+    expect(prompts[0]).toContain("Atelier Lumen");
+    expect(prompts[0]).toContain("Fiche Google");
+    expect(result.status).toBe("done");
+    expect(result.rubrics).toEqual({ site: { status: "read" }, google: { status: "read" }, zone: { status: "read" }, identity: { status: "read" } });
+    // Au fil de l'eau : les premières écritures ont encore des rubriques en cours.
+    expect(saves.length).toBeGreaterThanOrEqual(3);
+    expect(Object.values(saves[0].rubrics).some((rubric) => rubric.status === "pending")).toBe(true);
+    expect(saves.at(-1)).toEqual(result);
+    // Provenance : hypothèses du modèle, observé avec source et date ; un contact absent des pages n'est pas gardé.
+    expect(result.findings.trade).toEqual({ value: "Électricien", provenance: { kind: "hypothesis" } });
+    expect(result.findings.offers?.value).toBe("Rénovation électrique et dépannage");
+    expect(result.findings.contacts).toEqual([
+      { value: "contact@atelier-lumen.test", provenance: { kind: "observed", source: "https://atelier-lumen.test/contact", readAt: "2026-11-07T10:00:00.000Z" } },
+      { value: "04 78 00 00 00", provenance: { kind: "observed", source: "https://atelier-lumen.test/contact", readAt: "2026-11-07T10:00:00.000Z" } },
+    ]);
+    expect(result.findings.palette).toEqual({ value: ["#176b50", "#e06a30"], provenance: { kind: "observed", source: "https://atelier-lumen.test/", readAt: "2026-11-07T10:00:00.000Z" } });
+    expect(result.findings.google).toEqual({ value: "https://maps.google.com/?cid=42", provenance: { kind: "observed", source: "https://maps.google.com/?cid=42", readAt: "2026-11-07T10:00:05.000Z" } });
+    // Seul le lien de la fiche est gardé, ni adresse ni avis.
+    expect(JSON.stringify(result)).not.toContain("rue des Lampes");
+    expect(result.cost).toEqual({ usd: (3000 * 2 + 200 * 10) / 1_000_000, inputTokens: 3000, outputTokens: 200 });
+    expect(readAnalysis(JSON.parse(JSON.stringify(result)))).toEqual(result);
+
+    // Étape 2 préremplie en hypothèses ; rien n'est confirmé.
+    const state = { ...emptyDraft(), step: 2 as const, profile: { ...emptyDraft().profile, firstName: "Claire", companyName: "Atelier Lumen", location: "Lyon", website: analysisInput.website, offers: "Dépannage" }, analysis: result };
+    expect(prefillProfile(state)).toEqual({
+      values: { trade: "Électricien", servingArea: "Lyon et Villeurbanne", targetClients: "Particuliers propriétaires", offers: "Dépannage" },
+      origins: { trade: "hypothesis", servingArea: "hypothesis", targetClients: "hypothesis", offers: "declared" },
+    });
+    expect(state.profileConfirmed).toBe(false);
+  } finally {
+    await site.close();
+  }
+});
+
+test("GH-280: without a site, a model or Google, the rubrics say why and nothing is presented as observed", async () => {
+  const save = async () => true;
+  // Sans site : pas de lecture web, pas de modèle sans rien à lire, la fiche Google est cherchée.
+  let extractCalls = 0;
+  const extract: Extractor = async () => { extractCalls++; return { ok: false }; };
+  const noSite = await runDraftAnalysis("d", { ...analysisInput, website: "" }, { analysis: newAnalysis({ ...analysisInput, website: "" }, "r"), save, places: { apiKey: "" }, extract, readSite: async () => { throw new Error("aucune lecture"); } });
+  expect(noSite.rubrics).toEqual({ site: { status: "unavailable", reason: "no_site" }, google: { status: "unavailable", reason: "service" }, zone: { status: "unavailable", reason: "no_site" }, identity: { status: "unavailable", reason: "no_site" } });
+  expect(extractCalls).toBe(0);
+  expect(noSite.findings.trade).toBeNull();
+  expect(prefillProfile({ ...emptyDraft(), profile: { ...emptyDraft().profile, location: "Lyon" }, analysis: noSite })).toEqual({
+    values: { trade: "", servingArea: "Lyon", targetClients: "", offers: "" },
+    origins: { trade: "missing", servingArea: "declared", targetClients: "missing", offers: "missing" },
+  });
+  expect(analysisView(noSite)?.rubrics.map((rubric) => `${rubric.name} : ${rubric.label}`)).toEqual([
+    "Site et offres : Non disponible (pas de site)", "Informations publiques : Non disponible (service indisponible)", "Zone et clients : Non disponible (pas de site)", "Identité visuelle : Non disponible (pas de site)",
+  ]);
+
+  // Modèle indisponible : Zone et Identité « Non disponible », l'observé du site est gardé.
+  const site = await startFakeSite();
+  try {
+    const noModel = await runDraftAnalysis("d", analysisInput, { analysis: newAnalysis(analysisInput, "r"), save, readSite: (url) => readPublicSite(url, site.deps), places: placesDeps, extract });
+    expect(noModel.rubrics).toEqual({ site: { status: "read" }, google: { status: "read" }, zone: { status: "unavailable", reason: "service" }, identity: { status: "unavailable", reason: "service" } });
+    expect(noModel.findings.palette?.provenance.kind).toBe("observed");
+    expect(noModel.findings.trade).toBeNull();
+    expect(noModel.cost.usd).toBe(0);
+    expect(analysisNotice(noModel)).toBe(ANALYSIS_MESSAGES.partial);
+  } finally {
+    await site.close();
+  }
+
+  // Site interne : aucune requête, « Non disponible (accès refusé) » ; la suite continue.
+  const refused = await runDraftAnalysis("d", { ...analysisInput, website: "http://127.0.0.1" }, { analysis: newAnalysis({ ...analysisInput, website: "http://127.0.0.1" }, "r"), save, places: { apiKey: "" }, extract: async () => ({ ok: false }), readSite: (url) => readPublicSite(url, { fetchImpl: async () => { throw new Error("aucune requête"); } }) });
+  expect(refused.rubrics.site).toEqual({ status: "unavailable", reason: "refused" });
+  expect(refused.rubrics.identity).toEqual({ status: "unavailable", reason: "refused" });
+  expect(refused.status).toBe("done");
+
+  // Le brouillon a disparu : l'analyse s'arrête sans appeler le modèle.
+  let modelCalls = 0;
+  await runDraftAnalysis("d", analysisInput, { analysis: newAnalysis(analysisInput, "r"), save: async () => false, readSite: async () => ({ ok: true, url: analysisInput.website, readAt: new Date().toISOString(), pages: [{ url: analysisInput.website, title: "", text: "Bonjour" }], palette: [], logo: null }), places: { apiKey: "" }, extract: async () => { modelCalls++; return { ok: false }; } });
+  expect(modelCalls).toBe(0);
+
+  // Contacts : seuls ceux écrits sur une page lue sont gardés ; le texte envoyé au modèle est borné.
+  expect(observedContacts({ emails: ["a@b.fr"], phones: [] }, [{ url: "https://x.test/", title: "", text: "rien" }], "2026-11-07T10:00:00.000Z")).toEqual([]);
+  expect(extractionPrompt({ declared: analysisInput, pages: [{ url: "https://x.test/", title: "", text: "x".repeat(30_000) }], google: null, palette: [], logo: null }).length).toBeLessThan(EXTRACTION_TEXT_MAX + 500);
+});
+
+test("GH-280: rubric states, interrupted analyses, relaunch rules and the daily cap setting", () => {
+  expect(rubricsFor({ site: "pending", google: "pending", model: "pending" })).toEqual({ site: { status: "pending" }, google: { status: "pending" }, zone: { status: "pending" }, identity: { status: "pending" } });
+  expect(rubricsFor({ site: "unreadable", google: "not_found", model: "skipped" })).toEqual({ site: { status: "unavailable", reason: "unreadable" }, google: { status: "not_found" }, zone: { status: "unavailable", reason: "unreadable" }, identity: { status: "unavailable", reason: "unreadable" } });
+  expect(rubricsFor({ site: "read", google: "read", model: { zone: false, identity: false } })).toMatchObject({ zone: { status: "not_found" }, identity: { status: "not_found" } });
+  expect(rubricsFor({ site: "none", google: "read", model: { zone: true, identity: false } })).toMatchObject({ zone: { status: "read" }, identity: { status: "unavailable", reason: "no_site" } });
+  expect(["pending", "read", "not_found"].map((status) => rubricLabel({ status: status as "pending" }))).toEqual(["En cours", "Lue", "Non trouvée"]);
+  expect(rubricLabel({ status: "unavailable", reason: "refused" })).toBe("Non disponible (accès refusé)");
+
+  const now = new Date("2026-11-07T10:00:00.000Z");
+  const running = newAnalysis(analysisInput, "r", now);
+  expect(analysisFinished(running, new Date(now.getTime() + 1000))).toBe(false);
+  // Interrompue (au-delà de la durée de la route) : terminée, les rubriques en cours deviennent « Non disponible ».
+  const later = new Date(now.getTime() + ANALYSIS_STALE_MS + 1);
+  expect(analysisFinished(running, later)).toBe(true);
+  expect(effectiveAnalysis(running, later)?.rubrics.google).toEqual({ status: "unavailable", reason: "service" });
+  expect(needsNewAnalysis(null, analysisInput)).toBe(true);
+  expect(needsNewAnalysis(running, analysisInput, now)).toBe(false);
+  // Interrompue pour la même entreprise : elle peut être relancée.
+  expect(needsNewAnalysis(running, analysisInput, later)).toBe(true);
+  const done = { ...running, status: "done" as const };
+  expect(needsNewAnalysis(done, analysisInput, now)).toBe(false);
+  expect(needsNewAnalysis(done, { ...analysisInput, website: "" }, now)).toBe(true);
+  const limited = newAnalysis(analysisInput, "r", now, "limited");
+  expect(needsNewAnalysis(limited, analysisInput, now)).toBe(true);
+  expect(analysisNotice(limited)).toContain("revenez plus tard");
+  expect(analysisView(limited, now)).toMatchObject({ status: "limited", finished: true });
+  expect(readAnalysis({ runId: "r", status: "running" })).toBeNull();
+  expect(readAnalysis({ ...done, findings: { ...done.findings, palette: { value: ["red;background:url(x)"], provenance: { kind: "hypothesis" } } } })).toBeNull();
+
+  // Transitions : « Découvrir » refusé pendant une analyse, « Voir les constats » seulement une fois terminée.
+  const profile = { ...emptyDraft().profile, firstName: "Claire", companyName: "Atelier Lumen", location: "Lyon", website: analysisInput.website };
+  const atStep1 = { ...emptyDraft(), profile, analysis: running };
+  expect(applyDraftAction(atStep1, { action: "discover", ...profile }, now)).toEqual({ ok: false, kind: "busy", error: ANALYSIS_MESSAGES.busy });
+  expect(applyDraftAction(atStep1, { action: "see_findings" }, now)).toEqual({ ok: false, kind: "busy", error: ANALYSIS_MESSAGES.busy });
+  expect(applyDraftAction(atStep1, { action: "goto", step: 2 }, now)).toEqual({ ok: false, kind: "wrong_step", step: 1 });
+  expect(applyDraftAction({ ...atStep1, analysis: null }, { action: "see_findings" }, now)).toMatchObject({ ok: false, kind: "invalid", code: "analysis", error: ANALYSIS_MESSAGES.missing });
+  expect(applyDraftAction({ ...atStep1, analysis: limited }, { action: "see_findings" }, now)).toMatchObject({ ok: true, state: { step: 2, profileConfirmed: false } });
+  // Une analyse d'une autre entreprise (profil modifié depuis) n'ouvre pas l'étape 2.
+  expect(applyDraftAction({ ...atStep1, profile: { ...profile, companyName: "Autre atelier" }, analysis: done }, { action: "see_findings" }, now)).toMatchObject({ ok: false, kind: "invalid", code: "analysis", error: ANALYSIS_MESSAGES.missing });
+  expect(applyDraftAction({ ...atStep1, profile: { ...profile, website: "" }, analysis: done }, { action: "goto", step: 2 }, now)).toEqual({ ok: false, kind: "wrong_step", step: 1 });
+  expect(applyDraftAction({ ...atStep1, analysis: done }, { action: "goto", step: 2 }, now)).toMatchObject({ ok: true, state: { step: 2 } });
+  expect(applyDraftAction({ ...atStep1, step: 2, analysis: done }, { action: "see_findings" }, now)).toEqual({ ok: false, kind: "wrong_step", step: 2 });
+  expect(parseDraftAction({ action: "see_findings" })).toEqual({ action: "see_findings" });
+  expect(readDraftState({ step: 1, profile: {}, ambition: null, profileConfirmed: false, diagnosticReady: false, analysis: done }).analysis).toEqual(done);
+
+  expect(anonymousAnalysisDailyLimit({})).toBe(DEFAULT_ANONYMOUS_ANALYSIS_DAILY_LIMIT);
+  expect(DEFAULT_ANONYMOUS_ANALYSIS_DAILY_LIMIT).toBe(300);
+  expect(anonymousAnalysisDailyLimit({ ANONYMOUS_ANALYSIS_DAILY_LIMIT: "50" })).toBe(50);
+  for (const value of ["0", "-3", "abc", "1.5", ""]) expect(anonymousAnalysisDailyLimit({ ANONYMOUS_ANALYSIS_DAILY_LIMIT: value }), value).toBe(300);
+});
+
+test("GH-280: the public analysis never writes company-bound tables and has no fake mode", () => {
+  const sources = ["src/lib/onboarding/analysis.ts", "src/lib/onboarding/site-reader.ts", "src/app/api/bienvenue/route.ts", "src/app/api/bienvenue/analyse/route.ts"].map((file) => readFileSync(join(process.cwd(), file), "utf8")).join("\n");
+  expect(sources).not.toMatch(/auditFinding|sourceRead|usageEvent|recordUsage|reserveUsageBudget|web_search/);
+  expect(sources).not.toMatch(/process\.env\.[A-Z_]*(FAKE|MOCK|DEMO|FIXTURE)/);
+});
+
+
+test("GH-280: the default transport connects to the checked address only, without resolving the name again, and decompresses", async () => {
+  const seen: string[] = [];
+  const server = createHttpServer((request, response) => {
+    seen.push(`${request.headers.host} ${request.url}`);
+    if (request.url === "/redirige") { response.writeHead(302, { Location: "/" }); response.end(); return; }
+    response.writeHead(200, { "Content-Type": "text/html", "Content-Encoding": "gzip" });
+    response.end(gzipSync("<p>Compressé</p>"));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as { port: number }).port;
+  try {
+    // Le nom ne se résout pas : seule l'adresse fournie sert à la connexion.
+    const url = new URL(`http://nom-introuvable.invalid:${port}/`);
+    const response = await pinnedTransport(url, { address: { address: "127.0.0.1", family: 4 }, signal: AbortSignal.timeout(5000), headers: { Accept: "text/html" } });
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("<p>Compressé</p>");
+    const redirect = await pinnedTransport(new URL(`http://nom-introuvable.invalid:${port}/redirige`), { address: { address: "127.0.0.1", family: 4 }, signal: AbortSignal.timeout(5000), headers: {} });
+    expect(redirect.status).toBe(302);
+    expect(redirect.headers.get("location")).toBe("/");
+    expect(seen).toEqual([`nom-introuvable.invalid:${port} /`, `nom-introuvable.invalid:${port} /redirige`]);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+
+test("GH-280: hostile HTML (200 000 unclosed tags in 1 MB) is read in linear time, with at most 300 links", () => {
+  const base = new URL("https://atelier-lumen.test/");
+  for (const hostile of ["<svg ".repeat(200_000), "<a ".repeat(200_000), "<a href=x>".repeat(200_000), "<style>".repeat(150_000), "<!--".repeat(200_000), "<title>".repeat(150_000), `<p style="#e06a30 ${"x".repeat(1_000_000)}`]) {
+    const started = Date.now();
+    htmlToText(hostile);
+    extractLinks(hostile, base);
+    extractPalette(hostile);
+    extractTitle(hostile);
+    expect(Date.now() - started, hostile.slice(0, 12)).toBeLessThan(2000);
+  }
+  expect(extractLinks('<a href="/p">p</a>'.repeat(1000), base)).toHaveLength(MAX_LINKS);
+  // Un élément sans fermeture emporte la suite ; le reste du texte est gardé.
+  expect(htmlToText("<p>Avant</p><script>secret")).toBe("Avant");
+  expect(htmlToText("<header>Entête</header><HEAD><title>t</title></HEAD>")).toBe("Entête");
+});
+
+test("GH-280: charset from <meta>, unknown encodings, DNS within the delay, long URLs and model tags", async () => {
+  // Page en ISO-8859-1 sans charset dans l'en-tête : le <meta charset> fait foi.
+  const latin1 = Buffer.from('<meta charset="iso-8859-1"><p>Électricité générale</p>', "latin1");
+  expect(decode(new Uint8Array(latin1), "text/html")).toContain("Électricité générale");
+  const equiv = Buffer.from('<meta http-equiv="Content-Type" content="text/html; charset=windows-1252"><p>Dépannage</p>', "latin1");
+  expect(decode(new Uint8Array(equiv), "text/html")).toContain("Dépannage");
+  expect(decode(new Uint8Array(Buffer.from("<p>Rénovation</p>", "utf8")), "text/html; charset=utf-8")).toContain("Rénovation");
+
+  // Codage inconnu ou en liste : refusé, jamais lu comme du texte.
+  const server = createHttpServer((request, response) => {
+    response.writeHead(200, { "Content-Type": "text/html", "Content-Encoding": request.url === "/liste" ? "gzip, br" : "compress" });
+    response.end("xx");
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as { port: number }).port;
+  try {
+    for (const path of ["/liste", "/inconnu"]) {
+      await expect(pinnedTransport(new URL(`http://atelier.invalid:${port}${path}`), { address: { address: "127.0.0.1", family: 4 }, signal: AbortSignal.timeout(5000), headers: {} }), path).rejects.toThrow("encoding");
+    }
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+
+  // Une résolution DNS qui ne répond jamais compte dans les 8 secondes de la page.
+  const signal = AbortSignal.timeout(200);
+  expect(await checkSiteUrl(new URL("https://lent.test/"), () => new Promise(() => undefined), signal)).toEqual({ ok: false, reason: "unreadable" });
+
+  // Adresses trop longues : tronquées ou écartées, l'analyse reste lisible.
+  const longUrl = `https://atelier-lumen.test/${"p".repeat(700)}`;
+  const long = await runDraftAnalysis("d", analysisInput, {
+    analysis: newAnalysis(analysisInput, "r"), save: async () => true, places: { apiKey: "" },
+    readSite: async () => ({ ok: true, url: longUrl, readAt: "2026-11-07T10:00:00.000Z", pages: [{ url: longUrl, title: "", text: "contact@atelier-lumen.test" }], palette: ["#176b50"], logo: `${longUrl}.png` }),
+    extract: async () => ({ ok: true, model: "claude-sonnet-5-5", usage: { input_tokens: 1, output_tokens: 1 }, value: { trade: "", servingArea: "", targetClients: "", offers: "", emails: ["contact@atelier-lumen.test"], phones: [], visualIdentity: "" } }),
+  });
+  expect(long.findings.pages).toEqual([]);
+  expect(long.findings.contacts[0].provenance).toMatchObject({ kind: "observed", source: longUrl.slice(0, 600) });
+  expect(readAnalysis(JSON.parse(JSON.stringify(long)))).toEqual(long);
+
+  // Balises du modèle retirées entières.
+  expect(cleanValue("Rénovation <b>électrique</b> et <i>dépannage</i> <")).toBe("Rénovation électrique et dépannage");
+  expect(cleanValue("Plomberie <<b>script>alert(1)<</b>/script>")).toBe("Plomberie alert(1)");
+});
+
+test("GH-280: a phone is observed only if written as a phone on the page, not rebuilt from prices or postcodes", () => {
+  const readAt = "2026-11-07T10:00:00.000Z";
+  const page = (text: string) => [{ url: "https://atelier-lumen.test/contact", title: "", text }];
+  // Chiffres dispersés (code postal, prix) : rien n'est observé.
+  expect(observedContacts({ emails: [], phones: ["06 90 03 12 50"] }, page("69003 Lyon. Tarif 1250 €, devis en 06 heures."), readAt)).toEqual([]);
+  expect(observedContacts({ emails: [], phones: ["0478000000"] }, page("Prix 04 78 € — 00 00 00 clients"), readAt)).toEqual([]);
+  // Même numéro écrit autrement : +33, 0033, points ou espaces.
+  for (const written of ["04 78 00 00 00", "04.78.00.00.00", "+33 4 78 00 00 00", "0033 (0)4 78 00 00 00".replace(" (0)", " ")]) {
+    expect(observedContacts({ emails: [], phones: ["+33 4 78 00 00 00"] }, page(`Appelez le ${written}.`), readAt), written).toHaveLength(1);
+  }
+  expect(normalizePhone("+33 4 78 00 00 00")).toBe("0478000000");
+  expect(normalizePhone("0033478000000")).toBe("0478000000");
 });

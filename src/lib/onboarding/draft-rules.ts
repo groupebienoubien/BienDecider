@@ -1,9 +1,10 @@
 import { MISSION_TEMPLATES, availableTemplates, enabledChannels, type TemplateKey } from "@/lib/missions/templates";
+import { ANALYSIS_MESSAGES, analysisFinished, analysisRunning, readAnalysis, type DraftAnalysis, type Provenance } from "@/lib/onboarding/analysis-rules";
 
 /**
  * Règles pures du parcours d'entrée en cinq étapes (#279, spécification §1.1, §1.2, §11, §12, §14).
- * Le serveur les applique à chaque transition ; l'interface les reflète. Version minimale décidée le
- * 2026-11-06 : ni analyse, ni reformulation de l'ambition, ni appel à Paul pendant le parcours.
+ * Le serveur les applique à chaque transition ; l'interface les reflète. Depuis #280, « Découvrir » lance une
+ * analyse publique (§1.3) gardée dans le brouillon ; « Voir les constats » ouvre l'étape 2 une fois l'analyse terminée.
  */
 
 export const DRAFT_STEPS = [1, 2, 3, 4, 5] as const;
@@ -26,6 +27,8 @@ export type DraftState = {
   ambition: string | null;
   profileConfirmed: boolean;
   diagnosticReady: boolean;
+  /** Analyse publique de l'étape 1 (#280), écrite à part : jamais enregistrée par `saveDraft`. */
+  analysis: DraftAnalysis | null;
 };
 
 export const STEP_TITLES: Record<DraftStep, string> = {
@@ -60,7 +63,7 @@ export const ONBOARDING_MESSAGES = {
   "M-12": "Le mot de passe doit contenir au moins 8 caractères.",
   "M-13": "Les deux mots de passe ne correspondent pas.",
 } as const;
-export type OnboardingCode = keyof typeof ONBOARDING_MESSAGES | "M-16" | "markup";
+export type OnboardingCode = keyof typeof ONBOARDING_MESSAGES | "M-16" | "markup" | "analysis";
 
 /** Adresse déjà utilisée (FR-9 prévaut sur M-14) : le message ne dit pas qu'un compte existe. */
 export const ADDRESS_UNAVAILABLE_MESSAGE = "Nous ne pouvons pas créer de compte avec cette adresse. Si vous avez déjà un compte, retrouvez-le avec la connexion.";
@@ -97,7 +100,7 @@ export function emptyProfile(): DraftProfile {
 }
 
 export function emptyDraft(): DraftState {
-  return { step: 1, profile: emptyProfile(), ambition: null, profileConfirmed: false, diagnosticReady: false };
+  return { step: 1, profile: emptyProfile(), ambition: null, profileConfirmed: false, diagnosticReady: false, analysis: null };
 }
 
 /** Page de l'étape courante (spécification §1.4, addendum §9). */
@@ -116,7 +119,9 @@ export type FieldErrors = Partial<Record<string, string>>;
 export type TransitionResult =
   | { ok: true; state: DraftState }
   | { ok: false; kind: "invalid"; code: OnboardingCode; error: string; errors: FieldErrors }
-  | { ok: false; kind: "wrong_step"; step: DraftStep };
+  | { ok: false; kind: "wrong_step"; step: DraftStep }
+  /** Une analyse est en cours : pas de second lancement, pas d'étape 2 avant sa fin (409). */
+  | { ok: false; kind: "busy"; error: string };
 
 const text = (value: unknown) => (typeof value === "string" ? value.trim() : "");
 const hasMarkup = (value: string) => /[<>]/.test(value);
@@ -206,13 +211,14 @@ export function checkAmbition(value: unknown): { ok: true; ambition: string } | 
 
 export type DraftAction =
   | { action: "discover"; firstName?: unknown; companyName?: unknown; location?: unknown; website?: unknown }
+  | { action: "see_findings" }
   | { action: "confirm_profile"; trade?: unknown; servingArea?: unknown; targetClients?: unknown; offers?: unknown }
   | { action: "confirm_ambition"; ambition?: unknown }
   | { action: "interested" }
   | { action: "back"; step: unknown }
   | { action: "goto"; step: unknown };
 
-export const DRAFT_ACTIONS = ["discover", "confirm_profile", "confirm_ambition", "interested", "back", "goto"] as const;
+export const DRAFT_ACTIONS = ["discover", "see_findings", "confirm_profile", "confirm_ambition", "interested", "back", "goto"] as const;
 
 /** Demande lisible, ou null (400). */
 export function parseDraftAction(body: Record<string, unknown>): DraftAction | null {
@@ -227,10 +233,16 @@ function back(state: DraftState, step: DraftStep): DraftState {
   return { ...state, step, diagnosticReady: step < 4 ? false : state.diagnosticReady };
 }
 
+/** L'analyse porte-t-elle sur l'entreprise saisie (nom, localisation, site) ? */
+export function analysisMatchesProfile(state: DraftState): boolean {
+  const input = state.analysis?.input;
+  return input !== undefined && input.companyName === state.profile.companyName && input.location === state.profile.location && input.website === state.profile.website;
+}
+
 /** L'étape n est-elle ouverte depuis l'étape n - 1 (étape précédente confirmée) ? */
-function previousConfirmed(state: DraftState, step: DraftStep): boolean {
+function previousConfirmed(state: DraftState, step: DraftStep, now: Date): boolean {
   if (step === 1) return true;
-  if (step === 2) return discoveryDone(state.profile);
+  if (step === 2) return discoveryDone(state.profile) && analysisFinished(state.analysis, now) && analysisMatchesProfile(state);
   if (step === 3) return state.profileConfirmed;
   return state.diagnosticReady;
 }
@@ -239,15 +251,25 @@ function previousConfirmed(state: DraftState, step: DraftStep): boolean {
  * Transitions de la spécification §1.2. Chaque étape ne s'ouvre que si la précédente est confirmée ;
  * une action demandée depuis une autre étape renvoie à l'étape courante (`wrong_step`).
  */
-export function applyDraftAction(state: DraftState, request: DraftAction): TransitionResult {
+export function applyDraftAction(state: DraftState, request: DraftAction, now = new Date()): TransitionResult {
   switch (request.action) {
     case "discover": {
       if (state.step !== 1) return { ok: false, kind: "wrong_step", step: state.step };
+      if (analysisRunning(state.analysis, now)) return { ok: false, kind: "busy", error: ANALYSIS_MESSAGES.busy };
       const checked = checkDiscovery(request);
       if (!checked.ok) return invalid(checked);
       const changed = (Object.keys(checked.values) as (keyof typeof checked.values)[]).some((key) => state.profile[key] !== checked.values[key]);
-      // Un profil modifié se reconfirme à l'étape 2.
-      return { ok: true, state: { ...state, step: 2, profile: { ...state.profile, ...checked.values }, profileConfirmed: changed ? false : state.profileConfirmed } };
+      // L'étape 1 reste affichée le temps de l'analyse ; un profil modifié se reconfirme à l'étape 2.
+      return { ok: true, state: { ...state, step: 1, profile: { ...state.profile, ...checked.values }, profileConfirmed: changed ? false : state.profileConfirmed } };
+    }
+    case "see_findings": {
+      if (state.step !== 1) return { ok: false, kind: "wrong_step", step: state.step };
+      const checked = checkDiscovery(state.profile);
+      if (!checked.ok) return invalid(checked);
+      if (analysisRunning(state.analysis, now)) return { ok: false, kind: "busy", error: ANALYSIS_MESSAGES.busy };
+      // L'analyse doit porter sur l'entreprise saisie : sinon, il faut relancer la découverte.
+      if (!analysisMatchesProfile(state)) return invalid({ code: "analysis", error: ANALYSIS_MESSAGES.missing, errors: {} });
+      return { ok: true, state: { ...state, step: 2 } };
     }
     case "confirm_profile": {
       if (state.step !== 2) return { ok: false, kind: "wrong_step", step: state.step };
@@ -274,7 +296,7 @@ export function applyDraftAction(state: DraftState, request: DraftAction): Trans
       if (!isDraftStep(request.step)) return { ok: false, kind: "wrong_step", step: state.step };
       if (request.step < state.step) return { ok: true, state: back(state, request.step) };
       if (request.step === state.step) return { ok: true, state };
-      if (request.step === state.step + 1 && previousConfirmed(state, request.step)) return { ok: true, state: { ...state, step: request.step } };
+      if (request.step === state.step + 1 && previousConfirmed(state, request.step, now)) return { ok: true, state: { ...state, step: request.step } };
       return { ok: false, kind: "wrong_step", step: state.step };
     }
   }
@@ -351,7 +373,7 @@ export function starterMissions(profile: DraftProfile, ambition: string, availab
 }
 
 /** Lecture défensive du brouillon stocké : toute valeur illisible redevient vide. */
-export function readDraftState(row: { step: number; profile: unknown; ambition: unknown; profileConfirmed: boolean; diagnosticReady: boolean }): DraftState {
+export function readDraftState(row: { step: number; profile: unknown; ambition: unknown; profileConfirmed: boolean; diagnosticReady: boolean; analysis?: unknown }): DraftState {
   const raw = row.profile !== null && typeof row.profile === "object" && !Array.isArray(row.profile) ? (row.profile as Record<string, unknown>) : {};
   const profile = emptyProfile();
   for (const key of Object.keys(profile) as (keyof DraftProfile)[]) profile[key] = typeof raw[key] === "string" ? (raw[key] as string) : "";
@@ -362,5 +384,26 @@ export function readDraftState(row: { step: number; profile: unknown; ambition: 
     ambition: typeof ambitionRaw === "string" ? ambitionRaw : null,
     profileConfirmed: row.profileConfirmed,
     diagnosticReady: row.diagnosticReady,
+    analysis: readAnalysis(row.analysis ?? null),
   };
+}
+
+export type ProfileOrigin = Provenance["kind"] | "missing";
+export type ProfilePrefill = { values: Pick<DraftProfile, "trade" | "servingArea" | "targetClients" | "offers">; origins: Record<"trade" | "servingArea" | "targetClients" | "offers", ProfileOrigin> };
+
+/**
+ * Préremplissage de l'étape 2 (#280) : ce que le dirigeant a déjà saisi (déclaré), sinon l'hypothèse de l'analyse,
+ * sinon « À renseigner par vous ». La zone reprend à défaut la localisation déclarée. Rien n'est confirmé ici.
+ */
+export function prefillProfile(state: DraftState): ProfilePrefill {
+  const fields = ["trade", "servingArea", "targetClients", "offers"] as const;
+  const values = { trade: "", servingArea: "", targetClients: "", offers: "" };
+  const origins = { trade: "missing", servingArea: "missing", targetClients: "missing", offers: "missing" } as ProfilePrefill["origins"];
+  for (const field of fields) {
+    const found = state.analysis?.findings[field];
+    if (state.profile[field]) [values[field], origins[field]] = [state.profile[field], "declared"];
+    else if (found?.value) [values[field], origins[field]] = [clip(found.value, LIMITS[field]), found.provenance.kind];
+    else if (field === "servingArea" && state.profile.location) [values[field], origins[field]] = [state.profile.location, "declared"];
+  }
+  return { values, origins };
 }

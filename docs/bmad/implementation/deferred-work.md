@@ -167,3 +167,9 @@
 - source_spec: `docs/bmad/implementation/spec-gh-279-parcours-entree-cinq-etapes.md`
   summary: Tester deux inscriptions simultanées sur un même brouillon (un seul compte, une 409 M-10, emplacement du jour libéré).
   evidence: Les tests d'inscription envoient des requêtes l'une après l'autre ; la branche `count === 0` n'est pas couverte.
+- source_spec: `docs/bmad/implementation/spec-gh-280-decouverte-entreprise.md`
+  summary: À la création du compte, reprendre les constats de l'analyse anonyme (AuditFinding, SourceRead) et son coût, comme le prévoit l'addendum §6.
+  evidence: #280 garde l'analyse dans OnboardingDraft.analysis seulement ; les constats affichés et corrigés relèvent de #281, leur reprise dans le compte vient avec.
+- source_spec: `docs/bmad/implementation/spec-gh-280-decouverte-entreprise.md`
+  summary: Cumuler le coût des analyses anonymes (y compris des brouillons qui n'aboutissent pas à un compte) dans la trace des visites et une vue d'administration.
+  evidence: Le coût n'est gardé que dans OnboardingDraft.analysis, effacé avec le brouillon ; à faire avec #311 (analysisCostUsd de VisitTrace).

@@ -1,11 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { TradeCombobox } from "@/components/trade-combobox";
-import { LIMITS, type DraftProfile } from "@/lib/onboarding/draft-rules";
-import { FieldError, FormError, INPUT_CLASS, PRIMARY_BUTTON, useDraftAction, type FieldErrors } from "./journey-client";
+import { LIMITS, type DraftProfile, type ProfileOrigin, type ProfilePrefill } from "@/lib/onboarding/draft-rules";
+import type { AnalysisView } from "@/lib/onboarding/analysis-rules";
+import { FieldError, FormError, INPUT_CLASS, PRIMARY_BUTTON, SECONDARY_BUTTON, useDraftAction, type FieldErrors } from "./journey-client";
+
+/** Bouton secondaire bordé : « Découvrir » une fois les constats prêts (un seul bouton principal par écran). */
+const SECONDARY_OUTLINE = "inline-flex min-h-11 items-center justify-center rounded-md border border-[var(--bd-line-strong)] bg-white px-5 py-2 text-base font-semibold text-[var(--bd-ink)] hover:bg-[var(--bd-cream-deep)] disabled:opacity-60";
 
 const LABEL = "text-sm font-semibold text-[var(--bd-ink)]";
 const HINT = "text-sm text-[var(--bd-muted)]";
@@ -29,37 +33,173 @@ function TextField({ id, label, hint, value, onChange, errors, max, required = t
   );
 }
 
-/** Étape 1 : prénom, entreprise, localisation, site facultatif. */
-export function DiscoveryForm({ profile }: { profile: DraftProfile }) {
-  const { busy, error, errors, send } = useDraftAction();
-  const [values, setValues] = useState({ firstName: profile.firstName, companyName: profile.companyName, location: profile.location, website: profile.website });
-  const set = (key: keyof typeof values) => (value: string) => setValues((current) => ({ ...current, [key]: value }));
+const DISCOVERY_ERROR = "La découverte n'a pas pu être lancée. Réessayez dans un instant.";
+const POLL_MS = 1_200;
+
+/** Les quatre rubriques de l'analyse, annoncées aux lecteurs d'écran à chaque changement. */
+function RubricList({ analysis }: { analysis: AnalysisView }) {
   return (
-    <form noValidate className="flex flex-col gap-5" onSubmit={(event) => { event.preventDefault(); void send({ action: "discover", ...values }); }}>
-      <TextField id="firstName" label="Votre prénom" value={values.firstName} onChange={set("firstName")} errors={errors} max={LIMITS.firstName} autoComplete="given-name" />
-      <TextField id="companyName" label="Le nom de votre entreprise" value={values.companyName} onChange={set("companyName")} errors={errors} max={LIMITS.companyName} autoComplete="organization" />
-      <TextField id="location" label="Sa localisation" hint="La ville ou le code postal de votre entreprise." value={values.location} onChange={set("location")} errors={errors} max={LIMITS.location} autoComplete="address-level2" />
-      <TextField id="website" label="Votre site (facultatif)" hint="Une adresse commençant par https:// ou http://." value={values.website} onChange={set("website")} errors={errors} max={LIMITS.website} required={false} type="url" autoComplete="url" />
-      <FormError error={error} errors={errors} />
-      <div><button type="submit" className={PRIMARY_BUTTON} disabled={busy}>Continuer</button></div>
-    </form>
+    <section aria-labelledby="rubrics-title" className="flex flex-col gap-3 rounded-lg bg-[var(--bd-cream)] p-4">
+      <h2 id="rubrics-title" className="text-base font-semibold text-[var(--bd-ink)]">Ce que Paul lit</h2>
+      <ul aria-live="polite" className="flex flex-col gap-2">
+        {analysis.rubrics.map((rubric) => (
+          <li key={rubric.key} className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 text-sm">
+            <span className="font-semibold text-[var(--bd-ink)]">{rubric.name}</span>
+            <span className={rubric.status === "read" ? "font-semibold text-[var(--bd-brand)]" : "text-[var(--bd-muted)]"}>{rubric.label}</span>
+          </li>
+        ))}
+      </ul>
+      {analysis.notice && <p role="status" className="text-sm text-[var(--bd-ink)]">{analysis.notice}</p>}
+    </section>
   );
 }
 
-/** Étape 2 : activité, zone, clients et offres, à confirmer. */
-export function ProfileForm({ profile }: { profile: DraftProfile }) {
-  const { busy, error, errors, send } = useDraftAction();
-  const [values, setValues] = useState({ trade: profile.trade, servingArea: profile.servingArea || profile.location, targetClients: profile.targetClients, offers: profile.offers });
+/**
+ * Étape 1 (#280) : prénom, entreprise, localisation, site facultatif. « Découvrir mon entreprise » enregistre et lance
+ * l'analyse publique ; la progression des quatre rubriques est relue toutes les 1,2 s ; une fois l'analyse terminée,
+ * « Voir mes premiers constats » ouvre l'étape 2 et reçoit le focus.
+ */
+export function DiscoveryStep({ profile, analysis: initial }: { profile: DraftProfile; analysis: AnalysisView | null }) {
+  const router = useRouter();
+  const findings = useDraftAction();
+  const [values, setValues] = useState({ firstName: profile.firstName, companyName: profile.companyName, location: profile.location, website: profile.website });
+  const [analysis, setAnalysis] = useState<AnalysisView | null>(initial);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [errors, setErrors] = useState<FieldErrors>({});
+  const seeRef = useRef<HTMLButtonElement>(null);
+  const focusOnFinish = useRef(false);
+  // Saisies enregistrées par le dernier « Découvrir » : toute modification depuis demande une nouvelle découverte.
+  const [saved, setSaved] = useState(values);
   const set = (key: keyof typeof values) => (value: string) => setValues((current) => ({ ...current, [key]: value }));
+  const running = analysis?.finished === false;
+  const edited = (Object.keys(values) as (keyof typeof values)[]).some((key) => values[key].trim() !== saved[key].trim());
+  const finished = analysis?.finished === true && !edited;
+
+  useEffect(() => {
+    if (!running) return;
+    let stopped = false;
+    const timer = window.setInterval(async () => {
+      try {
+        const response = await fetch("/api/bienvenue/analyse", { cache: "no-store" });
+        const data = await response.json().catch(() => null);
+        if (stopped) return;
+        if (response.ok && data && typeof data.analysis === "object" && data.analysis !== null) {
+          setAnalysis(data.analysis as AnalysisView);
+          return;
+        }
+        // Plus d'analyse, brouillon expiré ou session ouverte : on arrête d'interroger, puis une seule navigation.
+        if (!response.ok && !(data && typeof data.href === "string")) return;
+        stopped = true;
+        window.clearInterval(timer);
+        setAnalysis(null);
+        const href = data && typeof data.href === "string" ? data.href : "/bienvenue";
+        if (href === "/bienvenue") router.refresh();
+        else router.push(href);
+      } catch {
+        // Réseau coupé : la prochaine interrogation réessaie.
+      }
+    }, POLL_MS);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, [running, router]);
+
+  useEffect(() => {
+    if (finished && focusOnFinish.current) {
+      focusOnFinish.current = false;
+      seeRef.current?.focus();
+    }
+  }, [finished, analysis]);
+
+  async function discover(website: string) {
+    setBusy(true);
+    setError(null);
+    setErrors({});
+    try {
+      const response = await fetch("/api/bienvenue", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "discover", ...values, website }) });
+      const data = await response.json().catch(() => null);
+      // Enregistrées : réponse acceptée, ou quota atteint (le brouillon les garde quand même).
+      if (response.ok || data?.code === "limited") setSaved({ ...values, website });
+      if (data && typeof data.analysis === "object" && data.analysis !== null) {
+        focusOnFinish.current = true;
+        setAnalysis(data.analysis as AnalysisView);
+      }
+      if (response.ok) return;
+      // 409 sans analyse : autre étape ou session ouverte, le serveur dit où aller.
+      if (response.status === 409 && data && typeof data.href === "string") {
+        findings.go(data.href);
+        return;
+      }
+      setErrors(data && typeof data.errors === "object" && data.errors !== null ? data.errors : {});
+      // Quota atteint : le message est déjà sous les rubriques.
+      if (data?.code !== "limited") setError(data && typeof data.error === "string" ? data.error : DISCOVERY_ERROR);
+    } catch {
+      setError(DISCOVERY_ERROR);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-6">
+      <form noValidate className="flex flex-col gap-5" onSubmit={(event) => { event.preventDefault(); if (!running) void discover(values.website); }}>
+        <TextField id="firstName" label="Votre prénom" value={values.firstName} onChange={set("firstName")} errors={errors} max={LIMITS.firstName} autoComplete="given-name" />
+        <TextField id="companyName" label="Le nom de votre entreprise" value={values.companyName} onChange={set("companyName")} errors={errors} max={LIMITS.companyName} autoComplete="organization" />
+        <TextField id="location" label="Sa localisation" hint="La ville ou le code postal de votre entreprise." value={values.location} onChange={set("location")} errors={errors} max={LIMITS.location} autoComplete="address-level2" />
+        <TextField id="website" label="Votre site (facultatif)" hint="Une adresse commençant par https:// ou http://." value={values.website} onChange={set("website")} errors={errors} max={LIMITS.website} required={false} type="url" autoComplete="url" />
+        <p className={HINT}>Paul lit seulement ce qui est public : votre site et votre fiche Google. Aucun mot de passe ni accès privé nécessaire.</p>
+        <FormError error={error} errors={errors} />
+        <div className="flex flex-wrap items-center gap-3">
+          <button type="submit" className={finished ? SECONDARY_OUTLINE : PRIMARY_BUTTON} disabled={busy || running}>Découvrir mon entreprise</button>
+          <button
+            type="button" className={SECONDARY_BUTTON} disabled={busy || running}
+            onClick={() => { setValues((current) => ({ ...current, website: "" })); void discover(""); }}
+          >
+            Je n&apos;ai pas de site
+          </button>
+        </div>
+      </form>
+      {analysis && <RubricList analysis={analysis} />}
+      {finished && (
+        <div className="flex flex-col gap-3">
+          <FormError error={findings.error} errors={findings.errors} />
+          <div>
+            <button ref={seeRef} type="button" className={PRIMARY_BUTTON} disabled={findings.busy} onClick={() => findings.send({ action: "see_findings" })}>
+              Voir mes premiers constats
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const ORIGIN_HINTS: Record<ProfileOrigin, string | null> = {
+  declared: null,
+  observed: "Observé par Paul, à vérifier.",
+  hypothesis: "Hypothèse de Paul, à vérifier.",
+  missing: "À renseigner par vous.",
+};
+
+/** Étape 2 : activité, zone, clients et offres, préremplis par l'analyse (hypothèses), à vérifier puis confirmer. */
+export function ProfileForm({ prefill }: { prefill: ProfilePrefill }) {
+  const { busy, error, errors, send } = useDraftAction();
+  const [values, setValues] = useState(prefill.values);
+  const set = (key: keyof typeof values) => (value: string) => setValues((current) => ({ ...current, [key]: value }));
+  const origin = (key: keyof typeof values) => ORIGIN_HINTS[prefill.origins[key]] ?? undefined;
+  const tradeOrigin = origin("trade");
   return (
     <form noValidate className="flex flex-col gap-5" onSubmit={(event) => { event.preventDefault(); void send({ action: "confirm_profile", ...values }); }}>
       <div className="flex flex-col gap-1.5">
-        <TradeCombobox id="trade" label="Votre activité" value={values.trade} onChange={set("trade")} invalid={Boolean(errors.trade)} describedBy={errors.trade ? "trade-error" : undefined} />
+        <TradeCombobox id="trade" label="Votre activité" value={values.trade} onChange={set("trade")} invalid={Boolean(errors.trade)} describedBy={[tradeOrigin ? "trade-origin" : null, errors.trade ? "trade-error" : null].filter(Boolean).join(" ") || undefined} />
+        {tradeOrigin && <p id="trade-origin" className={HINT}>{tradeOrigin}</p>}
         <FieldError id="trade-error" message={errors.trade} />
       </div>
-      <TextField id="servingArea" label="Votre zone d'intervention" value={values.servingArea} onChange={set("servingArea")} errors={errors} max={LIMITS.servingArea} />
-      <TextField id="targetClients" label="Vos clients" hint="Par exemple : des particuliers propriétaires de maisons anciennes." value={values.targetClients} onChange={set("targetClients")} errors={errors} max={LIMITS.targetClients} />
-      <TextField id="offers" label="Vos offres" hint="Par exemple : rénovation de salles de bain, dépannage." value={values.offers} onChange={set("offers")} errors={errors} max={LIMITS.offers} />
+      <TextField id="servingArea" label="Votre zone d'intervention" hint={origin("servingArea")} value={values.servingArea} onChange={set("servingArea")} errors={errors} max={LIMITS.servingArea} />
+      <TextField id="targetClients" label="Vos clients" hint={origin("targetClients") ?? "Par exemple : des particuliers propriétaires de maisons anciennes."} value={values.targetClients} onChange={set("targetClients")} errors={errors} max={LIMITS.targetClients} />
+      <TextField id="offers" label="Vos offres" hint={origin("offers") ?? "Par exemple : rénovation de salles de bain, dépannage."} value={values.offers} onChange={set("offers")} errors={errors} max={LIMITS.offers} />
       <FormError error={error} errors={errors} />
       <div><button type="submit" className={PRIMARY_BUTTON} disabled={busy}>Oui, c&apos;est bien moi</button></div>
     </form>

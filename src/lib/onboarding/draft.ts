@@ -3,6 +3,7 @@ import { cookies } from "next/headers";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { readDraftState, type DraftState } from "@/lib/onboarding/draft-rules";
+import { analysisRunning, readAnalysis, type DraftAnalysis } from "@/lib/onboarding/analysis-rules";
 
 /**
  * Brouillon anonyme du parcours d'entrée (#279, addendum §6) : lié au cookie `pepito_draft`, valable 24 h.
@@ -66,6 +67,30 @@ export async function createDraft(state: DraftState, now = new Date()): Promise<
 export async function saveDraft(id: string, state: DraftState, now = new Date()): Promise<boolean> {
   // L'ambition ne redevient jamais vide : absente, elle reste telle qu'en base.
   const saved = await prisma.onboardingDraft.updateMany({ where: { id, expiresAt: { gt: now } }, data: toJson(state) });
+  return saved.count > 0;
+}
+
+/**
+ * Pose une nouvelle analyse « en cours » (#280), sauf si une autre l'est déjà : la ligne est verrouillée le temps
+ * du contrôle, deux lancements simultanés ne passent jamais tous les deux. La colonne `analysis` est la seule écrite.
+ */
+export async function startAnalysis(id: string, analysis: DraftAnalysis, now = new Date()): Promise<"started" | "busy" | "missing"> {
+  return prisma.$transaction(async (tx) => {
+    const rows = await tx.$queryRaw<{ analysis: unknown; expiresAt: Date }[]>`SELECT "analysis", "expiresAt" FROM "OnboardingDraft" WHERE "id" = ${id} FOR UPDATE`;
+    const row = rows[0];
+    if (!row || row.expiresAt <= now) return "missing";
+    if (analysisRunning(readAnalysis(row.analysis), now)) return "busy";
+    await tx.onboardingDraft.update({ where: { id }, data: { analysis: analysis as unknown as Prisma.InputJsonObject } });
+    return "started";
+  });
+}
+
+/** Écrit l'état de l'analyse `runId` (en arrière-plan) ; faux si le brouillon a disparu, expiré ou relancé une autre analyse. */
+export async function saveAnalysis(id: string, analysis: DraftAnalysis, now = new Date()): Promise<boolean> {
+  const saved = await prisma.onboardingDraft.updateMany({
+    where: { id, expiresAt: { gt: now }, analysis: { path: ["runId"], equals: analysis.runId } },
+    data: { analysis: analysis as unknown as Prisma.InputJsonObject },
+  });
   return saved.count > 0;
 }
 
