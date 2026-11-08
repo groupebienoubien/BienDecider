@@ -8,7 +8,8 @@ import { readSignupControl, releaseSignupSlot, reserveSignupSlot, todaySignupCou
 import { sendVerificationEmail } from "@/lib/email-verification";
 import { passwordPolicyError } from "@/lib/password-policy";
 import { SIGNUP_CLOSED_MESSAGE, SIGNUP_FULL_MESSAGE, secondsUntilNextSignupDay, signupAvailability } from "@/lib/signup-rules";
-import { ADDRESS_UNAVAILABLE_MESSAGE, ONBOARDING_MESSAGES, RECOVER_ACCOUNT_HREF, checkDraftForAccount, isValidEmail, starterPlan, stepHref, synthesisUsage } from "@/lib/onboarding/draft-rules";
+import { ADDRESS_UNAVAILABLE_MESSAGE, ONBOARDING_MESSAGES, RECOVER_ACCOUNT_HREF, checkDraftForAccount, confirmedOrigin, isValidEmail, starterPlan, stepHref, synthesisUsage } from "@/lib/onboarding/draft-rules";
+import { cleanOwnerName, type ProfileOrigins } from "@/lib/company-profile";
 import { clearDraftCookie, loadDraft } from "@/lib/onboarding/draft";
 import { analysisUsage } from "@/lib/onboarding/analysis-rules";
 import { createMissionIn } from "@/lib/missions/service";
@@ -89,12 +90,23 @@ export async function POST(request: NextRequest) {
           trade: profile.trade,
           servingArea: profile.servingArea,
           website: profile.website || null,
-          firstName: profile.firstName,
-          ownerName: profile.firstName,
+          // Normalisé comme sur Entreprise (#169) : renvoyer le formulaire tel quel n'est pas une correction.
+          firstName: cleanOwnerName(profile.firstName),
+          ownerName: cleanOwnerName(profile.firstName),
           location: profile.location,
           targetClients: profile.targetClients,
           offers: profile.offers,
           profileConfirmedAt: now,
+          // Origine de chaque information confirmée (#169) : l'étape 1 est saisie par le dirigeant ; l'étape 2 garde celle de l'analyse si la valeur est restée telle quelle.
+          profileOrigins: {
+            firstName: profile.firstName ? "declared" : "missing",
+            name: profile.companyName ? "declared" : "missing",
+            location: profile.location ? "declared" : "missing",
+            trade: confirmedOrigin(draft.state, "trade"),
+            servingArea: confirmedOrigin(draft.state, "servingArea"),
+            targetClients: confirmedOrigin(draft.state, "targetClients"),
+            offers: confirmedOrigin(draft.state, "offers"),
+          } satisfies ProfileOrigins,
           ambitionText: ambition?.text ?? null,
           ambitionTerms: ambition ? { ...ambition.terms } : undefined,
           ambitionConfirmedAt: ambition ? now : null,

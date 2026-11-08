@@ -5,7 +5,30 @@ import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
 import { TradeCombobox } from "@/components/trade-combobox";
 import { PageHeading } from "@/components/mockup-ui";
-import { PROFILE_FIELD_LABELS, PROFILE_TEXT_LIMITS } from "@/lib/company-profile";
+import { CORRECTION_FIELDS, PROFILE_FIELD_LABELS, PROFILE_TEXT_LIMITS, companyOriginLabel, readProfileOrigins, type CorrectionField, type ProfileOrigins } from "@/lib/company-profile";
+import { LIMITS } from "@/lib/onboarding/draft-rules";
+
+/** Limite de chaque champ de « Corriger mon profil », la même qu'aux étapes 1 et 2 du parcours d'entrée. */
+const CORRECTION_LIMITS: Record<CorrectionField, number> = {
+  firstName: LIMITS.firstName,
+  name: LIMITS.companyName,
+  location: LIMITS.location,
+  trade: LIMITS.trade,
+  servingArea: LIMITS.servingArea,
+  targetClients: LIMITS.targetClients,
+  offers: LIMITS.offers,
+};
+
+/** Champ du formulaire de chaque information, pour le marquer et le focaliser quand le serveur le refuse. */
+const FIELD_INPUT_IDS: Record<CorrectionField, string> = {
+  firstName: "profile-first-name",
+  name: "profile-name",
+  location: "profile-location",
+  trade: "profile-trade",
+  servingArea: "profile-area",
+  targetClients: "profile-target-clients",
+  offers: "profile-offers",
+};
 
 export function CompanyProfileForm({ guided = false, embedded = false, initialTab = "informations" }: { guided?: boolean; embedded?: boolean; initialTab?: "informations" | "objectifs" }) {
   const router = useRouter();
@@ -21,6 +44,14 @@ export function CompanyProfileForm({ guided = false, embedded = false, initialTa
   const [certifications, setCertifications] = useState("");
   const [openingHours, setOpeningHours] = useState("");
   const [ownerName, setOwnerName] = useState("");
+  // « Corriger mon profil » (#169) : prénom, localisation, clients et offres, et l'origine de chaque information telle qu'enregistrée.
+  const [firstName, setFirstName] = useState("");
+  const [location, setLocation] = useState("");
+  const [targetClients, setTargetClients] = useState("");
+  const [offers, setOffers] = useState("");
+  const [saved, setSaved] = useState<Partial<Record<CorrectionField, string>>>({});
+  const [origins, setOrigins] = useState<ProfileOrigins | null>(null);
+  const [invalidField, setInvalidField] = useState<CorrectionField | null>(null);
   const [monthlyRevenue, setMonthlyRevenue] = useState("");
   const [revenueTarget, setRevenueTarget] = useState("");
   const [targetDate, setTargetDate] = useState("");
@@ -54,6 +85,12 @@ export function CompanyProfileForm({ guided = false, embedded = false, initialTa
         setCertifications(c.certifications ?? "");
         setOpeningHours(c.openingHours ?? "");
         setOwnerName(c.ownerName ?? "");
+        setFirstName(c.firstName ?? "");
+        setLocation(c.location ?? "");
+        setTargetClients(c.targetClients ?? "");
+        setOffers(c.offers ?? "");
+        setSaved(Object.fromEntries(CORRECTION_FIELDS.map((field) => [field, typeof c[field] === "string" ? c[field] : ""])));
+        setOrigins(readProfileOrigins(c.profileOrigins));
         setMonthlyRevenue(c.monthlyRevenue?.toString() ?? "");
         setRevenueTarget(c.revenueTarget?.toString() ?? "");
         setTargetDate(c.targetDate ? String(c.targetDate).slice(0, 7) : "");
@@ -63,6 +100,20 @@ export function CompanyProfileForm({ guided = false, embedded = false, initialTa
       .catch(() => {})
       .finally(() => setProfileLoaded(true));
   }, []);
+
+  /** Origine d'un champ (#169), tant qu'il garde sa valeur enregistrée : un champ modifié sera « déclaré par vous ». */
+  function originOf(field: CorrectionField, value: string): string | null {
+    if (guided || !origins || value !== (saved[field] ?? "")) return null;
+    return companyOriginLabel(origins[field]);
+  }
+  /** Description d'un champ : son origine, et le message du serveur s'il l'a refusé. */
+  const originId = (field: CorrectionField, value: string) =>
+    [originOf(field, value) ? `profile-origin-${field}` : null, invalidField === field ? "profile-error" : null].filter(Boolean).join(" ") || undefined;
+  const invalid = (field: CorrectionField) => (invalidField === field ? true : undefined);
+  const originNote = (field: CorrectionField, value: string) => {
+    const label = originOf(field, value);
+    return label ? <p id={`profile-origin-${field}`} className="-mt-2 text-xs text-[var(--bd-muted)]" data-origin={field}>Origine : {label}</p> : null;
+  };
 
   const missingProfileFields = [
     { key: "name", label: "nom commercial", value: name },
@@ -114,6 +165,7 @@ export function CompanyProfileForm({ guided = false, embedded = false, initialTa
     e.preventDefault();
     setLoading(true);
     setError(null);
+    setInvalidField(null);
     try {
       const res = await fetch("/api/companies", {
         method: "POST",
@@ -131,6 +183,8 @@ export function CompanyProfileForm({ guided = false, embedded = false, initialTa
           certifications: certifications.trim(),
           openingHours: openingHours.trim(),
           ownerName: ownerName.trim(),
+          // Absents du formulaire guidé : ils restent tels qu'en base.
+          ...(guided ? {} : { firstName: firstName.trim(), location: location.trim(), targetClients: targetClients.trim(), offers: offers.trim() }),
           monthlyRevenue: monthlyRevenue || null,
           revenueTarget: revenueTarget || null,
           // <input type="month"> renvoie "AAAA-MM" : on vise la fin du mois choisi.
@@ -139,12 +193,23 @@ export function CompanyProfileForm({ guided = false, embedded = false, initialTa
           newClientsPerMonth: newClientsPerMonth || null,
         }),
       });
-      if (!res.ok) throw new Error();
+      if (!res.ok) {
+        // Champ refusé (#169) : le message du champ, le champ marqué et focalisé dans l'onglet « Informations ».
+        const data = await res.json().catch(() => null);
+        const field = typeof data?.field === "string" && (CORRECTION_FIELDS as readonly string[]).includes(data.field) ? (data.field as CorrectionField) : null;
+        if (res.status === 400 && field && typeof data?.error === "string") {
+          setInvalidField(field);
+          if (!guided) setProfileTab("informations");
+          requestAnimationFrame(() => document.getElementById(FIELD_INPUT_IDS[field])?.focus());
+          throw new Error(data.error);
+        }
+        throw new Error("");
+      }
 
       // Le premier audit de Martine est créé au plan et lancé par le serveur à la première création du profil.
       router.push("/dashboard");
-    } catch {
-      setError("Impossible d'enregistrer ces informations, réessayez.");
+    } catch (failure) {
+      setError(failure instanceof Error && failure.message ? failure.message : "Impossible d'enregistrer ces informations, réessayez.");
     } finally {
       setLoading(false);
     }
@@ -156,8 +221,8 @@ export function CompanyProfileForm({ guided = false, embedded = false, initialTa
           <PageHeading kicker="BIENVENUE" title="Parlez-nous de votre activité" description="Moins de 5 minutes. Vous pourrez tout modifier plus tard." />
         ) : (
           <>
-            <h2>Modifier les informations</h2>
-            <p className="legend">Modifiez ces informations à tout moment — elles orientent directement vos agents.</p>
+            <h2 id="corriger-mon-profil">Corriger mon profil</h2>
+            <p className="legend">Paul prépare vos contenus à partir de ces informations.</p>
             <div className="tabs" role="group" aria-label="Rubriques de mon entreprise">
               {([["informations", "Informations"], ["objectifs", "Objectifs"]] as const).map(([tab, label]) => (
                 <button key={tab} type="button" className={profileTab === tab ? "selected" : undefined} aria-current={profileTab === tab ? "page" : undefined} onClick={() => setProfileTab(tab)}>{label}</button>
@@ -307,27 +372,55 @@ export function CompanyProfileForm({ guided = false, embedded = false, initialTa
           </div>
           <div data-profile-section="informations" hidden={!guided && profileTab !== "informations"}>
           <div className="flex flex-col gap-3">
-          <label htmlFor="profile-name" className="field">Nom commercial</label>
+          {!guided && <>
+            <label htmlFor="profile-first-name" className="field">Prénom (facultatif)</label>
+            <input id="profile-first-name" autoComplete="given-name" maxLength={CORRECTION_LIMITS.firstName} aria-invalid={invalid("firstName")} aria-describedby={originId("firstName", firstName)} value={firstName} onChange={(e) => setFirstName(e.target.value)} />
+            {originNote("firstName", firstName)}
+          </>}
+
+          <label htmlFor="profile-name" className="field">{guided ? "Nom commercial" : "Entreprise"}</label>
           <input
             id="profile-name"
             required
             placeholder="Nom commercial"
+            maxLength={guided ? undefined : CORRECTION_LIMITS.name}
+            aria-invalid={invalid("name")} aria-describedby={originId("name", name)}
             value={name}
             onChange={(e) => setName(e.target.value)}
-           
+
           />
+          {originNote("name", name)}
 
-          <TradeCombobox value={trade} onChange={setTrade} />
+          {!guided && <>
+            <label htmlFor="profile-location" className="field">Localisation (facultatif)</label>
+            <input id="profile-location" placeholder="ex: Lyon 7e" maxLength={CORRECTION_LIMITS.location} aria-invalid={invalid("location")} aria-describedby={originId("location", location)} value={location} onChange={(e) => setLocation(e.target.value)} />
+            {originNote("location", location)}
+          </>}
 
-          <label htmlFor="profile-area" className="field">Zone de chalandise (là où vous trouvez vos clients)</label>
+          <TradeCombobox value={trade} onChange={setTrade} label={guided ? undefined : "Activité"} invalid={invalid("trade")} describedBy={originId("trade", trade)} />
+          {originNote("trade", trade)}
+
+          <label htmlFor="profile-area" className="field">{guided ? "Zone de chalandise (là où vous trouvez vos clients)" : "Zone (là où vous trouvez vos clients)"}</label>
           <input
             id="profile-area"
             required
             placeholder="Zone de chalandise (ex: Lyon et alentours)"
+            maxLength={guided ? undefined : CORRECTION_LIMITS.servingArea}
+            aria-invalid={invalid("servingArea")} aria-describedby={originId("servingArea", servingArea)}
             value={servingArea}
             onChange={(e) => setServingArea(e.target.value)}
-           
+
           />
+          {originNote("servingArea", servingArea)}
+
+          {!guided && <>
+            <label htmlFor="profile-target-clients" className="field">Clients prioritaires (facultatif)</label>
+            <input id="profile-target-clients" placeholder="ex: Syndics de copropriété" maxLength={CORRECTION_LIMITS.targetClients} aria-invalid={invalid("targetClients")} aria-describedby={originId("targetClients", targetClients)} value={targetClients} onChange={(e) => setTargetClients(e.target.value)} />
+            {originNote("targetClients", targetClients)}
+            <label htmlFor="profile-offers" className="field">Offres principales (facultatif)</label>
+            <input id="profile-offers" placeholder="ex: Mise aux normes électriques" maxLength={CORRECTION_LIMITS.offers} aria-invalid={invalid("offers")} aria-describedby={originId("offers", offers)} value={offers} onChange={(e) => setOffers(e.target.value)} />
+            {originNote("offers", offers)}
+          </>}
 
           {/* L'onboarding guidé garde ses trois champs (refonte UX) : le nom se saisit dans Entreprise ou via Paul, qui le demande dès qu'un email est en jeu. */}
           {!guided && <>
@@ -414,14 +507,16 @@ export function CompanyProfileForm({ guided = false, embedded = false, initialTa
           </>}
           </div>
           </div>
+          {!guided && !isNew && <p id="profile-correction-effects" className="text-sm text-[var(--bd-muted)]">Vos contenus en cours seront à relire et leurs programmations annulées.</p>}
           <button
             type="submit"
+            aria-describedby={!guided && !isNew ? "profile-correction-effects" : undefined}
             disabled={loading || !profileLoaded}
             className="primary"
           >
             {loading ? "Enregistrement…" : isNew ? "Valider et lancer mon audit" : "Enregistrer"}
           </button>
-          {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
+          {error && <p id="profile-error" role="alert" className="text-sm text-red-600">{error}</p>}
           </fieldset>
         </form>
       </div>

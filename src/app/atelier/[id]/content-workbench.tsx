@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { Icon } from "@/components/icon";
 import { Modal } from "@/components/modal";
 import { MISSION_MESSAGES } from "@/lib/missions/messages";
-import { BODY_MAX, REJECTION_MAX, TITLE_MAX, VARIANTS, variantLabel, type ChecklistItem, type VariantKind } from "@/lib/contents/rules";
+import { BODY_MAX, PROFILE_REVIEW_BADGE, REJECTION_MAX, TITLE_MAX, VARIANTS, variantLabel, type ChecklistItem, type VariantKind } from "@/lib/contents/rules";
 import type { AtelierItem, ContentDetail, VersionView } from "@/lib/contents/view";
 
 const AUTHORS: Record<VersionView["author"], string> = { owner: "vous", paul: "Paul", system: "système" };
@@ -197,6 +197,7 @@ export function ContentWorkbench({ detail, viewing, items, checklist, credits }:
     : validated ? (selfPublish
       ? (detail.mission.channel === null ? "Mission menée hors canal : récupérez le texte, diffusez-le, puis déclarez-le." : `Votre règle : ${detail.delegationLabel}. Récupérez le texte, diffusez-le vous-même, puis déclarez-le.`)
       : `Aucun envoi effectué. ${detail.publishRefusal ?? "Validation et diffusion sont deux décisions distinctes : rien ne part sans votre confirmation."}`)
+    : detail.canValidate && detail.profileToReview ? MISSION_MESSAGES["M-92"]
     : detail.canValidate ? "Valider n'envoie rien : la diffusion reste une décision distincte."
     : MISSION_MESSAGES["M-47"];
 
@@ -212,6 +213,7 @@ export function ContentWorkbench({ detail, viewing, items, checklist, credits }:
         <div className="tags">
           <span className="tag blue">V{version.number} · {archive ? "archive" : "courante"}</span>
           <span className={`tag ${validated || diffused ? "green" : archive ? "gray" : "orange"}`}>{archive ? version.state : detail.statusLabel}</span>
+          {!archive && detail.profileToReview && <span className="tag orange">{PROFILE_REVIEW_BADGE}</span>}
         </div>
       </div>
 
@@ -268,7 +270,7 @@ export function ContentWorkbench({ detail, viewing, items, checklist, credits }:
               </>}
               {scheduled && !detail.readOnly && <button type="button" disabled={busy} onClick={() => openDialog("cancel")}><Icon name="x" />Annuler la programmation</button>}
               {!archive && !pending && !diffused && !scheduled && !detail.readOnly && !validated && (
-                <button type="button" className="primary" disabled={busy || !detail.canValidate} onClick={() => openDialog("validate")}><Icon name="check" />Valider cette version</button>
+                <button type="button" className="primary" disabled={busy || !detail.canValidate || detail.profileToReview} onClick={() => openDialog("validate")}><Icon name="check" />Valider cette version</button>
               )}
               {!archive && !pending && !diffused && !scheduled && !detail.readOnly && !version.rejectionReason && (
                 <button type="button" disabled={busy} onClick={() => openDialog("reject")}><Icon name="x" />Je ne veux pas de cette version</button>

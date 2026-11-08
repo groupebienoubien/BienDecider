@@ -791,6 +791,58 @@ test("GH-282: the ambition is changed with Paul from Entreprise, traced as J-03,
   } finally { await prisma.$disconnect(); }
 });
 
+test("GH-169: Entreprise shows the origin of each profile information and its landmarks; a correction puts the content to review in the mission and the atelier", async ({ page, company }) => {
+  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }) });
+  try {
+    await prisma.company.update({ where: { id: company.id }, data: {
+      workspaceV52: true, firstName: "Claire", location: "Lyon 7e", trade: "Électricien", servingArea: "Lyon", targetClients: null, offers: "Mise aux normes", ambitionText: "Plus de devis", objective: "Plus de devis",
+      profileOrigins: { firstName: "declared", name: "declared", location: "declared", trade: "observed", servingArea: "hypothesis", targetClients: "missing", offers: "observed" },
+    } });
+    const mission = await prisma.mission.create({ data: { companyId: company.id, template: "site_page", channel: "site", title: "Nos tarifs", outcome: "Des demandes", originalOutcome: "Des demandes", finding: "Un constat", scope: { page: "Nos tarifs" }, status: "active", firstLaunchedAt: new Date(), position: 1 } });
+    const content = await prisma.missionContent.create({ data: { companyId: company.id, missionId: mission.id, channel: "site", format: "site_page", currentNumber: 1, validatedNumber: 1, validatedAt: new Date(), versions: { create: { number: 1, title: "Nos tarifs", body: "Sur devis.", author: "paul", note: "Premier brouillon préparé par Paul" } } } });
+
+    await page.setViewportSize({ width: 360, height: 900 });
+    await page.goto(`${baseURL}/entreprise`);
+    // Repères : ambition, localisation, zone, clients ; « À renseigner » pour une valeur vide.
+    const landmarks = page.getByRole("region", { name: "Vos repères" });
+    await expect(landmarks).toContainText("AmbitionPlus de devis");
+    await expect(landmarks).toContainText("LocalisationLyon 7e");
+    await expect(landmarks).toContainText("ZoneLyon");
+    await expect(landmarks).toContainText("ClientsÀ renseigner");
+    await expect(landmarks.getByRole("link", { name: "Modifier avec Paul" })).toHaveAttribute("href", "#modifier");
+
+    // « Corriger mon profil » : chaque champ montre son origine, qui disparaît dès qu'il est modifié.
+    await expect(page.getByRole("heading", { name: "Corriger mon profil" })).toBeVisible();
+    await expect(page.locator('[data-origin="firstName"]')).toHaveText("Origine : Déclaré par vous");
+    await expect(page.locator('[data-origin="trade"]')).toHaveText("Origine : Lu sur le site");
+    await expect(page.locator('[data-origin="servingArea"]')).toHaveText("Origine : Proposé par Paul, confirmé par vous");
+    await expect(page.locator('[data-origin="targetClients"]')).toHaveText("Origine : À renseigner par vous");
+    await expect(page.locator('[data-origin="offers"]')).toHaveText("Origine : Lu sur le site");
+    await expect(page.getByLabel("Offres principales (facultatif)")).toHaveValue("Mise aux normes");
+    await page.getByLabel("Offres principales (facultatif)").fill("Bornes de recharge");
+    await expect(page.locator('[data-origin="offers"]')).toHaveCount(0);
+    await expect(page.getByText("Vos contenus en cours seront à relire et leurs programmations annulées.")).toBeVisible();
+    expect(await noHorizontalScroll(page)).toBe(true);
+    await page.getByRole("button", { name: "Enregistrer", exact: true }).click();
+    await expect(page).toHaveURL(`${baseURL}/dashboard`);
+
+    const saved = await prisma.company.findUniqueOrThrow({ where: { id: company.id } });
+    expect(saved.offers).toBe("Bornes de recharge");
+    expect(saved.profileOrigins).toMatchObject({ offers: "declared", trade: "observed", servingArea: "hypothesis" });
+    expect(await prisma.journalEntry.count({ where: { companyId: company.id, code: "J-02" } })).toBe(1);
+
+    // La mission et l'atelier signalent « Profil à relire » ; la validation attend une nouvelle version.
+    await page.goto(`${baseURL}/missions/${mission.id}`);
+    await expect(page.getByText("Profil à relire")).toBeVisible();
+    await page.goto(`${baseURL}/atelier/${content.id}`);
+    await expect(page.locator(".atelier .tags").first()).toContainText("Profil à relire");
+    await expect(page.getByText("Profil corrigé : relisez ce contenu et enregistrez une nouvelle version avant de le valider.")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Valider cette version" })).toBeDisabled();
+    expect(await noHorizontalScroll(page)).toBe(true);
+    expect(await prisma.publication.count({ where: { contentId: content.id } })).toBe(0);
+  } finally { await prisma.$disconnect(); }
+});
+
 test("Canaux & délégation: only active channels, honest states, scheduled diffusions listed before disconnecting, access requested for a reserved channel", async ({ page, company }, testInfo) => {
   const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }) });
   const previous = await prisma.channelRollout.findUnique({ where: { channel: "gmail" } });
@@ -2818,6 +2870,13 @@ test("GH-279: five anonymous steps, back and reload keep the answers, and the ac
       ambitionTerms: { gainPercent: 20, horizonMonths: 12, recruitment: "no" },
     });
     expect(company.ambitionConfirmedAt).not.toBeNull();
+    // #169 : l'origine retenue à l'inscription ; site illisible, la zone reprise de la localisation reste une proposition de Paul.
+    expect(company.profileOrigins).toEqual({ firstName: "declared", name: "declared", location: "declared", trade: "declared", servingArea: "hypothesis", targetClients: "declared", offers: "declared" });
+    await page.goto(`${baseURL}/entreprise`);
+    await expect(page.locator('[data-origin="servingArea"]')).toHaveText("Origine : Proposé par Paul, confirmé par vous");
+    await expect(page.locator('[data-origin="offers"]')).toHaveText("Origine : Déclaré par vous");
+    await expect(page.locator("[data-origin]")).toHaveCount(7);
+    await page.goto(`${baseURL}/strategie`);
     // Le premier audit est mis au plan après la création du compte, une seule fois.
     expect(await prisma.actionPlanItem.count({ where: { companyId: company.id, agent: "marketing", timing: "Dès l'inscription" } })).toBe(1);
     expect(company.profileConfirmedAt).not.toBeNull();
@@ -3090,6 +3149,47 @@ test("GH-281: step 2 says where each field comes from, and « Non, corriger mes 
     expect(await prisma.onboardingDraft.findUniqueOrThrow({ where: { id: draft.id } })).toMatchObject({ step: 2, analysis: { runId: "run-corriger" } });
   } finally {
     await prisma.onboardingDraft.deleteMany({ where: { id: draft.id } });
+    await prisma.$disconnect();
+  }
+});
+
+test("GH-169: the origins from the analysis, kept unchanged at step 2, are stored at signup and shown on Entreprise", async ({ page }) => {
+  const prisma = journeyDatabase();
+  const website = "https://atelier-lumen.test";
+  const email = `ux-origines-${randomUUID()}@example.invalid`;
+  // Étape 5 : activité (hypothèse) et offres (lues sur le site) gardées telles quelles ; clients modifiés ; zone reprise de la localisation.
+  const draft = await createTestDraft(prisma, { profile: { website, trade: "Électricien", servingArea: "Lyon", targetClients: "Particuliers propriétaires", offers: "Rénovation électrique" } });
+  const readAt = "2026-11-07T10:00:00.000Z";
+  try {
+    await prisma.onboardingDraft.update({ where: { id: draft.id }, data: { analysis: {
+      runId: "run-origines", status: "done", startedAt: readAt, finishedAt: readAt,
+      input: { companyName: "Atelier Lumen", location: "Lyon", website },
+      rubrics: { site: { status: "read" }, google: { status: "not_found" }, zone: { status: "read" }, identity: { status: "read" } },
+      findings: {
+        trade: { value: "Électricien", provenance: { kind: "hypothesis" } }, servingArea: null,
+        targetClients: { value: "Particuliers", provenance: { kind: "hypothesis" } },
+        offers: { value: "Rénovation électrique", provenance: { kind: "observed", source: `${website}/`, readAt } },
+        tone: null, contacts: [], palette: null, logo: null, google: null, pages: [{ url: `${website}/`, readAt }],
+      },
+      cost: { usd: 0, inputTokens: 0, outputTokens: 0 },
+    } } });
+    await page.context().addCookies([{ name: "pepito_draft", value: draft.token, url: baseURL }]);
+    const password = "mot-de-passe-valide";
+    const signup = await page.request.post(`${baseURL}/api/auth/signup`, { headers: { Origin: baseURL, ...testIpHeader() }, data: { email, password, passwordConfirmation: password } });
+    expect(signup.status()).toBe(201);
+
+    const company = await prisma.company.findUniqueOrThrow({ where: { ownerEmail: email } });
+    expect(company.profileOrigins).toEqual({ firstName: "declared", name: "declared", location: "declared", trade: "hypothesis", servingArea: "hypothesis", targetClients: "declared", offers: "observed" });
+
+    await page.setViewportSize({ width: 360, height: 800 });
+    await page.goto(`${baseURL}/entreprise`);
+    await expect(page.locator('[data-origin="offers"]')).toHaveText("Origine : Lu sur le site");
+    await expect(page.locator('[data-origin="trade"]')).toHaveText("Origine : Proposé par Paul, confirmé par vous");
+    await expect(page.locator('[data-origin="targetClients"]')).toHaveText("Origine : Déclaré par vous");
+    expect(await noHorizontalScroll(page)).toBe(true);
+  } finally {
+    await prisma.onboardingDraft.deleteMany({ where: { id: draft.id } });
+    await prisma.company.deleteMany({ where: { ownerEmail: email } });
     await prisma.$disconnect();
   }
 });

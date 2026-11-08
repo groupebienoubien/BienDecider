@@ -144,13 +144,38 @@ export function checkChannelConstraints(content: Pick<ContentSnapshot, "channel"
   return null;
 }
 
+/** Note de la version système écrite après une correction du profil (§4.5, J-02). */
+export const PROFILE_REVIEW_NOTE = "Profil corrigé : informations du contenu à vérifier";
+export const PROFILE_REVIEW_BADGE = "Profil à relire";
+
+/** Version système écrite après une correction du profil (§4.5). */
+export function isProfileReview(version: { author?: string | null; note?: string | null } | null | undefined): boolean {
+  return version?.author === "system" && version.note === PROFILE_REVIEW_NOTE;
+}
+
+/**
+ * « Profil à relire » (#169) : une version système de correction du profil existe, et aucune version du dirigeant ou de Paul
+ * ne l'a suivie. Une autre version système (canal, destinataires) ne lève pas le blocage : personne n'a relu le contenu.
+ */
+export function profileReviewPending(versions: readonly { number: number; author: string; note: string | null }[]): boolean {
+  const ordered = [...versions].sort((a, b) => a.number - b.number);
+  let pending = false;
+  for (const version of ordered) {
+    if (isProfileReview(version)) pending = true;
+    else if (version.author === "owner" || version.author === "paul") pending = false;
+  }
+  return pending;
+}
+
 /**
  * Valider une version (§4.4), conditions dans l'ordre de la spécification.
- * Le profil relu (3, #4.5), la réactivation (5) et la marque du visuel (6) arrivent avec leurs US ; elles n'ont pas d'objet ici aujourd'hui.
+ * Le profil relu (3) : refusé tant que le contenu est « à relire » après une correction du profil (M-92, #169) ; la réactivation (5)
+ * et la marque du visuel (6) arrivent avec leurs US ; elles n'ont pas d'objet ici aujourd'hui.
  */
-export function checkValidation(content: ContentSnapshot, version: { number: number; body: string }, input: { number: number; reviewed: boolean }): Refusal | null {
+export function checkValidation(content: ContentSnapshot, version: { number: number; body: string }, input: { number: number; reviewed: boolean; profileToReview?: boolean }): Refusal | null {
   if (input.number !== content.currentNumber || version.number !== content.currentNumber) return { code: "M-02" };
   if (content.missionStatus !== "active") return { code: "M-47" };
+  if (input.profileToReview) return { code: "M-92" };
   if (content.format === "email" && !content.recipients) return { code: "M-49" };
   const constraint = checkChannelConstraints(content, version.body);
   if (constraint) return constraint;

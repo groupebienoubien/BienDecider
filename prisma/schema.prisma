@@ -73,6 +73,7 @@ model Company {
   ambitionText       String? // ambition en texte libre, conservée telle quelle (étape 3, spec §11)
   ambitionTerms      Json? // éléments retenus avec Paul : gain, horizon, budget média, recrutement (#282, spec §11)
   ambitionConfirmedAt DateTime? // dernière confirmation de l'ambition (« C'est bien ça »)
+  profileOrigins     Json? // origine des sept champs de « Corriger mon profil » (#169) : observed, hypothesis, declared ou missing ; absent pour un compte d'avant #169
   channels        ChannelConnection[]
   proposals       AgentProposal[]
   auditFindings   AuditFinding[]

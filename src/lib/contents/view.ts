@@ -3,7 +3,7 @@ import { emailVerificationGateOpen } from "@/lib/email-verification-policy";
 import { channelLabel } from "@/lib/missions/channels";
 import { loadMissionViews, type MissionView } from "@/lib/missions/view";
 import {
-  CONTENT_STATUS_LABELS, channelBodyLimit, checkNewVersion, contentStatus, exposureFor, isReadOnly, reviewChecklist, titleLabel,
+  CONTENT_STATUS_LABELS, channelBodyLimit, checkNewVersion, contentStatus, exposureFor, isReadOnly, profileReviewPending, reviewChecklist, titleLabel,
   type ChecklistItem, type ContentFormat, type ContentStatus,
 } from "@/lib/contents/rules";
 import { readSuggestion, snapshotOf, type ContentSuggestion } from "@/lib/contents/service";
@@ -42,6 +42,8 @@ export type ContentDetail = {
   readOnly: boolean;
   editRefusal: string | null;
   canValidate: boolean;
+  /** « Profil à relire » (#169) : la version courante est la version système d'une correction du profil ; sa validation est refusée (M-92). */
+  profileToReview: boolean;
   channelConnected: boolean;
   exposure: string;
   companyName: string;
@@ -112,6 +114,7 @@ export async function loadContentDetail(companyId: string, contentId: string): P
     readOnly: isReadOnly(snapshot),
     editRefusal: editRefusal ? editRefusal.code : null,
     canValidate: mission.status === "active",
+    profileToReview: profileReviewPending(content.versions),
     channelConnected: destination.connected,
     exposure: exposureFor(snapshot.channel),
     companyName: content.company.name,
@@ -138,6 +141,15 @@ export async function loadContentDetail(companyId: string, contentId: string): P
     systemCancel: newest?.status === "cancelled" && newest.cancelledBy === "system" ? newest.cancelReason : null,
     recipients: content.mission.template === "agencies" ? (await scopeAgencies(companyId, content.mission.scope)).map((agency) => ({ name: agency.name, email: agency.email })) : [],
   };
+}
+
+/** « Profil à relire » d'un contenu (#169), pour la page mission : aucune version du dirigeant ou de Paul depuis la correction du profil. */
+export async function loadProfileToReview(companyId: string, contentId: string): Promise<boolean> {
+  const content = await prisma.missionContent.findFirst({
+    where: { id: contentId, companyId },
+    select: { versions: { select: { number: true, author: true, note: true } } },
+  });
+  return content ? profileReviewPending(content.versions) : false;
 }
 
 /** Programmations annulées par l'ordonnanceur (contrôle échoué à l'heure prévue), tant que rien d'autre n'a suivi sur la version courante. */

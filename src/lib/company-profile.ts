@@ -3,6 +3,7 @@
  * (POST /api/companies) et les cartes de profil de Paul (update_profile) :
  * une seule règle de longueur et de nettoyage. Module pur, sans accès base.
  */
+import type { ProfileOrigin } from "@/lib/onboarding/draft-rules";
 
 /** Longueur maximale de chaque champ texte facultatif, mesurée après rognage des espaces. */
 export const PROFILE_TEXT_LIMITS = {
@@ -86,6 +87,62 @@ export function profileChanges(before: Record<string, unknown>, after: Record<st
     }
     return value !== previous;
   });
+}
+
+/**
+ * « Corriger mon profil » (#169) : les sept champs confirmés au parcours d'entrée, dans l'ordre de la page Entreprise.
+ * Clés de `Company` ; `name` est l'entreprise (`companyName` du brouillon).
+ */
+export const CORRECTION_FIELDS = ["firstName", "name", "location", "trade", "servingArea", "targetClients", "offers"] as const;
+export type CorrectionField = (typeof CORRECTION_FIELDS)[number];
+
+/** Origine d'une information du profil : lue sur le site, proposée par Paul, déclarée par le dirigeant, ou vide (celle de l'étape 2). */
+export type CompanyOrigin = ProfileOrigin;
+export type ProfileOrigins = Partial<Record<CorrectionField, CompanyOrigin>>;
+
+/** Étiquettes d'origine de la page Entreprise (décision de Samir du 2026-11-08). */
+export const COMPANY_ORIGIN_LABELS: Record<CompanyOrigin, string> = {
+  observed: "Lu sur le site",
+  hypothesis: "Proposé par Paul, confirmé par vous",
+  declared: "Déclaré par vous",
+  missing: "À renseigner par vous",
+};
+
+const ORIGINS = Object.keys(COMPANY_ORIGIN_LABELS) as CompanyOrigin[];
+
+export function companyOriginLabel(origin: CompanyOrigin | undefined): string | null {
+  return origin ? COMPANY_ORIGIN_LABELS[origin] : null;
+}
+
+/** Lecture défensive de `Company.profileOrigins` : null pour un compte d'avant #169 ; toute entrée illisible est ignorée. */
+export function readProfileOrigins(value: unknown): ProfileOrigins | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  const origins: ProfileOrigins = {};
+  for (const field of CORRECTION_FIELDS) {
+    const origin = raw[field];
+    if (typeof origin === "string" && (ORIGINS as string[]).includes(origin)) origins[field] = origin as CompanyOrigin;
+  }
+  return origins;
+}
+
+/**
+ * Origines après une correction : un champ absent (undefined) ou inchangé garde la sienne, un champ vidé passe à « missing »,
+ * un champ modifié à « declared ». Un compte d'avant #169 (null) reste sans origine.
+ */
+export function nextProfileOrigins(before: Record<string, unknown>, after: Record<string, unknown>, origins: ProfileOrigins | null): ProfileOrigins | null {
+  if (!origins) return null;
+  const next: ProfileOrigins = { ...origins };
+  for (const field of CORRECTION_FIELDS) {
+    const value = after[field];
+    if (value === undefined) continue;
+    const previous = before[field] ?? "";
+    // "" et null sont un même champ vide : vide avant et après, l'origine ne change pas.
+    if (value === null || value === "") {
+      if (previous !== "") next[field] = "missing";
+    } else if (value !== previous) next[field] = "declared";
+  }
+  return next;
 }
 
 /** Champs que Paul peut proposer de modifier ; nom commercial, métier et zone restent sur la page Entreprise. */

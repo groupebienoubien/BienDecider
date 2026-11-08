@@ -68,6 +68,7 @@ export const MISSION_MESSAGES = {
   "M-89": "Ce contenu a déjà été diffusé : le périmètre est figé. Créez une nouvelle version dans l'atelier pour repartir sur un autre périmètre.",
   "M-90": "Paul n'a trouvé aucune nouvelle agence avec un e-mail professionnel public dans votre zone. Réessayez plus tard.",
   "M-91": "La recherche d'agences n'est pas disponible pour le moment. Réessayez dans un instant.",
+  "M-92": "Profil corrigé : relisez ce contenu et enregistrez une nouvelle version avant de le valider.",
 } as const;
 
 export type MissionMessageCode = keyof typeof MISSION_MESSAGES;

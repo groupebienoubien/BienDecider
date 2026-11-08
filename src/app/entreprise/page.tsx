@@ -1,4 +1,6 @@
+import { Fragment } from "react";
 import Link from "next/link";
+import { capLabel, readAmbitionTerms } from "@/lib/ambition-rules";
 import { redirect } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
 import { CompanyProfileForm } from "@/components/company-profile-form";
@@ -47,6 +49,18 @@ export default async function EntreprisePage({ searchParams }: { searchParams: P
     { name: "Site", connected: Boolean(company.siteSlug), detail: company.siteSlug ? `/site/${company.siteSlug} · publié` : "Aucune page publiée" },
   ];
 
+  // Repères (#169, spécification §13) : ambition, localisation, zone et clients ; « À renseigner » quand une valeur est vide.
+  const ambitionTerms = readAmbitionTerms(company.ambitionTerms);
+  const ambitionText = company.ambitionText?.trim() || company.objective;
+  const hasAmbition = Boolean(ambitionText?.trim()) || (ambitionTerms?.gainPercent != null && ambitionTerms.horizonMonths != null);
+  const filled = (value: string | null | undefined) => value?.trim() || null;
+  const landmarks = [
+    { label: "Ambition", value: hasAmbition ? capLabel(ambitionText, ambitionTerms) : null },
+    { label: "Localisation", value: filled(company.location) },
+    { label: "Zone", value: filled(company.servingArea) },
+    { label: "Clients", value: filled(company.targetClients) },
+  ];
+
   return (
     <AppShell {...shell}>
       <PageHeading kicker="MON ENTREPRISE" title="Le contexte commun à votre équipe." description="Informations, objectif, agents et connexions." />
@@ -54,6 +68,22 @@ export default async function EntreprisePage({ searchParams }: { searchParams: P
         <section className="setting-section">
           <h2>{company.name}</h2>
           <p>{[company.trade, company.servingArea].filter(Boolean).join(" · ")}</p>
+          <section aria-labelledby="reperes-title" className="flex flex-col gap-3">
+            <h3 id="reperes-title">Vos repères</h3>
+            <dl className="modal-details">
+              {landmarks.map((landmark) => (
+                <Fragment key={landmark.label}>
+                  <dt>{landmark.label}</dt>
+                  <dd>{landmark.value ?? <span className="muted">À renseigner</span>}</dd>
+                </Fragment>
+              ))}
+            </dl>
+            <p className="small">
+              <a href="#modifier">Modifier avec Paul</a>
+              {" · "}
+              <a href="#corriger-mon-profil">Corriger mon profil</a>
+            </p>
+          </section>
           <section id="modifier" aria-labelledby="ambition-title" className="flex flex-col gap-3">
             <h3 id="ambition-title">Votre ambition</h3>
             <AmbitionEditor target="entreprise" initialText={company.ambitionText ?? company.objective ?? ""} />
