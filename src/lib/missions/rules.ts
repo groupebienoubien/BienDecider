@@ -60,6 +60,53 @@ export function validateDeduction(value: unknown): { ok: true; deduction: string
   return typeof value === "string" && inRange(deduction, 10, 300) ? { ok: true, deduction } : failure("M-20");
 }
 
+/** Agents qu'une mission peut nommer comme responsables (#284) : les clés de `PERSONAS` (vérifié par les tests). */
+export const RESPONSIBLE_AGENTS = ["co_ceo", "marketing", "contenu", "demarchage"] as const;
+export type ResponsibleAgent = (typeof RESPONSIBLE_AGENTS)[number];
+
+export function isResponsibleAgent(value: unknown): value is ResponsibleAgent {
+  return typeof value === "string" && (RESPONSIBLE_AGENTS as readonly string[]).includes(value);
+}
+
+/**
+ * Libellé visible de l'agent responsable (#284). La charte ne montre que Paul (D3, FR-55) : l'agent se lit comme
+ * le rôle que Paul tient pour cette mission, jamais comme un autre personnage.
+ */
+export const RESPONSIBLE_LABELS: Record<ResponsibleAgent, string> = {
+  co_ceo: "Paul, qui coordonne la mission",
+  marketing: "Paul, pour votre présence en ligne",
+  contenu: "Paul, pour vos contenus et votre site",
+  demarchage: "Paul, pour la prospection",
+};
+
+export function responsibleLabel(agent: string | null | undefined): string | null {
+  return isResponsibleAgent(agent) ? RESPONSIBLE_LABELS[agent] : null;
+}
+
+/** Agent responsable (#284) : facultatif ; donné, une clé de `PERSONAS`, sinon M-20. */
+export function validateResponsibleAgent(value: unknown): { ok: true; agent: ResponsibleAgent | null } | MissionFailure {
+  if (value === undefined || value === null) return { ok: true, agent: null };
+  return isResponsibleAgent(value) ? { ok: true, agent: value } : failure("M-20");
+}
+
+export const RISK_MIN = 10;
+export const RISK_MAX = 200;
+
+/** Promesse de résultat (#284) : « garanti », « assuré », « certain », « promesse », « à coup sûr »… lettres accentuées comprises. */
+const PROMISE = /(?<![\p{L}])(garanti\p{L}*|assur[ée]\p{L}*|promesse|promet|certaine?|à coup sûr)(?![\p{L}])/iu;
+
+/** Le texte contient-il une promesse de résultat ? Un résultat recherché est une cible, jamais une promesse. */
+export function containsPromise(text: string): boolean {
+  return PROMISE.test(text);
+}
+
+/** Risque ou limite de la mission (#284) : facultatif ; donné, 10 à 200 caractères après nettoyage des espaces, sans balise, sinon M-20. */
+export function validateRisk(value: unknown): { ok: true; risk: string | null } | MissionFailure {
+  if (value === undefined || value === null) return { ok: true, risk: null };
+  const risk = typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
+  return typeof value === "string" && inRange(risk, RISK_MIN, RISK_MAX) ? { ok: true, risk } : failure("M-20");
+}
+
 export type MissionSnapshot = {
   template: TemplateKey;
   channel: MissionChannel | null;

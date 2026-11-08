@@ -9,8 +9,9 @@ import { createSessionToken, SESSION_MAX_AGE_SECONDS } from "../src/lib/session-
 import { hashPassword } from "../src/lib/password";
 import { signupDayKey } from "../src/lib/signup-rules";
 import { startSmtpSink } from "./support/smtp-sink";
-import { createTestDraft, waitForAnalysis } from "./support/onboarding-draft";
+import { DRAFT_AMBITION, DRAFT_AMBITION_TERMS, createTestDraft, waitForAnalysis } from "./support/onboarding-draft";
 import { newAnalysis } from "../src/lib/onboarding/analysis-rules";
+import { readDraftState, retainedFromRules } from "../src/lib/onboarding/draft-rules";
 
 config({ quiet: true });
 
@@ -62,6 +63,7 @@ const GUARDED_ROUTES: Guarded[] = [
   { method: "GET", path: "/api/co-ceo/plan", denied: 401 },
   { method: "POST", path: "/api/co-ceo/pending-actions/[id]", denied: 401 },
   { method: "POST", path: "/api/co-ceo/plan", denied: 401 },
+  { method: "POST", path: "/api/co-ceo/missions", denied: 401 },
   { method: "GET", path: "/api/companies", denied: 401 },
   { method: "POST", path: "/api/companies", denied: 401 },
   { method: "PATCH", path: "/api/companies", denied: 401 },
@@ -288,6 +290,37 @@ test("GH-281: the anonymous analysis cost becomes exactly one usage event of the
     expect(freeSignup.status()).toBe(201);
     const freeCompany = await prisma.company.findUniqueOrThrow({ where: { ownerEmail: freeEmail } });
     expect(await prisma.usageEvent.count({ where: { companyId: freeCompany.id, agent: "onboarding_analysis" } })).toBe(0);
+  } finally {
+    await prisma.company.deleteMany({ where: { ownerEmail: { in: [paidEmail, freeEmail] } } });
+    await prisma.$disconnect();
+  }
+});
+
+test("GH-284: the cost of « Ce que nous retenons » becomes exactly one onboarding_synthesis event, none when it cost nothing", async ({ request }) => {
+  const prisma = openDatabase();
+  const paidEmail = `security-synthesis-cost-${randomUUID()}@example.invalid`;
+  const freeEmail = `security-synthesis-free-${randomUUID()}@example.invalid`;
+  const password = "mot-de-passe-valide";
+  const ambition = (retainedCost: { usd: number; inputTokens: number; outputTokens: number; model?: string }) => ({
+    text: DRAFT_AMBITION, terms: DRAFT_AMBITION_TERMS,
+    retained: ["Atelier Lumen rénove l'électricité des particuliers à Lyon.", "Votre cap vise +20 % en 12 mois, à confirmer par vos premiers bilans."], retainedCost,
+  });
+  try {
+    const paid = await createTestDraft(prisma);
+    await prisma.onboardingDraft.update({ where: { id: paid.id }, data: { ambition: ambition({ usd: 0.003, inputTokens: 800, outputTokens: 120, model: "claude-sonnet-5-5" }) } });
+    const paidSignup = await request.post(`${baseURL}/api/auth/signup`, { headers: { "x-real-ip": `test-${randomUUID()}`, Cookie: paid.cookie }, data: { email: paidEmail, password, passwordConfirmation: password } });
+    expect(paidSignup.status()).toBe(201);
+    const paidCompany = await prisma.company.findUniqueOrThrow({ where: { ownerEmail: paidEmail } });
+    const events = await prisma.usageEvent.findMany({ where: { companyId: paidCompany.id, agent: "onboarding_synthesis" } });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ model: "claude-sonnet-5-5", inputTokens: 800, outputTokens: 120, costUsd: 0.003 });
+
+    const free = await createTestDraft(prisma);
+    await prisma.onboardingDraft.update({ where: { id: free.id }, data: { ambition: ambition({ usd: 0, inputTokens: 0, outputTokens: 0, model: "claude-sonnet-5-5" }) } });
+    const freeSignup = await request.post(`${baseURL}/api/auth/signup`, { headers: { "x-real-ip": `test-${randomUUID()}`, Cookie: free.cookie }, data: { email: freeEmail, password, passwordConfirmation: password } });
+    expect(freeSignup.status()).toBe(201);
+    const freeCompany = await prisma.company.findUniqueOrThrow({ where: { ownerEmail: freeEmail } });
+    expect(await prisma.usageEvent.count({ where: { companyId: freeCompany.id, agent: "onboarding_synthesis" } })).toBe(0);
   } finally {
     await prisma.company.deleteMany({ where: { ownerEmail: { in: [paidEmail, freeEmail] } } });
     await prisma.$disconnect();
@@ -1617,6 +1650,43 @@ test("story 5.5: site photo and republish routes refuse another origin, even wit
   }
 });
 
+test("GH-284: « Préparer mes missions » needs a session and the same origin, a request id, and a current diagnostic (409 otherwise)", async ({ request }) => {
+  const prisma = openDatabase();
+  const email = `security-missions-${randomUUID()}@example.invalid`;
+  const company = await prisma.company.create({ data: { ownerEmail: email, name: "Missions Test", trade: "Artisan", servingArea: "Paris" } });
+  const other = await prisma.company.create({ data: { ownerEmail: `security-missions-other-${randomUUID()}@example.invalid`, name: "Autre", trade: "Artisan", servingArea: "Lyon" } });
+  const cookie = sessionCookie(email, company.sessionVersion);
+  const post = (headers: Record<string, string>, data: unknown = { requestId: randomUUID() }) => request.post(`${baseURL}/api/co-ceo/missions`, { headers, data });
+  try {
+    expect((await post({ Origin: baseURL })).status()).toBe(401);
+    expect((await post({ Cookie: cookie, Origin: "https://attacker.invalid" })).status()).toBe(403);
+    expect((await post({ Cookie: cookie, Origin: baseURL }, { requestId: "pas-un-uuid" })).status()).toBe(400);
+    expect((await post({ Cookie: cookie, Origin: baseURL }, {})).status()).toBe(400);
+    // Le diagnostic d'une autre entreprise ne compte pas : 409 « no_diagnostic », rien n'est lancé.
+    const audit = await prisma.agentRun.create({ data: { companyId: other.id, agent: "marketing", requestKey: randomUUID(), payload: {}, status: "succeeded", finishedAt: new Date() } });
+    await prisma.auditFinding.create({ data: { companyId: other.id, agentRunId: audit.id, category: "site_web", title: "Constat voisin", content: "Secret" } });
+    const refused = await post({ Cookie: cookie, Origin: baseURL });
+    expect(refused.status()).toBe(409);
+    expect(await refused.json()).toMatchObject({ reason: "no_diagnostic", href: "/diagnostic" });
+    expect(await prisma.agentRun.count({ where: { companyId: company.id } })).toBe(0);
+
+    // Diagnostic courant mais 10 missions non arrêtées : 409 « cap » avec le message M-75, aucune exécution consommée.
+    const ownAudit = await prisma.agentRun.create({ data: { companyId: company.id, agent: "marketing", requestKey: randomUUID(), payload: {}, status: "succeeded", finishedAt: new Date() } });
+    await prisma.auditFinding.create({ data: { companyId: company.id, agentRunId: ownAudit.id, category: "site_web", title: "Constat courant", content: "Le site ne présente pas les offres." } });
+    await prisma.mission.createMany({ data: Array.from({ length: 10 }, (_, index) => ({
+      companyId: company.id, template: "custom", title: `Mission ouverte ${index + 1}`, outcome: "Un premier pas concret", originalOutcome: "Un premier pas concret", finding: "Constat déclaré par le dirigeant",
+      scope: { description: "Une action menée par le dirigeant" }, stopRuleDays: 30, createdBy: "owner", position: index,
+    })) });
+    const capped = await post({ Cookie: cookie, Origin: baseURL });
+    expect(capped.status()).toBe(409);
+    expect(await capped.json()).toEqual({ reason: "cap", error: "Vous avez déjà 10 missions non arrêtées. Arrêtez-en une avant d'en créer une autre." });
+    expect(await prisma.agentRun.count({ where: { companyId: company.id } })).toBe(1);
+  } finally {
+    await prisma.company.deleteMany({ where: { id: { in: [company.id, other.id] } } });
+    await prisma.$disconnect();
+  }
+});
+
 test("Partenariats: the agency list belongs to its company, the scope names one or two of them, and the e-mail preview shows each address", async ({ request, page }) => {
   const prisma = openDatabase();
   const marker = randomUUID().slice(0, 8);
@@ -1853,7 +1923,13 @@ test("GH-282: the ambition is confirmed only with the token of the exact interpr
     const confirmed = await post({ action: "confirm_ambition", ambition: text, terms: interpretation.terms, token });
     expect(confirmed.status()).toBe(200);
     expect(await confirmed.json()).toMatchObject({ step: 4, href: "/bienvenue/missions" });
-    expect(await prisma.onboardingDraft.findUniqueOrThrow({ where: { id: draft.id } })).toMatchObject({ step: 4, diagnosticReady: true, ambition: { text, terms: interpretation.terms } });
+    const stored = await prisma.onboardingDraft.findUniqueOrThrow({ where: { id: draft.id } });
+    expect(stored).toMatchObject({ step: 4, diagnosticReady: true, ambition: { text, terms: interpretation.terms } });
+    // #284 : « Ce que nous retenons » est enregistré au clic ; sans clé de modèle sur le serveur de test, ce sont les règles.
+    const retained = (stored.ambition as { retained?: unknown }).retained as string[];
+    expect(retained.length).toBeGreaterThanOrEqual(2);
+    expect(retained.length).toBeLessThanOrEqual(3);
+    expect(retained).toEqual(retainedFromRules(readDraftState(stored)));
     // Étape 4 : plus d'interprétation possible depuis le brouillon.
     expect((await post({ action: "interpret_ambition", ambition: text })).status()).toBe(409);
 

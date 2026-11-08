@@ -25,6 +25,7 @@ const DIRECT_DEDUPE_SECONDS = 5 * 60;
 type AgentRunPayload =
   | { kind: "plan_item"; planItemId: string; extras: PlanRunExtras }
   | { kind: "plan_generation" }
+  | { kind: "mission_generation" }
   | { kind: "direct"; agent: PlanAgent; newsContext?: string; prospectDescription?: string }
   | RevisionRunPayload;
 
@@ -251,6 +252,27 @@ export async function enqueuePlanGeneration(companyId: string, requestKey: strin
   return run;
 }
 
+/** Clé active de « Préparer mes missions » : une seule préparation à la fois par entreprise (#284). */
+export const MISSION_GENERATION_ACTIVE_KEY = "mission-generation";
+
+/**
+ * « Préparer mes missions » (#284) : une exécution de Paul, comptée comme un lancement (quota `runs`), qui crée au plus
+ * trois missions « À décider » sourcées. Un même `requestId` ou une préparation active renvoie l'exécution existante ;
+ * une préparation terminée ne bloque pas un nouveau clic, qui ajoute d'autres missions sans toucher aux existantes.
+ */
+export async function enqueueMissionGeneration(companyId: string, requestKey: string) {
+  const run = await persistRun({
+    companyId,
+    agent: "co_ceo",
+    requestKey: `mission-generation:${requestKey}`,
+    activeDedupeKey: MISSION_GENERATION_ACTIVE_KEY,
+    payload: { kind: "mission_generation" },
+    succeededDedupeSeconds: 0,
+  });
+  schedule(run.id);
+  return run;
+}
+
 export async function getAgentRun(companyId: string, runId: string) {
   let run = await prisma.agentRun.findFirst({ where: { id: runId, companyId } });
   if (!run) return null;
@@ -305,6 +327,11 @@ async function executeRun(run: AgentRun) {
     const { runCoCeoPlanning } = await import("@/lib/agents/co-ceo");
     const items = await runCoCeoPlanning(run.companyId, run.id);
     return items.length;
+  }
+  if (payload.kind === "mission_generation") {
+    const { runCoCeoMissions } = await import("@/lib/agents/co-ceo");
+    const missions = await runCoCeoMissions(run.companyId, run.id);
+    return missions.length;
   }
   if (payload.kind === "plan_item") {
     const item = await prisma.actionPlanItem.findFirst({ where: { id: payload.planItemId, companyId: run.companyId } });
