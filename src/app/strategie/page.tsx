@@ -17,6 +17,8 @@ import { listOpenIdeas } from "@/lib/ideas";
 import { missionProvenance } from "@/lib/findings/certainty";
 import { IdeaActions } from "./idea-actions";
 import { FindingSource } from "./finding-source";
+import { PrepareMissions } from "./prepare-missions";
+import { getLatestAuditFindings } from "@/lib/audit-findings";
 
 export const dynamic = "force-dynamic";
 
@@ -24,7 +26,10 @@ export const dynamic = "force-dynamic";
 export default async function StrategiePage() {
   const company = await requireWorkspaceCompany();
   const shell = await getShellProps(company);
-  const [missions, ideas] = await Promise.all([loadMissionViews(company.id), listOpenIdeas(company.id)]);
+  const [missions, ideas, currentFindings] = await Promise.all([loadMissionViews(company.id), listOpenIdeas(company.id), getLatestAuditFindings(company.id, { take: 1 })]);
+  // « Préparer mes missions » (#284) : seulement avec un diagnostic courant ; sinon un lien vers le diagnostic.
+  const hasDiagnostic = currentFindings.length > 0;
+  const empty = missions.length === 0 && ideas.length === 0;
   const connected = await prisma.channelConnection.count({ where: { companyId: company.id, status: "connecte" } });
   const step = nextStep(missions, asDelegationLevel(company.delegationLevel), priorityOf(missions));
   const stepMission = missions.find((mission) => mission.id === step.missionId) ?? null;
@@ -42,6 +47,7 @@ export default async function StrategiePage() {
         description="Votre stratégie relie votre ambition, les constats, les missions et les apprentissages."
         actions={<>
           <PaulButton label="Challenger le plan" />
+          {!empty && <PrepareMissions hasDiagnostic={hasDiagnostic} />}
           <Link className="btn" href="/missions/nouvelle"><Icon name="plus" />Créer une mission</Link>
         </>}
       />
@@ -125,12 +131,13 @@ export default async function StrategiePage() {
           <h2 id="grouped-title">Vos missions regroupées</h2>
           <p>Chaque mission part d&apos;un constat et le teste dans un cadre limité.</p>
         </div>
-        {missions.length === 0 && ideas.length === 0 ? (
+        {empty ? (
           <div className="empty">
             <Icon name="flag" />
             <h3>Aucune mission pour le moment</h3>
-            <p>Créez votre première mission à partir d&apos;un constat, ou explorez une idée avec Paul.</p>
+            <p>{hasDiagnostic ? "Paul peut préparer vos missions à partir de votre diagnostic, ou vous pouvez en créer une vous-même." : "Paul prépare vos missions à partir de votre diagnostic : lancez-le d'abord, ou créez une mission vous-même."}</p>
             <div className="heading-actions">
+              <PrepareMissions hasDiagnostic={hasDiagnostic} />
               <Link className="btn" href="/missions/nouvelle"><Icon name="plus" />Créer une mission</Link>
               <PaulButton label="Explorer une idée" idea />
             </div>
@@ -160,6 +167,9 @@ export default async function StrategiePage() {
                   <h3>{mission.title}</h3>
                   <p className="target"><Icon name="target" />{mission.outcome}</p>
                   <p className="small muted">{mission.templateLabel} · {mission.scopeSummary}</p>
+                  {(mission.responsibleLabel || mission.risk) && (
+                    <p className="small muted">{[mission.responsibleLabel, mission.risk && `Risque ou limite : ${mission.risk}`].filter(Boolean).join(" · ")}</p>
+                  )}
                   <MissionActions mission={mission.actions} credits={company.creditBalance} launchCost={LAUNCH_COST_CREDITS} variant="row" />
                 </div>
               </article>

@@ -60,7 +60,10 @@ import { firstNameOf } from "../src/lib/workspace";
 import { workspacePageLabel } from "../src/components/workspace-nav";
 import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH, passwordPolicyError } from "../src/lib/password-policy";
 import { startSmtpSink } from "./support/smtp-sink";
-import { ADDRESS_UNAVAILABLE_MESSAGE, STARTER_TEMPLATE_ORDER, applyDraftAction, checkAmbition, checkDiscovery, checkDraftForAccount, clip, emptyDraft, isValidEmail, isValidWebsite, parseDraftAction, pickStarterTemplates, prefillFromPaul, prefillProfile, profileOriginLabel, readDraftState, starterMissions, stepHref } from "../src/lib/onboarding/draft-rules";
+import { ADDRESS_UNAVAILABLE_MESSAGE, FIRST_BADGE, ORIGIN_DECLARED, ORIGIN_SITE, SITE_NOT_GIVEN_NOTICE, SITE_NOT_READ_NOTICE, SYNTHESIS_USAGE_AGENT, TARGET_NOTICE, ambitionTargetsRequests, applyDraftAction, checkAmbition, checkDiscovery, checkDraftForAccount, clip, emptyDraft, firstOffer, isValidEmail, isValidWebsite, parseDraftAction, prefillFromPaul, prefillProfile, profileOriginLabel, rankStarterTemplates, readDraftState, readRetained, retainedFromRules, starterPlan, stepHref, synthesisUsage, withRetained, type DraftState } from "../src/lib/onboarding/draft-rules";
+import { anonymousSynthesisModel, writeRetained, type SynthesisModel } from "../src/lib/onboarding/synthesis";
+import { PERSONAS } from "../src/lib/agents/personas";
+import { RESPONSIBLE_AGENTS, RESPONSIBLE_LABELS, validateResponsibleAgent, validateRisk } from "../src/lib/missions/rules";
 import { AMBITION_TARGET_NOTICE, EMPTY_TERMS, GAIN_QUESTION, HORIZON_QUESTION, RECRUITMENT_UNSPECIFIED_NOTE, REINTERPRET_MESSAGE, boundAmbition, capLabel, interpretationFrom, parseAmbition, readAmbitionTerms, reformulation, type AmbitionTerms } from "../src/lib/ambition-rules";
 import { signInterpretation, verifyInterpretation } from "../src/lib/ambition-token";
 import { anonymousAmbitionModel, interpretAmbition, type AmbitionModel } from "../src/lib/ambition";
@@ -2161,28 +2164,230 @@ test("GH-279: each step of the entry journey opens only once the previous one is
   expect(ADDRESS_UNAVAILABLE_MESSAGE).not.toMatch(/existe|a déjà un compte/);
 });
 
-test("GH-279: step 4 offers the first three available templates in the fixed order, as valid « À décider » missions", () => {
-  expect(STARTER_TEMPLATE_ORDER).toEqual(["google_profile", "social_post", "site_page", "review_reply", "custom"]);
-  expect(pickStarterTemplates(["agencies", "social_post", "site_page", "custom"])).toEqual(["social_post", "site_page", "custom"]);
-  expect(pickStarterTemplates(["google_profile", "social_post", "site_page", "review_reply", "custom"])).toEqual(["google_profile", "social_post", "site_page"]);
-  expect(pickStarterTemplates(["custom"])).toEqual(["custom"]);
-  const available = availableTemplates().map((template) => template.key);
-  expect(pickStarterTemplates()).toEqual(STARTER_TEMPLATE_ORDER.filter((key) => available.includes(key)).slice(0, 3));
+const SITE = "https://atelier-lumen.fr";
+const READ_AT = "2026-11-08T09:00:00.000Z";
+const observed = (value: string) => ({ value, provenance: { kind: "observed" as const, source: "atelier-lumen.fr", readAt: READ_AT } });
 
-  const longProfile = { ...filledProfile, offers: "o".repeat(100), targetClients: "c ".repeat(50).trim(), servingArea: "z".repeat(100) };
-  const ambition = "Doubler le nombre de chantiers en douze mois sans embaucher, ".repeat(9).trim();
-  for (const profile of [filledProfile, longProfile]) {
-    const missions = starterMissions(profile, ambition, ["social_post", "site_page", "custom"]);
-    expect(missions.map((mission) => mission.template)).toEqual(["social_post", "site_page", "custom"]);
-    for (const mission of missions) {
-      expect(validateNewMission(mission, 0), mission.template).toMatchObject({ ok: true });
-      expect(mission.finding.length).toBeLessThanOrEqual(300);
-    }
-  }
-  // Le catalogue réel : chaque mission proposée est créable telle quelle.
-  for (const mission of starterMissions(filledProfile, "Plus de chantiers cette année")) expect(validateNewMission(mission, 0), mission.template).toMatchObject({ ok: true });
+/** Brouillon à l'étape 4 : profil confirmé, ambition confirmée, analyse lue (`done`) ou absente. */
+function step4Draft(options: { read?: boolean; ambition?: string; terms?: Partial<AmbitionTerms>; observedOffers?: boolean } = {}): DraftState {
+  const profile = { ...filledProfile, website: options.read === false ? "" : SITE, offers: "Rénovation électrique, dépannage" };
+  const input = { companyName: profile.companyName, location: profile.location, website: profile.website };
+  const analysis = options.read === false ? null : {
+    ...newAnalysis(input, "run-284"), status: "done" as const, finishedAt: READ_AT,
+    rubrics: { site: { status: "read" as const }, google: { status: "not_found" as const }, zone: { status: "read" as const }, identity: { status: "read" as const } },
+    findings: { ...newAnalysis(input, "run-284").findings, offers: options.observedOffers ? observed(profile.offers) : null, targetClients: options.observedOffers ? observed(profile.targetClients) : null, trade: observed(profile.trade) },
+  };
+  return {
+    step: 4, profile, profileConfirmed: true, diagnosticReady: true, analysis,
+    ambition: { text: options.ambition ?? "+20 % de chiffre d'affaires en 12 mois", terms: { ...EMPTY_TERMS, gainPercent: 20, horizonMonths: 12, ...options.terms } },
+  };
+}
+
+test("GH-284: step 4 ranks the templates from the draft — site page first without a read site or when the ambition aims at requests", () => {
+  const catalogue = ["agencies", "social_post", "google_profile", "review_reply", "site_page", "custom"] as const;
+  // Site lu, ambition sans demandes : la publication d'abord ; fiche Google et avis si leur canal s'ouvre ; jamais les agences.
+  expect(rankStarterTemplates(step4Draft(), catalogue)).toEqual(["social_post", "google_profile", "review_reply"]);
+  expect(rankStarterTemplates(step4Draft(), ["agencies", "social_post", "site_page", "custom"])).toEqual(["social_post", "site_page", "custom"]);
+  // Pas de site lu, ou une ambition qui vise des demandes : la page du site d'abord.
+  expect(rankStarterTemplates(step4Draft({ read: false }), ["agencies", "social_post", "site_page", "custom"])).toEqual(["site_page", "social_post", "custom"]);
+  expect(rankStarterTemplates(step4Draft({ ambition: "Recevoir plus de demandes de devis en 6 mois" }), catalogue)).toEqual(["site_page", "social_post", "google_profile"]);
+  expect(rankStarterTemplates({ ...step4Draft(), analysis: { ...step4Draft().analysis!, status: "limited" } }, catalogue)[0]).toBe("site_page");
+  // « Sur mesure » en dernier recours, et seulement des modèles disponibles.
+  expect(rankStarterTemplates(step4Draft(), ["custom"])).toEqual(["custom"]);
+  expect(rankStarterTemplates(step4Draft(), ["agencies"])).toEqual([]);
+  expect(ambitionTargetsRequests("Plus d'appels et de rendez-vous")).toBe(true);
+  expect(ambitionTargetsRequests("+20 % de chiffre d'affaires en 12 mois")).toBe(false);
+  expect(firstOffer("Rénovation électrique, dépannage")).toBe("Rénovation électrique");
+  expect(firstOffer("Plomberie et chauffage")).toBe("Plomberie");
   expect(clip("un deux trois quatre", 10)).toBe("un deux…");
   expect(clip("court", 10)).toBe("court");
+});
+
+test("GH-284: step 4 missions are distinct, valid, sourced and the first one is « À examiner en premier »", () => {
+  const longProfile = { ...filledProfile, offers: "o".repeat(100), targetClients: "c ".repeat(50).trim(), servingArea: "z".repeat(100), trade: "t".repeat(100) };
+  const longAmbition = "Doubler le nombre de chantiers en douze mois sans embaucher, ".repeat(9).trim();
+  // Chevrons et offre de 3 caractères : jamais d'erreur à la création (qui annulerait l'inscription).
+  const markup = step4Draft();
+  const drafts = [step4Draft(), step4Draft({ read: false }), step4Draft({ observedOffers: true }), { ...step4Draft({ ambition: longAmbition }), profile: { ...longProfile, website: SITE } },
+    { ...markup, profile: { ...markup.profile, offers: "<b>Rénovation</b> électrique", targetClients: "Particuliers <i>pressés</i>" } },
+    { ...markup, profile: { ...markup.profile, offers: "Pac", trade: "Pac" } }];
+  for (const draft of drafts) {
+    // Seuls des modèles du catalogue réel : `validateNewMission` refuse un modèle sans canal actif (M-76).
+    for (const available of [undefined, ["agencies", "social_post", "site_page", "custom"] as const, ["custom"] as const]) {
+      const { missions } = starterPlan(draft, available);
+      expect(missions.length).toBeGreaterThan(0);
+      expect(missions.length).toBeLessThanOrEqual(3);
+      expect(new Set(missions.map((mission) => mission.template)).size).toBe(missions.length);
+      expect(missions.map((mission) => mission.first)).toEqual(missions.map((_, index) => index === 0));
+      for (const mission of missions) {
+        // Créable telle quelle : mêmes règles que la création (titre, résultat, constat, canal actif, périmètre valide).
+        expect(validateNewMission(mission, 0), mission.template).toMatchObject({ ok: true });
+        expect(JSON.stringify(mission), mission.template).not.toMatch(/[<>]/);
+        expect(validateDeduction(mission.deduction), mission.template).toMatchObject({ ok: true, deduction: mission.deduction });
+        expect(validateRisk(mission.risk)).toMatchObject({ ok: true });
+        expect(validateResponsibleAgent(mission.responsibleAgent)).toMatchObject({ ok: true });
+        expect([ORIGIN_SITE, ORIGIN_DECLARED]).toContain(mission.origin);
+        expect(mission.scopeLabel.length).toBeGreaterThan(0);
+      }
+    }
+  }
+  // Le catalogue réel : un modèle sans canal actif n'est jamais proposé.
+  const available = new Set(availableTemplates().map((template) => template.key));
+  for (const mission of starterPlan(step4Draft()).missions) {
+    expect(available.has(mission.template)).toBe(true);
+    if (mission.channel) expect(enabledChannels(MISSION_TEMPLATES[mission.template])).toContain(mission.channel);
+  }
+  expect(FIRST_BADGE).toBe("À examiner en premier");
+
+  // Périmètres (§6.3) et déduction de la page du site sans site.
+  const noSite = starterPlan(step4Draft({ read: false }), ["social_post", "site_page", "custom"]).missions;
+  expect(noSite.map((mission) => [mission.template, mission.scopeLabel])).toEqual([
+    ["site_page", "Rénovation électrique"], ["social_post", "Rénovation électrique"], ["custom", expect.stringContaining("Une action que vous menez vous-même")],
+  ]);
+  expect(noSite[0].deduction).toBe("Vous n'avez pas encore de page qui présente Rénovation électrique : c'est le premier point d'entrée de vos clients.");
+  const google = starterPlan(step4Draft(), ["google_profile", "review_reply"]).missions;
+  expect(google.map((mission) => mission.scopeLabel)).toEqual(["Votre fiche Google", "Aucun avis choisi"]);
+  // Valeurs par défaut du modèle d'action : agent et risque.
+  for (const mission of noSite) {
+    expect(mission.responsibleAgent).toBe(MISSION_TEMPLATES[mission.template].defaultAgent);
+    expect(mission.risk).toBe(MISSION_TEMPLATES[mission.template].defaultRisk);
+  }
+});
+
+test("GH-284: the finding cites its origin — « Lu sur le site » only for values observed and kept as they were", () => {
+  const declared = starterPlan(step4Draft(), ["social_post"]).missions[0];
+  expect(declared.origin).toBe(ORIGIN_DECLARED);
+  expect(declared.finding).toBe("Vos clients : Particuliers propriétaires. Votre offre : Rénovation électrique.");
+  const seen = starterPlan(step4Draft({ observedOffers: true }), ["social_post"]).missions[0];
+  expect(seen.origin).toBe(ORIGIN_SITE);
+  // Une valeur observée puis corrigée par le dirigeant redevient « Vous nous avez dit ».
+  const corrected = step4Draft({ observedOffers: true });
+  expect(starterPlan({ ...corrected, profile: { ...corrected.profile, offers: "Bornes de recharge" } }, ["social_post"]).missions[0].origin).toBe(ORIGIN_DECLARED);
+  // Une analyse d'une autre entreprise ne compte pas.
+  expect(starterPlan({ ...corrected, profile: { ...corrected.profile, companyName: "Autre" } }, ["social_post"]).missions[0].origin).toBe(ORIGIN_DECLARED);
+  // « Sur mesure » cite l'ambition : toujours « Vous nous avez dit ».
+  expect(starterPlan(step4Draft({ observedOffers: true }), ["custom"]).missions[0]).toMatchObject({ origin: ORIGIN_DECLARED, finding: "Votre ambition : +20 % de chiffre d'affaires en 12 mois" });
+});
+
+test("GH-284: the recap, the cap and the reserves — site not read, target to refine", () => {
+  const plan = starterPlan(step4Draft());
+  expect(plan.recap).toEqual({ companyName: "Atelier Lumen", location: "Lyon", trade: "Électricien", servingArea: "Lyon et alentours", details: ["Lyon", "Électricien", "Lyon et alentours"], cap: "+20 % de chiffre d'affaires en 12 mois", notes: [] });
+  // Sans site indiqué : une mention propre, jamais « Paul n'a pas pu lire votre site ».
+  const unread = starterPlan(step4Draft({ read: false, terms: { gainPercent: null } }));
+  expect(unread.recap.notes).toEqual([SITE_NOT_GIVEN_NOTICE, "La cible reste à préciser : le gain visé n'est pas indiqué."]);
+  // Site indiqué mais pas lu : « Paul n'a pas pu lire votre site ».
+  const notRead = { ...step4Draft({ read: false }), profile: { ...step4Draft({ read: false }).profile, website: SITE } };
+  expect(starterPlan(notRead).recap.notes).toEqual([SITE_NOT_READ_NOTICE]);
+  // Rappel : sans partie vide, ni la zone quand elle répète la localisation.
+  const sameZone = step4Draft();
+  expect(starterPlan({ ...sameZone, profile: { ...sameZone.profile, servingArea: "Lyon", trade: "" } }).recap.details).toEqual(["Lyon"]);
+  const vague = starterPlan(step4Draft({ ambition: "Avoir plus de clients", terms: { gainPercent: null, horizonMonths: null } }));
+  expect(vague.recap.notes).toEqual(["La cible reste à préciser : le gain visé et l'horizon ne sont pas indiqués."]);
+});
+
+test("GH-284: « Ce que nous retenons » — the draft's sentences, otherwise the rules, always 2 or 3 bounded sentences", () => {
+  const rules = retainedFromRules(step4Draft());
+  expect(rules).toEqual([
+    "Atelier Lumen : Électricien, sur la zone Lyon et alentours.",
+    "Votre cap : +20 % de chiffre d'affaires en 12 mois.",
+    `À vérifier : rubriques non lues (Informations publiques). ${TARGET_NOTICE}`,
+  ]);
+  expect(readRetained(rules)).toEqual(rules);
+  const noSite = retainedFromRules(step4Draft({ read: false, terms: { gainPercent: null, horizonMonths: null } }));
+  expect(noSite[2]).toBe(`À vérifier : aucun site indiqué ; le gain visé et l'horizon à préciser. ${TARGET_NOTICE}`);
+  const unreadSite = { ...step4Draft({ read: false }), profile: { ...step4Draft({ read: false }).profile, website: SITE } };
+  expect(retainedFromRules(unreadSite)[2]).toContain("votre site n'a pas été lu");
+  // Deux fois la même phrase : refusé.
+  expect(readRetained(["Phrase un assez longue pour compter.", "Phrase un assez longue pour compter."])).toBeNull();
+  const hypothesis = step4Draft();
+  const withHypothesis = { ...hypothesis, analysis: { ...hypothesis.analysis!, findings: { ...hypothesis.analysis!.findings, servingArea: { value: "Lyon et alentours", provenance: { kind: "hypothesis" as const } } } } };
+  expect(retainedFromRules(withHypothesis)[2]).toContain("valeurs à confirmer (zone)");
+  // Champs très longs : chaque phrase reste dans les bornes.
+  const long = { ...step4Draft({ ambition: "a".repeat(600) }), profile: { ...filledProfile, companyName: "n".repeat(100), trade: "t".repeat(100), servingArea: "z".repeat(100) } };
+  expect(readRetained(retainedFromRules(long))).not.toBeNull();
+  // Lecture : 2 ou 3 phrases de 20 à 240 caractères, sans balise.
+  expect(readRetained(["Une seule phrase assez longue pour compter."])).toBeNull();
+  expect(readRetained(["Phrase un assez longue pour compter.", "trop court"])).toBeNull();
+  expect(readRetained(["Phrase un assez longue pour compter.", "Phrase <b>deux</b> assez longue pour compter."])).toBeNull();
+  expect(readRetained(["a".repeat(20), "b".repeat(240), "c".repeat(241)])).toBeNull();
+  expect(readRetained(["  Phrase   un assez longue pour compter. ", "Phrase deux assez longue pour compter."])).toEqual(["Phrase un assez longue pour compter.", "Phrase deux assez longue pour compter."]);
+  // starterPlan reprend celles du brouillon.
+  const written = withRetained(step4Draft(), ["Paul retient une activité locale et suivie.", "Votre cap reste une cible à confirmer."], null);
+  expect(starterPlan(written).retained).toEqual(["Paul retient une activité locale et suivie.", "Votre cap reste une cible à confirmer."]);
+  expect(starterPlan(step4Draft()).retained).toEqual(rules);
+});
+
+test("GH-284: the synthesis model is optional — no key, quota, failure or invalid output fall back to the rules, and the cost is kept", async () => {
+  const draft = step4Draft();
+  const rules = retainedFromRules(draft);
+  expect(await writeRetained(draft, { model: null })).toEqual({ retained: rules, source: "rules", cost: null });
+  expect((await writeRetained(draft, { model: async () => { throw new Error("réseau"); } })).source).toBe("rules");
+  const usage = { input_tokens: 1000, output_tokens: 100 };
+  const invalid = await writeRetained(draft, { model: async () => ({ ok: true, sentences: ["trop court"], usage, model: "claude-sonnet-5-5" }) });
+  expect(invalid.source).toBe("rules");
+  expect(invalid.retained).toEqual(rules);
+  expect(invalid.cost).toMatchObject({ inputTokens: 1000, outputTokens: 100, model: "claude-sonnet-5-5" });
+  const sentences = ["Atelier Lumen rénove l'électricité des particuliers à Lyon.", "Votre cap vise +20 % en 12 mois, à confirmer par vos premiers bilans."];
+  const written = await writeRetained(draft, { model: async () => ({ ok: true, sentences, usage, model: "claude-sonnet-5-5" }) });
+  expect(written).toMatchObject({ retained: sentences, source: "model" });
+  // Une promesse dans une phrase du modèle : les règles répondent.
+  for (const promise of ["Atelier Lumen aura des clients à coup sûr dès ce mois-ci.", "Votre croissance de +20 % est assurée en 12 mois."]) {
+    const promised = await writeRetained(draft, { model: async () => ({ ok: true, sentences: [sentences[0], promise], usage, model: "claude-sonnet-5-5" }) });
+    expect(promised.source, promise).toBe("rules");
+  }
+
+  // Quota anonyme : portée dédiée, consommée seulement si le modèle est configuré.
+  const configured = { ANTHROPIC_API_KEY: "cle-de-test" };
+  const model: SynthesisModel = async () => ({ ok: false });
+  expect(await anonymousSynthesisModel(async () => ({ limited: false }), configured, model)).toBe(model);
+  expect(await anonymousSynthesisModel(async () => ({ limited: true }), configured, model)).toBeNull();
+  expect(await anonymousSynthesisModel(async () => { throw new Error("base"); }, configured, model)).toBeNull();
+  let calls = 0;
+  expect(await anonymousSynthesisModel(async () => { calls += 1; return { limited: false }; }, {}, model)).toBeNull();
+  expect(calls).toBe(0);
+
+  // Le coût s'ajoute d'une rédaction à l'autre ; il passe au compte seulement s'il a coûté quelque chose.
+  const once = withRetained(draft, sentences, { usd: 0.01, inputTokens: 1000, outputTokens: 100, model: "claude-sonnet-5-5" });
+  const twice = withRetained(once, sentences, { usd: 0.02, inputTokens: 500, outputTokens: 50, model: "claude-sonnet-5-5" });
+  expect(twice.ambition?.retainedCost).toEqual({ usd: 0.03, inputTokens: 1500, outputTokens: 150, model: "claude-sonnet-5-5" });
+  expect(synthesisUsage(twice.ambition)).toEqual({ agent: SYNTHESIS_USAGE_AGENT, model: "claude-sonnet-5-5", inputTokens: 1500, outputTokens: 150, costUsd: 0.03 });
+  expect(SYNTHESIS_USAGE_AGENT).toBe("onboarding_synthesis");
+  expect(synthesisUsage(withRetained(draft, sentences, { usd: 0, inputTokens: 0, outputTokens: 0, model: "claude-sonnet-5-5" }).ambition)).toBeNull();
+  expect(synthesisUsage(withRetained(draft, sentences, null).ambition)).toBeNull();
+});
+
+test("GH-284: a step back before step 4 erases « Ce que nous retenons » but keeps its cost; the stored draft is read defensively", () => {
+  const written = withRetained(step4Draft(), ["Paul retient une activité locale et suivie.", "Votre cap reste une cible à confirmer."], { usd: 0.01, inputTokens: 10, outputTokens: 5, model: "claude-sonnet-5-5" });
+  const back = applyDraftAction(written, { action: "back", step: 3 });
+  expect(back).toMatchObject({ ok: true, state: { step: 3, diagnosticReady: false } });
+  if (!back.ok) throw new Error("back");
+  expect(back.state.ambition?.retained).toBeUndefined();
+  expect(back.state.ambition?.retainedCost).toEqual({ usd: 0.01, inputTokens: 10, outputTokens: 5, model: "claude-sonnet-5-5" });
+  // Revenir à l'étape 4 depuis l'étape 5 garde « Ce que nous retenons ».
+  const atFive = { ...written, step: 5 as const };
+  const toFour = applyDraftAction(atFive, { action: "back", step: 4 });
+  expect(toFour.ok && toFour.state.ambition?.retained).toEqual(written.ambition?.retained);
+  // Relecture défensive : des phrases ou un coût illisibles sont ignorés.
+  const row = { step: 4, profile: filledProfile, profileConfirmed: true, diagnosticReady: true };
+  expect(readDraftState({ ...row, ambition: { text: "Plus de chantiers", terms: EMPTY_TERMS, retained: ["court"], retainedCost: { usd: "1" } } }).ambition).toEqual({ text: "Plus de chantiers", terms: EMPTY_TERMS });
+  expect(readDraftState({ ...row, ambition: { text: "Plus de chantiers", terms: EMPTY_TERMS, retained: written.ambition?.retained, retainedCost: written.ambition?.retainedCost } }).ambition).toEqual({ text: "Plus de chantiers", terms: EMPTY_TERMS, retained: written.ambition?.retained, retainedCost: written.ambition?.retainedCost });
+});
+
+test("GH-284: responsible agent and risk — keys of PERSONAS, 10 to 200 characters without markup, shown as a role of Paul", () => {
+  expect([...RESPONSIBLE_AGENTS].sort()).toEqual(Object.keys(PERSONAS).sort());
+  for (const agent of RESPONSIBLE_AGENTS) expect(RESPONSIBLE_LABELS[agent]).toMatch(/^Paul/);
+  expect(validateResponsibleAgent(undefined)).toEqual({ ok: true, agent: null });
+  expect(validateResponsibleAgent("contenu")).toEqual({ ok: true, agent: "contenu" });
+  expect(validateResponsibleAgent("martine")).toMatchObject({ ok: false, code: "M-20" });
+  expect(validateRisk(null)).toEqual({ ok: true, risk: null });
+  expect(validateRisk("  Une   limite claire  ")).toEqual({ ok: true, risk: "Une limite claire" });
+  expect(validateRisk("court")).toMatchObject({ ok: false, code: "M-20" });
+  expect(validateRisk("x".repeat(201))).toMatchObject({ ok: false, code: "M-20" });
+  expect(validateRisk("Une <b>limite</b> claire")).toMatchObject({ ok: false, code: "M-20" });
+  for (const template of Object.values(MISSION_TEMPLATES)) {
+    expect(validateRisk(template.defaultRisk), template.key).toMatchObject({ ok: true, risk: template.defaultRisk });
+    expect(RESPONSIBLE_AGENTS).toContain(template.defaultAgent);
+  }
 });
 
 test("GH-279: e-mail verification blocks nothing during the POC, unless REQUIRE_EMAIL_VERIFICATION is true", () => {

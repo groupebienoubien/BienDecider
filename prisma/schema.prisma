@@ -492,7 +492,7 @@ model UncoveredRequest {
   company            Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   request            String // ce que le dirigeant voulait, reformulé par Paul sans donnée personnelle de tiers
   closestAlternative String? // ce que Paul a proposé à la place
-  source             String // chat, plan
+  source             String // chat, plan, mission
   createdAt          DateTime @default(now())
 }
 
@@ -574,6 +574,9 @@ model Mission {
   sourceFindingId     String?
   sourceFinding       AuditFinding?  @relation(fields: [sourceFindingId], references: [id], onDelete: SetNull)
   deduction           String?
+  // US #284 : agent responsable (clé de PERSONAS, affiché comme un rôle de Paul) et risque ou limite (10 à 200 caractères, sans balise) ; nuls pour les missions du dirigeant et les anciennes.
+  responsibleAgent    String?
+  risk                String?
   createdBy           String         @default("owner") // paul | owner
   status              String         @default("proposed") // proposed, active, paused, stopped, dismissed
   previousStatus      String? // pour « Remettre au plan »

@@ -2767,6 +2767,18 @@ test("GH-279: five anonymous steps, back and reload keep the answers, and the ac
     const pistes = page.getByRole("list", { name: "Trois premières pistes" }).getByRole("listitem");
     await expect(pistes).toHaveCount(3);
     await expect(pistes.first()).toContainText("Résultat recherché");
+    // #284 : rappel, « Ce que nous retenons », la première piste repérée, l'origine et le périmètre de chaque piste.
+    await expect(page.getByRole("heading", { name: "Ce que nous retenons" })).toBeVisible();
+    await expect(page.getByText("Paul n'a pas pu lire votre site : ce qui suit repose sur ce que vous nous avez dit.")).toBeVisible();
+    await expect(pistes.first()).toContainText("À examiner en premier");
+    await expect(pistes.nth(1)).not.toContainText("À examiner en premier");
+    for (let index = 0; index < 3; index += 1) {
+      await expect(pistes.nth(index)).toContainText("Vous nous avez dit");
+      await expect(pistes.nth(index)).toContainText("Périmètre proposé");
+    }
+    const stepTitles = await pistes.locator("h3").allTextContents();
+    expect(new Set(stepTitles).size).toBe(3);
+    await expect(page.getByRole("button", { name: "Ça m'intéresse" })).toHaveCount(1);
     expect(await noHorizontalScroll(page)).toBe(true);
 
     // Retour jusqu'à l'étape 2 : l'ambition est gardée mais à reconfirmer.
@@ -2797,7 +2809,7 @@ test("GH-279: five anonymous steps, back and reload keep the answers, and the ac
     await expect(page).toHaveURL(`${baseURL}/strategie`);
     await expect(page.getByRole("heading", { name: "Bonjour Claire." })).toBeVisible();
 
-    const company = await prisma.company.findUniqueOrThrow({ where: { ownerEmail: email }, include: { missions: true, journalEntries: true } });
+    const company = await prisma.company.findUniqueOrThrow({ where: { ownerEmail: email }, include: { missions: { orderBy: { position: "asc" } }, journalEntries: true } });
     expect(company).toMatchObject({
       name: "Atelier Lumen", firstName: "Claire", location: "Lyon", website: "https://atelier-lumen.invalid", trade: "Électricien", servingArea: "Lyon",
       targetClients: "Particuliers propriétaires", offers: "Rénovation électrique", ambitionText: "+20 % de chiffre d'affaires en 12 mois, sans embaucher",
@@ -2811,6 +2823,11 @@ test("GH-279: five anonymous steps, back and reload keep the answers, and the ac
     expect(company.profileConfirmedAt).not.toBeNull();
     expect(company.missions).toHaveLength(3);
     expect(company.missions.every((mission) => mission.status === "proposed" && mission.firstLaunchedAt === null)).toBe(true);
+    // #284 : les pistes de l'étape 4, dans l'ordre, avec leur déduction, leur agent et leur risque ; la première est prioritaire.
+    expect(company.missions.map((mission) => mission.title)).toEqual(stepTitles);
+    expect(company.missions.every((mission) => mission.deduction && mission.responsibleAgent && mission.risk)).toBe(true);
+    expect(company.priorityMissionId).toBe(company.missions[0].id);
+    await expect(page.getByRole("article", { name: stepTitles[0] })).toContainText("À décider");
     expect(company.journalEntries.filter((entry) => entry.code === "J-04")).toHaveLength(1);
     expect((await page.context().cookies()).some((cookie) => cookie.name === "pepito_draft")).toBe(false);
 
@@ -2821,6 +2838,43 @@ test("GH-279: five anonymous steps, back and reload keep the answers, and the ac
     await expect(page).toHaveURL(`${baseURL}/strategie`);
   } finally {
     await prisma.company.deleteMany({ where: { ownerEmail: email } });
+    await prisma.$disconnect();
+  }
+});
+
+test("GH-284: Stratégie offers « Ouvrir mon diagnostic » without findings, « Préparer mes missions » with them, and shows who prepares a mission and its risk", async ({ page, company }) => {
+  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }) });
+  try {
+    await prisma.company.update({ where: { id: company.id }, data: { workspaceV52: true } });
+    // Sans constat : un lien vers le diagnostic, jamais le bouton.
+    await page.goto(`${baseURL}/strategie`);
+    await expect(page.getByRole("link", { name: "Ouvrir mon diagnostic" }).first()).toHaveAttribute("href", "/diagnostic");
+    await expect(page.getByRole("button", { name: "Préparer mes missions" })).toHaveCount(0);
+
+    // Un constat courant et une mission avec son agent et son risque (on ne lance pas le modèle).
+    const audit = await prisma.agentRun.create({ data: { companyId: company.id, agent: "marketing", requestKey: `audit-${randomUUID()}`, payload: {}, status: "succeeded", finishedAt: new Date() } });
+    await prisma.auditFinding.create({ data: { companyId: company.id, agentRunId: audit.id, category: "site_web", title: "Aucune page ne présente vos offres", content: "Le site ne détaille pas la rénovation." } });
+    const risk = "Une seule publication donne un signal, pas une preuve.";
+    const mission = await prisma.mission.create({ data: {
+      companyId: company.id, template: "social_post", channel: "facebook", title: "Publier un chantier terminé", outcome: "2 demandes de devis d'ici 30 jours",
+      originalOutcome: "2 demandes de devis d'ici 30 jours", finding: "Page Facebook peu active", position: 1, createdBy: "paul", responsibleAgent: "contenu", risk,
+    } });
+    await page.goto(`${baseURL}/strategie`);
+    const prepare = page.getByRole("button", { name: "Préparer mes missions" });
+    await expect(prepare).toHaveCount(1);
+    await expect(prepare).not.toHaveClass(/primary/);
+    await expect(page.getByRole("link", { name: "Ouvrir mon diagnostic" })).toHaveCount(0);
+    const row = page.getByRole("article", { name: "Publier un chantier terminé" });
+    await expect(row).toContainText("Paul, pour vos contenus et votre site");
+    await expect(row).toContainText(`Risque ou limite : ${risk}`);
+
+    await page.goto(`${baseURL}/missions/${mission.id}`);
+    const contract = page.getByRole("complementary", { name: "Notre contrat de mission" });
+    await expect(contract).toContainText("Préparée par");
+    await expect(contract).toContainText("Paul, pour vos contenus et votre site");
+    await expect(contract).toContainText("Risque ou limite");
+    await expect(contract).toContainText(risk);
+  } finally {
     await prisma.$disconnect();
   }
 });

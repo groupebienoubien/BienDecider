@@ -33,7 +33,13 @@ function toJson(state: DraftState): { step: number; profile: Prisma.InputJsonObj
   return {
     step: state.step,
     profile: { ...state.profile },
-    ambition: state.ambition === null ? undefined : { text: state.ambition.text, terms: { ...state.ambition.terms } },
+    ambition: state.ambition === null ? undefined : {
+      text: state.ambition.text,
+      terms: { ...state.ambition.terms },
+      // « Ce que nous retenons » et son coût (#284) ; absents, ils disparaissent de la colonne (retour avant l'étape 4).
+      ...(state.ambition.retained ? { retained: [...state.ambition.retained] } : {}),
+      ...(state.ambition.retainedCost ? { retainedCost: { ...state.ambition.retainedCost } } : {}),
+    },
     profileConfirmed: state.profileConfirmed,
     diagnosticReady: state.diagnosticReady,
   };

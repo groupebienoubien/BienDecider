@@ -2,7 +2,7 @@ import { createHmac } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 
-export type ThrottleScope = "login" | "signup" | "token" | "reset" | "draft" | "analysis" | "ambition";
+export type ThrottleScope = "login" | "signup" | "token" | "reset" | "draft" | "analysis" | "ambition" | "synthesis";
 
 export const MAX_ATTEMPTS = 5;
 const LOCK_DURATION_MS = 15 * 60 * 1000;
@@ -36,6 +36,8 @@ const POLICY: Record<ThrottleScope, { limit: number; windowSeconds: number }> = 
   analysis: { limit: 3, windowSeconds: 24 * 60 * 60 },
   // Interprétations de l'ambition par le modèle avant compte (#282) : au-delà, l'analyseur de secours prend le relais.
   ambition: { limit: 10, windowSeconds: 24 * 60 * 60 },
+  // « Ce que nous retenons » rédigé par le modèle avant compte (#284) : au-delà, les règles prennent le relais.
+  synthesis: { limit: 10, windowSeconds: 24 * 60 * 60 },
 };
 
 /** Ligne unique du compteur global des analyses anonymes (#280), toutes IP confondues. */

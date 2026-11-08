@@ -8,7 +8,7 @@ import { readSignupControl, releaseSignupSlot, reserveSignupSlot, todaySignupCou
 import { sendVerificationEmail } from "@/lib/email-verification";
 import { passwordPolicyError } from "@/lib/password-policy";
 import { SIGNUP_CLOSED_MESSAGE, SIGNUP_FULL_MESSAGE, secondsUntilNextSignupDay, signupAvailability } from "@/lib/signup-rules";
-import { ADDRESS_UNAVAILABLE_MESSAGE, ONBOARDING_MESSAGES, RECOVER_ACCOUNT_HREF, checkDraftForAccount, isValidEmail, starterMissions, stepHref } from "@/lib/onboarding/draft-rules";
+import { ADDRESS_UNAVAILABLE_MESSAGE, ONBOARDING_MESSAGES, RECOVER_ACCOUNT_HREF, checkDraftForAccount, isValidEmail, starterPlan, stepHref, synthesisUsage } from "@/lib/onboarding/draft-rules";
 import { clearDraftCookie, loadDraft } from "@/lib/onboarding/draft";
 import { analysisUsage } from "@/lib/onboarding/analysis-rules";
 import { createMissionIn } from "@/lib/missions/service";
@@ -110,8 +110,18 @@ export async function POST(request: NextRequest) {
       // Le coût de l'analyse anonyme revient au compte, une seule fois : le brouillon vient d'être effacé dans cette transaction.
       const usage = analysisUsage(draft.state.analysis);
       if (usage) await tx.usageEvent.create({ data: { companyId: created.id, ...usage } });
+      // « Ce que nous retenons » rédigé par le modèle avant compte (#284) : son coût revient aussi au compte.
+      const synthesis = synthesisUsage(ambition);
+      if (synthesis) await tx.usageEvent.create({ data: { companyId: created.id, ...synthesis } });
       await writeJournal(tx, { companyId: created.id, code: "J-04", params: {}, actor: "owner" });
-      for (const mission of starterMissions(profile, ambition?.text ?? "")) await createMissionIn(tx, created.id, mission, "paul");
+      // Les missions de l'étape 4, dans le même ordre, « À décider » ; la première devient la priorité, sans J-08 ni lancement (#284).
+      let priorityMissionId: string | null = null;
+      for (const starter of starterPlan(draft.state).missions) {
+        const { template, channel, title, outcome, finding, scope, stopRuleDays, deduction, responsibleAgent, risk } = starter;
+        const mission = await createMissionIn(tx, created.id, { template, channel, title, outcome, finding, scope, stopRuleDays }, "paul", undefined, { deduction, responsibleAgent, risk });
+        priorityMissionId ??= mission.id;
+      }
+      if (priorityMissionId) await tx.company.update({ where: { id: created.id }, data: { priorityMissionId } });
       return created;
     }, { maxWait: 5000, timeout: 20000 });
   } catch (error) {

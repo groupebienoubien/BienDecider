@@ -15,7 +15,7 @@ const REQUEST_MAX_LENGTH = 1000;
 /** Note une demande hors catalogue pour les pères fondateurs (vue admin). */
 export async function recordUncoveredRequest(
   companyId: string,
-  source: "chat" | "plan",
+  source: "chat" | "plan" | "mission",
   request: string,
   closestAlternative?: string,
 ) {

@@ -4273,3 +4273,144 @@ test("GH-41: connecting the Google business listing writes one J-07 in the same 
     else process.env.GOOGLE_TOKEN_ENCRYPTION_KEY = previousKey;
   }
 });
+
+/** Diagnostic courant : un audit terminé et ses constats (#284). */
+async function seedCurrentDiagnostic(companyId: string) {
+  const { prisma } = await import("../src/lib/prisma");
+  const audit = await prisma.agentRun.create({ data: { companyId, agent: "marketing", requestKey: `audit-${randomUUID()}`, payload: {}, status: "succeeded", finishedAt: new Date() } });
+  const site = await prisma.auditFinding.create({ data: { companyId, agentRunId: audit.id, category: "site_web", title: "Aucune page ne présente vos offres", content: "Le site ne détaille pas la rénovation électrique." } });
+  const social = await prisma.auditFinding.create({ data: { companyId, agentRunId: audit.id, category: "reseaux_sociaux", title: "Page Facebook peu active", content: "Dernière publication il y a six mois." } });
+  return { site, social };
+}
+
+async function queueMissionGeneration(companyId: string) {
+  const { prisma } = await import("../src/lib/prisma");
+  return prisma.agentRun.create({ data: { companyId, agent: "co_ceo", requestKey: `mission-generation:${randomUUID()}`, payload: { kind: "mission_generation" } } });
+}
+
+const FIRST_MISSION = { template: "social_post", channel: "facebook", title: "Publier un chantier terminé", outcome: "2 demandes de devis d'ici 30 jours", deduction: "La page est peu active : une publication montre le savoir-faire sans dépense.", scope: { topic: "Un chantier de rénovation terminé" }, responsibleAgent: "contenu", risk: "Une seule publication donne un signal, pas une preuve." };
+
+test("GH-284: « Préparer mes missions » adds at most three sourced « À décider » missions, refuses refused titles and promises, and changes no existing mission", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { site, social } = await seedCurrentDiagnostic(company.id);
+  const base = { companyId: company.id, outcome: "Un résultat", originalOutcome: "Un résultat", finding: "Un constat de départ" };
+  const existing = await prisma.mission.create({ data: { ...base, template: "social_post", channel: "facebook", title: "Ma mission existante", position: 1, createdBy: "owner" } });
+  await prisma.mission.create({ data: { ...base, template: "site_page", channel: "site", title: "Mission écartée", position: 2, status: "dismissed", previousStatus: "proposed" } });
+  await prisma.paulPendingAction.create({ data: { companyId: company.id, type: "mission_create", status: "cancelled", decidedAt: new Date(), expiresAt: new Date(), payload: { template: "social_post", title: "Carte refusée", outcome: "x", finding: "y", scope: {} } } });
+  // Carte annulée sans décision du dirigeant (orpheline) : ce n'est pas un refus, son titre reste proposable.
+  await prisma.paulPendingAction.create({ data: { companyId: company.id, type: "mission_create", status: "cancelled", expiresAt: new Date(), payload: { template: "social_post", title: FIRST_MISSION.title, outcome: "x", finding: "y", scope: {} } } });
+  await prisma.agentProposal.create({ data: { companyId: company.id, agent: "contenu", kind: "social_post", title: "Proposition refusée", content: "Texte", status: "rejetee" } });
+
+  const run = await queueMissionGeneration(company.id);
+  const answers: Record<string, string> = {};
+  await processWithScenario(run.id, async (tool) => {
+    const propose = tool("propose_first_mission");
+    const ask = (input: Record<string, unknown>) => propose.run({ ...FIRST_MISSION, findingId: social.id, ...input });
+    answers.existing = await ask({ title: "ma MISSION existante !" });
+    answers.dismissed = await ask({ title: "Mission écartée" });
+    answers.card = await ask({ title: "Carte refusée" });
+    answers.proposal = await ask({ title: "Proposition refusée" });
+    answers.noDeadline = await ask({ outcome: "Plus de demandes de devis" });
+    answers.promise = await ask({ outcome: "3 devis garantis d'ici 30 jours" });
+    answers.oldFinding = await ask({ findingId: "constat-inconnu" });
+    answers.badRisk = await ask({ risk: "court" });
+    answers.first = await ask({});
+    answers.again = await ask({});
+    // Deux appels parallèles du même titre : traités l'un après l'autre, un seul crée la mission.
+    const sitePage = { template: "site_page", channel: "site", title: "Présenter la rénovation sur le site", outcome: "Une page en ligne d'ici 15 jours", scope: { page: "Rénovation électrique" }, findingId: site.id };
+    [answers.second, answers.parallel] = await Promise.all([ask(sitePage), ask(sitePage)]);
+    answers.uncovered = await tool("record_uncovered_request").run({ request: "Être référencé dans un annuaire payant" });
+    answers.third = await ask({ template: "custom", channel: null, title: "Un salon local", outcome: "5 contacts qualifiés en 2 mois", scope: { description: "Tenir un stand au salon de l'habitat de Lyon" }, stopRuleDays: 60, responsibleAgent: "co_ceo" });
+    answers.fourth = await ask({ title: "Une quatrième mission" });
+  });
+  for (const key of ["existing", "dismissed", "card", "proposal", "again", "parallel"]) expect(answers[key], key).toContain("déjà au plan, ou le dirigeant l'a écartée ou refusée");
+  expect(answers.noDeadline).toContain("cible avec une échéance");
+  expect(answers.promise).toContain("cible avec une échéance");
+  expect(answers.oldFinding).toContain("pas dans le diagnostic actuel");
+  expect(answers.badRisk).toContain("10 à 200 caractères");
+  for (const key of ["first", "second", "third"]) expect(answers[key], key).toContain("créée, À décider");
+  expect(answers.uncovered).toContain("Demande notée");
+  expect(answers.fourth).toContain("3 missions sont déjà créées");
+
+  expect(await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })).toMatchObject({ status: "succeeded", resultCount: 3 });
+  const created = await prisma.mission.findMany({ where: { companyId: company.id, createdBy: "paul" }, orderBy: { position: "asc" } });
+  expect(created.map((mission) => mission.title)).toEqual(["Publier un chantier terminé", "Présenter la rénovation sur le site", "Un salon local"]);
+  for (const mission of created) {
+    expect(mission).toMatchObject({ status: "proposed", firstLaunchedAt: null });
+    expect(mission.sourceFindingId).toBeTruthy();
+    expect(mission.deduction).toBeTruthy();
+    expect(mission.risk).toBeTruthy();
+  }
+  expect(created[0]).toMatchObject({ sourceFindingId: social.id, responsibleAgent: "contenu", finding: "Page Facebook peu active : Dernière publication il y a six mois." });
+  expect(created[2].responsibleAgent).toBe("co_ceo");
+  // Les missions existantes restent telles quelles.
+  expect(await prisma.mission.findUniqueOrThrow({ where: { id: existing.id } })).toMatchObject({ version: existing.version, title: existing.title, status: "proposed" });
+  expect(await prisma.mission.count({ where: { companyId: company.id } })).toBe(5);
+  // Demande non couverte, et « Sur mesure » transmis au catalogue : source « mission ».
+  const uncovered = await prisma.uncoveredRequest.findMany({ where: { companyId: company.id } });
+  expect(uncovered.map((row) => row.source)).toEqual(["mission", "mission"]);
+});
+
+test("GH-284: a preparation that creates nothing fails with no_result, and a new click starts a new run", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { enqueueMissionGeneration } = await import("../src/lib/agent-runs");
+  await seedCurrentDiagnostic(company.id);
+  const run = await queueMissionGeneration(company.id);
+  await processWithScenario(run.id, async () => undefined);
+  expect(await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })).toMatchObject({ status: "failed", failureReason: "no_result", activeDedupeKey: null });
+  const again = await inRequestScope([], () => enqueueMissionGeneration(company.id, randomUUID()));
+  expect(again.id).not.toBe(run.id);
+  expect(again.status).toBe("queued");
+});
+
+test("GH-284: a double click — same requestId or an active preparation — gives one run; the quota refuses and creates nothing", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { enqueueMissionGeneration, AgentRunQuotaError } = await import("../src/lib/agent-runs");
+  await seedCurrentDiagnostic(company.id);
+  const requestId = randomUUID();
+  const [first, second] = await inRequestScope([], () => Promise.all([enqueueMissionGeneration(company.id, requestId), enqueueMissionGeneration(company.id, requestId)]));
+  expect(second.id).toBe(first.id);
+  const other = await inRequestScope([], () => enqueueMissionGeneration(company.id, randomUUID()));
+  expect(other.id).toBe(first.id);
+  expect(await prisma.agentRun.count({ where: { companyId: company.id, requestKey: { startsWith: "mission-generation:" } } })).toBe(1);
+  expect(await prisma.agentRunAttempt.count({ where: { agentRunId: first.id } })).toBe(1);
+
+  await prisma.agentRun.update({ where: { id: first.id }, data: { status: "failed", activeDedupeKey: null, reservedCostUsd: 0, finishedAt: new Date() } });
+  await prisma.company.update({ where: { id: company.id }, data: { dailyAgentRunLimit: 0 } });
+  await expect(inRequestScope([], () => enqueueMissionGeneration(company.id, randomUUID()))).rejects.toBeInstanceOf(AgentRunQuotaError);
+  expect(await prisma.mission.count({ where: { companyId: company.id } })).toBe(0);
+});
+
+test("GH-284: the open missions cap refuses the tool with the message of validateNewMission", async ({ company }) => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { renderMissionMessage } = await import("../src/lib/missions/messages");
+  const { social } = await seedCurrentDiagnostic(company.id);
+  await prisma.mission.createMany({ data: Array.from({ length: 10 }, (_, index) => ({
+    companyId: company.id, template: "social_post", channel: "facebook", title: `Mission ouverte ${index}`, outcome: "Un résultat", originalOutcome: "Un résultat", finding: "Un constat de départ", position: index + 1, createdBy: "paul",
+  })) });
+  const run = await queueMissionGeneration(company.id);
+  let answer = "";
+  await processWithScenario(run.id, async (tool) => { answer = await tool("propose_first_mission").run({ ...FIRST_MISSION, findingId: social.id }); });
+  expect(answer).toContain(renderMissionMessage("M-75"));
+  expect(await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })).toMatchObject({ status: "failed", failureReason: "no_result" });
+});
+
+test("GH-284: a mission result is a target with a deadline, never a promise; its finding is the cited one, without markup", async () => {
+  const { isTargetWithDeadline, containsPromise, missionFindingText } = await import("../src/lib/agents/co-ceo");
+  expect(isTargetWithDeadline("3 demandes de devis d'ici 30 jours")).toBe(true);
+  expect(isTargetWithDeadline("Une page en ligne sous trois semaines")).toBe(true);
+  for (const outcome of ["5 avis clients en 1 an", "Une publication en sept jours", "3 devis sous vingt jours", "10 contacts en neuf mois", "2 partenaires en deux années", "20 avis en quatre-vingt-dix jours"]) {
+    expect(isTargetWithDeadline(outcome), outcome).toBe(true);
+  }
+  expect(isTargetWithDeadline("Plus de demandes")).toBe(false);
+  expect(isTargetWithDeadline("10 clients garantis en 2 mois")).toBe(false);
+  expect(isTargetWithDeadline("Un résultat assuré en 30 jours")).toBe(false);
+  expect(isTargetWithDeadline("Des devis à coup sûr en 2 mois")).toBe(false);
+  expect(containsPromise("Un résultat assuré")).toBe(true);
+  expect(containsPromise("Des clients à coup sûr")).toBe(true);
+  expect(containsPromise("Une cible de 3 devis, pas une promesse")).toBe(true);
+  expect(containsPromise("Tester une publication sur la rénovation")).toBe(false);
+  expect(containsPromise("Rassurer les clients")).toBe(false);
+  expect(missionFindingText("Site <b>vide</b>", "Rien.")).toBe("Site b vide /b : Rien.");
+  expect(missionFindingText("Site", "x".repeat(400)).length).toBe(300);
+});

@@ -3,7 +3,8 @@ import { after, NextRequest, NextResponse } from "next/server";
 import { getSessionEmail } from "@/lib/session";
 import { readJsonObject } from "@/lib/request-body";
 import { consumeGlobalAnalysis, consumeIpAttempt, refundIpAttempt, type ThrottleResult } from "@/lib/auth-throttle";
-import { applyDraftAction, checkInterpretation, emptyDraft, parseDraftAction, stepHref, type DraftState } from "@/lib/onboarding/draft-rules";
+import { applyDraftAction, checkInterpretation, emptyDraft, parseDraftAction, stepHref, withRetained, type DraftState } from "@/lib/onboarding/draft-rules";
+import { anonymousSynthesisModel, writeRetained } from "@/lib/onboarding/synthesis";
 import { signInterpretation, verifyInterpretation } from "@/lib/ambition-token";
 import { anonymousAmbitionModel, interpretAmbition } from "@/lib/ambition";
 import { ANALYSIS_MESSAGES, analysisView, needsNewAnalysis, newAnalysis } from "@/lib/onboarding/analysis-rules";
@@ -42,9 +43,17 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: result.error, code: result.code, errors: result.errors }, { status: 422 });
   }
 
+  let state = result.state;
+  if (action.action === "confirm_ambition") {
+    // « Ce que nous retenons » (#284) : rédigé à ce clic, jamais au chargement de l'étape 4 ; les règles prennent le relais sans bloquer.
+    const model = await anonymousSynthesisModel(() => consumeIpAttempt(request, "synthesis"));
+    const synthesis = await writeRetained(state, { model });
+    state = withRetained(state, synthesis.retained, synthesis.cost);
+  }
+
   let draftId: string;
   if (draft) {
-    if (!(await saveDraft(draft.id, result.state))) return NextResponse.json({ error: "Reprenez à la première étape.", step: 1, href: stepHref(1) }, { status: 409 });
+    if (!(await saveDraft(draft.id, state))) return NextResponse.json({ error: "Reprenez à la première étape.", step: 1, href: stepHref(1) }, { status: 409 });
     draftId = draft.id;
   } else {
     const attempt = await consumeIpAttempt(request, "draft");
@@ -54,10 +63,10 @@ export async function POST(request: NextRequest) {
         { status: 429, headers: { "Retry-After": String(attempt.retryAfterSeconds) } },
       );
     }
-    draftId = (await createDraft(result.state)).id;
+    draftId = (await createDraft(state)).id;
   }
-  if (action.action === "discover") return launchAnalysis(request, draftId, result.state, now);
-  return NextResponse.json({ step: result.state.step, href: stepHref(result.state.step) });
+  if (action.action === "discover") return launchAnalysis(request, draftId, state, now);
+  return NextResponse.json({ step: state.step, href: stepHref(state.step) });
 }
 
 /**

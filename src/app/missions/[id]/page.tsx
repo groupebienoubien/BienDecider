@@ -112,6 +112,8 @@ export default async function MissionPage({ params }: { params: Promise<{ id: st
           <h2 id="contract-title">Notre contrat de mission</h2>
           <dl>
             <dt>Résultat</dt><dd>{mission.outcome}</dd>
+            {mission.responsibleLabel && <><dt>Préparée par</dt><dd>{mission.responsibleLabel}</dd></>}
+            {mission.risk && <><dt>Risque ou limite</dt><dd>{mission.risk}</dd></>}
             <dt>Coût</dt><dd>{mission.actions.launched ? "Lancée : crédits déjà réglés" : `${LAUNCH_COST_CREDITS} crédits au lancement`}</dd>
             <dt>Dépenses externes</dt><dd>0 € engagé</dd>
             <dt>Règle d&apos;arrêt</dt><dd>{mission.stopRuleDays ? `Bilan à ${mission.stopRuleDays} jours` : "—"}</dd>

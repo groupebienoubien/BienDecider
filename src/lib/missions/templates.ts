@@ -1,5 +1,6 @@
 import { MISSION_CHANNELS, isChannelEnabled, type MissionChannel } from "@/lib/missions/channels";
 import type { MissionMessageCode } from "@/lib/missions/messages";
+import type { ResponsibleAgent } from "@/lib/missions/rules";
 
 /**
  * Catalogue des modèles d'action, décrit en données (spécification §6.1, addendum §2.4, décision D9).
@@ -22,6 +23,10 @@ export type MissionTemplate = {
   /** Faux tant que la source de son périmètre ou une condition d'ouverture manque : agences (#316), réalisations (#317), fichier de prospection (#69). */
   open: boolean;
   validateScope: (scope: unknown) => ScopeResult;
+  /** Agent responsable par défaut (#284), repris à l'étape 4 du parcours d'entrée ; Paul le choisit lui-même ensuite. */
+  defaultAgent: ResponsibleAgent;
+  /** Risque ou limite par défaut (#284), 10 à 200 caractères : dit ce que le test ne garantit pas, sans rien promettre. */
+  defaultRisk: string;
 };
 
 const asObject = (value: unknown): Record<string, unknown> => (value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {});
@@ -53,32 +58,32 @@ const SOCIAL: readonly MissionChannel[] = ["facebook", "instagram", "linkedin"];
 
 export const MISSION_TEMPLATES: Record<TemplateKey, MissionTemplate> = {
   agencies: {
-    key: "agencies", label: "Partenariats", channels: ["gmail"], contentFormat: "E-mail individuel, sans relance automatique",
+    key: "agencies", defaultAgent: "demarchage", defaultRisk: "Une agence peut ne pas répondre : le test s'arrête après un refus clair ou 30 jours sans réponse.", label: "Partenariats", channels: ["gmail"], contentFormat: "E-mail individuel, sans relance automatique",
     defaultOutcome: "Une réponse d'une agence de votre zone", stopRuleDays: 30, open: true, validateScope: idsScope("agencyIds", 1, 2, "M-30"),
   },
   leads: {
-    key: "leads", label: "Réactivation", channels: ["gmail"], contentFormat: "E-mail individuel qui propose de ne plus être recontacté",
+    key: "leads", defaultAgent: "demarchage", defaultRisk: "Un ancien contact peut ne pas souhaiter être recontacté : chaque e-mail lui propose de ne plus l'être.", label: "Réactivation", channels: ["gmail"], contentFormat: "E-mail individuel qui propose de ne plus être recontacté",
     defaultOutcome: "Un rendez-vous avec un ancien contact", stopRuleDays: 30, open: false, validateScope: idsScope("contactIds", 1, 8, "M-31"),
   },
   proof: {
-    key: "proof", label: "Réalisation", channels: SOCIAL, contentFormat: "Publication avec visuel",
+    key: "proof", defaultAgent: "contenu", defaultRisk: "Sans photo ni accord du client, la réalisation ne peut pas être publiée.", label: "Réalisation", channels: SOCIAL, contentFormat: "Publication avec visuel",
     defaultOutcome: "Des demandes qualifiées à partir d'une réalisation", stopRuleDays: 7, open: false,
     validateScope: (scope) => (typeof asObject(scope).proofId === "string" && boundedText(asObject(scope).proofId, 1, 80) ? { ok: true, scope: { proofId: asObject(scope).proofId } } : { ok: false, code: "M-32" }),
   },
   social_post: {
-    key: "social_post", label: "Publication", channels: SOCIAL, contentFormat: "Publication (actualité, offre, conseil)",
+    key: "social_post", defaultAgent: "contenu", defaultRisk: "Une seule publication donne un signal, pas une preuve : le bilan à 7 jours dira ce qu'elle a apporté.", label: "Publication", channels: SOCIAL, contentFormat: "Publication (actualité, offre, conseil)",
     defaultOutcome: "Des réactions et des demandes à partir d'une publication", stopRuleDays: 7, open: true, validateScope: textScope("topic", 5, 120, "M-17"),
   },
   google_profile: {
-    key: "google_profile", label: "Fiche Google à jour", channels: ["google_business_profile"], contentFormat: "Informations de la fiche ou publication Google",
+    key: "google_profile", defaultAgent: "marketing", defaultRisk: "Une fiche à jour ne garantit aucun appel : le bilan à 30 jours dira ce qu'elle a apporté.", label: "Fiche Google à jour", channels: ["google_business_profile"], contentFormat: "Informations de la fiche ou publication Google",
     defaultOutcome: "Une fiche Google complète et à jour", stopRuleDays: 30, open: true, validateScope: () => ({ ok: true, scope: {} }),
   },
   review_reply: {
-    key: "review_reply", label: "Réponse aux avis", channels: ["google_business_profile"], contentFormat: "Une réponse par avis",
+    key: "review_reply", defaultAgent: "marketing", defaultRisk: "Une réponse publiée reste visible de tous : chacune est relue et validée par vous avant d'être diffusée.", label: "Réponse aux avis", channels: ["google_business_profile"], contentFormat: "Une réponse par avis",
     defaultOutcome: "Tous les avis récents ont une réponse", stopRuleDays: 30, open: true, validateScope: idsScope("reviewIds", 1, 5, "M-64"),
   },
   site_page: {
-    key: "site_page", label: "Page du site vitrine", channels: ["site"], contentFormat: "Page (titre, textes, photos)",
+    key: "site_page", defaultAgent: "contenu", defaultRisk: "Une page en ligne ne suffit pas seule : elle n'apporte des demandes que si vos clients la trouvent.", label: "Page du site vitrine", channels: ["site"], contentFormat: "Page (titre, textes, photos)",
     defaultOutcome: "Une page du site qui présente votre offre", stopRuleDays: 30, open: true,
     validateScope: (scope) => {
       const page = asObject(scope).page;
@@ -88,7 +93,7 @@ export const MISSION_TEMPLATES: Record<TemplateKey, MissionTemplate> = {
     },
   },
   custom: {
-    key: "custom", label: "Sur mesure", channels: MISSION_CHANNELS, contentFormat: "Texte, visuel facultatif",
+    key: "custom", defaultAgent: "co_ceo", defaultRisk: "Vous menez cette action vous-même : Paul ne mesure que ce que vous déclarez.", label: "Sur mesure", channels: MISSION_CHANNELS, contentFormat: "Texte, visuel facultatif",
     defaultOutcome: "", stopRuleDays: null, open: true, validateScope: textScope("description", 10, 300, "M-18"),
   },
 };

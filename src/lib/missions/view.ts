@@ -6,7 +6,7 @@ import { scopeSummary } from "@/lib/missions/scope";
 import { missionStage, orderMissions, priorityMissionId, type ContentState, type Delegation, type MissionStage, type StageMission } from "@/lib/missions/stage";
 import { asDelegationLevel } from "@/lib/delegation-level";
 import { MISSION_TEMPLATES, type TemplateKey } from "@/lib/missions/templates";
-import type { MissionStatus } from "@/lib/missions/rules";
+import { responsibleLabel, type MissionStatus } from "@/lib/missions/rules";
 import { isUpToDate, stopRuleDue } from "@/lib/missions/report";
 import { listAgencies } from "@/lib/agencies/service";
 
@@ -33,6 +33,10 @@ export type MissionView = StageMission & {
   deduction: string | null;
   /** Constat du diagnostic relié (#168) ; null s'il n'y en a pas ou s'il a été supprimé. */
   source: MissionSourceFinding | null;
+  /** Rôle de Paul qui prépare la mission (#284), libellé visible ; null s'il n'est pas renseigné. */
+  responsibleLabel: string | null;
+  /** Risque ou limite rédigé par Paul (#284) ; null s'il n'est pas renseigné. */
+  risk: string | null;
   templateLabel: string;
   channelLabel: string;
   scopeSummary: string;
@@ -122,6 +126,8 @@ function toView(mission: MissionWithContent, priorityId: string | null, connecte
     createdBy: mission.createdBy,
     deduction: mission.deduction,
     source: sourceOf(mission),
+    responsibleLabel: responsibleLabel(mission.responsibleAgent),
+    risk: mission.risk,
     templateLabel: MISSION_TEMPLATES[base.template]?.label ?? "Sur mesure",
     channelLabel: label,
     scopeSummary: summary,
