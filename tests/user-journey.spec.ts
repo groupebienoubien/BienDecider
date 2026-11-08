@@ -824,7 +824,7 @@ test("GH-169: Entreprise shows the origin of each profile information and its la
     await expect(page.getByText("Vos contenus en cours seront à relire et leurs programmations annulées.")).toBeVisible();
     expect(await noHorizontalScroll(page)).toBe(true);
     await page.getByRole("button", { name: "Enregistrer", exact: true }).click();
-    await expect(page).toHaveURL(`${baseURL}/dashboard`);
+    await expect(page).toHaveURL(`${baseURL}/strategie`);
 
     const saved = await prisma.company.findUniqueOrThrow({ where: { id: company.id } });
     expect(saved.offers).toBe("Bornes de recharge");
