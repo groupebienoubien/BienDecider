@@ -15,6 +15,8 @@ import { LAUNCH_COST_CREDITS } from "@/lib/missions/rules";
 import { channelLabel } from "@/lib/missions/channels";
 import { MISSION_TEMPLATES, enabledChannels } from "@/lib/missions/templates";
 import { listAgencies } from "@/lib/agencies/service";
+import { loadProfileToReview } from "@/lib/contents/view";
+import { PROFILE_REVIEW_BADGE } from "@/lib/contents/rules";
 import { ScopeEditor } from "./scope-editor";
 
 export const dynamic = "force-dynamic";
@@ -40,8 +42,9 @@ export default async function MissionPage({ params }: { params: Promise<{ id: st
   const tracker = missionTracker(mission.stage);
   const done = (index: number) => tracker?.[index]?.state === "done";
   const contentOpen = mission.status !== "stopped" && mission.status !== "dismissed";
+  const profileToReview = mission.contentId ? await loadProfileToReview(company.id, mission.contentId) : false;
   const contentLink = mission.contentId
-    ? <Link href={`/atelier/${mission.contentId}`}>Ouvrir le contenu (V{mission.content?.number}) dans l&apos;atelier</Link>
+    ? <><Link href={`/atelier/${mission.contentId}`}>Ouvrir le contenu (V{mission.content?.number}) dans l&apos;atelier</Link>{profileToReview && <> <Tag color="orange">{PROFILE_REVIEW_BADGE}</Tag></>}</>
     : contentOpen ? <PrepareDraftButton missionId={mission.id} className="small" /> : null;
   const steps = [
     { title: "Confirmer le périmètre", text: "Vous fixez ce que la mission teste, puis vous la lancez.", done: mission.status !== "proposed" && mission.status !== "dismissed" },

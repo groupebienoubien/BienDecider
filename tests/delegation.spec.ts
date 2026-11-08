@@ -24,7 +24,7 @@ import { CONTEXT_DISPLAYED_MESSAGES, CONTEXT_HISTORY_MESSAGES, DEFAULT_CONTEXT_K
 import { chatWindow, lastMessageBefore, latestOf, paulMessageTimes } from "../src/lib/agents/paul-message-times";
 import { WEEKLY_REVIEW_MARKER } from "../src/lib/weekly-review";
 import { RUN_CAPS, capGroup, runCapReachedMessage, withRunCap } from "../src/lib/agents/run-caps";
-import { PROFILE_TEXT_LIMITS, clearableText, companyContextLine, companyFocusText, profileChanges, profileTextIssue } from "../src/lib/company-profile";
+import { COMPANY_ORIGIN_LABELS, CORRECTION_FIELDS, companyOriginLabel, nextProfileOrigins, readProfileOrigins, PROFILE_TEXT_LIMITS, clearableText, companyContextLine, companyFocusText, profileChanges, profileTextIssue } from "../src/lib/company-profile";
 import { buildAgencySearchPrompt } from "../src/lib/agencies/finder";
 import { buildDraftPrompt } from "../src/lib/contents/writer";
 import { parisQuotaWindows, usageCounterFor } from "../src/lib/quota-windows";
@@ -55,12 +55,12 @@ import { DELEGATION_LABELS, asDelegationLevel, prepareOnlyRefusal } from "../src
 import { slugify } from "../src/lib/site/slug";
 import { canonicalOAuthStart } from "../src/lib/oauth/canonical-host";
 import { NextRequest } from "next/server";
-import { BODY_MAX, checkDeclaration, checkDiffusion, checkNewVersion, isSchedulable, parseSchedule, checkRejection, checkValidation, contentFormat, contentStatus, exposureFor, parseVariant, reviewChecklist, titleLabel, validateDraft, validateRejection, variantLabel, type ContentSnapshot } from "../src/lib/contents/rules";
+import { BODY_MAX, PROFILE_REVIEW_BADGE, PROFILE_REVIEW_NOTE, isProfileReview, profileReviewPending, checkDeclaration, checkDiffusion, checkNewVersion, isSchedulable, parseSchedule, checkRejection, checkValidation, contentFormat, contentStatus, exposureFor, parseVariant, reviewChecklist, titleLabel, validateDraft, validateRejection, variantLabel, type ContentSnapshot } from "../src/lib/contents/rules";
 import { firstNameOf } from "../src/lib/workspace";
 import { workspacePageLabel } from "../src/components/workspace-nav";
 import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH, passwordPolicyError } from "../src/lib/password-policy";
 import { startSmtpSink } from "./support/smtp-sink";
-import { ADDRESS_UNAVAILABLE_MESSAGE, FIRST_BADGE, ORIGIN_DECLARED, ORIGIN_SITE, SITE_NOT_GIVEN_NOTICE, SITE_NOT_READ_NOTICE, SYNTHESIS_USAGE_AGENT, TARGET_NOTICE, ambitionTargetsRequests, applyDraftAction, checkAmbition, checkDiscovery, checkDraftForAccount, clip, emptyDraft, firstOffer, isValidEmail, isValidWebsite, parseDraftAction, prefillFromPaul, prefillProfile, profileOriginLabel, rankStarterTemplates, readDraftState, readRetained, retainedFromRules, starterPlan, stepHref, synthesisUsage, withRetained, type DraftState } from "../src/lib/onboarding/draft-rules";
+import { ADDRESS_UNAVAILABLE_MESSAGE, FIRST_BADGE, ORIGIN_DECLARED, ORIGIN_SITE, SITE_NOT_GIVEN_NOTICE, SITE_NOT_READ_NOTICE, SYNTHESIS_USAGE_AGENT, TARGET_NOTICE, ambitionTargetsRequests, applyDraftAction, checkAmbition, checkDiscovery, checkDraftForAccount, clip, emptyDraft, firstOffer, isValidEmail, isValidWebsite, parseDraftAction, prefillFromPaul, prefillProfile, profileFieldIssue, profileOriginLabel, rankStarterTemplates, readDraftState, readRetained, retainedFromRules, starterPlan, stepHref, synthesisUsage, withRetained, type DraftState } from "../src/lib/onboarding/draft-rules";
 import { anonymousSynthesisModel, writeRetained, type SynthesisModel } from "../src/lib/onboarding/synthesis";
 import { PERSONAS } from "../src/lib/agents/personas";
 import { RESPONSIBLE_AGENTS, RESPONSIBLE_LABELS, validateResponsibleAgent, validateRisk } from "../src/lib/missions/rules";
@@ -3065,4 +3065,69 @@ test("GH-281: the analysis cost is read with or without its model, and kept for 
   expect(analysisUsage({ ...paid!, cost: { ...paid!.cost, usd: 0 } })).toBeNull();
   expect(analysisUsage(null)).toBeNull();
   expect(readAnalysis({ ...base, cost: { usd: 0, inputTokens: 0, outputTokens: 0, model: "m".repeat(101) } })).toBeNull();
+});
+
+test("GH-169: each profile field keeps its origin; a changed field becomes declared, an emptied one missing, an old account stays without origin", () => {
+  expect(CORRECTION_FIELDS).toEqual(["firstName", "name", "location", "trade", "servingArea", "targetClients", "offers"]);
+  expect(COMPANY_ORIGIN_LABELS).toEqual({ observed: "Lu sur le site", hypothesis: "Proposé par Paul, confirmé par vous", declared: "Déclaré par vous", missing: "À renseigner par vous" });
+  expect(companyOriginLabel(undefined)).toBeNull();
+
+  // Lecture défensive : absent ou illisible, aucune origine ; une entrée inconnue est ignorée.
+  expect(readProfileOrigins(null)).toBeNull();
+  expect(readProfileOrigins([])).toBeNull();
+  expect(readProfileOrigins("observed")).toBeNull();
+  expect(readProfileOrigins({ offers: "observed", trade: "invented", website: "declared", name: 3 })).toEqual({ offers: "observed" });
+
+  const before = { firstName: "Claire", name: "Atelier Lumen", location: "Lyon", trade: "Électricien", servingArea: "Lyon", targetClients: "Syndics", offers: "Mise aux normes" };
+  const origins = { firstName: "declared", name: "declared", location: "declared", trade: "observed", servingArea: "hypothesis", targetClients: "hypothesis", offers: "observed" } as const;
+  // Rien de changé : origines inchangées.
+  expect(nextProfileOrigins(before, { ...before }, origins)).toEqual(origins);
+  // Champ absent : inchangé ; champ modifié : déclaré ; champ vidé : à renseigner.
+  expect(nextProfileOrigins(before, { ...before, offers: "Bornes de recharge", targetClients: null, firstName: undefined }, origins)).toEqual({ ...origins, offers: "declared", targetClients: "missing" });
+  expect(nextProfileOrigins(before, { trade: "Électricien", servingArea: "Lyon et alentours" }, origins)).toEqual({ ...origins, servingArea: "declared" });
+  // "" en base et vide envoyé : le même champ vide, l'origine ne change pas.
+  expect(nextProfileOrigins({ location: "" }, { location: null }, { location: "declared" })).toEqual({ location: "declared" });
+  expect(nextProfileOrigins({ location: null }, { location: "" }, { location: "missing" })).toEqual({ location: "missing" });
+  // Compte d'avant #169 : aucune origine, même après une correction.
+  expect(nextProfileOrigins(before, { ...before, offers: "Autre" }, null)).toBeNull();
+  // Les autres champs du profil n'ont pas d'origine.
+  expect(nextProfileOrigins(before, { website: "https://atelier.example" }, {})).toEqual({});
+
+  // Mêmes limites et même refus des balises qu'aux étapes 1 et 2.
+  expect(profileFieldIssue("offers", "a".repeat(100))).toBeNull();
+  expect(profileFieldIssue("offers", "a".repeat(101))).toBe("La description de vos offres doit être compris entre 1 et 100 caractères.");
+  expect(profileFieldIssue("firstName", "a".repeat(41))).toBe("Le prénom doit être compris entre 1 et 40 caractères.");
+  expect(profileFieldIssue("targetClients", "<b>Syndics</b>")).toBe("Retirez les signes < et > de ce champ.");
+  expect(profileFieldIssue("location", "")).toBeNull();
+});
+
+test("GH-169: the system version written after a profile correction blocks validation with M-92 until a new version is saved", () => {
+  expect(renderMissionMessage("M-92")).toBe("Profil corrigé : relisez ce contenu et enregistrez une nouvelle version avant de le valider.");
+  expect(PROFILE_REVIEW_NOTE).toBe("Profil corrigé : informations du contenu à vérifier");
+  expect(PROFILE_REVIEW_BADGE).toBe("Profil à relire");
+  expect(isProfileReview({ author: "system", note: PROFILE_REVIEW_NOTE })).toBe(true);
+  expect(isProfileReview({ author: "system", note: "Destinataires modifiés" })).toBe(false);
+  expect(isProfileReview({ author: "owner", note: PROFILE_REVIEW_NOTE })).toBe(false);
+  expect(isProfileReview(null)).toBe(false);
+
+  const first = { number: 1, author: "paul", note: "Premier brouillon préparé par Paul" };
+  const profile = { number: 2, author: "system", note: PROFILE_REVIEW_NOTE };
+  const channel = { number: 3, author: "system", note: "Canal changé : Page Facebook. Texte à adapter" };
+  const owner = { number: 4, author: "owner", note: "Retouche directe par vous" };
+  expect(profileReviewPending([first])).toBe(false);
+  expect(profileReviewPending([first, profile])).toBe(true);
+  // Une autre version système après la correction ne lève pas le blocage ; l'ordre reçu ne compte pas.
+  expect(profileReviewPending([channel, profile, first])).toBe(true);
+  expect(profileReviewPending([first, profile, channel, owner])).toBe(false);
+  expect(profileReviewPending([first, profile, { number: 3, author: "paul", note: "Préparée avec Paul : plus court" }])).toBe(false);
+
+  const version = { number: 3, body: "Un texte court." };
+  const snapshot = contentSnapshot({ currentNumber: 3 });
+  expect(checkValidation(snapshot, version, { number: 3, reviewed: true, profileToReview: profileReviewPending([first, profile, channel]) })).toEqual({ code: "M-92" });
+  // La version vue et la mission passent avant ; le profil relu avant les destinataires (§4.4).
+  expect(checkValidation(snapshot, version, { number: 2, reviewed: true, profileToReview: true })).toEqual({ code: "M-02" });
+  expect(checkValidation(contentSnapshot({ currentNumber: 3, missionStatus: "paused" }), version, { number: 3, reviewed: true, profileToReview: true })).toEqual({ code: "M-47" });
+  expect(checkValidation(contentSnapshot({ currentNumber: 3, channel: "gmail", format: "email", recipients: 0 }), version, { number: 3, reviewed: true, profileToReview: true })).toEqual({ code: "M-92" });
+  // Une version du dirigeant après la correction lève le blocage.
+  expect(checkValidation(contentSnapshot({ currentNumber: 4 }), { number: 4, body: "Un texte court." }, { number: 4, reviewed: true, profileToReview: profileReviewPending([first, profile, channel, owner]) })).toBeNull();
 });

@@ -6,7 +6,8 @@ import { z } from "zod";
 import { readJsonObject } from "@/lib/request-body";
 import { startOnboardingAudit } from "@/lib/agents/onboarding-audit";
 import { AgentRunConflictError, AgentRunQuotaError } from "@/lib/agents/agent-errors";
-import { PROFILE_TEXT_LIMITS, clearableText, cleanProfileText, profileChanges, profileTextIssue, type ProfileTextField } from "@/lib/company-profile";
+import { PROFILE_TEXT_LIMITS, cleanOwnerName, clearableText, cleanProfileText, nextProfileOrigins, profileChanges, profileTextIssue, readProfileOrigins, type ProfileTextField } from "@/lib/company-profile";
+import { profileFieldIssue } from "@/lib/onboarding/draft-rules";
 import { markProfileChanged } from "@/lib/contents/service";
 
 // Les montants sont des entiers 32 bits en base : au-delà, la requête échouerait en erreur serveur.
@@ -76,16 +77,32 @@ export async function POST(request: NextRequest) {
     newClientsPerMonth,
   } = body;
 
-  const required = { name: [rawName, 160], trade: [rawTrade, 160], servingArea: [rawServingArea, 240] } as const;
-  for (const [key, [value, max]] of Object.entries(required)) {
+  for (const value of [rawName, rawTrade, rawServingArea]) {
     if (typeof value !== "string" || !value.trim()) {
       return NextResponse.json({ error: "name, trade et servingArea sont requis" }, { status: 400 });
     }
-    if (value.length > max) return NextResponse.json({ error: `${key} est limité à ${max} caractères` }, { status: 400 });
   }
   const name = (rawName as string).trim();
   const trade = (rawTrade as string).trim();
   const servingArea = (rawServingArea as string).trim();
+  const stored = await prisma.company.findUnique({ where: { ownerEmail } });
+  // « Corriger mon profil » (#169) : prénom, localisation, clients et offres, facultatifs ; absents, ils restent tels qu'en base.
+  const corrections: Partial<Record<"firstName" | "location" | "targetClients" | "offers", string | null>> = {};
+  for (const [key, value] of Object.entries({ firstName: body.firstName, location: body.location, targetClients: body.targetClients, offers: body.offers }) as [keyof typeof corrections, unknown][]) {
+    if (value === undefined) continue;
+    if (value !== null && typeof value !== "string") return NextResponse.json({ error: `${key} doit être du texte`, field: key }, { status: 400 });
+    const cleaned = typeof value === "string" ? (key === "firstName" ? cleanOwnerName(value) : value.trim()) : "";
+    // Vide envoyé, vide en base ("" ou null) : inchangé.
+    corrections[key] = cleaned || (stored?.[key] === "" ? "" : null);
+  }
+  // Mêmes règles qu'aux étapes 1 et 2 du parcours d'entrée (sans balise, longueur bornée), pour une valeur modifiée seulement :
+  // une valeur déjà en base, même hors de ces règles (compte ancien), passe telle quelle. Rien n'est écrit sinon.
+  const submitted = { firstName: corrections.firstName, name, location: corrections.location, trade, servingArea, targetClients: corrections.targetClients, offers: corrections.offers };
+  for (const [key, value] of Object.entries(submitted) as [keyof typeof submitted, string | null | undefined][]) {
+    if (!value || (stored && stored[key] === value)) continue;
+    const issue = profileFieldIssue(key === "name" ? "companyName" : key, value);
+    if (issue) return NextResponse.json({ error: issue, field: key }, { status: 400 });
+  }
 
   const amounts = { monthlyRevenue, revenueTarget, averageClientValue };
   for (const [key, value] of Object.entries(amounts)) {
@@ -121,6 +138,7 @@ export async function POST(request: NextRequest) {
     name,
     trade,
     servingArea,
+    ...corrections,
     website: clearableText(website),
     socialHandles: clearableText(socialHandles),
     objective: clearableText(objective),
@@ -141,10 +159,12 @@ export async function POST(request: NextRequest) {
   const { company, isFirstCreation } = await prisma.$transaction(async (tx) => {
     const existing = await tx.company.findUnique({ where: { ownerEmail } });
     const firstCreation = !existing?.name;
+    // Origine de chaque information (#169) : un champ modifié passe à « déclaré par vous », un champ vidé à « à renseigner ».
+    const origins = existing && !firstCreation ? nextProfileOrigins(existing, data, readProfileOrigins(existing.profileOrigins)) : null;
     const saved = await tx.company.upsert({
       where: { ownerEmail },
       create: { ownerEmail, ...data },
-      update: data,
+      update: { ...data, ...(origins ? { profileOrigins: origins } : {}) },
     });
     if (existing && !firstCreation && profileChanges(existing, data)) await markProfileChanged(tx, saved.id);
     return { company: saved, isFirstCreation: firstCreation };

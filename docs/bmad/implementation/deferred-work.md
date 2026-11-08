@@ -185,3 +185,13 @@
 - source_spec: `docs/bmad/implementation/spec-gh-281-corriger-ce-que-paul-a-compris.md`
   summary: Cumuler le coût de toutes les analyses d'un même brouillon (chaque relance de la découverte remet le coût à 0) avant de le reprendre au compte.
   evidence: `newAnalysis` crée un coût nul à chaque relance ; seule la dernière analyse devient un `UsageEvent` à l'inscription. À traiter avec le cumul des coûts anonymes de #311.
+
+- source_spec: none
+  summary: Chiffrage facultatif de #169 (CA actuel, valeur moyenne d'un client) pour le calcul de l'écart (D8, FR-52).
+  evidence: Séparé de #169 par Samir le 2026-11-08 (périmètre « A seul ») ; livrable indépendant de la correction du profil.
+- source_spec: none
+  summary: Critères d'octobre de #169 sur les constats (« Corriger cette information » rattaché au constat, niveaux de certitude, trace de la correction, missions à réexaminer), à reprendre avec #292.
+  evidence: Séparé de #169 par Samir le 2026-11-08 (périmètre « A seul ») ; #292 affiche les niveaux de certitude de ces constats.
+- source_spec: `docs/bmad/implementation/spec-gh-169-corriger-mon-profil.md`
+  summary: Relier « Prénom » (firstName) et « Votre prénom et nom » (ownerName, signature des e-mails) sur Entreprise, ou expliquer leur différence.
+  evidence: Relecture #169 : corriger le prénom ne change pas la signature, et les deux champs se côtoient sans explication.

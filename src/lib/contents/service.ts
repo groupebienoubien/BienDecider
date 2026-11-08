@@ -8,12 +8,15 @@ import { scopeSummary } from "@/lib/missions/scope";
 import type { MissionStatus } from "@/lib/missions/rules";
 import type { TemplateKey } from "@/lib/missions/templates";
 import {
-  CONTENT_FORMATS, checkNewVersion, checkRejection, checkValidation, contentFormat, isReadOnly, parseVariant, validateDraft, validateRejection, variantLabel,
+  CONTENT_FORMATS, PROFILE_REVIEW_NOTE, checkNewVersion, profileReviewPending, checkRejection, checkValidation, contentFormat, isReadOnly, parseVariant, validateDraft, validateRejection, variantLabel,
   type ContentFormat, type ContentSnapshot, type Refusal, type VariantRequest,
 } from "@/lib/contents/rules";
 import { anthropicDraftWriter, type DraftRequest, type DraftWriter } from "@/lib/contents/writer";
 import { agencyNames } from "@/lib/agencies/service";
 import { cancelScheduledPublications } from "@/lib/contents/publish";
+
+/** Note de la version système d'une correction du profil (§4.5) ; définie avec les règles pures, qui refusent sa validation (M-92). */
+export { PROFILE_REVIEW_NOTE };
 
 export class ContentNotFoundError extends Error {
   constructor() {
@@ -195,7 +198,7 @@ export async function markProfileChanged(tx: Tx, companyId: string): Promise<voi
   for (const content of contents) {
     if (checkNewVersion(snapshotOf(content))) continue;
     const current = await tx.contentVersion.findUniqueOrThrow({ where: { contentId_number: { contentId: content.id, number: content.currentNumber } } });
-    await addVersion(tx, content, { title: current.title, body: current.body, author: "system", note: "Profil corrigé : informations du contenu à vérifier" }, { origine: "à vérifier après correction du profil", actor: "system" });
+    await addVersion(tx, content, { title: current.title, body: current.body, author: "system", note: PROFILE_REVIEW_NOTE }, { origine: "à vérifier après correction du profil", actor: "system" });
   }
   await writeJournal(tx, { companyId, code: "J-02", params: {} });
 }
@@ -263,7 +266,8 @@ export async function applyContentAction(companyId: string, contentId: string, r
         return done();
       }
       case "validate": {
-        const refusal = checkValidation(snapshot, current, { number: request.number, reviewed: request.input.reviewed === true });
+        const versions = await tx.contentVersion.findMany({ where: { contentId }, select: { number: true, author: true, note: true } });
+        const refusal = checkValidation(snapshot, current, { number: request.number, reviewed: request.input.reviewed === true, profileToReview: profileReviewPending(versions) });
         if (refusal) refuse(refusal);
         const written = await tx.missionContent.updateMany({ where: { id: content.id, version: content.version }, data: { validatedNumber: current.number, validatedAt: new Date(), version: { increment: 1 } } });
         if (written.count === 0) throw new MissionError("M-02");

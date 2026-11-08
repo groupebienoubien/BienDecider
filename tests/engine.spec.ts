@@ -4239,6 +4239,99 @@ test("GH-41: a profile correction that fails writes nothing: the schedule, the v
   expect(await prisma.journalEntry.count({ where: { companyId: company.id, code: { in: ["J-02", "J-19", "J-23"] } } })).toBe(0);
 });
 
+test("GH-169: correcting the profile from Entreprise keeps each field's origin, puts contents to review with M-92 until a new version, and refuses an invalid field", async ({ company, request }) => {
+  if (!process.env.SESSION_SECRET) throw new Error("SESSION_SECRET is required for engine tests.");
+  const { prisma } = await import("../src/lib/prisma");
+  const { applyContentAction } = await import("../src/lib/contents/service");
+  const { loadProfileToReview } = await import("../src/lib/contents/view");
+  const baseURL = process.env.UX_TEST_BASE_URL ?? "http://localhost:3000";
+  const headers = { Cookie: `pepito_session=${createSessionToken(company.ownerEmail, company.sessionVersion, process.env.SESSION_SECRET)}`, Origin: baseURL };
+  const profile = { firstName: "Claire", name: "Atelier Lumen", location: "Lyon 7e", trade: "Électricien", servingArea: "Lyon", targetClients: "Syndics de copropriété", offers: "Mise aux normes" };
+  const origins = { firstName: "declared", name: "declared", location: "declared", trade: "observed", servingArea: "hypothesis", targetClients: "hypothesis", offers: "observed" };
+  await prisma.company.update({ where: { id: company.id }, data: { ...profile, profileOrigins: origins } });
+  const mission = await prisma.mission.create({ data: { companyId: company.id, template: "site_page", channel: "site", title: "Nos tarifs", outcome: "Des demandes", originalOutcome: "Des demandes", finding: "Un constat", scope: { page: "Nos tarifs" }, status: "active", firstLaunchedAt: new Date(), position: 1 } });
+  const content = await prisma.missionContent.create({ data: { companyId: company.id, missionId: mission.id, channel: "site", format: "site_page", currentNumber: 1, validatedNumber: 1, validatedAt: new Date(), versions: { create: { number: 1, title: "Nos tarifs", body: "Sur devis.", author: "paul" } } } });
+  await prisma.publication.create({ data: { companyId: company.id, missionId: mission.id, contentId: content.id, versionNumber: 1, title: "Nos tarifs", channel: "site", channelLabel: "Votre site vitrine", mode: "confirmed", status: "scheduled", scheduledAt: new Date(Date.now() + 86_400_000), timezone: "Europe/Paris", idempotencyKey: `${content.id}:v1:1` } });
+  const j02 = () => prisma.journalEntry.count({ where: { companyId: company.id, code: "J-02" } });
+  const saved = () => prisma.company.findUniqueOrThrow({ where: { id: company.id } });
+  const post = (data: Record<string, unknown>) => request.post(`${baseURL}/api/companies`, { headers, data: { ...profile, ...data } });
+
+  // Rien de changé : aucune version, aucun J-02, origines inchangées.
+  expect((await post({})).status()).toBe(201);
+  expect(await j02()).toBe(0);
+  expect((await saved()).profileOrigins).toEqual(origins);
+  expect(await prisma.missionContent.findUniqueOrThrow({ where: { id: content.id } })).toMatchObject({ currentNumber: 1, validatedNumber: 1 });
+
+  // Champ invalide (balise, longueur) : refusé avec le message du champ, rien n'est écrit.
+  const markup = await post({ offers: "<b>Bornes</b>" });
+  expect(markup.status()).toBe(400);
+  expect(await markup.json()).toEqual({ error: "Retirez les signes < et > de ce champ.", field: "offers" });
+  const tooLong = await post({ firstName: "a".repeat(41) });
+  expect(tooLong.status()).toBe(400);
+  expect(await tooLong.json()).toEqual({ error: "Le prénom doit être compris entre 1 et 40 caractères.", field: "firstName" });
+  expect((await post({ location: 42 })).status()).toBe(400);
+  // Les bornes valent aussi pour l'entreprise, l'activité et la zone, quand elles changent.
+  const badName = await post({ name: "<b>X</b>" });
+  expect(badName.status()).toBe(400);
+  expect(await badName.json()).toEqual({ error: "Retirez les signes < et > de ce champ.", field: "name" });
+  expect(await (await post({ trade: "a".repeat(101) })).json()).toMatchObject({ field: "trade" });
+  expect((await post({ servingArea: "a".repeat(101) })).status()).toBe(400);
+  expect(await saved()).toMatchObject({ ...profile, profileOrigins: origins });
+  expect(await j02()).toBe(0);
+
+  // Compte ancien : une zone de 150 caractères déjà en base ne bloque pas l'onglet « Objectifs » ; la changer pour 101 caractères est refusé.
+  const legacyArea = "z".repeat(150);
+  await prisma.company.update({ where: { id: company.id }, data: { servingArea: legacyArea, location: "" } });
+  // (Un chiffre modifié est lui aussi une correction, J-02 : l'enregistrement est renvoyé ici sans changement.)
+  const objectives = await request.post(`${baseURL}/api/companies`, { headers, data: { name: profile.name, trade: profile.trade, servingArea: legacyArea, monthlyRevenue: null } });
+  expect(objectives.status()).toBe(201);
+  expect(await saved()).toMatchObject({ servingArea: legacyArea });
+  const changedArea = await post({ servingArea: "a".repeat(101) });
+  expect(changedArea.status()).toBe(400);
+  expect(await changedArea.json()).toMatchObject({ field: "servingArea" });
+  // Vide en base ("") et vide envoyé : inchangé, aucune correction.
+  const before = await j02();
+  expect((await post({ servingArea: legacyArea, location: "" })).status()).toBe(201);
+  expect(await j02()).toBe(before);
+  expect(await saved()).toMatchObject({ location: "", profileOrigins: origins });
+  await prisma.company.update({ where: { id: company.id }, data: { servingArea: profile.servingArea, location: profile.location } });
+  expect(await j02()).toBe(0);
+
+  // Correction réelle des offres : programmation annulée, version système, J-02, « offres » déclaré par vous.
+  expect((await post({ offers: "  Bornes de recharge " })).status()).toBe(201);
+  expect(await j02()).toBe(1);
+  expect(await saved()).toMatchObject({ offers: "Bornes de recharge", profileOrigins: { ...origins, offers: "declared" } });
+  expect(await prisma.publication.findFirstOrThrow({ where: { contentId: content.id } })).toMatchObject({ status: "cancelled", cancelReason: "profil corrigé" });
+  expect(await prisma.missionContent.findUniqueOrThrow({ where: { id: content.id } })).toMatchObject({ currentNumber: 2, validatedNumber: null });
+  expect(await loadProfileToReview(company.id, content.id)).toBe(true);
+  expect(await prisma.publication.count({ where: { contentId: content.id, status: "sent" } })).toBe(0);
+
+  // Validation refusée (M-92) tant que la version courante est la version système du profil.
+  await expect(applyContentAction(company.id, content.id, { action: "validate", number: 2, input: { reviewed: true } })).rejects.toMatchObject({ code: "M-92", status: 422 });
+  expect(await prisma.missionContent.findUniqueOrThrow({ where: { id: content.id } })).toMatchObject({ validatedNumber: null });
+
+  // Le dirigeant enregistre une retouche : le blocage est levé, la validation redevient possible.
+  await applyContentAction(company.id, content.id, { action: "save", number: 2, input: { title: "Nos tarifs", body: "Sur devis, bornes comprises." } });
+  expect(await loadProfileToReview(company.id, content.id)).toBe(false);
+  await applyContentAction(company.id, content.id, { action: "validate", number: 3, input: { reviewed: true } });
+  expect(await prisma.missionContent.findUniqueOrThrow({ where: { id: content.id } })).toMatchObject({ currentNumber: 3, validatedNumber: 3 });
+
+  // Prénom, localisation et clients corrigés ; clients vidé : accepté, à renseigner.
+  expect((await post({ offers: "Bornes de recharge", firstName: "Claire-Marie", location: "Villeurbanne", targetClients: "" })).status()).toBe(201);
+  expect(await j02()).toBe(2);
+  expect(await saved()).toMatchObject({
+    firstName: "Claire-Marie", location: "Villeurbanne", targetClients: null,
+    profileOrigins: { ...origins, offers: "declared", firstName: "declared", location: "declared", targetClients: "missing" },
+  });
+
+  // Compte d'avant #169 : aucune origine écrite, même comportement sinon.
+  const { Prisma } = await import("@prisma/client");
+  await prisma.company.update({ where: { id: company.id }, data: { profileOrigins: Prisma.DbNull } });
+  expect((await post({ offers: "Tableaux électriques", firstName: "Claire-Marie", location: "Villeurbanne", targetClients: "" })).status()).toBe(201);
+  expect(await j02()).toBe(3);
+  expect(await saved()).toMatchObject({ offers: "Tableaux électriques", profileOrigins: null });
+});
+
 test("GH-41: connecting the Google business listing writes one J-07 in the same transaction, with or without a refresh token", async ({ company }) => {
   const { prisma } = await import("../src/lib/prisma");
   const { renderJournal } = await import("../src/lib/journal");

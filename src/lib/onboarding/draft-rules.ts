@@ -146,6 +146,17 @@ function lengthMessage(field: keyof DraftProfile, max: number): string {
   return `${FIELD_NAMES[field]} doit être compris entre 1 et ${max} caractères.`;
 }
 
+/**
+ * Écart d'une valeur rognée aux règles des étapes 1 et 2 (balise, longueur), repris par « Corriger mon profil » (#169) :
+ * le message du champ, ou null si elle est acceptable (vide comprise : l'obligation se vérifie à part).
+ */
+export function profileFieldIssue(field: keyof DraftProfile, value: string): string | null {
+  if (!value) return null;
+  if (hasMarkup(value)) return MARKUP_MESSAGE;
+  if (value.length > LIMITS[field]) return lengthMessage(field, LIMITS[field]);
+  return null;
+}
+
 /** Site facultatif : vide, ou une adresse http(s) lisible. */
 export function isValidWebsite(value: string): boolean {
   if (value === "") return true;
