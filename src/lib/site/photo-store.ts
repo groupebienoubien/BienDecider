@@ -90,6 +90,16 @@ export async function removeSitePhoto(companyId: string, id: string): Promise<vo
  */
 export async function deleteCompanySitePhotoFiles(companyId: string): Promise<void> {
   const photos = await prisma.sitePhoto.findMany({ where: { companyId }, select: { url: true, pathname: true } });
+  // Photos importées dans les visuels (#291) : mêmes règles, un fichier par adresse.
+  const versions = await prisma.contentVersion.findMany({ where: { content: { companyId }, photo: { not: Prisma.DbNull } }, select: { photo: true } });
+  const seen = new Set(photos.map((photo) => photo.url));
+  for (const { photo } of versions) {
+    const record = photo !== null && typeof photo === "object" && !Array.isArray(photo) ? photo : {};
+    if (typeof record.url === "string" && typeof record.pathname === "string" && !seen.has(record.url)) {
+      seen.add(record.url);
+      photos.push({ url: record.url, pathname: record.pathname });
+    }
+  }
   if (photos.length === 0) return;
   if (!sitePhotoStorage.isConfigured()) {
     console.error("Fichiers de photos du site non supprimés : stockage non configuré.", photos.map((photo) => photo.pathname));

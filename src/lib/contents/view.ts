@@ -13,6 +13,7 @@ import { DELEGATION_LABELS, asDelegationLevel, type DelegationLevel } from "@/li
 import { SENDING_STALE_MS, formatMoment, readDestination } from "@/lib/contents/publish";
 import { checkDiffusion } from "@/lib/contents/rules";
 import { scopeAgencies } from "@/lib/agencies/service";
+import { readVisualPhoto } from "@/lib/brand/photo";
 import { isBrandComposition, type BrandComposition } from "@/lib/brand/rules";
 
 export type AtelierItem = { contentId: string; missionId: string; label: string };
@@ -65,7 +66,7 @@ export type ContentDetail = {
   /** E-mail : les destinataires du périmètre, un envoi chacun. */
   recipients: { name: string; email: string }[];
   /** Visuel (#290) : composition choisie (null = aucun), et marque encore à confirmer, ce qui refuse la validation (M-93). */
-  visual: { composition: BrandComposition | null; brandToConfirm: boolean };
+  visual: { composition: BrandComposition | null; brandToConfirm: boolean; photo: { alt: string } | null; rightsConfirmed: boolean };
 };
 
 export type PublicationView = { status: string; mode: string; channelLabel: string; sentAt: string | null; url: string | null; failureReason: string | null; scheduledLabel: string | null; recipients: { name: string; status: string; failureReason: string | null }[] };
@@ -103,6 +104,7 @@ export async function loadContentDetail(companyId: string, contentId: string): P
   const newest = content.publications.find((publication) => publication.versionNumber === content.currentNumber) ?? null;
   const sentVersions = new Set(content.publications.filter((publication) => publication.status === "sent").map((publication) => publication.versionNumber));
   const now = Date.now();
+  const currentPhoto = readVisualPhoto(content.versions[0]?.photo, companyId);
   return {
     id: content.id,
     mission: { id: mission.id, title: mission.title, status: mission.status, outcome: mission.outcome, channel: snapshot.channel, channelLabel: snapshot.channel ? channelLabel(snapshot.channel) : "Hors canal", scopeSummary: mission.scopeSummary },
@@ -142,7 +144,7 @@ export async function loadContentDetail(companyId: string, contentId: string): P
     publication: latest && { status: latest.status, mode: latest.mode, channelLabel: latest.channelLabel, sentAt: latest.sentAt?.toISOString() ?? null, url: latest.url, failureReason: latest.failureReason, scheduledLabel: latest.scheduledAt ? formatMoment(latest.scheduledAt, latest.timezone ?? "Europe/Paris") : null, recipients: latest.recipients.map((recipient) => ({ name: recipient.name, status: recipient.status, failureReason: recipient.failureReason })) },
     resolvable: latest !== null && (latest.status === "uncertain" || (latest.status === "sending" && now - latest.createdAt.getTime() > SENDING_STALE_MS)),
     systemCancel: newest?.status === "cancelled" && newest.cancelledBy === "system" ? newest.cancelReason : null,
-    visual: { composition: isBrandComposition(content.visualComposition) ? content.visualComposition : null, brandToConfirm: content.company.brandConfirmedAt === null },
+    visual: { composition: isBrandComposition(content.visualComposition) ? content.visualComposition : null, brandToConfirm: content.company.brandConfirmedAt === null, photo: currentPhoto && { alt: currentPhoto.alt }, rightsConfirmed: content.versions[0]?.rightsConfirmedAt != null },
     recipients: content.mission.template === "agencies" ? (await scopeAgencies(companyId, content.mission.scope)).map((agency) => ({ name: agency.name, email: agency.email })) : [],
   };
 }
