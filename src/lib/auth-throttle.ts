@@ -1,6 +1,7 @@
 import { createHmac } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { ANALYSIS_PER_IP_DAILY_LIMIT } from "@/lib/onboarding/analysis-rules";
 
 export type ThrottleScope = "login" | "signup" | "token" | "reset" | "draft" | "analysis" | "ambition" | "synthesis";
 
@@ -33,7 +34,7 @@ const POLICY: Record<ThrottleScope, { limit: number; windowSeconds: number }> = 
   // Brouillons anonymes du parcours d'entrée (#279) : chacun garde des saisies 24 h ; la limite borne le stockage.
   draft: { limit: 20, windowSeconds: 24 * 60 * 60 },
   // Analyses publiques avant compte (#280, décision D2) : chacune lit un site et appelle le modèle une fois.
-  analysis: { limit: 3, windowSeconds: 24 * 60 * 60 },
+  analysis: { limit: ANALYSIS_PER_IP_DAILY_LIMIT, windowSeconds: 24 * 60 * 60 },
   // Interprétations de l'ambition par le modèle avant compte (#282) : au-delà, l'analyseur de secours prend le relais.
   ambition: { limit: 10, windowSeconds: 24 * 60 * 60 },
   // « Ce que nous retenons » rédigé par le modèle avant compte (#284) : au-delà, les règles prennent le relais.

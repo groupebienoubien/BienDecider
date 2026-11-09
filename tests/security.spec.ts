@@ -1829,7 +1829,8 @@ test("GH-280: the public analysis refuses internal sites, a second launch and a 
     expect(Number(limited.headers()["retry-after"])).toBeGreaterThan(0);
     const limitedBody = await limited.json();
     expect(limitedBody).toMatchObject({ code: "limited", analysis: { status: "limited", finished: true } });
-    expect(limitedBody.error).toContain("revenez plus tard");
+    expect(limitedBody.error).toContain("depuis cette connexion (3 lectures par jour) : ce n'est pas une panne");
+    expect(limitedBody.analysis.rubrics[0].label).toBe("Non disponible (limite du jour atteinte)");
     expect((await post(fourth, { action: "see_findings" })).status()).toBe(200);
     expect((await draftOf(fourth)).step).toBe(2);
     expect(await prisma.company.count()).toBe(companiesBefore);

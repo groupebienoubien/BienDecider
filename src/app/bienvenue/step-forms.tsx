@@ -77,7 +77,9 @@ function RubricList({ analysis }: { analysis: AnalysisView }) {
           </li>
         ))}
       </ul>
-      {analysis.notice && <p role="status" className="text-sm text-[var(--bd-ink)]">{analysis.notice}</p>}
+      {analysis.notice && (
+        <p role="status" className={analysis.status === "limited" ? "rounded-md border border-[var(--bd-line-strong)] bg-[var(--bd-attention-light)] p-3 text-sm font-semibold text-[var(--bd-ink)]" : "text-sm text-[var(--bd-ink)]"}>{analysis.notice}</p>
+      )}
     </section>
   );
 }
