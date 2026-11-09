@@ -11,6 +11,7 @@ import { SIGNUP_CLOSED_MESSAGE, SIGNUP_FULL_MESSAGE, secondsUntilNextSignupDay, 
 import { ADDRESS_UNAVAILABLE_MESSAGE, ONBOARDING_MESSAGES, RECOVER_ACCOUNT_HREF, checkDraftForAccount, confirmedOrigin, isValidEmail, starterPlan, stepHref, synthesisUsage } from "@/lib/onboarding/draft-rules";
 import { cleanOwnerName, type ProfileOrigins } from "@/lib/company-profile";
 import { clearDraftCookie, loadDraft } from "@/lib/onboarding/draft";
+import { recordSignupTrace } from "@/lib/onboarding/visit-trace";
 import { brandProposalFromAnalysis } from "@/lib/brand/rules";
 import { analysisUsage, firstFindingRecords } from "@/lib/onboarding/analysis-rules";
 import { createMissionIn } from "@/lib/missions/service";
@@ -35,7 +36,8 @@ function isUniqueViolation(error: unknown): boolean {
 
 /**
  * Étape 5 du parcours d'entrée (#279) : le compte est créé en dernier, à partir du brouillon arrivé à l'étape 5
- * avec le diagnostic prêt. Une transaction crée l'entreprise, ses trois missions « À décider » et J-04, puis efface le brouillon.
+ * avec le diagnostic prêt. Une transaction crée l'entreprise, ses trois missions « À décider » et J-04, écrit la trace anonyme
+ * de la visite (#311, sans lien vers le compte), puis efface le brouillon.
  */
 export async function POST(request: NextRequest) {
   // Une session ouverte ne crée jamais un second compte ni ne bascule de session.
@@ -135,12 +137,15 @@ export async function POST(request: NextRequest) {
       await writeJournal(tx, { companyId: created.id, code: "J-04", params: {}, actor: "owner" });
       // Les missions de l'étape 4, dans le même ordre, « À décider » ; la première devient la priorité, sans J-08 ni lancement (#284).
       let priorityMissionId: string | null = null;
-      for (const starter of starterPlan(draft.state).missions) {
+      const starters = starterPlan(draft.state).missions;
+      for (const starter of starters) {
         const { template, channel, title, outcome, finding, scope, stopRuleDays, deduction, responsibleAgent, risk } = starter;
         const mission = await createMissionIn(tx, created.id, { template, channel, title, outcome, finding, scope, stopRuleDays }, "paul", undefined, { deduction, responsibleAgent, risk });
         priorityMissionId ??= mission.id;
       }
       if (priorityMissionId) await tx.company.update({ where: { id: created.id }, data: { priorityMissionId } });
+      // Trace anonyme de la visite (#311) : écrite par la transaction qui efface le brouillon, sans aucune clé vers l'entreprise.
+      await recordSignupTrace(tx, draft, starters.map((starter) => starter.template));
       return created;
     }, { maxWait: 5000, timeout: 20000 });
   } catch (error) {

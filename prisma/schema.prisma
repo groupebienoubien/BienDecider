@@ -819,6 +819,7 @@ model OnboardingDraft {
   id                String   @id @default(cuid())
   tokenHash         String   @unique
   step              Int      @default(1) // étape courante, 1 à 5
+  furthestStep      Int      @default(1) // étape la plus avancée atteinte (#311) : un retour en arrière ne la baisse pas ; reprise dans la trace de la visite
   profile           Json // prénom, entreprise, localisation, site, activité, zone, clients, offres
   ambition          Json? // { text, terms } (#282)
   profileConfirmed  Boolean  @default(false)
@@ -828,4 +829,23 @@ model OnboardingDraft {
   expiresAt         DateTime
 
   @@index([expiresAt])
+}
+
+/// Trace anonyme d'une visite du parcours d'entrée (#311, FR-60, addendum §4.12) : écrite à l'inscription ou à la purge du brouillon expiré, juste avant son effacement.
+/// Aucune clé vers un brouillon, une entreprise ou un utilisateur ; ni IP, ni jeton, ni texte libre, ni heure (identifiant aléatoire, dates sans heure). Effacée après 25 mois.
+model VisitTrace {
+  id                String   @id @default(uuid())
+  startedOn         DateTime @db.Date // jour de début du brouillon (heure de Paris) ; la conservation de 25 mois court à partir de ce jour
+  lastStep          Int // étape la plus avancée atteinte, 1 à 5
+  abandonedStep     Int? // étape où le visiteur s'est arrêté sans créer de compte ; null si le compte est créé
+  trade             String? // activité du catalogue, ou « Autre activité » ; null si l'étape 2 n'est pas confirmée
+  department        String? // code du département tiré de la localisation (69, 2A, 974) ; jamais la commune ; null si indéterminé
+  hasWebsite        Boolean
+  sourcesRead       Json     @default("{}") // état de chaque rubrique de l'analyse publique : site, google, zone, identity
+  ambition          Json? // éléments interprétés : gain, horizon, budget média, recrutement ; null sans ambition confirmée
+  proposedTemplates String[] @default([]) // modèles des missions proposées à l'étape 4
+  accountCreated    Boolean
+  analysisCostUsd   Float    @default(0) // coût du modèle avant compte (analyse et « Ce que nous retenons »), arrondi au cent
+
+  @@index([startedOn])
 }

@@ -1,4 +1,5 @@
 import { AppShell } from "@/components/app-shell";
+import { VISIT_TRACE_NOTICE, VISIT_TRACE_RETENTION_MONTHS } from "@/lib/onboarding/visit-trace-rules";
 
 export default function ConfidentialitePage() {
   return (
@@ -122,6 +123,28 @@ export default function ConfidentialitePage() {
         </ul>
         <p className="mt-1">Vos données ne sont pas vendues à des tiers.</p>
 
+        <h2 id="trace-visites" className="mt-6 scroll-mt-4 font-medium text-slate-900">Trace anonyme des visites</h2>
+        <p className="mt-1">
+          {VISIT_TRACE_NOTICE} Quand vous créez votre compte, ou quand vos réponses du parcours d&apos;entrée sont
+          effacées après 24 heures, une trace de votre visite est écrite. Elle sert à savoir jusqu&apos;où vont les visiteurs
+          et ce qu&apos;ils cherchent, pour améliorer le parcours.
+        </p>
+        <ul className="mt-1 list-disc pl-5">
+          <li>
+            Nous gardons : le jour de début de la visite, l&apos;étape la plus avancée et celle où la visite s&apos;est arrêtée,
+            votre activité (choisie dans notre liste, sinon « Autre activité »), le département de votre localisation,
+            si vous avez indiqué un site ou non, les rubriques que Paul a pu lire, les éléments retenus de votre ambition
+            (gain, horizon, budget média, recrutement), les modèles des missions proposées, si un compte a été créé,
+            et le coût de l&apos;analyse.
+          </li>
+          <li>
+            Nous ne gardons jamais dans cette trace : votre prénom, le nom de votre entreprise, l&apos;adresse de votre site,
+            votre commune, le texte de votre ambition, votre adresse e-mail, votre adresse IP, ni aucun lien vers votre compte.
+          </li>
+          <li>Elle est conservée {VISIT_TRACE_RETENTION_MONTHS} mois, puis effacée automatiquement.</li>
+          <li>Seuls les administrateurs de BienDecider la consultent, et seulement en chiffres regroupés.</li>
+        </ul>
+
         <h2 className="mt-6 font-medium text-slate-900">Durée de conservation</h2>
         <p className="mt-1">
           [À confirmer avec un juriste/DPO] — en phase pilote, vos données sont conservées tant
@@ -143,7 +166,7 @@ export default function ConfidentialitePage() {
           du compte, un cookie technique relie votre navigateur à vos réponses (prénom, entreprise,
           localisation, site, activité, zone, clients, offres, ambition) : elles sont gardées au plus
           24 heures, reprises dans votre compte à sa création puis effacées, ou sinon ignorées puis
-          effacées. Aucun cookie publicitaire ou de traçage tiers
+          effacées ; seule reste la <a href="#trace-visites" className="underline">trace anonyme de la visite</a>. Aucun cookie publicitaire ou de traçage tiers
           n&apos;est ajouté par BienDecider.
         </p>
       </div>
