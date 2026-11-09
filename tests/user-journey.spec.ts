@@ -1701,7 +1701,7 @@ test("guided onboarding starts with three fields and keeps the full company page
     expect(saved.phone).toBeNull();
     await page.getByRole("link", { name: "Mon entreprise", exact: true }).first().click();
     await expect(page).toHaveURL(`${baseURL}/entreprise`);
-    await expect(page.getByRole("heading", { name: "Le contexte commun à votre équipe.", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Une entreprise bien comprise.", exact: true })).toBeVisible();
     await expect(page.getByPlaceholder("Nom commercial")).toHaveValue("Atelier Minimal");
     await expect(page.getByPlaceholder("Téléphone affiché aux clients (optionnel)")).toBeVisible();
     await page.getByPlaceholder("Téléphone affiché aux clients (optionnel)").fill("0102030405");
@@ -3186,6 +3186,89 @@ test("GH-169: the origins from the analysis, kept unchanged at step 2, are store
     await expect(page.locator('[data-origin="offers"]')).toHaveText("Origine : Lu sur le site");
     await expect(page.locator('[data-origin="trade"]')).toHaveText("Origine : Proposé par Paul, confirmé par vous");
     await expect(page.locator('[data-origin="targetClients"]')).toHaveText("Origine : Déclaré par vous");
+    expect(await noHorizontalScroll(page)).toBe(true);
+  } finally {
+    await prisma.onboardingDraft.deleteMany({ where: { id: draft.id } });
+    await prisma.company.deleteMany({ where: { ownerEmail: email } });
+    await prisma.$disconnect();
+  }
+});
+
+function analysisWithConstats(website: string, readAt: string) {
+  return {
+    runId: "run-constats", status: "done", startedAt: readAt, finishedAt: readAt,
+    input: { companyName: "Atelier Lumen", location: "Lyon", website },
+    rubrics: { site: { status: "read" }, google: { status: "not_found" }, zone: { status: "read" }, identity: { status: "read" } },
+    findings: { trade: null, servingArea: null, targetClients: null, offers: null, tone: null, contacts: [], palette: null, logo: null, google: null, pages: [{ url: `${website}/`, readAt }] },
+    cost: { usd: 0, inputTokens: 0, outputTokens: 0 },
+    constats: [
+      { topic: "site_web", fact: "Votre site ne montre aucune réalisation.", consequence: "Vos clients ne voient pas ce que vous savez faire.", certainty: "observe", source: `${website}/`, readAt },
+      { topic: "site_web", fact: "Vous semblez viser surtout les particuliers.", consequence: "Les syndics ne se sentent pas concernés.", certainty: "piste", source: null, readAt: null },
+    ],
+  };
+}
+
+test("GH-292: step 2 shows the first findings with their certainty, consequence, source and date; a hint never shows a source", async ({ page }) => {
+  const prisma = journeyDatabase();
+  const website = "https://atelier-lumen.test";
+  const draft = await createTestDraft(prisma, { step: 2, profile: { website, trade: "", servingArea: "", targetClients: "", offers: "" } });
+  try {
+    await prisma.onboardingDraft.update({ where: { id: draft.id }, data: { profileConfirmed: false, analysis: analysisWithConstats(website, "2026-11-07T10:00:00.000Z") } });
+    await page.context().addCookies([{ name: "pepito_draft", value: draft.token, url: baseURL }]);
+    await page.setViewportSize({ width: 360, height: 800 });
+    await page.goto(`${baseURL}/bienvenue`);
+    const constats = page.getByRole("region", { name: "Vos premiers constats" });
+    await expect(constats.getByRole("listitem")).toHaveCount(2);
+    const observed = constats.getByRole("listitem").filter({ hasText: "aucune réalisation" });
+    await expect(observed).toContainText("Observé");
+    await expect(observed).toContainText("Conséquence possible : Vos clients ne voient pas ce que vous savez faire.");
+    await expect(observed).toContainText("Lu sur atelier-lumen.test le 7 novembre 2026");
+    await expect(observed.getByRole("link", { name: "atelier-lumen.test" })).toHaveAttribute("href", `${website}/`);
+    const hint = constats.getByRole("listitem").filter({ hasText: "particuliers" });
+    await expect(hint).toContainText("Piste à qualifier");
+    await expect(hint).toContainText("Déduction de Paul, sans source directe");
+    await expect(hint.getByRole("link")).toHaveCount(0);
+    expect(await noHorizontalScroll(page)).toBe(true);
+  } finally {
+    await prisma.onboardingDraft.deleteMany({ where: { id: draft.id } });
+    await prisma.$disconnect();
+  }
+});
+
+test("GH-292: at signup the first findings become the starting diagnostic, read on Entreprise as findings leading to decisions", async ({ page }) => {
+  const prisma = journeyDatabase();
+  const website = "https://atelier-lumen.test";
+  const email = `ux-constats-${randomUUID()}@example.invalid`;
+  const draft = await createTestDraft(prisma, { profile: { website, trade: "Électricien", servingArea: "Lyon", targetClients: "Particuliers", offers: "Rénovation électrique" } });
+  try {
+    await prisma.onboardingDraft.update({ where: { id: draft.id }, data: { analysis: analysisWithConstats(website, "2026-11-07T10:00:00.000Z") } });
+    await page.context().addCookies([{ name: "pepito_draft", value: draft.token, url: baseURL }]);
+    const password = "mot-de-passe-valide";
+    const signup = await page.request.post(`${baseURL}/api/auth/signup`, { headers: { Origin: baseURL, ...testIpHeader() }, data: { email, password, passwordConfirmation: password } });
+    expect(signup.status()).toBe(201);
+    const company = await prisma.company.findUniqueOrThrow({ where: { ownerEmail: email } });
+    const findings = await prisma.auditFinding.findMany({ where: { companyId: company.id }, orderBy: { title: "asc" } });
+    expect(findings.map((finding) => [finding.title, finding.certainty, finding.sourceStatus, finding.sourceUrl, finding.agentRunId])).toEqual([
+      ["Votre site ne montre aucune réalisation.", "observe", "consultée", `${website}/`, null],
+      ["Vous semblez viser surtout les particuliers.", "piste", null, null, null],
+    ]);
+
+    await page.setViewportSize({ width: 360, height: 800 });
+    await page.goto(`${baseURL}/entreprise`);
+    const diagnostic = page.getByRole("region", { name: "Diagnostic & positionnement" });
+    await expect(diagnostic).toContainText("Relevé du");
+    const observed = diagnostic.getByRole("article", { name: "Constat : Votre site ne montre aucune réalisation." });
+    await expect(observed).toContainText("Observé");
+    await expect(observed).toContainText("Site web · atelier-lumen.test");
+    const hint = diagnostic.getByRole("article", { name: "Constat : Vous semblez viser surtout les particuliers." });
+    await expect(hint).toContainText("Piste à qualifier");
+    await expect(hint.getByRole("button", { name: /À discuter avec Paul/ })).toBeVisible();
+    await expect(diagnostic).toContainText("La performance réelle de vos concurrents : non accessible");
+    await observed.getByRole("button", { name: /Voir la source/ }).click();
+    const source = page.getByRole("dialog", { name: "Votre site ne montre aucune réalisation." });
+    await expect(source.getByRole("link", { name: `${website}/` })).toHaveAttribute("href", `${website}/`);
+    await page.keyboard.press("Escape");
+    await expect(source).toBeHidden();
     expect(await noHorizontalScroll(page)).toBe(true);
   } finally {
     await prisma.onboardingDraft.deleteMany({ where: { id: draft.id } });

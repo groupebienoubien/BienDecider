@@ -33,6 +33,7 @@ export default async function StrategiePage() {
   const connected = await prisma.channelConnection.count({ where: { companyId: company.id, status: "connecte" } });
   const step = nextStep(missions, asDelegationLevel(company.delegationLevel), priorityOf(missions));
   const stepMission = missions.find((mission) => mission.id === step.missionId) ?? null;
+  const stepProvenance = stepMission ? missionProvenance(stepMission) : null;
   const toValidate = missions.filter((mission) => (mission.stage === "approve" || mission.stage === "verify" || mission.stage === "scheduled") && mission.contentId);
   const cancelledSchedules = await loadCancelledSchedules(company.id);
   const STAGE_LINE: Partial<Record<string, [string, string]>> = { verify: ["diffusion à vérifier", "Vérifier"], scheduled: ["diffusion programmée", "Voir la programmation"] };
@@ -59,7 +60,7 @@ export default async function StrategiePage() {
         {stepMission && (
           <dl className="decision-reasons">
             <div><dt>Pourquoi maintenant</dt><dd>{stepMission.finding}</dd></div>
-            <div><dt>Preuve utilisée</dt><dd>{stepMission.createdBy === "owner" ? "Déclaré par vous" : "Constat relevé par Paul"}</dd></div>
+            <div><dt>Preuve utilisée</dt><dd>{stepProvenance ? `${stepProvenance.title} · ${stepProvenance.certainty}` : "—"}{stepProvenance?.source && <> <FindingSource source={stepProvenance.source} /></>}</dd></div>
             <div><dt>À vérifier</dt><dd>{stepMission.scopeSummary === "À préciser" ? "Le périmètre de la mission" : "—"}</dd></div>
             <div><dt>Résultat recherché</dt><dd>{stepMission.outcome}</dd></div>
           </dl>

@@ -18,6 +18,8 @@ import { listAgencies } from "@/lib/agencies/service";
 import { loadProfileToReview } from "@/lib/contents/view";
 import { PROFILE_REVIEW_BADGE } from "@/lib/contents/rules";
 import { ScopeEditor } from "./scope-editor";
+import { FindingSource } from "@/app/strategie/finding-source";
+import { missionProvenance } from "@/lib/findings/certainty";
 
 export const dynamic = "force-dynamic";
 
@@ -40,6 +42,7 @@ export default async function MissionPage({ params }: { params: Promise<{ id: st
     ...(mission.template === "custom" ? [{ key: null, label: "Hors canal, diffusion déclarée" }] : []),
   ];
   const tracker = missionTracker(mission.stage);
+  const provenance = missionProvenance(mission);
   const done = (index: number) => tracker?.[index]?.state === "done";
   const contentOpen = mission.status !== "stopped" && mission.status !== "dismissed";
   const profileToReview = mission.contentId ? await loadProfileToReview(company.id, mission.contentId) : false;
@@ -79,7 +82,8 @@ export default async function MissionPage({ params }: { params: Promise<{ id: st
           <section className="section-space" aria-labelledby="why-title">
             <h2 id="why-title">Pourquoi cette mission ?</h2>
             <p>{mission.finding}</p>
-            <p className="small muted">{mission.createdBy === "owner" ? "Déclaré par vous" : "Constat relevé par Paul"} · un test limité d&apos;abord, pour apprendre avant d&apos;élargir.</p>
+            <p className="small muted">{provenance.certainty} · {provenance.origin} · un test limité d&apos;abord, pour apprendre avant d&apos;élargir.</p>
+            {provenance.source && <FindingSource source={provenance.source} />}
           </section>
 
           <section className="section-space" aria-labelledby="scope-title">

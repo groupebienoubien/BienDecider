@@ -24,6 +24,7 @@ export const CERTAINTY_DETAILS: Record<Certainty, string> = {
 
 export const FINDING_CATEGORY_LABELS: Record<string, string> = {
   site_web: "Site web",
+  fiche_google: "Fiche Google",
   reseaux_sociaux: "Réseaux sociaux",
   concurrence: "Concurrence",
 };

@@ -5,42 +5,46 @@ import { redirect } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
 import { CompanyProfileForm } from "@/components/company-profile-form";
 import { AmbitionEditor } from "@/components/ambition-editor";
-import { OpenPaulButton } from "@/components/open-paul-button";
-import { PageHeading } from "@/components/mockup-ui";
-import { PersonaAvatar } from "@/components/persona-avatar";
+import { Icon } from "@/components/icon";
+import { PageHeading, Tag } from "@/components/mockup-ui";
 import { DirectionForm } from "@/components/direction-form";
 import { GooglePlaceLine } from "@/components/google-place";
 import { FacebookPageLine } from "@/components/facebook-page";
 import { placeMapsLink } from "@/lib/google-places";
 import { SitePhotos } from "@/components/site-photos";
-import { PERSONAS, type AgentKey } from "@/lib/agents/personas";
+import { FindingSource } from "@/app/strategie/finding-source";
+import { getAuditFindingsView } from "@/lib/audit-findings";
+import { formatReadDate } from "@/lib/findings/certainty";
+import { decisionRows, diagnosticSummary, missingInputs } from "@/lib/findings/decisions";
 import { facebookConnectionView } from "@/lib/oauth/meta";
 import { prisma } from "@/lib/prisma";
 import { getRetainedFeedback } from "@/lib/retained-feedback";
 import { getSessionCompany } from "@/lib/session";
 import { getShellProps } from "@/lib/shell-data";
 import { listSitePhotos, sitePhotoStorage } from "@/lib/site/photo-store";
+import { AskPaulPositioning, DiscussFinding } from "./diagnostic-actions";
 
 export const dynamic = "force-dynamic";
-
-const TEAM: { key: AgentKey; role: string }[] = [
-  { key: "co_ceo", role: "Coordination" },
-  { key: "marketing", role: "Diagnostic & marketing" },
-  { key: "contenu", role: "Contenus & site" },
-  { key: "demarchage", role: "Prospection" },
-];
 
 export default async function EntreprisePage({ searchParams }: { searchParams: Promise<{ tab?: string }> }) {
   const company = await getSessionCompany();
   if (!company) redirect("/login");
   if (!company.name) redirect("/onboarding");
   const { tab } = await searchParams;
-  const [shell, connections, feedback, sitePhotos] = await Promise.all([
+  const [shell, connections, feedback, sitePhotos, audits] = await Promise.all([
     getShellProps(company),
     prisma.channelConnection.findMany({ where: { companyId: company.id } }),
     getRetainedFeedback(company.id),
     listSitePhotos(company.id),
+    getAuditFindingsView(company.id),
   ]);
+  // Diagnostic courant (#168) : ses constats, et les missions qui en découlent (#292).
+  const linkedMissions = audits.latest.length
+    ? await prisma.mission.findMany({ where: { companyId: company.id, sourceFindingId: { in: audits.latest.map((finding) => finding.id) } }, select: { id: true, title: true, status: true, sourceFindingId: true, deduction: true }, orderBy: { position: "asc" } })
+    : [];
+  const rows = decisionRows(audits.latest, linkedMissions);
+  const summary = diagnosticSummary(rows);
+  const missing = missingInputs(company);
   const facebook = facebookConnectionView(connections.find((connection) => connection.channel === "facebook"), company.id);
   const gmailConnected = connections.some((connection) => connection.channel === "gmail" && connection.status === "connecte");
   const channels = [
@@ -63,8 +67,53 @@ export default async function EntreprisePage({ searchParams }: { searchParams: P
 
   return (
     <AppShell {...shell}>
-      <PageHeading kicker="MON ENTREPRISE" title="Le contexte commun à votre équipe." description="Informations, objectif, agents et connexions." />
-      <div className="settings-grid">
+      <PageHeading kicker={company.name} title="Une entreprise bien comprise." description="Votre diagnostic, votre identité et les règles qui guident les décisions de Paul." />
+      <section aria-labelledby="diagnostic-title" className="section-space">
+        <div className="section-title">
+          <h2 id="diagnostic-title">Diagnostic &amp; positionnement</h2>
+          <p>{audits.latestAt ? `Relevé du ${formatReadDate(audits.latestAt)} : chaque constat dit d'où il vient et à quel point il est sûr.` : "Aucun diagnostic pour le moment : Paul n'a encore rien relevé sur votre entreprise."}</p>
+        </div>
+        <dl className="decision-reasons">
+          <div><dt>Constats</dt><dd>{summary.findings}</dd></div>
+          <div><dt>Sources lues</dt><dd>{summary.sources}</dd></div>
+          <div><dt>Missions qui en découlent</dt><dd>{summary.missions}</dd></div>
+        </dl>
+        <div className="heading-actions">
+          <a className="btn" href="#corriger-mon-profil"><Icon name="pencil" />Corriger mon profil</a>
+          <Link className="btn" href="/strategie">Voir les constats et les missions<Icon name="arrow-right" /></Link>
+          <AskPaulPositioning />
+          <Link className="btn" href="/diagnostic">{audits.latestAt ? "Voir le diagnostic détaillé" : "Lancer le diagnostic"}</Link>
+        </div>
+        {rows.length > 0 && (
+          <>
+            <h3>Des constats aux décisions</h3>
+            <div className="finding-flow" aria-hidden="true">
+              <span>1 · Le constat et sa certitude</span><span>2 · Ce que Paul en déduit</span><span>3 · La suite proposée</span>
+            </div>
+            {rows.map((row) => (
+              <article key={row.finding.id} className="finding-row" aria-label={`Constat : ${row.finding.title}`}>
+                <div>
+                  <p><strong>{row.finding.title}</strong></p>
+                  <p className="small muted">{row.origin} · lu le {formatReadDate(row.finding.createdAt)}</p>
+                  <Tag color={row.tone}>{row.certainty}</Tag>
+                  <FindingSource source={row.finding} />
+                </div>
+                <Icon name="arrow-right" className="finding-arrow" />
+                <div><p>{row.deduction ?? "—"}</p></div>
+                <Icon name="arrow-right" className="finding-arrow" />
+                <div>
+                  {row.missions.length
+                    ? row.missions.map((mission) => <p key={mission.id}><Link href={`/missions/${mission.id}`}>{mission.title}</Link></p>)
+                    : <DiscussFinding id={row.finding.id} title={row.finding.title} />}
+                </div>
+              </article>
+            ))}
+          </>
+        )}
+        <h3>Ce qu&apos;il nous manque</h3>
+        <ul className="feedback-list">{missing.map((item) => <li key={item}>{item}</li>)}</ul>
+      </section>
+      <div className="settings-grid section-space">
         <section className="setting-section">
           <h2>{company.name}</h2>
           <p>{[company.trade, company.servingArea].filter(Boolean).join(" · ")}</p>
@@ -90,13 +139,6 @@ export default async function EntreprisePage({ searchParams }: { searchParams: P
           </section>
           {company.googlePlaceId && <GooglePlaceLine link={placeMapsLink(company.googlePlaceId)} />}
           {company.facebookPageUrl && <FacebookPageLine url={company.facebookPageUrl} />}
-          <h2>Votre équipe</h2>
-          {TEAM.map(({ key, role }) => (
-            <div key={key} className="connection">
-              <span className="team-member"><PersonaAvatar agentKey={key} size={36} /><span><strong style={{ color: `var(--bd-agent-${key})` }}>{PERSONAS[key].name}</strong><small>{role}</small></span></span>
-              {key === "co_ceo" ? <OpenPaulButton>Échanger</OpenPaulButton> : <Link className="btn" href={key === "marketing" ? "/diagnostic" : "/equipe"}>{key === "marketing" ? "Diagnostic" : "Demande"}</Link>}
-            </div>
-          ))}
           <h2>Consigne durable</h2>
           <p>Relue par Paul et les agents à chaque préparation. Pour une question ou un échange, utilisez la conversation avec Paul.</p>
           <DirectionForm initialDirection={company.direction} />
