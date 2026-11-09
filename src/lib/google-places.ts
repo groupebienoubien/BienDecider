@@ -18,7 +18,11 @@ export type PlacesDeps = { fetchImpl?: typeof fetch; apiKey?: string };
 
 export type PlaceIdentity = { id: string; name: string; address: string | null; link: string };
 export type PlaceReview = { rating: number | null; text: string; publishedAgo: string | null };
-export type PlaceDetails = PlaceIdentity & { rating: number | null; ratingCount: number | null; reviews: PlaceReview[] };
+export type PlaceDetails = PlaceIdentity & {
+  rating: number | null; ratingCount: number | null; reviews: PlaceReview[];
+  /** Catégorie principale de la fiche, en français (« Restaurant », « Plombier »). */
+  category: string | null; summary: string | null; website: string | null;
+};
 
 function configuredKey(deps: PlacesDeps = {}): string | null {
   return (deps.apiKey ?? process.env.GOOGLE_PLACES_API_KEY ?? "").trim() || null;
@@ -103,6 +107,9 @@ const placeSchema = z.object({
   googleMapsUri: z.string().optional(),
   rating: z.number().optional(),
   userRatingCount: z.number().int().optional(),
+  primaryTypeDisplayName: localizedText.optional(),
+  editorialSummary: localizedText.optional(),
+  websiteUri: z.string().optional(),
   reviews: z.array(z.object({
     rating: z.number().optional(),
     text: localizedText.optional(),
@@ -134,9 +141,23 @@ export async function readPlaceIdentity(placeId: string, deps: PlacesDeps = {}):
   return result.ok ? { ok: true, value: identityOf(result.value, placeId) } : result;
 }
 
+function shortText(value: string | undefined, max: number): string | null {
+  const text = value?.replace(/\p{Cc}+/gu, " ").trim();
+  return text ? text.slice(0, max) : null;
+}
+
+function httpUrl(value: string | undefined): string | null {
+  try {
+    const url = new URL(value ?? "");
+    return url.protocol === "https:" || url.protocol === "http:" ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Note, volume et avis d'une fiche, lus en direct (jamais conservés). */
 export async function readPlaceDetails(placeId: string, deps: PlacesDeps = {}): Promise<PlacesResult<PlaceDetails>> {
-  const result = await readPlace(placeId, "id,displayName,formattedAddress,googleMapsUri,rating,userRatingCount,reviews", deps);
+  const result = await readPlace(placeId, "id,displayName,formattedAddress,googleMapsUri,rating,userRatingCount,reviews,primaryTypeDisplayName,editorialSummary,websiteUri", deps);
   if (!result.ok) return result;
   const place = result.value;
   const reviews = (place.reviews ?? []).flatMap((review): PlaceReview[] => {
@@ -145,6 +166,9 @@ export async function readPlaceDetails(placeId: string, deps: PlacesDeps = {}): 
   });
   return {
     ok: true,
-    value: { ...identityOf(place, placeId), rating: place.rating ?? null, ratingCount: place.userRatingCount ?? null, reviews },
+    value: {
+      ...identityOf(place, placeId), rating: place.rating ?? null, ratingCount: place.userRatingCount ?? null, reviews,
+      category: shortText(place.primaryTypeDisplayName?.text, 80), summary: shortText(place.editorialSummary?.text, 300), website: httpUrl(place.websiteUri),
+    },
   };
 }

@@ -91,7 +91,7 @@ test("Places client: explicit field masks, key in a header only, malformed ids n
   expect(calls).toHaveLength(3);
   expect(calls[0]).toMatchObject({ method: "POST", fieldMask: "places.id", apiKey: KEY });
   expect(JSON.parse(calls[0].body!)).toEqual({ textQuery: "Atelier Test Paris", languageCode: "fr", regionCode: "FR", pageSize: 3 });
-  expect(calls[1].fieldMask).toBe("id,displayName,formattedAddress,googleMapsUri,rating,userRatingCount,reviews");
+  expect(calls[1].fieldMask).toBe("id,displayName,formattedAddress,googleMapsUri,rating,userRatingCount,reviews,primaryTypeDisplayName,editorialSummary,websiteUri");
   expect(calls[2].fieldMask).toBe("id,displayName,formattedAddress,googleMapsUri");
   expect(calls.every((call) => !call.url.includes(KEY))).toBe(true);
 });

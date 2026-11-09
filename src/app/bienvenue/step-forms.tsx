@@ -15,15 +15,18 @@ const SECONDARY_OUTLINE = "inline-flex min-h-11 items-center justify-center roun
 const LABEL = "text-sm font-semibold text-[var(--bd-ink)]";
 const HINT = "text-sm text-[var(--bd-muted)]";
 
-function TextField({ id, label, hint, value, onChange, errors, max, required = true, type = "text", autoComplete }: {
-  id: keyof DraftProfile; label: string; hint?: string; value: string; onChange: (value: string) => void; errors: FieldErrors; max: number; required?: boolean; type?: string; autoComplete?: string;
+function TextField({ id, label, hint, example, value, onChange, errors, max, required = true, type = "text", autoComplete }: {
+  id: keyof DraftProfile; label: string; hint?: string; example?: string; value: string; onChange: (value: string) => void; errors: FieldErrors; max: number; required?: boolean; type?: string; autoComplete?: string;
 }) {
   const error = errors[id];
-  const describedBy = [hint ? `${id}-hint` : null, error ? `${id}-error` : null].filter(Boolean).join(" ") || undefined;
+  // L'exemple aide à remplir un champ vide ; il s'efface dès la saisie.
+  const shownExample = example && !value.trim() ? example : undefined;
+  const describedBy = [hint ? `${id}-hint` : null, shownExample ? `${id}-example` : null, error ? `${id}-error` : null].filter(Boolean).join(" ") || undefined;
   return (
     <div className="flex flex-col gap-1.5">
       <label htmlFor={id} className={LABEL}>{label}</label>
       {hint && <p id={`${id}-hint`} className={HINT}>{hint}</p>}
+      {shownExample && <p id={`${id}-example`} className={HINT}>{shownExample}</p>}
       <input
         id={id} name={id} type={type} value={value} maxLength={max} required={required} autoComplete={autoComplete}
         aria-invalid={error ? true : undefined} aria-describedby={describedBy}
@@ -36,6 +39,30 @@ function TextField({ id, label, hint, value, onChange, errors, max, required = t
 
 const DISCOVERY_ERROR = "La découverte n'a pas pu être lancée. Réessayez dans un instant.";
 const POLL_MS = 1_200;
+
+const CLIENT_SUGGESTIONS = ["Particuliers", "Familles", "Professionnels", "Entreprises", "Touristes"];
+
+/** Choix rapides ajoutés au champ, séparés par des virgules ; un second clic les retire. */
+function Suggestions({ label, options, value, onChange, max }: { label: string; options: string[]; value: string; onChange: (value: string) => void; max: number }) {
+  const parts = value.split(",").map((part) => part.trim()).filter(Boolean);
+  const chosen = (option: string) => parts.some((part) => part.toLowerCase() === option.toLowerCase());
+  const toggle = (option: string) => {
+    const next = chosen(option) ? parts.filter((part) => part.toLowerCase() !== option.toLowerCase()) : [...parts, option];
+    onChange(next.join(", ").slice(0, max));
+  };
+  return (
+    <div role="group" aria-label={label} className="-mt-2 flex flex-wrap gap-2">
+      {options.map((option) => (
+        <button
+          key={option} type="button" aria-pressed={chosen(option)} onClick={() => toggle(option)}
+          className={`min-h-11 rounded-full border px-4 text-sm font-semibold ${chosen(option) ? "border-[var(--bd-brand)] bg-[var(--bd-brand)] text-white" : "border-[var(--bd-line-strong)] bg-white text-[var(--bd-ink)] hover:bg-[var(--bd-cream-deep)]"}`}
+        >
+          {option}
+        </button>
+      ))}
+    </div>
+  );
+}
 
 /** Les quatre rubriques de l'analyse, annoncées aux lecteurs d'écran à chaque changement. */
 function RubricList({ analysis }: { analysis: AnalysisView }) {
@@ -198,8 +225,9 @@ export function ProfileForm({ prefill }: { prefill: ProfilePrefill }) {
         <FieldError id="trade-error" message={errors.trade} />
       </div>
       <TextField id="servingArea" label="Votre zone d'intervention" hint={origin("servingArea")} value={values.servingArea} onChange={set("servingArea")} errors={errors} max={LIMITS.servingArea} />
-      <TextField id="targetClients" label="Vos clients prioritaires" hint={origin("targetClients") ?? "Par exemple : des particuliers propriétaires de maisons anciennes."} value={values.targetClients} onChange={set("targetClients")} errors={errors} max={LIMITS.targetClients} />
-      <TextField id="offers" label="Vos offres principales" hint={origin("offers") ?? "Par exemple : rénovation de salles de bain, dépannage."} value={values.offers} onChange={set("offers")} errors={errors} max={LIMITS.offers} />
+      <TextField id="targetClients" label="Vos clients" hint={origin("targetClients")} example="Qui vous achète ? Quelques mots suffisent, ou choisissez ci-dessous." value={values.targetClients} onChange={set("targetClients")} errors={errors} max={LIMITS.targetClients} />
+      <Suggestions label="Exemples de clients" options={CLIENT_SUGGESTIONS} value={values.targetClients} onChange={set("targetClients")} max={LIMITS.targetClients} />
+      <TextField id="offers" label="Ce que vous proposez" hint={origin("offers")} example="Vos principaux produits ou services, séparés par des virgules. Par exemple : menu du jour, plats à emporter ; ou : dépannage, rénovation de salle de bain." value={values.offers} onChange={set("offers")} errors={errors} max={LIMITS.offers} />
       <FormError error={error ?? correct.error} errors={errors} />
       <div className="flex flex-wrap items-center gap-3">
         <button type="submit" className={PRIMARY_BUTTON} disabled={pending}>Oui, c&apos;est bien moi</button>

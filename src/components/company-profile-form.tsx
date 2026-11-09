@@ -414,11 +414,11 @@ export function CompanyProfileForm({ guided = false, embedded = false, initialTa
           {originNote("servingArea", servingArea)}
 
           {!guided && <>
-            <label htmlFor="profile-target-clients" className="field">Clients prioritaires (facultatif)</label>
-            <input id="profile-target-clients" placeholder="ex: Syndics de copropriété" maxLength={CORRECTION_LIMITS.targetClients} aria-invalid={invalid("targetClients")} aria-describedby={originId("targetClients", targetClients)} value={targetClients} onChange={(e) => setTargetClients(e.target.value)} />
+            <label htmlFor="profile-target-clients" className="field">Vos clients (facultatif)</label>
+            <input id="profile-target-clients" placeholder="ex: Particuliers, familles, entreprises" maxLength={CORRECTION_LIMITS.targetClients} aria-invalid={invalid("targetClients")} aria-describedby={originId("targetClients", targetClients)} value={targetClients} onChange={(e) => setTargetClients(e.target.value)} />
             {originNote("targetClients", targetClients)}
-            <label htmlFor="profile-offers" className="field">Offres principales (facultatif)</label>
-            <input id="profile-offers" placeholder="ex: Mise aux normes électriques" maxLength={CORRECTION_LIMITS.offers} aria-invalid={invalid("offers")} aria-describedby={originId("offers", offers)} value={offers} onChange={(e) => setOffers(e.target.value)} />
+            <label htmlFor="profile-offers" className="field">Ce que vous proposez (facultatif)</label>
+            <input id="profile-offers" placeholder="Vos principaux produits ou services" maxLength={CORRECTION_LIMITS.offers} aria-invalid={invalid("offers")} aria-describedby={originId("offers", offers)} value={offers} onChange={(e) => setOffers(e.target.value)} />
             {originNote("offers", offers)}
           </>}
 

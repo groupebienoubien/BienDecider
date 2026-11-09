@@ -52,7 +52,8 @@ export async function POST(request: NextRequest) {
           additionalProperties: false,
         },
       }],
-      tool_choice: { type: "tool", name: "extract_company_profile" },
+      // Ce modèle refuse un outil imposé (tool_choice « tool » ou « any ») : la consigne système le demande.
+      system: "Tu réponds uniquement en appelant l'outil extract_company_profile, une seule fois, sans texte autour.",
       messages: [{
         role: "user",
         content: `À partir de cette phrase, retourne uniquement les informations explicitement présentes. Si un champ n'est pas indiqué, retourne une chaîne vide. N'invente jamais un nom commercial, un métier, une zone ni un objectif.\n\nPhrase : ${sentence.data.sentence}`,
