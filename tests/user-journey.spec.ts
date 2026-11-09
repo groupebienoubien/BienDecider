@@ -818,8 +818,8 @@ test("GH-169: Entreprise shows the origin of each profile information and its la
     await expect(page.locator('[data-origin="servingArea"]')).toHaveText("Origine : Proposé par Paul, confirmé par vous");
     await expect(page.locator('[data-origin="targetClients"]')).toHaveText("Origine : À renseigner par vous");
     await expect(page.locator('[data-origin="offers"]')).toHaveText("Origine : Lu sur le site");
-    await expect(page.getByLabel("Offres principales (facultatif)")).toHaveValue("Mise aux normes");
-    await page.getByLabel("Offres principales (facultatif)").fill("Bornes de recharge");
+    await expect(page.getByLabel("Ce que vous proposez (facultatif)")).toHaveValue("Mise aux normes");
+    await page.getByLabel("Ce que vous proposez (facultatif)").fill("Bornes de recharge");
     await expect(page.locator('[data-origin="offers"]')).toHaveCount(0);
     await expect(page.getByText("Vos contenus en cours seront à relire et leurs programmations annulées.")).toBeVisible();
     expect(await noHorizontalScroll(page)).toBe(true);
@@ -2784,8 +2784,8 @@ test("GH-279: five anonymous steps, back and reload keep the answers, and the ac
     await expect(page.locator("main").getByRole("alert").first()).toHaveText("Complétez chaque information avant de confirmer.");
     await page.getByLabel("Votre activité").fill("Électricien");
     await expect(page.getByLabel("Votre zone d'intervention")).toHaveValue("Lyon");
-    await page.getByLabel("Vos clients prioritaires").fill("Particuliers propriétaires");
-    await page.getByLabel("Vos offres principales").fill("Rénovation électrique");
+    await page.getByLabel("Vos clients", { exact: true }).fill("Particuliers propriétaires");
+    await page.getByLabel("Ce que vous proposez", { exact: true }).fill("Rénovation électrique");
     await page.getByRole("button", { name: "Oui, c'est bien moi" }).click();
     await expect(stepHeading(page, "Qu'aimeriez-vous changer ?")).toBeFocused();
 
@@ -2838,7 +2838,7 @@ test("GH-279: five anonymous steps, back and reload keep the answers, and the ac
     await expect(stepHeading(page, "Qu'aimeriez-vous changer ?")).toBeFocused();
     await page.getByRole("button", { name: "Retour" }).click();
     await expect(stepHeading(page, "Paul semble avoir compris votre entreprise.")).toBeFocused();
-    await expect(page.getByLabel("Vos offres principales")).toHaveValue("Rénovation électrique");
+    await expect(page.getByLabel("Ce que vous proposez", { exact: true })).toHaveValue("Rénovation électrique");
     await page.goto(`${baseURL}/bienvenue/missions`);
     await expect(page).toHaveURL(`${baseURL}/bienvenue`);
     await page.getByRole("button", { name: "Oui, c'est bien moi" }).click();
@@ -3120,9 +3120,9 @@ test("GH-281: step 2 says where each field comes from, and « Non, corriger mes 
     // Les offres lues sur le site, les hypothèses du modèle à confirmer ; la zone reprend la localisation, à confirmer aussi.
     await expect(page.getByText("Lu sur le site", { exact: true })).toHaveCount(1);
     await expect(page.getByText("À confirmer", { exact: true })).toHaveCount(3);
-    await expect(page.getByLabel("Vos offres principales")).toHaveValue("Rénovation électrique");
-    await expect(page.getByLabel("Vos offres principales")).toHaveAccessibleDescription("Lu sur le site");
-    await expect(page.getByLabel("Vos clients prioritaires")).toHaveAccessibleDescription("À confirmer");
+    await expect(page.getByLabel("Ce que vous proposez", { exact: true })).toHaveValue("Rénovation électrique");
+    await expect(page.getByLabel("Ce que vous proposez", { exact: true })).toHaveAccessibleDescription("Lu sur le site");
+    await expect(page.getByLabel("Vos clients", { exact: true })).toHaveAccessibleDescription("À confirmer");
     await expect(page.getByLabel("Votre zone d'intervention")).toHaveValue("Lyon");
     await expect(page.getByLabel("Votre zone d'intervention")).toHaveAccessibleDescription("À confirmer");
     // Une valeur modifiée par le dirigeant n'a plus d'étiquette ; la remettre telle quelle la fait revenir.
