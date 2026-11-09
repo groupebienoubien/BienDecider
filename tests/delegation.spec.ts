@@ -67,7 +67,7 @@ import { RESPONSIBLE_AGENTS, RESPONSIBLE_LABELS, validateResponsibleAgent, valid
 import { AMBITION_TARGET_NOTICE, EMPTY_TERMS, GAIN_QUESTION, HORIZON_QUESTION, RECRUITMENT_UNSPECIFIED_NOTE, REINTERPRET_MESSAGE, boundAmbition, capLabel, interpretationFrom, parseAmbition, readAmbitionTerms, reformulation, type AmbitionTerms } from "../src/lib/ambition-rules";
 import { signInterpretation, verifyInterpretation } from "../src/lib/ambition-token";
 import { anonymousAmbitionModel, interpretAmbition, type AmbitionModel } from "../src/lib/ambition";
-import { ANALYSIS_MESSAGES, ANALYSIS_STALE_MS, ANALYSIS_USAGE_AGENT, analysisFinished, analysisUsage, analysisNotice, analysisView, effectiveAnalysis, needsNewAnalysis, newAnalysis, readAnalysis, rubricLabel, rubricsFor, type DraftAnalysis } from "../src/lib/onboarding/analysis-rules";
+import { ANALYSIS_MESSAGES, ANALYSIS_STALE_MS, ANALYSIS_USAGE_AGENT, analysisFinished, analysisUsage, analysisNotice, analysisView, effectiveAnalysis, limitedStepNotice, needsNewAnalysis, newAnalysis, readAnalysis, retryLabel, rubricLabel, rubricsFor, type DraftAnalysis } from "../src/lib/onboarding/analysis-rules";
 import { MAX_LINKS, SITE_READ_LIMITS, checkSiteUrl, decode, extractTitle, extractLogo, extractPalette, htmlToText, isPublicAddress, pickInternalPages, extractLinks, pinnedTransport, readPage, readPublicSite, type SiteTransport } from "../src/lib/onboarding/site-reader";
 import { EXTRACTION_TEXT_MAX, cleanValue, extractionPrompt, normalizePhone, observedContacts, runDraftAnalysis, type Extractor } from "../src/lib/onboarding/analysis";
 import { DEFAULT_ANONYMOUS_ANALYSIS_DAILY_LIMIT, anonymousAnalysisDailyLimit } from "../src/lib/auth-throttle";
@@ -2722,8 +2722,16 @@ test("GH-280: rubric states, interrupted analyses, relaunch rules and the daily 
   expect(needsNewAnalysis(done, { ...analysisInput, website: "" }, now)).toBe(true);
   const limited = newAnalysis(analysisInput, "r", now, "limited");
   expect(needsNewAnalysis(limited, analysisInput, now)).toBe(true);
-  expect(analysisNotice(limited)).toContain("revenez plus tard");
+  expect(analysisNotice(limited)).toBe(ANALYSIS_MESSAGES.limited);
   expect(analysisView(limited, now)).toMatchObject({ status: "limited", finished: true });
+  // Plafond atteint : la raison, la portée et l'heure de reprise sont dites, chaque rubrique dit « limite du jour atteinte ».
+  const at = new Date("2026-11-09T13:00:00.000Z");
+  const byIp = newAnalysis(analysisInput, "r", at, "limited", { scope: "ip", retryAt: "2026-11-09T14:40:00.000Z" });
+  expect(readAnalysis(JSON.parse(JSON.stringify(byIp)))).toEqual(byIp);
+  expect(rubricLabel(byIp.rubrics.site)).toBe("Non disponible (limite du jour atteinte)");
+  expect(analysisNotice(byIp, at)).toBe("Limite de lectures du jour atteinte depuis cette connexion (3 lectures par jour) : ce n'est pas une panne. Paul pourra lire votre entreprise aujourd'hui à 15 h 40. Vous pouvez continuer dès maintenant et compléter vous-même l'étape suivante.");
+  expect(limitedStepNotice({ scope: "global", retryAt: "2026-11-10T08:05:00.000Z" }, at)).toBe("Paul n'a pas lu votre entreprise : limite de lectures du jour atteinte pour l'ensemble des visiteurs. Ce n'est pas une panne. Complétez les champs ci-dessous, ou revenez demain à 9 h 05 et choisissez « Non, corriger mes informations » pour qu'il la lise.");
+  expect(retryLabel("2026-11-09T12:00:00.000Z", at)).toBe("dès maintenant");
   expect(readAnalysis({ runId: "r", status: "running" })).toBeNull();
   expect(readAnalysis({ ...done, findings: { ...done.findings, palette: { value: ["red;background:url(x)"], provenance: { kind: "hypothesis" } } } })).toBeNull();
 

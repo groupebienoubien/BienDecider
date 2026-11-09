@@ -1,7 +1,7 @@
 import { currentSignupAvailability } from "@/lib/signup-control";
 import { SIGNUP_CLOSED_MESSAGE, SIGNUP_FULL_MESSAGE } from "@/lib/signup-rules";
 import { prefillFromPaul, prefillProfile } from "@/lib/onboarding/draft-rules";
-import { analysisView, type DraftAnalysis, type Finding } from "@/lib/onboarding/analysis-rules";
+import { analysisView, limitedStepNotice, type DraftAnalysis, type Finding } from "@/lib/onboarding/analysis-rules";
 import { requireDraftPage } from "./guard";
 import { WelcomeFrame } from "./welcome-frame";
 import { AmbitionForm, DiscoveryStep, ProfileForm } from "./step-forms";
@@ -79,6 +79,11 @@ export default async function WelcomePage() {
     const guessed = prefillFromPaul(prefill);
     return (
       <WelcomeFrame step={2} intro={<p>{state.profile.firstName}, {guessed ? `voici ce que Paul a compris de ${state.profile.companyName}. Vérifiez, corrigez ou complétez, puis confirmez.` : `décrivez en quelques mots l'activité de ${state.profile.companyName}. Complétez ou corrigez, puis confirmez.`}</p>}>
+        {state.analysis?.status === "limited" && (
+          <p role="status" className="mb-6 rounded-lg border border-[var(--bd-line-strong)] bg-[var(--bd-attention-light)] p-4 text-sm font-semibold text-[var(--bd-ink)]">
+            {limitedStepNotice(state.analysis.limit)}
+          </p>
+        )}
         {state.analysis && <ObservedFindings analysis={state.analysis} guessed={guessed} />}
         <ProfileForm key="profile" prefill={prefill} />
       </WelcomeFrame>

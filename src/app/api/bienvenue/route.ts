@@ -7,7 +7,7 @@ import { applyDraftAction, checkInterpretation, emptyDraft, parseDraftAction, st
 import { anonymousSynthesisModel, writeRetained } from "@/lib/onboarding/synthesis";
 import { signInterpretation, verifyInterpretation } from "@/lib/ambition-token";
 import { anonymousAmbitionModel, interpretAmbition } from "@/lib/ambition";
-import { ANALYSIS_MESSAGES, analysisView, needsNewAnalysis, newAnalysis } from "@/lib/onboarding/analysis-rules";
+import { ANALYSIS_MESSAGES, analysisView, limitedNotice, needsNewAnalysis, newAnalysis } from "@/lib/onboarding/analysis-rules";
 import { createDraft, loadDraft, saveAnalysis, saveDraft, startAnalysis } from "@/lib/onboarding/draft";
 import { errorLabel, runDraftAnalysis } from "@/lib/onboarding/analysis";
 
@@ -109,10 +109,11 @@ async function launchAnalysis(request: NextRequest, draftId: string, state: Draf
   }
   if (limited) {
     // Pas d'analyse : le brouillon le garde, l'étape 2 s'ouvre sans constats.
-    const refused = newAnalysis(input, runId, now, "limited");
+    const limit = { scope: limited === perIp ? "ip" as const : "global" as const, retryAt: new Date(now.getTime() + limited.retryAfterSeconds * 1000).toISOString() };
+    const refused = newAnalysis(input, runId, now, "limited", limit);
     await startAnalysis(draftId, refused, now);
     return NextResponse.json(
-      { error: ANALYSIS_MESSAGES.limited, code: "limited", step: 1, analysis: analysisView(refused, now) },
+      { error: limitedNotice(limit, now), code: "limited", step: 1, analysis: analysisView(refused, now) },
       { status: 429, headers: { "Retry-After": String(limited.retryAfterSeconds) } },
     );
   }

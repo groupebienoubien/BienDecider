@@ -16,7 +16,7 @@ export const RUBRIC_NAMES: Record<RubricKey, string> = {
 };
 
 export type RubricStatus = "pending" | "read" | "unavailable" | "not_found";
-export type UnavailableReason = "no_site" | "unreadable" | "refused" | "service";
+export type UnavailableReason = "no_site" | "unreadable" | "refused" | "service" | "limit";
 export type Rubric = { status: RubricStatus; reason?: UnavailableReason };
 
 const REASON_LABELS: Record<UnavailableReason, string> = {
@@ -24,6 +24,7 @@ const REASON_LABELS: Record<UnavailableReason, string> = {
   unreadable: "site illisible",
   refused: "accès refusé",
   service: "service indisponible",
+  limit: "limite du jour atteinte",
 };
 
 /** Libellé visible d'une rubrique : « En cours », « Lue », « Non disponible (raison) » ou « Non trouvée ». */
@@ -53,6 +54,11 @@ export type AnalysisFindings = {
 
 export type AnalysisInput = { companyName: string; location: string; website: string };
 
+/** Analyses anonymes par connexion (IP) et par 24 h (#280, D2). */
+export const ANALYSIS_PER_IP_DAILY_LIMIT = 3;
+/** Lecture refusée par un plafond : celui de la connexion ou celui de tous les visiteurs, et l'heure où il se libère. */
+export type AnalysisLimit = { scope: "ip" | "global"; retryAt: string };
+
 export type DraftAnalysis = {
   runId: string;
   status: "running" | "done" | "limited";
@@ -63,30 +69,60 @@ export type DraftAnalysis = {
   findings: AnalysisFindings;
   /** `model` : modèle réellement appelé, repris dans le `UsageEvent` du compte à l'inscription (#281) ; absent d'un brouillon ancien. */
   cost: { usd: number; inputTokens: number; outputTokens: number; model?: string };
+  limit?: AnalysisLimit;
 };
 
 /** Une analyse « en cours » plus vieille que ce délai a été interrompue (durée maximale de la route : 60 s). */
 export const ANALYSIS_STALE_MS = 90_000;
 
 export const ANALYSIS_MESSAGES = {
-  limited: "Paul a déjà beaucoup lu aujourd'hui : revenez plus tard pour la lecture de votre entreprise. Vous pouvez continuer dès maintenant et compléter vous-même l'étape suivante.",
+  limited: "Paul a atteint sa limite de lectures pour aujourd'hui : ce n'est pas une panne. Réessayez plus tard, ou continuez dès maintenant et complétez vous-même l'étape suivante.",
   busy: "Paul lit déjà votre entreprise. Patientez quelques secondes.",
   missing: "Lancez d'abord « Découvrir mon entreprise ».",
   partial: "Paul n'a pas pu tout lire. Vous compléterez ce qui manque à l'étape suivante.",
 } as const;
 
+const PARIS_TIME = new Intl.DateTimeFormat("fr-FR", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Paris" });
+const PARIS_DAY = new Intl.DateTimeFormat("fr-CA", { timeZone: "Europe/Paris" });
+
+/** « aujourd'hui à 15 h 40 », « demain à 9 h 05 » (heure de Paris) ; « dès maintenant » si l'heure est passée. */
+export function retryLabel(retryAt: string, now = new Date()): string {
+  const at = new Date(retryAt);
+  if (Number.isNaN(at.getTime()) || at <= now) return "dès maintenant";
+  const time = PARIS_TIME.format(at).replace(":", " h ").replace(/^0/, "");
+  return `${PARIS_DAY.format(at) === PARIS_DAY.format(now) ? "aujourd'hui" : "demain"} à ${time}`;
+}
+
+function limitScope(limit: AnalysisLimit): string {
+  return limit.scope === "ip" ? `depuis cette connexion (${ANALYSIS_PER_IP_DAILY_LIMIT} lectures par jour)` : "pour l'ensemble des visiteurs";
+}
+
+/** Étape 1 : pourquoi la lecture n'a pas eu lieu, quand elle sera possible, et que le parcours continue. */
+export function limitedNotice(limit: AnalysisLimit | undefined, now = new Date()): string {
+  if (!limit) return ANALYSIS_MESSAGES.limited;
+  return `Limite de lectures du jour atteinte ${limitScope(limit)} : ce n'est pas une panne. Paul pourra lire votre entreprise ${retryLabel(limit.retryAt, now)}. Vous pouvez continuer dès maintenant et compléter vous-même l'étape suivante.`;
+}
+
+/** Étape 2 : les champs sont vides parce que Paul n'a rien lu, pas parce que la lecture a échoué. */
+export function limitedStepNotice(limit: AnalysisLimit | undefined, now = new Date()): string {
+  const when = limit ? retryLabel(limit.retryAt, now) : "plus tard";
+  const scope = limit ? ` ${limitScope(limit)}` : "";
+  return `Paul n'a pas lu votre entreprise : limite de lectures du jour atteinte${scope}. Ce n'est pas une panne. Complétez les champs ci-dessous, ou revenez ${when} et choisissez « Non, corriger mes informations » pour qu'il la lise.`;
+}
+
 export function emptyFindings(): AnalysisFindings {
   return { trade: null, servingArea: null, targetClients: null, offers: null, tone: null, contacts: [], palette: null, logo: null, google: null, pages: [] };
 }
 
-export function newAnalysis(input: AnalysisInput, runId: string, now = new Date(), status: DraftAnalysis["status"] = "running"): DraftAnalysis {
+export function newAnalysis(input: AnalysisInput, runId: string, now = new Date(), status: DraftAnalysis["status"] = "running", limit?: AnalysisLimit): DraftAnalysis {
   const pending: Rubric = { status: "pending" };
   const rubrics: Record<RubricKey, Rubric> = status === "limited"
-    ? { site: { status: "unavailable", reason: "service" }, google: { status: "unavailable", reason: "service" }, zone: { status: "unavailable", reason: "service" }, identity: { status: "unavailable", reason: "service" } }
+    ? { site: { status: "unavailable", reason: "limit" }, google: { status: "unavailable", reason: "limit" }, zone: { status: "unavailable", reason: "limit" }, identity: { status: "unavailable", reason: "limit" } }
     : { site: input.website ? pending : { status: "unavailable", reason: "no_site" }, google: pending, zone: pending, identity: input.website ? pending : { status: "unavailable", reason: "no_site" } };
   return {
     runId, status, startedAt: now.toISOString(), finishedAt: status === "limited" ? now.toISOString() : null,
     input: { ...input }, rubrics, findings: emptyFindings(), cost: { usd: 0, inputTokens: 0, outputTokens: 0 },
+    ...(status === "limited" && limit ? { limit } : {}),
   };
 }
 
@@ -148,9 +184,9 @@ export function needsNewAnalysis(current: DraftAnalysis | null, input: AnalysisI
 }
 
 /** Message affiché sous les rubriques, s'il y a lieu (quota, service indisponible, site illisible ou refusé). */
-export function analysisNotice(analysis: DraftAnalysis | null): string | null {
+export function analysisNotice(analysis: DraftAnalysis | null, now = new Date()): string | null {
   if (!analysis || analysis.status === "running") return null;
-  if (analysis.status === "limited") return ANALYSIS_MESSAGES.limited;
+  if (analysis.status === "limited") return limitedNotice(analysis.limit, now);
   return RUBRIC_KEYS.some((key) => analysis.rubrics[key].status === "unavailable" && analysis.rubrics[key].reason !== "no_site") ? ANALYSIS_MESSAGES.partial : null;
 }
 
@@ -160,7 +196,7 @@ const provenanceSchema = z.union([
   z.object({ kind: z.literal("declared") }),
 ]);
 const findingSchema = z.object({ value: z.string().max(600), provenance: provenanceSchema });
-const rubricSchema = z.object({ status: z.enum(["pending", "read", "unavailable", "not_found"]), reason: z.enum(["no_site", "unreadable", "refused", "service"]).optional() });
+const rubricSchema = z.object({ status: z.enum(["pending", "read", "unavailable", "not_found"]), reason: z.enum(["no_site", "unreadable", "refused", "service", "limit"]).optional() });
 const analysisSchema = z.object({
   runId: z.string().max(100),
   status: z.enum(["running", "done", "limited"]),
@@ -174,6 +210,7 @@ const analysisSchema = z.object({
     logo: findingSchema.nullable(), google: findingSchema.nullable(), pages: z.array(z.object({ url: z.string().max(600), readAt: z.string().max(40) })).max(5),
   }),
   cost: z.object({ usd: z.number(), inputTokens: z.number(), outputTokens: z.number(), model: z.string().max(100).optional() }),
+  limit: z.object({ scope: z.enum(["ip", "global"]), retryAt: z.string().max(40) }).optional(),
 });
 
 /** Lecture défensive de la colonne `analysis` : toute valeur illisible vaut « pas d'analyse ». */
@@ -203,7 +240,7 @@ export function analysisView(analysis: DraftAnalysis | null, now = new Date()) {
     status: shown.status,
     finished: analysisFinished(shown, now),
     rubrics: RUBRIC_KEYS.map((key) => ({ key, name: RUBRIC_NAMES[key], status: shown.rubrics[key].status, label: rubricLabel(shown.rubrics[key]) })),
-    notice: analysisNotice(shown),
+    notice: analysisNotice(shown, now),
   };
 }
 export type AnalysisView = NonNullable<ReturnType<typeof analysisView>>;
