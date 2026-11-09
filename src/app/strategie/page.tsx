@@ -102,13 +102,6 @@ export default async function StrategiePage() {
 
       <section className="section-space" aria-labelledby="to-validate-title">
         <div className="section-title"><h2 id="to-validate-title">À valider par vous</h2></div>
-        {brandToConfirm && (
-          <div className="decision">
-            <Icon name="pencil" />
-            <span><strong>Votre marque</strong> · à confirmer avant de valider un visuel</span>
-            <Link href="/entreprise#ma-marque">Confirmer ma marque</Link>
-          </div>
-        )}
         {toValidate.length === 0 && cancelledSchedules.length === 0 ? (
           <div className="decision">
             <Icon name="panels-top-left" />
@@ -128,6 +121,13 @@ export default async function StrategiePage() {
             <Link href={`/atelier/${item.contentId}`}>Voir le contenu</Link>
           </div>
         ))}
+        {brandToConfirm && (
+          <div className="decision">
+            <Icon name="pencil" />
+            <span><strong>Votre marque</strong> · à confirmer avant de valider un visuel</span>
+            <Link href="/entreprise#ma-marque">Confirmer ma marque</Link>
+          </div>
+        )}
         <div className="decision">
           <Icon name="refresh-cw" />
           <span>{connected === 0 ? "Aucun canal connecté." : `${connected} canal${connected > 1 ? "aux" : ""} connecté${connected > 1 ? "s" : ""}.`}</span>
