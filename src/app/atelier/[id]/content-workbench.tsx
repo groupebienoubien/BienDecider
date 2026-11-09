@@ -7,6 +7,7 @@ import { Icon } from "@/components/icon";
 import { Modal } from "@/components/modal";
 import { MISSION_MESSAGES } from "@/lib/missions/messages";
 import { BODY_MAX, PROFILE_REVIEW_BADGE, REJECTION_MAX, TITLE_MAX, VARIANTS, variantLabel, type ChecklistItem, type VariantKind } from "@/lib/contents/rules";
+import { BRAND_COMPOSITIONS, BRAND_COMPOSITION_LABELS, type BrandComposition } from "@/lib/brand/rules";
 import type { AtelierItem, ContentDetail, VersionView } from "@/lib/contents/view";
 
 const AUTHORS: Record<VersionView["author"], string> = { owner: "vous", paul: "Paul", system: "système" };
@@ -87,7 +88,7 @@ function Preview({ detail, title, body }: { detail: ContentDetail; title: string
  * L'atelier d'un contenu : les règles sont celles du serveur, l'interface montre seulement les gestes possibles
  * et affiche les refus tels quels. Les retouches non enregistrées sont gardées dans l'onglet et bloquent les décisions (M-60).
  */
-export function ContentWorkbench({ detail, viewing, items, checklist, credits }: { detail: ContentDetail; viewing: number; items: AtelierItem[]; checklist: ChecklistItem[]; credits: number }) {
+export function ContentWorkbench({ detail, viewing, items, checklist, credits, visualSvg, visualPreview }: { detail: ContentDetail; viewing: number; items: AtelierItem[]; checklist: ChecklistItem[]; credits: number; visualSvg: string | null; visualPreview: boolean }) {
   const router = useRouter();
   const current = detail.versions[0];
   const version = detail.versions.find((item) => item.number === viewing) ?? current;
@@ -116,6 +117,7 @@ export function ContentWorkbench({ detail, viewing, items, checklist, credits }:
   const [refreshing, startRefresh] = useTransition();
   const [error, setError] = useState<{ area: string; text: string } | null>(null);
   const [copied, setCopied] = useState(false);
+  const [composition, setComposition] = useState<BrandComposition | "none">(detail.visual.composition ?? "none");
   const busy = sending !== null || refreshing;
 
   const dirty = title !== current.title || body !== current.body;
@@ -198,6 +200,7 @@ export function ContentWorkbench({ detail, viewing, items, checklist, credits }:
       ? (detail.mission.channel === null ? "Mission menée hors canal : récupérez le texte, diffusez-le, puis déclarez-le." : `Votre règle : ${detail.delegationLabel}. Récupérez le texte, diffusez-le vous-même, puis déclarez-le.`)
       : `Aucun envoi effectué. ${detail.publishRefusal ?? "Validation et diffusion sont deux décisions distinctes : rien ne part sans votre confirmation."}`)
     : detail.canValidate && detail.profileToReview ? MISSION_MESSAGES["M-92"]
+    : detail.canValidate && detail.visual.composition && detail.visual.brandToConfirm ? MISSION_MESSAGES["M-93"]
     : detail.canValidate ? "Valider n'envoie rien : la diffusion reste une décision distincte."
     : MISSION_MESSAGES["M-47"];
 
@@ -233,6 +236,29 @@ export function ContentWorkbench({ detail, viewing, items, checklist, credits }:
             <button type="button" className="small" onClick={() => void copy()}><Icon name="copy" />{copied ? "Texte copié" : "Copier le texte"}</button>
           </div>
           {failure("copy")}
+
+          {detail.format === "social_post" && (
+            <section className="section-space" aria-labelledby="visual-title">
+              <h2 id="visual-title">Visuel</h2>
+              {visualSvg
+                ? <div className="preview-stage" role="group" aria-label="Aperçu du visuel" dangerouslySetInnerHTML={{ __html: visualSvg }} />
+                : <p className="small muted">{detail.visual.composition ? "Aucun visuel pour cette version." : "Aucun visuel : cette publication partira sans image."}</p>}
+              {detail.visual.composition && visualPreview && <p className="small muted">Aperçu avec une identité proposée : confirmez votre marque pour figer ce rendu.</p>}
+              {detail.visual.composition && detail.visual.brandToConfirm && <p className="warning small" role="status">{MISSION_MESSAGES["M-93"]} <Link href="/entreprise#ma-marque">Confirmer ma marque</Link></p>}
+              {!archive && canEdit && (
+                <div className="heading-actions">
+                  <label className="field">Composition
+                    <select value={composition} onChange={(event) => setComposition(event.target.value as BrandComposition | "none")}>
+                      <option value="none">Sans visuel</option>
+                      {BRAND_COMPOSITIONS.map((key) => <option key={key} value={key}>{BRAND_COMPOSITION_LABELS[key]}</option>)}
+                    </select>
+                  </label>
+                  <button type="button" disabled={busy || composition === (detail.visual.composition ?? "none")} onClick={() => void run("visual", { action: "set_visual", composition: composition === "none" ? null : composition }, clearDraft)}><Icon name="check" />Enregistrer le visuel</button>
+                </div>
+              )}
+              {failure("visual")}
+            </section>
+          )}
 
           <div className="atelier-decision" aria-labelledby="decision-title">
             <div>
@@ -270,7 +296,7 @@ export function ContentWorkbench({ detail, viewing, items, checklist, credits }:
               </>}
               {scheduled && !detail.readOnly && <button type="button" disabled={busy} onClick={() => openDialog("cancel")}><Icon name="x" />Annuler la programmation</button>}
               {!archive && !pending && !diffused && !scheduled && !detail.readOnly && !validated && (
-                <button type="button" className="primary" disabled={busy || !detail.canValidate || detail.profileToReview} onClick={() => openDialog("validate")}><Icon name="check" />Valider cette version</button>
+                <button type="button" className="primary" disabled={busy || !detail.canValidate || detail.profileToReview || (detail.visual.composition !== null && detail.visual.brandToConfirm)} onClick={() => openDialog("validate")}><Icon name="check" />Valider cette version</button>
               )}
               {!archive && !pending && !diffused && !scheduled && !detail.readOnly && !version.rejectionReason && (
                 <button type="button" disabled={busy} onClick={() => openDialog("reject")}><Icon name="x" />Je ne veux pas de cette version</button>

@@ -98,6 +98,8 @@ const GUARDED_ROUTES: Guarded[] = [
   { method: "GET", path: "/api/proposals/[id]/versions", denied: 401 },
   { method: "POST", path: "/api/onboarding/interpret", denied: 401 },
   { method: "POST", path: "/api/entreprise/ambition", denied: 401 },
+  { method: "POST", path: "/api/entreprise/marque", denied: 401 },
+  { method: "GET", path: "/api/contents/[id]/visuel", denied: 401 },
   { method: "GET", path: "/api/site/photos", denied: 401 },
   { method: "POST", path: "/api/site/photos", denied: 401 },
   { method: "DELETE", path: "/api/site/photos/[id]", denied: 401 },
@@ -1351,6 +1353,72 @@ test("mission contents belong to the session company: versions, validation and r
     // Mission arrêtée : le contenu reste en lecture seule (M-44).
     await prisma.mission.update({ where: { id: mission.id }, data: { status: "stopped" } });
     expect(await (await act(a, { action: "save", number: 3, title: "Autre", body: "Autre texte" })).json()).toMatchObject({ code: "M-44" });
+  } finally {
+    await prisma.company.deleteMany({ where: { id: { in: [a.id, b.id] } } });
+    await prisma.$disconnect();
+  }
+});
+
+test("brand confirmation gates visual validation, versions each visual and keeps archives unchanged (#290)", async ({ request }) => {
+  const prisma = openDatabase();
+  const marker = randomUUID().slice(0, 8);
+  const a = await prisma.company.create({ data: { ownerEmail: `security-brand-a-${marker}@example.invalid`, name: `Marque A ${marker}`, trade: "Artisan", servingArea: "Paris" } });
+  const b = await prisma.company.create({ data: { ownerEmail: `security-brand-b-${marker}@example.invalid`, name: `Marque B ${marker}`, trade: "Artisan", servingArea: "Paris" } });
+  const headers = (company: typeof a, origin = baseURL) => ({ Cookie: sessionCookie(company.ownerEmail, company.sessionVersion), Origin: origin });
+  const mission = await prisma.mission.create({ data: { companyId: a.id, template: "social_post", channel: "facebook", title: "Publier un chantier", outcome: "Des demandes de devis", originalOutcome: "Des demandes de devis", finding: "Aucune publication depuis trois mois", scope: { topic: "Nos chantiers" }, status: "active", position: 1 } });
+  const content = await prisma.missionContent.create({ data: { companyId: a.id, missionId: mission.id, channel: "facebook", format: "social_post", currentNumber: 1, versions: { create: { number: 1, title: "Nos chantiers de novembre", body: "Une salle de bains refaite à neuf.", author: "paul", note: "Premier brouillon préparé par Paul" } } } });
+  const act = (data: unknown) => request.post(`${baseURL}/api/contents/${content.id}`, { headers: headers(a), data });
+  const brand = (company: typeof a, data: unknown, origin = baseURL) => request.post(`${baseURL}/api/entreprise/marque`, { headers: headers(company, origin), data });
+  const kit = { primary: "#1f5f4a", accent: "#e0a030", tone: "clair", confirmed: true };
+  const versions = () => prisma.contentVersion.findMany({ where: { contentId: content.id }, orderBy: { number: "asc" } });
+  try {
+    // Formulaire : origine, case obligatoire, couleurs et ton valides.
+    expect((await brand(a, kit, "https://attacker.invalid")).status()).toBe(403);
+    expect(await (await brand(a, { ...kit, confirmed: false })).json()).toMatchObject({ errors: { confirmed: expect.any(String) } });
+    expect(await (await brand(a, { ...kit, primary: "vert", tone: "drôle" })).json()).toMatchObject({ errors: { primary: expect.any(String), tone: expect.any(String) } });
+    expect((await prisma.company.findUniqueOrThrow({ where: { id: a.id } })).brandConfirmedAt).toBeNull();
+
+    // Un visuel est ajouté : nouvelle version, sans instantané tant que la marque n'est pas confirmée ; sa validation est refusée (M-93).
+    expect(await (await act({ action: "set_visual", number: 1, composition: "inconnue" })).json()).toMatchObject({ code: "M-95" });
+    expect(await (await act({ action: "set_visual", number: 1, composition: "photo_signature" })).json()).toMatchObject({ currentNumber: 2 });
+    expect(await prisma.missionContent.findUniqueOrThrow({ where: { id: content.id } })).toMatchObject({ visualComposition: "photo_signature" });
+    expect((await versions())[1]).toMatchObject({ note: "Visuel : Photo & signature", brandSnapshot: null });
+    expect(await (await act({ action: "validate", number: 2, reviewed: true })).json()).toMatchObject({ code: "M-93", error: "Confirmez votre marque avant de valider un visuel." });
+    const image = await request.get(`${baseURL}/api/contents/${content.id}/visuel?n=2`, { headers: headers(a) });
+    expect(image.status()).toBe(200);
+    expect(image.headers()["content-type"]).toContain("image/svg+xml");
+    expect(await image.text()).toContain(a.name);
+    expect((await request.get(`${baseURL}/api/contents/${content.id}/visuel?n=2`, { headers: headers(b) })).status()).toBe(404);
+    expect((await request.get(`${baseURL}/api/contents/${content.id}/visuel?n=1`, { headers: headers(a) })).status()).toBe(404);
+
+    // Première confirmation : le visuel reçoit une version à valider, avec l'instantané de la marque ; J-32 au journal.
+    expect(await (await brand(a, kit)).json()).toMatchObject({ ok: true, changed: true });
+    expect(await prisma.company.findUniqueOrThrow({ where: { id: a.id } })).toMatchObject({ brandPrimary: "#1f5f4a", brandAccent: "#e0a030", brandTone: "clair" });
+    expect((await prisma.company.findUniqueOrThrow({ where: { id: a.id } })).brandConfirmedAt).not.toBeNull();
+    expect((await versions())[2]).toMatchObject({ number: 3, author: "system", note: "Marque modifiée : visuel à valider à nouveau", brandSnapshot: { primary: "#1f5f4a", tone: "clair", composition: "photo_signature", name: a.name } });
+    expect(await prisma.journalEntry.count({ where: { companyId: a.id, code: "J-32" } })).toBe(1);
+    expect((await act({ action: "validate", number: 3, reviewed: true })).status()).toBe(200);
+
+    // Marque inchangée : rien n'est écrit. Marque modifiée : version suivante, validation retirée, l'archive garde l'ancienne marque.
+    expect(await (await brand(a, kit)).json()).toMatchObject({ ok: true, changed: false });
+    expect((await versions()).length).toBe(3);
+    expect(await (await brand(a, { ...kit, primary: "#123456", tone: "expert" })).json()).toMatchObject({ ok: true, changed: true });
+    const after = await versions();
+    expect(after.length).toBe(4);
+    expect(after[3]).toMatchObject({ brandSnapshot: { primary: "#123456", tone: "expert" } });
+    expect(after[2]).toMatchObject({ brandSnapshot: { primary: "#1f5f4a", tone: "clair" } });
+    expect(await prisma.missionContent.findUniqueOrThrow({ where: { id: content.id } })).toMatchObject({ currentNumber: 4, validatedNumber: null });
+    expect(await prisma.journalEntry.count({ where: { companyId: a.id, code: "J-32" } })).toBe(2);
+    const archive = await (await request.get(`${baseURL}/api/contents/${content.id}/visuel?n=3`, { headers: headers(a) })).text();
+    expect(archive).toContain("#1f5f4a");
+    expect(archive).not.toContain("#123456");
+
+    // Un visuel programmé : modifier la marque est refusé (M-94) ; rien n'est écrit.
+    expect((await act({ action: "validate", number: 4, reviewed: true })).status()).toBe(200);
+    await prisma.publication.create({ data: { companyId: a.id, missionId: mission.id, contentId: content.id, versionNumber: 4, title: "Nos chantiers de novembre", channel: "facebook", channelLabel: "Page Facebook", mode: "confirmed", status: "scheduled", scheduledAt: new Date(Date.now() + 86_400_000), timezone: "Europe/Paris", idempotencyKey: `brand-${marker}` } });
+    expect(await (await brand(a, { ...kit, primary: "#654321" })).json()).toMatchObject({ code: "M-94" });
+    expect((await prisma.company.findUniqueOrThrow({ where: { id: a.id } })).brandPrimary).toBe("#123456");
+    expect((await versions()).length).toBe(4);
   } finally {
     await prisma.company.deleteMany({ where: { id: { in: [a.id, b.id] } } });
     await prisma.$disconnect();

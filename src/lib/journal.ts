@@ -32,6 +32,7 @@ export const JOURNAL_TEXTS = {
   "J-29": "Canal de la mission changé · {mission} : {canal}. Nouvelle version du brouillon à relire.",
   "J-30": "Idée retirée : « {idée} ».",
   "J-31": "Idée cadrée en mission : {mission}.",
+  "J-32": "Identité de marque confirmée. Le visuel doit être validé à nouveau.",
 } as const;
 
 export type JournalCode = keyof typeof JOURNAL_TEXTS;

@@ -5,6 +5,9 @@ import { redirect } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
 import { CompanyProfileForm } from "@/components/company-profile-form";
 import { AmbitionEditor } from "@/components/ambition-editor";
+import { BrandForm } from "@/components/brand-form";
+import { brandViewOf } from "@/lib/brand/service";
+import { hasScheduledVisual } from "@/lib/contents/service";
 import { Icon } from "@/components/icon";
 import { PageHeading, Tag } from "@/components/mockup-ui";
 import { DirectionForm } from "@/components/direction-form";
@@ -31,13 +34,15 @@ export default async function EntreprisePage({ searchParams }: { searchParams: P
   if (!company) redirect("/login");
   if (!company.name) redirect("/onboarding");
   const { tab } = await searchParams;
-  const [shell, connections, feedback, sitePhotos, audits] = await Promise.all([
+  const [shell, connections, feedback, sitePhotos, audits, brandLocked] = await Promise.all([
     getShellProps(company),
     prisma.channelConnection.findMany({ where: { companyId: company.id } }),
     getRetainedFeedback(company.id),
     listSitePhotos(company.id),
     getAuditFindingsView(company.id),
+    hasScheduledVisual(company.id),
   ]);
+  const brand = brandViewOf(company);
   // Diagnostic courant (#168) : ses constats, et les missions qui en découlent (#292).
   const linkedMissions = audits.latest.length
     ? await prisma.mission.findMany({ where: { companyId: company.id, sourceFindingId: { in: audits.latest.map((finding) => finding.id) } }, select: { id: true, title: true, status: true, sourceFindingId: true, deduction: true }, orderBy: { position: "asc" } })
@@ -113,6 +118,7 @@ export default async function EntreprisePage({ searchParams }: { searchParams: P
         <h3>Ce qu&apos;il nous manque</h3>
         <ul className="feedback-list">{missing.map((item) => <li key={item}>{item}</li>)}</ul>
       </section>
+      <BrandForm name={company.name} status={brand.status} kit={brand.kit} origins={brand.origins} fromSite={brand.fromSite} source={brand.source} locked={brandLocked} />
       <div className="settings-grid section-space">
         <section className="setting-section">
           <h2>{company.name}</h2>

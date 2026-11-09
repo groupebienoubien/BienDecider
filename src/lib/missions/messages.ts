@@ -69,6 +69,9 @@ export const MISSION_MESSAGES = {
   "M-90": "Paul n'a trouvé aucune nouvelle agence avec un e-mail professionnel public dans votre zone. Réessayez plus tard.",
   "M-91": "La recherche d'agences n'est pas disponible pour le moment. Réessayez dans un instant.",
   "M-92": "Profil corrigé : relisez ce contenu et enregistrez une nouvelle version avant de le valider.",
+  "M-93": "Confirmez votre marque avant de valider un visuel.",
+  "M-94": "Un visuel est programmé : annulez sa diffusion avant de modifier votre marque.",
+  "M-95": "Choisissez l'une des deux compositions de visuel, ou retirez le visuel.",
 } as const;
 
 export type MissionMessageCode = keyof typeof MISSION_MESSAGES;
