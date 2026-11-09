@@ -99,6 +99,7 @@ const GUARDED_ROUTES: Guarded[] = [
   { method: "POST", path: "/api/onboarding/interpret", denied: 401 },
   { method: "POST", path: "/api/entreprise/ambition", denied: 401 },
   { method: "POST", path: "/api/entreprise/marque", denied: 401 },
+  { method: "POST", path: "/api/contents/[id]/photo", denied: 401 },
   { method: "GET", path: "/api/contents/[id]/visuel", denied: 401 },
   { method: "GET", path: "/api/site/photos", denied: 401 },
   { method: "POST", path: "/api/site/photos", denied: 401 },
@@ -1419,6 +1420,80 @@ test("brand confirmation gates visual validation, versions each visual and keeps
     expect(await (await brand(a, { ...kit, primary: "#654321" })).json()).toMatchObject({ code: "M-94" });
     expect((await prisma.company.findUniqueOrThrow({ where: { id: a.id } })).brandPrimary).toBe("#123456");
     expect((await versions()).length).toBe(4);
+  } finally {
+    await prisma.company.deleteMany({ where: { id: { in: [a.id, b.id] } } });
+    await prisma.$disconnect();
+  }
+});
+
+test("a visual photo is controlled by the server, carried by versions, and its rights are confirmed per version (#291)", async ({ request }) => {
+  const prisma = openDatabase();
+  const marker = randomUUID().slice(0, 8);
+  const a = await prisma.company.create({ data: { ownerEmail: `security-photo-a-${marker}@example.invalid`, name: `Photo A ${marker}`, trade: "Artisan", servingArea: "Paris", brandPrimary: "#1f5f4a", brandAccent: "#e0a030", brandTone: "clair", brandConfirmedAt: new Date() } });
+  const b = await prisma.company.create({ data: { ownerEmail: `security-photo-b-${marker}@example.invalid`, name: `Photo B ${marker}`, trade: "Artisan", servingArea: "Paris" } });
+  const headers = (company: typeof a, origin = baseURL) => ({ Cookie: sessionCookie(company.ownerEmail, company.sessionVersion), Origin: origin });
+  const mission = await prisma.mission.create({ data: { companyId: a.id, template: "social_post", channel: "facebook", title: "Publier un chantier", outcome: "Des demandes de devis", originalOutcome: "Des demandes de devis", finding: "Aucune publication depuis trois mois", scope: { topic: "Nos chantiers" }, status: "active", position: 1 } });
+  const content = await prisma.missionContent.create({ data: { companyId: a.id, missionId: mission.id, channel: "facebook", format: "social_post", currentNumber: 1, visualComposition: "photo_signature", versions: { create: { number: 1, title: "Nos chantiers de novembre", body: "Une salle de bains refaite à neuf.", author: "paul", note: "Premier brouillon préparé par Paul" } } } });
+  const act = (data: unknown) => request.post(`${baseURL}/api/contents/${content.id}`, { headers: headers(a), data });
+  const upload = (company: typeof a, fields: { file?: { name: string; mimeType: string; buffer: Buffer }; alt?: string; number?: string }, id = content.id, origin = baseURL) => {
+    const multipart: Record<string, string | { name: string; mimeType: string; buffer: Buffer }> = {};
+    if (fields.file) multipart.file = fields.file;
+    if (fields.alt !== undefined) multipart.alt = fields.alt;
+    if (fields.number !== undefined) multipart.number = fields.number;
+    return request.post(`${baseURL}/api/contents/${id}/photo`, { headers: headers(company, origin), multipart });
+  };
+  const png = (width: number, height: number, extra = 0) => {
+    const head = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 0, 0, 0, 0, 0, 8, 2, 0, 0, 0]);
+    head.writeUInt32BE(width, 16);
+    head.writeUInt32BE(height, 20);
+    return Buffer.concat([head, Buffer.alloc(extra)]);
+  };
+  const file = (buffer: Buffer, name = "photo.png") => ({ name, mimeType: "image/png", buffer });
+  const versions = () => prisma.contentVersion.findMany({ where: { contentId: content.id }, orderBy: { number: "asc" } });
+  try {
+    // Contrôles du fichier, décidés par le serveur avant tout stockage.
+    expect((await upload(a, { file: file(png(800, 600)), alt: "Salle", number: "1" }, content.id, "https://attacker.invalid")).status()).toBe(403);
+    expect((await upload(a, { alt: "Salle", number: "1" })).status()).toBe(400);
+    expect((await upload(a, { file: file(png(800, 600)), alt: "  ", number: "1" })).status()).toBe(400);
+    expect((await upload(a, { file: file(png(800, 600)), alt: "Salle", number: "x" })).status()).toBe(400);
+    expect(await (await upload(a, { file: file(png(800, 600, 1024 * 1024)), alt: "Salle", number: "1" })).json()).toMatchObject({ error: expect.stringContaining("1 Mo") });
+    expect((await upload(a, { file: file(Buffer.from("<svg onload=alert(1)></svg>"), "photo.png"), alt: "Salle", number: "1" })).status()).toBe(415);
+    expect((await upload(a, { file: file(png(0, 0)), alt: "Salle", number: "1" })).status()).toBe(415);
+    expect((await upload(b, { file: file(png(800, 600)), alt: "Salle", number: "1" })).status()).toBe(404);
+    // Version obsolète : refusée avant le stockage, rien n'est rattaché.
+    expect(await (await upload(a, { file: file(png(800, 600)), alt: "Salle", number: "7" })).json()).toMatchObject({ code: "M-02" });
+    expect((await versions()).length).toBe(1);
+
+    // Version portant une photo : les droits sont demandés en plus de la relecture (M-96), puis portés par la version.
+    const photo = { url: "https://blob.example.invalid/photo.jpg", pathname: `content-photos/${a.id}/${content.id}/p1.jpg`, alt: "Salle de bains refaite", width: 800, height: 600 };
+    await prisma.contentVersion.create({ data: { contentId: content.id, number: 2, title: "Nos chantiers de novembre", body: "Une salle de bains refaite à neuf.", author: "owner", note: "Photo importée par vous, droits à reconfirmer", photo } });
+    await prisma.missionContent.update({ where: { id: content.id }, data: { currentNumber: 2 } });
+    expect(await (await act({ action: "validate", number: 2, reviewed: true })).json()).toMatchObject({ code: "M-96", error: expect.stringContaining("droits d'utilisation") });
+    expect(await (await act({ action: "validate", number: 2, reviewed: true, rights: false })).json()).toMatchObject({ code: "M-96" });
+    expect(await prisma.missionContent.findUniqueOrThrow({ where: { id: content.id } })).toMatchObject({ validatedNumber: null });
+    expect((await act({ action: "validate", number: 2, reviewed: true, rights: true })).status()).toBe(200);
+    expect((await versions())[1].rightsConfirmedAt).not.toBeNull();
+    const image = await (await request.get(`${baseURL}/api/contents/${content.id}/visuel?n=2`, { headers: headers(a) })).text();
+    expect(image).toContain(photo.url);
+    expect(image).toContain("Photo : Salle de bains refaite");
+
+    // Tout changement invalide les droits : la version suivante garde la photo, mais pas la confirmation.
+    expect(await (await act({ action: "save", number: 2, title: "Nos chantiers", body: "Une salle de bains refaite." })).json()).toMatchObject({ currentNumber: 3 });
+    const third = (await versions())[2];
+    expect(third.photo).toMatchObject({ url: photo.url, alt: photo.alt });
+    expect(third.rightsConfirmedAt).toBeNull();
+    expect(await (await act({ action: "validate", number: 3, reviewed: true })).json()).toMatchObject({ code: "M-96" });
+
+    // Retrait de la photo : nouvelle version sans photo, plus de droits à confirmer.
+    expect(await (await act({ action: "remove_photo", number: 3 })).json()).toMatchObject({ currentNumber: 4 });
+    expect((await versions())[3]).toMatchObject({ photo: null, note: "Photo retirée par vous", rightsConfirmedAt: null });
+    expect((await act({ action: "validate", number: 4, reviewed: true })).status()).toBe(200);
+    expect((await versions())[3].rightsConfirmedAt).toBeNull();
+
+    // Un contenu qui n'est pas une publication de réseau social n'a pas de visuel (M-97).
+    const other = await prisma.mission.create({ data: { companyId: a.id, template: "site_page", channel: "site", title: "Page tarifs", outcome: "Des demandes", originalOutcome: "Des demandes", finding: "Pas de page tarifs", scope: { page: "Nos tarifs" }, status: "active", position: 2 } });
+    const page = await prisma.missionContent.create({ data: { companyId: a.id, missionId: other.id, channel: "site", format: "site_page", currentNumber: 1, versions: { create: { number: 1, title: "Nos tarifs", body: "Tarifs.", author: "paul", note: "Premier brouillon préparé par Paul" } } } });
+    expect(await (await upload(a, { file: file(png(800, 600)), alt: "Salle", number: "1" }, page.id)).json()).toMatchObject({ code: "M-97" });
   } finally {
     await prisma.company.deleteMany({ where: { id: { in: [a.id, b.id] } } });
     await prisma.$disconnect();

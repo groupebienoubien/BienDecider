@@ -24,6 +24,8 @@ export type VisualInput = {
   signature: string;
   /** Adresse d'une photo de l'entreprise ; absente, le visuel s'en passe. */
   photoUrl?: string | null;
+  /** Texte alternatif de la photo (#291), repris dans la description de l'image. */
+  photoAlt?: string | null;
 };
 
 function escapeXml(text: string): string {
@@ -81,7 +83,8 @@ export function renderVisual(input: VisualInput): string {
   const size = VISUAL_SIZE;
   const signature = escapeXml(input.signature.replace(/\s+/g, " ").trim().slice(0, 60));
   const url = input.photoUrl && /^https:\/\//.test(input.photoUrl) ? input.photoUrl : null;
-  const open = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}" width="100%" role="img" aria-label="${escapeXml(input.headline.slice(0, 100))}" preserveAspectRatio="xMidYMid meet">`;
+  const label = url && input.photoAlt ? `${input.headline.slice(0, 100)}. Photo : ${input.photoAlt.slice(0, 200)}` : input.headline.slice(0, 100);
+  const open = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}" width="100%" role="img" aria-label="${escapeXml(label)}" preserveAspectRatio="xMidYMid meet">`;
   const signatureLine = (x: number, y: number, fill: string) => `<text x="${x}" y="${y}" font-family="${FONT_STACK}" font-size="40" font-weight="600" fill="${fill}">${signature}</text>`;
 
   if (input.composition === "photo_signature") {

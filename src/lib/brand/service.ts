@@ -7,6 +7,7 @@ import {
   type BrandChecked, type BrandKit, type BrandOrigins, type BrandStatus,
 } from "@/lib/brand/rules";
 import { renderVisual } from "@/lib/brand/render";
+import { readVisualPhoto } from "@/lib/brand/photo";
 
 type BrandColumns = { brandPrimary: string | null; brandAccent: string | null; brandTone: string | null; brandOrigins: Prisma.JsonValue | null; brandProposal: Prisma.JsonValue | null; brandConfirmedAt: Date | null };
 
@@ -66,15 +67,16 @@ export async function confirmBrand(companyId: string, body: unknown): Promise<Co
 export async function visualOfVersion(companyId: string, contentId: string, number: number): Promise<{ svg: string; preview: boolean } | null> {
   const content = await prisma.missionContent.findFirst({
     where: { id: contentId, companyId },
-    select: { visualComposition: true, currentNumber: true, company: { select: { name: true, brandPrimary: true, brandAccent: true, brandTone: true, brandOrigins: true, brandProposal: true, brandConfirmedAt: true } }, versions: { where: { number }, select: { title: true, brandSnapshot: true } } },
+    select: { visualComposition: true, currentNumber: true, company: { select: { name: true, brandPrimary: true, brandAccent: true, brandTone: true, brandOrigins: true, brandProposal: true, brandConfirmedAt: true } }, versions: { where: { number }, select: { title: true, brandSnapshot: true, photo: true } } },
   });
   const version = content?.versions[0];
   if (!content || !version) return null;
   const snapshot = readBrandSnapshot(version.brandSnapshot);
-  const photo = (await prisma.sitePhoto.findFirst({ where: { companyId }, orderBy: { position: "asc" }, select: { url: true } }))?.url ?? null;
-  if (snapshot) return { svg: renderVisual({ ...snapshot, headline: version.title, signature: snapshot.name, photoUrl: photo }), preview: false };
+  // La photo est celle que le dirigeant a importée dans cette version et dont il a confirmé les droits (#291) ; sans photo, illustration neutre.
+  const photo = readVisualPhoto(version.photo, companyId);
+  if (snapshot) return { svg: renderVisual({ ...snapshot, headline: version.title, signature: snapshot.name, photoUrl: photo?.url ?? null, photoAlt: photo?.alt ?? null }), preview: false };
   // Pas d'instantané : seule la version courante d'un contenu qui a un visuel est montrée, avec la marque proposée.
   if (number !== content.currentNumber || !isBrandComposition(content.visualComposition)) return null;
   const view = brandViewOf(content.company);
-  return { svg: renderVisual({ ...view.kit, composition: content.visualComposition, headline: version.title, signature: content.company.name, photoUrl: photo }), preview: true };
+  return { svg: renderVisual({ ...view.kit, composition: content.visualComposition, headline: version.title, signature: content.company.name, photoUrl: photo?.url ?? null, photoAlt: photo?.alt ?? null }), preview: true };
 }

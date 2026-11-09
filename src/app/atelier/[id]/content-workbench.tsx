@@ -7,6 +7,9 @@ import { Icon } from "@/components/icon";
 import { Modal } from "@/components/modal";
 import { MISSION_MESSAGES } from "@/lib/missions/messages";
 import { BODY_MAX, PROFILE_REVIEW_BADGE, REJECTION_MAX, TITLE_MAX, VARIANTS, variantLabel, type ChecklistItem, type VariantKind } from "@/lib/contents/rules";
+import { VISUAL_PHOTO_ALT_REQUIRED, VISUAL_PHOTO_MAX_BYTES, VISUAL_PHOTO_TOO_LARGE, VISUAL_RIGHTS_LABEL } from "@/lib/brand/photo";
+import { resizeVisualPhoto } from "@/lib/brand/photo-client";
+import { SITE_PHOTO_BAD_TYPE } from "@/lib/site/photos";
 import { BRAND_COMPOSITIONS, BRAND_COMPOSITION_LABELS, type BrandComposition } from "@/lib/brand/rules";
 import type { AtelierItem, ContentDetail, VersionView } from "@/lib/contents/view";
 
@@ -106,6 +109,8 @@ export function ContentWorkbench({ detail, viewing, items, checklist, credits, v
   const [moment, setMoment] = useState<"now" | "later">("now");
   const [scheduleAt, setScheduleAt] = useState("");
   const [reviewed, setReviewed] = useState(false);
+  const [rights, setRights] = useState(false);
+  const [photoAlt, setPhotoAlt] = useState(`Photo de ${detail.companyName}`);
   const [confirmed, setConfirmed] = useState(false);
   const [declaredWhere, setDeclaredWhere] = useState("");
   const [declaredOn, setDeclaredOn] = useState("");
@@ -150,6 +155,42 @@ export function ContentWorkbench({ detail, viewing, items, checklist, credits, v
     });
   }
 
+  // Import d'une photo (#291) : l'adresse et la version sont fixées au clic ; changer de page pendant l'envoi ne rattache jamais la photo ailleurs.
+  async function importPhoto(file: File) {
+    const target = `/api/contents/${detail.id}/photo`;
+    const sentNumber = current.number;
+    setError(null);
+    setNotice(null);
+    if (dirty) { setError({ area: "photo", text: MISSION_MESSAGES["M-60"] }); return; }
+    const alt = photoAlt.trim();
+    if (!alt) { setError({ area: "photo", text: VISUAL_PHOTO_ALT_REQUIRED }); return; }
+    setSending("photo");
+    let resized: Blob;
+    try {
+      resized = await resizeVisualPhoto(file);
+    } catch {
+      setSending(null);
+      setError({ area: "photo", text: SITE_PHOTO_BAD_TYPE });
+      return;
+    }
+    if (resized.size > VISUAL_PHOTO_MAX_BYTES) { setSending(null); setError({ area: "photo", text: VISUAL_PHOTO_TOO_LARGE }); return; }
+    const body = new FormData();
+    body.set("file", resized, "photo.jpg");
+    body.set("alt", alt);
+    body.set("number", String(sentNumber));
+    try {
+      const response = await fetch(target, { method: "POST", body });
+      const data = (await response.json().catch(() => ({}))) as { error?: string };
+      setSending(null);
+      if (!response.ok) { setError({ area: "photo", text: data.error ?? "La photo n'a pas pu être enregistrée. Réessayez." }); return; }
+      setNotice("Photo ajoutée. Les droits d'utilisation seront à confirmer à la validation.");
+      startRefresh(() => router.refresh());
+    } catch {
+      setSending(null);
+      setError({ area: "photo", text: "La photo n'a pas pu être envoyée. Réessayez." });
+    }
+  }
+
   const clearDraft = () => window.sessionStorage.removeItem(draftKey);
   const failure = (area: string) => (error?.area === area ? <p role="alert" className="warning">{error.text}</p> : null);
 
@@ -174,6 +215,7 @@ export function ContentWorkbench({ detail, viewing, items, checklist, credits, v
   const openDialog = (next: "validate" | "reject" | "publish" | "declare" | "cancel") => {
     setError(null);
     setReviewed(false);
+    setRights(false);
     setConfirmed(false);
     setReason("");
     setMoment("now");
@@ -256,6 +298,20 @@ export function ContentWorkbench({ detail, viewing, items, checklist, credits, v
                   <button type="button" disabled={busy || composition === (detail.visual.composition ?? "none")} onClick={() => void run("visual", { action: "set_visual", composition: composition === "none" ? null : composition }, clearDraft)}><Icon name="check" />Enregistrer le visuel</button>
                 </div>
               )}
+              {!archive && canEdit && (
+                <div className="heading-actions">
+                  <label className="field">Description de la photo
+                    <input value={photoAlt} maxLength={200} onChange={(event) => setPhotoAlt(event.target.value)} />
+                  </label>
+                  <label className="btn" aria-disabled={busy || dirty}>
+                    <Icon name="plus" />{detail.visual.photo ? "Remplacer la photo" : "Importer une photo"}
+                    <input type="file" accept="image/jpeg,image/png,image/webp" className="sr-only" disabled={busy || dirty} aria-label="Importer une photo" onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) void importPhoto(file); }} />
+                  </label>
+                  {detail.visual.photo && <button type="button" disabled={busy} onClick={() => void run("photo", { action: "remove_photo" })}><Icon name="x" />Retirer la photo</button>}
+                </div>
+              )}
+              <p className="small muted">{detail.visual.photo ? `Photo : « ${detail.visual.photo.alt} ». ${detail.visual.rightsConfirmed ? "Droits confirmés pour cette version." : "Droits à confirmer à la validation."}` : "Sans photo, le visuel reprend une illustration neutre de votre marque. JPG, PNG ou WebP, 1 Mo au plus."}</p>
+              {failure("photo")}
               {failure("visual")}
             </section>
           )}
@@ -475,7 +531,7 @@ export function ContentWorkbench({ detail, viewing, items, checklist, credits, v
         onClose={() => setDialog(null)}
         kicker="Votre accord"
         title={`Valider la version V${current.number}`}
-        actions={<button type="button" className="primary" disabled={busy || !reviewed || dirty} onClick={() => void run("validate", { action: "validate", reviewed })}><Icon name="check" />Valider sans diffuser</button>}
+        actions={<button type="button" className="primary" disabled={busy || !reviewed || (Boolean(detail.visual.composition && detail.visual.photo) && !rights) || dirty} onClick={() => void run("validate", { action: "validate", reviewed, rights })}><Icon name="check" />Valider sans diffuser</button>}
       >
         <h3>{current.title}</h3>
         <dl className="modal-details">
@@ -495,6 +551,12 @@ export function ContentWorkbench({ detail, viewing, items, checklist, credits, v
           <input type="checkbox" checked={reviewed} onChange={(event) => setReviewed(event.target.checked)} />
           <span>J&apos;ai relu le contenu et vérifié les informations qui engagent mon entreprise</span>
         </label>
+        {detail.visual.composition && detail.visual.photo && (
+          <label className="check-field">
+            <input type="checkbox" checked={rights} onChange={(event) => setRights(event.target.checked)} />
+            <span>{VISUAL_RIGHTS_LABEL}</span>
+          </label>
+        )}
         <p className="small muted">Aucun envoi ne sera effectué.</p>
         {failure("validate")}
       </Modal>

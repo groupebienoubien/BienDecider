@@ -715,6 +715,8 @@ model ContentVersion {
   note            String?
   rejectedAt      DateTime?
   rejectionReason String?
+  photo           Json? // photo importee par le dirigeant (#291) : { url, pathname, alt, width, height } ; reprise par les versions suivantes, droits a reconfirmer
+  rightsConfirmedAt DateTime? // droits d'utilisation du visuel confirmes a la validation de cette version ; une nouvelle version repart a null
   brandSnapshot   Json? // instantané de la marque à la création de la version (#290) : nom, palette, ton, composition ; les archives ne bougent pas
   createdAt       DateTime       @default(now())
   content         MissionContent @relation(fields: [contentId], references: [id], onDelete: Cascade)

@@ -172,7 +172,7 @@ export function profileReviewPending(versions: readonly { number: number; author
  * Le profil relu (3) : refusé tant que le contenu est « à relire » après une correction du profil (M-92, #169) ; la marque
  * du visuel (6) : refusée tant que la marque n'est pas confirmée (M-93, #290) ; la réactivation (5) arrive avec son US.
  */
-export function checkValidation(content: ContentSnapshot, version: { number: number; body: string }, input: { number: number; reviewed: boolean; profileToReview?: boolean; brandToConfirm?: boolean }): Refusal | null {
+export function checkValidation(content: ContentSnapshot, version: { number: number; body: string }, input: { number: number; reviewed: boolean; profileToReview?: boolean; brandToConfirm?: boolean; rightsToConfirm?: boolean }): Refusal | null {
   if (input.number !== content.currentNumber || version.number !== content.currentNumber) return { code: "M-02" };
   if (content.missionStatus !== "active") return { code: "M-47" };
   if (input.profileToReview) return { code: "M-92" };
@@ -184,6 +184,8 @@ export function checkValidation(content: ContentSnapshot, version: { number: num
   if (content.scheduled) return { code: "M-52" };
   if (content.currentDiffused) return { code: "M-53" };
   if (!input.reviewed) return { code: "M-77" };
+  // Les droits de la photo (#291) : case distincte de la relecture, portée par la version.
+  if (input.rightsToConfirm) return { code: "M-96" };
   return null;
 }
 

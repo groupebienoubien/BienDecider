@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { Prisma, type ContentVersion, type Mission, type MissionContent } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { PAUL_VERSION_CREDITS, debitCredits, ensureCreditGrant } from "@/lib/credits";
@@ -14,6 +15,10 @@ import {
 import { anthropicDraftWriter, type DraftRequest, type DraftWriter } from "@/lib/contents/writer";
 import { agencyNames } from "@/lib/agencies/service";
 import { cancelScheduledPublications } from "@/lib/contents/publish";
+import { sitePhotoStorage } from "@/lib/site/photo-store";
+import { PublishRefusedError } from "@/lib/execution-error";
+import { SITE_PHOTO_UNAVAILABLE, type SitePhotoCheck } from "@/lib/site/photos";
+import { rightsRequired, visualPhotoPathname, VISUAL_PHOTO_NOTE, VISUAL_PHOTO_REMOVED_NOTE, readVisualPhoto, type VisualPhoto } from "@/lib/brand/photo";
 import { BRAND_COMPOSITION_LABELS, BRAND_REVIEW_NOTE, isBrandComposition, isBrandTone, normalizeHex, type BrandComposition, type BrandSnapshot } from "@/lib/brand/rules";
 
 /** Note de la version système d'une correction du profil (§4.5) ; définie avec les règles pures, qui refusent sa validation (M-92). */
@@ -120,7 +125,7 @@ async function brandSnapshotFor(tx: Tx, companyId: string, composition: string |
 async function addVersion(
   tx: Tx,
   content: ContentWithMission,
-  version: { title: string; body: string; author: JournalActor; note: string },
+  version: { title: string; body: string; author: JournalActor; note: string; photo?: VisualPhoto | null },
   journal: { origine: string; actor: JournalActor },
   patch: Prisma.MissionContentUpdateManyMutationInput = {},
 ): Promise<ContentVersion> {
@@ -133,7 +138,9 @@ async function addVersion(
   // Instantané de la marque (#290) : ce que le visuel de cette version utilise ; les archives ne changent pas rétroactivement.
   const composition = patch.visualComposition !== undefined ? (patch.visualComposition as string | null) : content.visualComposition;
   const brandSnapshot = await brandSnapshotFor(tx, content.companyId, composition);
-  const created = await tx.contentVersion.create({ data: { contentId: content.id, number, title: version.title, body: version.body, author: version.author, note: version.note, ...(brandSnapshot ? { brandSnapshot } : {}) } });
+  // La photo suit les versions (#291) ; les droits, eux, repartent de zéro : ils se reconfirment à chaque validation.
+  const photo = version.photo !== undefined ? version.photo : readVisualPhoto((await tx.contentVersion.findUnique({ where: { contentId_number: { contentId: content.id, number: content.currentNumber } }, select: { photo: true } }))?.photo, content.companyId);
+  const created = await tx.contentVersion.create({ data: { contentId: content.id, number, title: version.title, body: version.body, author: version.author, note: version.note, ...(brandSnapshot ? { brandSnapshot } : {}), ...(photo ? { photo } : {}) } });
   await writeJournal(tx, { companyId: content.companyId, missionId: content.missionId, code: "J-19", actor: journal.actor, params: { n: String(number), origine: journal.origine, mission: content.mission.title } });
   return created;
 }
@@ -245,7 +252,7 @@ export async function hasScheduledVisual(companyId: string): Promise<boolean> {
   return contents.some((content) => snapshotOf(content).scheduled);
 }
 
-const ACTIONS = ["set_visual", "save", "restore", "variant", "accept_variant", "dismiss_variant", "validate", "reject", "next_version"] as const;
+const ACTIONS = ["remove_photo", "set_visual", "save", "restore", "variant", "accept_variant", "dismiss_variant", "validate", "reject", "next_version"] as const;
 export type ContentAction = (typeof ACTIONS)[number];
 
 export type ContentRequest = { action: ContentAction; number: number; input: Record<string, unknown> };
@@ -276,6 +283,14 @@ export async function applyContentAction(companyId: string, contentId: string, r
     const { content, snapshot, current } = await lockContent(tx, companyId, contentId, request.number);
     const done = async (balance: number | null = null) => ({ currentNumber: (await tx.missionContent.findUniqueOrThrow({ where: { id: content.id } })).currentNumber, balance });
     switch (request.action) {
+      case "remove_photo": {
+        // Retirer la photo (#291) : nouvelle version, validation et droits retirés ; le visuel retombe sur l'illustration neutre de la marque.
+        if (!readVisualPhoto(current.photo, companyId)) return done();
+        const refusal = checkNewVersion(snapshot);
+        if (refusal) refuse(refusal);
+        await addVersion(tx, content, { title: current.title, body: current.body, author: "owner", note: VISUAL_PHOTO_REMOVED_NOTE, photo: null }, { origine: "reprise sans photo", actor: "owner" });
+        return done();
+      }
       case "set_visual": {
         // Choisir ou retirer le visuel (#290) : une nouvelle version, validation retirée, avec l'instantané de la marque.
         const requested = request.input.composition;
@@ -303,7 +318,7 @@ export async function applyContentAction(companyId: string, contentId: string, r
         const refusal = checkNewVersion(snapshot);
         if (refusal) refuse(refusal);
         const source = await tx.contentVersion.findUniqueOrThrow({ where: { contentId_number: { contentId, number: from } } });
-        await addVersion(tx, content, { title: source.title, body: source.body, author: "owner", note: `Reprise de V${from}` }, { origine: `reprise de V${from} par vous`, actor: "owner" });
+        await addVersion(tx, content, { title: source.title, body: source.body, author: "owner", note: `Reprise de V${from}`, photo: readVisualPhoto(source.photo, companyId) }, { origine: `reprise de V${from} par vous`, actor: "owner" });
         return done();
       }
       case "accept_variant": {
@@ -322,10 +337,13 @@ export async function applyContentAction(companyId: string, contentId: string, r
       case "validate": {
         const versions = await tx.contentVersion.findMany({ where: { contentId }, select: { number: true, author: true, note: true } });
         const brand = await tx.company.findUniqueOrThrow({ where: { id: companyId }, select: { brandConfirmedAt: true } });
-        const refusal = checkValidation(snapshot, current, { number: request.number, reviewed: request.input.reviewed === true, profileToReview: profileReviewPending(versions), brandToConfirm: brand.brandConfirmedAt === null });
+        const photo = readVisualPhoto(current.photo, companyId);
+        const rights = snapshot.hasVisual && rightsRequired(photo);
+        const refusal = checkValidation(snapshot, current, { number: request.number, reviewed: request.input.reviewed === true, profileToReview: profileReviewPending(versions), brandToConfirm: brand.brandConfirmedAt === null, rightsToConfirm: rights && request.input.rights !== true });
         if (refusal) refuse(refusal);
         const written = await tx.missionContent.updateMany({ where: { id: content.id, version: content.version }, data: { validatedNumber: current.number, validatedAt: new Date(), version: { increment: 1 } } });
         if (written.count === 0) throw new MissionError("M-02");
+        if (rights) await tx.contentVersion.update({ where: { id: current.id }, data: { rightsConfirmedAt: new Date() } });
         await tx.mission.update({ where: { id: content.missionId }, data: { hasValidatedVersion: true } });
         await writeJournal(tx, { companyId, missionId: content.missionId, code: "J-20", params: { n: String(current.number), titre: current.title } });
         return done();
@@ -353,6 +371,36 @@ export async function applyContentAction(companyId: string, contentId: string, r
         throw new MissionError("M-02");
     }
   });
+}
+
+/**
+ * Importer une photo dans le visuel (#291) : une nouvelle version « Photo importée par vous, droits à reconfirmer », validation retirée.
+ * Le contenu est identifié par l'adresse et la version vue ; une version obsolète (M-02) ou un contenu d'un autre format (M-97) est refusé
+ * avant tout envoi. Le fichier est stocké sous un chemin propre à l'entreprise ; s'il n'y a pas de version, il est supprimé.
+ */
+export async function importVisualPhoto(companyId: string, contentId: string, number: number, bytes: Uint8Array, check: Extract<SitePhotoCheck, { ok: true }>, alt: string): Promise<ContentActionResult> {
+  const before = await prisma.missionContent.findFirst({ where: { id: contentId, companyId }, include: { mission: true, publications: { select: { versionNumber: true, status: true } } } });
+  if (!before || before.currentNumber === 0) throw new ContentNotFoundError();
+  if (number !== before.currentNumber) throw new MissionError("M-02");
+  const early = snapshotOf(before);
+  if (early.format !== "social_post") throw new MissionError("M-97");
+  const earlyRefusal = checkNewVersion(early);
+  if (earlyRefusal) refuse(earlyRefusal);
+  if (!sitePhotoStorage.isConfigured()) throw new PublishRefusedError(SITE_PHOTO_UNAVAILABLE, 503);
+  const stored = await sitePhotoStorage.put(visualPhotoPathname(companyId, contentId, randomUUID(), check.type), bytes, check.type.mime);
+  const photo: VisualPhoto = { url: stored.url, pathname: stored.pathname, alt, width: check.width, height: check.height };
+  try {
+    return await prisma.$transaction(async (tx) => {
+      const { content, snapshot, current } = await lockContent(tx, companyId, contentId, number);
+      const refusal = checkNewVersion(snapshot);
+      if (refusal) refuse(refusal);
+      await addVersion(tx, content, { title: current.title, body: current.body, author: "owner", note: VISUAL_PHOTO_NOTE, photo }, { origine: "recomposée avec une photo importée par vous", actor: "owner" }, { visualComposition: content.visualComposition ?? "photo_signature" });
+      return { currentNumber: (await tx.missionContent.findUniqueOrThrow({ where: { id: content.id } })).currentNumber, balance: null };
+    });
+  } catch (error) {
+    await sitePhotoStorage.del(stored.url).catch(() => undefined);
+    throw error;
+  }
 }
 
 /**

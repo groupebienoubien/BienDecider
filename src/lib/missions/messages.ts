@@ -71,6 +71,8 @@ export const MISSION_MESSAGES = {
   "M-92": "Profil corrigé : relisez ce contenu et enregistrez une nouvelle version avant de le valider.",
   "M-93": "Confirmez votre marque avant de valider un visuel.",
   "M-94": "Un visuel est programmé : annulez sa diffusion avant de modifier votre marque.",
+  "M-96": "Cochez « Je confirme le visuel et les droits d'utilisation » avant de valider.",
+  "M-97": "Seules les publications de réseaux sociaux ont un visuel : la photo ne peut pas être ajoutée à ce contenu.",
   "M-95": "Choisissez l'une des deux compositions de visuel, ou retirez le visuel.",
 } as const;
 
