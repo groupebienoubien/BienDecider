@@ -1,7 +1,8 @@
 import { currentSignupAvailability } from "@/lib/signup-control";
 import { SIGNUP_CLOSED_MESSAGE, SIGNUP_FULL_MESSAGE } from "@/lib/signup-rules";
 import { prefillFromPaul, prefillProfile } from "@/lib/onboarding/draft-rules";
-import { analysisView, limitedStepNotice, type DraftAnalysis, type Finding } from "@/lib/onboarding/analysis-rules";
+import { analysisView, limitedStepNotice, type DraftAnalysis, type Finding, type FirstFinding } from "@/lib/onboarding/analysis-rules";
+import { CERTAINTY_LABELS } from "@/lib/findings/certainty";
 import { requireDraftPage } from "./guard";
 import { WelcomeFrame } from "./welcome-frame";
 import { AmbitionForm, DiscoveryStep, ProfileForm } from "./step-forms";
@@ -19,6 +20,32 @@ function sourceName(source: string): string {
 
 function observedLine(finding: Finding<unknown>): string {
   return finding.provenance.kind === "observed" ? `Observé sur ${sourceName(finding.provenance.source)} le ${readDate(finding.provenance.readAt)}` : "Hypothèse de Paul";
+}
+
+/** Premiers constats (FR-6) : certitude, fait, conséquence possible, source et date ; une piste n'a jamais de source. */
+function FirstFindings({ constats }: { constats: FirstFinding[] }) {
+  if (!constats.length) return null;
+  return (
+    <section aria-labelledby="constats-title" className="mb-6 flex flex-col gap-3">
+      <h2 id="constats-title" className="text-base font-semibold text-[var(--bd-ink)]">Vos premiers constats</h2>
+      <ul className="flex flex-col gap-3">
+        {constats.map((constat) => (
+          <li key={constat.fact} className="flex flex-col gap-1 rounded-lg border border-[var(--bd-line-strong)] bg-white p-4 text-sm text-[var(--bd-ink)]">
+            <span className={`self-start rounded-full px-2.5 py-0.5 text-xs font-semibold ${constat.certainty === "observe" ? "bg-[var(--bd-brand-light)] text-[var(--bd-brand)]" : "bg-[var(--bd-attention-light)] text-[var(--bd-ink)]"}`}>
+              {CERTAINTY_LABELS[constat.certainty]}
+            </span>
+            <p className="font-semibold">{constat.fact}</p>
+            <p>Conséquence possible : {constat.consequence}</p>
+            <p className="text-[var(--bd-muted)]">
+              {constat.source && constat.readAt
+                ? <>Lu sur <a href={constat.source} target="_blank" rel="noopener noreferrer" className="underline">{sourceName(constat.source)}</a> le {readDate(constat.readAt)}</>
+                : "Déduction de Paul, sans source directe : à confirmer avec vous."}
+            </p>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
 }
 
 /** Ce que l'analyse a observé (source et date de lecture) ; rien n'est présenté comme observé sans avoir été lu. */
@@ -84,6 +111,7 @@ export default async function WelcomePage() {
             {limitedStepNotice(state.analysis.limit)}
           </p>
         )}
+        {state.analysis?.constats && <FirstFindings constats={state.analysis.constats} />}
         {state.analysis && <ObservedFindings analysis={state.analysis} guessed={guessed} />}
         <ProfileForm key="profile" prefill={prefill} />
       </WelcomeFrame>

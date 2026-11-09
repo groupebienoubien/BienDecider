@@ -5,6 +5,7 @@
  */
 export const DIAGNOSTIC_TOPICS = [
   { category: "site_web", label: "Site web" },
+  { category: "fiche_google", label: "Fiche Google" },
   { category: "reseaux_sociaux", label: "Réseaux sociaux" },
   { category: "concurrence", label: "Concurrence" },
 ] as const;

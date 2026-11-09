@@ -140,9 +140,6 @@
 - source_spec: `docs/bmad/implementation/spec-gh-168-provenance-des-missions.md`
   summary: Contrôler après déploiement la reprise de la certitude des constats (compter les constats par `certainty` face à `sourceStatus`).
   evidence: Le CI applique la migration sur une table vide ; aucun test ne vérifie l'UPDATE sur des constats existants.
-- source_spec: `docs/bmad/implementation/spec-gh-168-provenance-des-missions.md`
-  summary: Aligner « Preuve utilisée » (Votre prochaine décision dans Stratégie, détail de mission) sur la provenance reliée : titre et certitude du constat au lieu de « Constat relevé par Paul ».
-  evidence: src/app/strategie/page.tsx:56 et src/app/missions/[id]/page.tsx:79 affichent encore « Constat relevé par Paul » pour toute mission de Paul ; la spec #168 laissait le reste de la page inchangé.
 - source_spec: none
   summary: #279 Parcours d'entrée en cinq étapes, compte créé en dernier, à faire juste après #310.
   evidence: Découpage décidé par Samir le 2026-11-06 : #310 d'abord. Décisions déjà prises pour #279 : étapes 1 à 4 en version minimale (saisies, confirmation du profil, ambition en texte libre, trois missions tirées des modèles ; l'analyse et Paul arrivent avec #280, #281, #282 et #284), l'ancien parcours /signup et /onboarding est remplacé ; adresse déjà utilisée → message neutre qui renvoie vers « Retrouver mon compte » sans révéler que le compte existe (FR-9 prévaut sur M-14). Reste à trancher : la vérification de l'e-mail, qui bloque aujourd'hui tous les agents (agent-runs.ts:440), alors que l'addendum §6 ne l'exige qu'avant une diffusion.
@@ -165,9 +162,6 @@
   summary: Tester deux inscriptions simultanées sur un même brouillon (un seul compte, une 409 M-10, emplacement du jour libéré).
   evidence: Les tests d'inscription envoient des requêtes l'une après l'autre ; la branche `count === 0` n'est pas couverte.
 - source_spec: `docs/bmad/implementation/spec-gh-280-decouverte-entreprise.md`
-  summary: À la création du compte, reprendre les constats de l'analyse anonyme (AuditFinding, SourceRead) et son coût, comme le prévoit l'addendum §6.
-  evidence: #280 garde l'analyse dans OnboardingDraft.analysis seulement ; les constats affichés et corrigés relèvent de #281, leur reprise dans le compte vient avec.
-- source_spec: `docs/bmad/implementation/spec-gh-280-decouverte-entreprise.md`
   summary: Cumuler le coût des analyses anonymes (y compris des brouillons qui n'aboutissent pas à un compte) dans la trace des visites et une vue d'administration.
   evidence: Le coût n'est gardé que dans OnboardingDraft.analysis, effacé avec le brouillon ; à faire avec #311 (analysisCostUsd de VisitTrace).
 - source_spec: none
@@ -176,9 +170,6 @@
 - source_spec: `docs/bmad/implementation/spec-gh-282-ambition-reformulee-par-paul.md`
   summary: Tester le repli d'Entreprise quand le budget est atteint (`AgentRunQuotaError` → analyseur de secours, 200) et l'enregistrement d'usage sous `ambition_interpret`.
   evidence: En CI, aucune clé de modèle n'est posée, donc `modelFor` sort avant `reserveUsageBudget` ; il faudrait rendre la réservation injectable au niveau de la route.
-- source_spec: none
-  summary: À l'inscription, reprendre ce que l'analyse anonyme a lu en constats (`AuditFinding`, `SourceRead`), au format des premiers constats sourcés.
-  evidence: Choix de Samir du 2026-11-07 : séparé de #281 et laissé à #292, qui définit les constats (certitude, fait, conséquence, source, date).
 - source_spec: `docs/bmad/implementation/spec-gh-281-corriger-ce-que-paul-a-compris.md`
   summary: Cumuler le coût de toutes les analyses d'un même brouillon (chaque relance de la découverte remet le coût à 0) avant de le reprendre au compte.
   evidence: `newAnalysis` crée un coût nul à chaque relance ; seule la dernière analyse devient un `UsageEvent` à l'inscription. À traiter avec le cumul des coûts anonymes de #311.
@@ -192,3 +183,12 @@
 - source_spec: `docs/bmad/implementation/spec-gh-169-corriger-mon-profil.md`
   summary: Relier « Prénom » (firstName) et « Votre prénom et nom » (ownerName, signature des e-mails) sur Entreprise, ou expliquer leur différence.
   evidence: Relecture #169 : corriger le prénom ne change pas la signature, et les deux champs se côtoient sans explication.
+- source_spec: `docs/bmad/implementation/spec-gh-292-constats-et-diagnostic.md`
+  summary: FR-51, partie modèle : positionnement proposé « à challenger » (observé, supposé, à éviter), axes de positionnement et concurrence locale (acteur, angle, ce qu'il montre ou non, fiabilité), avec concurrents à confirmer ou écarter (un concurrent écarté n'est plus proposé).
+  evidence: Aucune de ces données n'est produite ni stockée aujourd'hui ; l'audit de Paul (marketing) doit les rendre dans un format vérifiable, et un modèle de stockage (concurrents écartés) est à ajouter. Rien n'est affiché en attendant, pas même d'exemple.
+- source_spec: `docs/bmad/implementation/spec-gh-292-constats-et-diagnostic.md`
+  summary: « Corriger cette information » sur un constat (critères d'octobre de #169) et « Votre boussole » avec la capacité disponible à reconfirmer dans 30 jours.
+  evidence: Les repères existants (ambition, localisation, zone, clients) restent sur Entreprise ; la capacité n'a pas de champ en base.
+- source_spec: `docs/bmad/implementation/spec-gh-292-constats-et-diagnostic.md`
+  summary: Relier les trois missions de l'étape 4 aux premiers constats repris (`sourceFindingId`), et écrire un `SourceRead` pour le site lu avant compte.
+  evidence: Les missions de départ gardent leur constat rédigé par les règles (#284) ; la correspondance entre un modèle et un constat n'est pas définie. `SourceRead` ne connaît aujourd'hui que les avis Google.

@@ -11,7 +11,7 @@ import { SIGNUP_CLOSED_MESSAGE, SIGNUP_FULL_MESSAGE, secondsUntilNextSignupDay, 
 import { ADDRESS_UNAVAILABLE_MESSAGE, ONBOARDING_MESSAGES, RECOVER_ACCOUNT_HREF, checkDraftForAccount, confirmedOrigin, isValidEmail, starterPlan, stepHref, synthesisUsage } from "@/lib/onboarding/draft-rules";
 import { cleanOwnerName, type ProfileOrigins } from "@/lib/company-profile";
 import { clearDraftCookie, loadDraft } from "@/lib/onboarding/draft";
-import { analysisUsage } from "@/lib/onboarding/analysis-rules";
+import { analysisUsage, firstFindingRecords } from "@/lib/onboarding/analysis-rules";
 import { createMissionIn } from "@/lib/missions/service";
 import { writeJournal } from "@/lib/journal";
 import { ensureCreditGrant } from "@/lib/credits";
@@ -120,6 +120,9 @@ export async function POST(request: NextRequest) {
         },
       });
       await ensureCreditGrant(tx, created.id);
+      // Premiers constats de l'analyse anonyme (#292) : ils forment le diagnostic de départ, jusqu'au premier audit terminé.
+      const constats = firstFindingRecords(draft.state.analysis);
+      if (constats.length) await tx.auditFinding.createMany({ data: constats.map((constat) => ({ companyId: created.id, ...constat })) });
       // Le coût de l'analyse anonyme revient au compte, une seule fois : le brouillon vient d'être effacé dans cette transaction.
       const usage = analysisUsage(draft.state.analysis);
       if (usage) await tx.usageEvent.create({ data: { companyId: created.id, ...usage } });

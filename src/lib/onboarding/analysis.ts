@@ -4,7 +4,7 @@ import { readPlaceDetails, searchPlaceIds, type PlaceDetails, type PlacesDeps } 
 import { estimateCostUsd, type UsageLike } from "@/lib/usage";
 import { readPublicSite, type SitePage, type SiteReadResult } from "@/lib/onboarding/site-reader";
 import {
-  rubricsFor, type AnalysisInput, type DraftAnalysis, type Finding, type GoogleOutcome, type ModelOutcome, type SiteOutcome,
+  keepFirstFindings, ruleFirstFindings, rubricsFor, type AnalysisInput, type DraftAnalysis, type Finding, type GoogleOutcome, type ModelOutcome, type SiteOutcome,
 } from "@/lib/onboarding/analysis-rules";
 
 export { rubricsFor } from "@/lib/onboarding/analysis-rules";
@@ -31,6 +31,7 @@ const extractedSchema = z.object({
   emails: z.array(z.string()).max(10),
   phones: z.array(z.string()).max(10),
   visualIdentity: z.string(),
+  findings: z.array(z.object({ topic: z.string().optional(), fact: z.string(), consequence: z.string(), source: z.string().optional() })).max(6).optional(),
 });
 export type Extracted = z.infer<typeof extractedSchema>;
 export type ExtractionResult = { ok: true; value: Extracted; usage: UsageLike; model: string } | { ok: false; usage?: UsageLike; model?: string };
@@ -98,8 +99,24 @@ export const extractWithModel: Extractor = async (input) => {
             emails: { type: "array", items: { type: "string" }, description: "Adresses e-mail publiques écrites sur les pages, telles quelles." },
             phones: { type: "array", items: { type: "string" }, description: "Numéros de téléphone publics écrits sur les pages, tels quels." },
             visualIdentity: { type: "string", description: "Identité visuelle en une phrase courte (couleurs dominantes, style) d'après les couleurs relevées et les pages ; sinon chaîne vide." },
+            findings: {
+              type: "array",
+              maxItems: 3,
+              description: "Trois constats au plus, utiles au dirigeant pour gagner des clients : ce qui est bien ou manque sur ses pages ou sa fiche Google. Aucun chiffre, aucune note ni citation d'avis.",
+              items: {
+                type: "object",
+                properties: {
+                  topic: { type: "string", enum: ["site_web", "fiche_google", "reseaux_sociaux"] },
+                  fact: { type: "string", description: "Le fait relevé, en une phrase de 10 à 200 caractères, au vouvoiement." },
+                  consequence: { type: "string", description: "Sa conséquence possible pour les clients, en une phrase de 10 à 200 caractères." },
+                  source: { type: "string", description: "L'adresse exacte de la page où le fait est écrit, ou « google » pour la fiche Google ; chaîne vide si c'est une déduction." },
+                },
+                required: ["topic", "fact", "consequence", "source"],
+                additionalProperties: false,
+              },
+            },
           },
-          required: ["trade", "servingArea", "targetClients", "offers", "emails", "phones", "visualIdentity"],
+          required: ["trade", "servingArea", "targetClients", "offers", "emails", "phones", "visualIdentity", "findings"],
           additionalProperties: false,
         },
       }],
@@ -267,7 +284,13 @@ export async function runDraftAnalysis(draftId: string, profile: AnalysisInput, 
       }
       // Catégorie de la fiche Google (« Restaurant ») : activité proposée quand le modèle n'en donne pas.
       if (!analysis.findings.trade && place?.category) analysis = { ...analysis, findings: { ...analysis.findings, trade: hypothesis(place.category) } };
+      const googleRead = analysis.findings.google?.provenance.kind === "observed" ? { link: analysis.findings.google.value, readAt: analysis.findings.google.provenance.readAt } : null;
+      const fromModel = extracted.ok ? keepFirstFindings(extracted.value.findings ?? [], { pages: analysis.findings.pages, google: googleRead }) : [];
+      const siteRead = siteResult?.ok ? { url: siteResult.url, readAt: siteResult.readAt } : null;
+      analysis = { ...analysis, constats: fromModel.length ? fromModel : ruleFirstFindings({ site: siteRead, google: googleRead }) };
     }
+    // Rien lu : l'absence n'est un constat que si la fiche a vraiment été cherchée sans résultat, sans site déclaré.
+    if (model === "skipped") analysis = { ...analysis, constats: !profile.website && analysis.rubrics.google.status === "not_found" ? ruleFirstFindings({ site: null, google: null }) : [] };
     await publish({ status: "done", finishedAt: now().toISOString() });
   } catch (error) {
     console.error(`Analyse du brouillon ${draftId} interrompue : ${errorLabel(error)}.`);

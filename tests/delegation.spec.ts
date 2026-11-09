@@ -67,7 +67,8 @@ import { RESPONSIBLE_AGENTS, RESPONSIBLE_LABELS, validateResponsibleAgent, valid
 import { AMBITION_TARGET_NOTICE, EMPTY_TERMS, GAIN_QUESTION, HORIZON_QUESTION, RECRUITMENT_UNSPECIFIED_NOTE, REINTERPRET_MESSAGE, boundAmbition, capLabel, interpretationFrom, parseAmbition, readAmbitionTerms, reformulation, type AmbitionTerms } from "../src/lib/ambition-rules";
 import { signInterpretation, verifyInterpretation } from "../src/lib/ambition-token";
 import { anonymousAmbitionModel, interpretAmbition, type AmbitionModel } from "../src/lib/ambition";
-import { ANALYSIS_MESSAGES, ANALYSIS_STALE_MS, ANALYSIS_USAGE_AGENT, analysisFinished, analysisUsage, analysisNotice, analysisView, effectiveAnalysis, limitedStepNotice, needsNewAnalysis, newAnalysis, readAnalysis, retryLabel, rubricLabel, rubricsFor, type DraftAnalysis } from "../src/lib/onboarding/analysis-rules";
+import { ANALYSIS_MESSAGES, ANALYSIS_STALE_MS, ANALYSIS_USAGE_AGENT, analysisFinished, analysisUsage, analysisNotice, analysisView, effectiveAnalysis, firstFindingRecords, keepFirstFindings, limitedStepNotice, needsNewAnalysis, newAnalysis, readAnalysis, retryLabel, ruleFirstFindings, rubricLabel, rubricsFor, type DraftAnalysis } from "../src/lib/onboarding/analysis-rules";
+import { decisionRows, diagnosticSummary, missingInputs } from "../src/lib/findings/decisions";
 import { MAX_LINKS, SITE_READ_LIMITS, checkSiteUrl, decode, extractTitle, extractLogo, extractPalette, htmlToText, isPublicAddress, pickInternalPages, extractLinks, pinnedTransport, readPage, readPublicSite, type SiteTransport } from "../src/lib/onboarding/site-reader";
 import { EXTRACTION_TEXT_MAX, cleanValue, extractionPrompt, normalizePhone, observedContacts, runDraftAnalysis, type Extractor } from "../src/lib/onboarding/analysis";
 import { DEFAULT_ANONYMOUS_ANALYSIS_DAILY_LIMIT, anonymousAnalysisDailyLimit } from "../src/lib/auth-throttle";
@@ -2696,6 +2697,79 @@ test("GH-280: without a declared site, Paul reads the site of the Google listing
   } finally {
     await site.close();
   }
+});
+
+test("GH-292: first findings — certainty comes from what was really read, never from the model, three at most, then become the starting diagnostic", async () => {
+  const readAt = "2026-11-09T10:00:00.000Z";
+  const read = { pages: [{ url: "https://atelier-lumen.test/", readAt }], google: { link: "https://maps.google.com/?cid=42", readAt } };
+  const kept = keepFirstFindings([
+    { topic: "site_web", fact: "Votre site ne montre aucune réalisation.", consequence: "Vos clients ne voient pas ce que vous savez faire.", source: "https://atelier-lumen.test" },
+    { topic: "fiche_google", fact: "Votre fiche Google n'a pas d'horaires.", consequence: "Un client peut se déplacer pour rien.", source: "google" },
+    { topic: "site_web", fact: "Vous semblez viser surtout les particuliers.", consequence: "Les syndics ne se sentent pas concernés.", source: "https://ailleurs.test/page" },
+    { topic: "site_web", fact: "Un quatrième constat de trop pour l'étape.", consequence: "Il n'est jamais montré au dirigeant.", source: "" },
+  ], read);
+  expect(kept.map((finding) => [finding.certainty, finding.topic, finding.source, finding.readAt])).toEqual([
+    ["observe", "site_web", "https://atelier-lumen.test/", readAt],
+    ["observe", "fiche_google", "https://maps.google.com/?cid=42", readAt],
+    // Une page non lue n'est pas une source : la déduction reste une piste, sans source ni date.
+    ["piste", "site_web", null, null],
+  ]);
+  // Trop court, balises, doublon et « google » sans fiche lue.
+  expect(keepFirstFindings([{ fact: "Court", consequence: "Une conséquence assez longue." }, { fact: "<b>Un fait</b> sans balise.", consequence: "Une conséquence assez longue.", source: "google" }, { fact: "Un fait sans balise.", consequence: "Une conséquence assez longue." }], { pages: [], google: null }))
+    .toEqual([{ topic: "site_web", fact: "Un fait sans balise.", consequence: "Une conséquence assez longue.", certainty: "piste", source: null, readAt: null }]);
+
+  // Sans constat du modèle : seulement ce que la lecture a établi.
+  expect(ruleFirstFindings({ site: null, google: read.google }).map((finding) => [finding.certainty, finding.topic])).toEqual([["observe", "fiche_google"]]);
+  expect(ruleFirstFindings({ site: null, google: null })).toEqual([expect.objectContaining({ certainty: "piste", source: null })]);
+
+  // Dans le brouillon, puis dans le compte : un constat par ligne, « consultée » seulement pour un observé.
+  const analysis = { ...newAnalysis(analysisInput, "r"), status: "done" as const, constats: kept };
+  expect(readAnalysis(JSON.parse(JSON.stringify(analysis)))).toEqual(analysis);
+  expect(readAnalysis({ ...analysis, constats: [...kept, ...kept] })).toBeNull();
+  expect(firstFindingRecords(analysis).map((record) => [record.category, record.certainty, record.sourceStatus, record.sourceUrl])).toEqual([
+    ["site_web", "observe", "consultée", "https://atelier-lumen.test/"],
+    ["fiche_google", "observe", "consultée", "https://maps.google.com/?cid=42"],
+    ["site_web", "piste", null, null],
+  ]);
+  expect(firstFindingRecords(null)).toEqual([]);
+
+  // Bout en bout : les constats du modèle sont contrôlés ; sans eux, les règles.
+  const site = await startFakeSite();
+  try {
+    const withModel = await runDraftAnalysis("d", analysisInput, { analysis: newAnalysis(analysisInput, "r"), save: async () => true, readSite: (url) => readPublicSite(url, site.deps), places: placesDeps, extract: async () => ({
+      ok: true, model: "claude-sonnet-5-5", usage: { input_tokens: 10, output_tokens: 10 },
+      value: { trade: "", servingArea: "", targetClients: "", offers: "", emails: [], phones: [], visualIdentity: "", findings: [{ topic: "fiche_google", fact: "Votre fiche Google n'a pas d'horaires.", consequence: "Un client peut se déplacer pour rien.", source: "google" }] },
+    }) });
+    expect(withModel.constats).toEqual([expect.objectContaining({ certainty: "observe", topic: "fiche_google", source: "https://maps.google.com/?cid=42" })]);
+    const withoutModel = await runDraftAnalysis("d", analysisInput, { analysis: newAnalysis(analysisInput, "r"), save: async () => true, readSite: (url) => readPublicSite(url, site.deps), places: placesDeps, extract: async () => ({ ok: false }) });
+    expect(withoutModel.constats?.map((finding) => finding.topic)).toEqual(["fiche_google", "site_web"]);
+    expect(withoutModel.constats?.every((finding) => finding.certainty === "observe")).toBe(true);
+  } finally {
+    await site.close();
+  }
+});
+
+test("GH-292: Entreprise — each current finding leads to Paul's deduction and its missions, or to a discussion; what is missing is said, never assumed", () => {
+  const at = "2026-11-09T10:00:00.000Z";
+  const finding = (id: string, certainty: string, sourceStatus: string | null, sourceUrl: string | null) => ({ id, title: `Constat ${id}`, category: "site_web", content: "Contenu", sourceUrl, sourceStatus, certainty, createdAt: at });
+  const rows = decisionRows(
+    [finding("a", "observe", "consultée", "https://atelier.test/"), finding("b", "observe", null, null), finding("c", "piste", null, null)],
+    [
+      { id: "m1", title: "Montrer un chantier", status: "proposed", sourceFindingId: "a", deduction: "  Un chantier rassure.  " },
+      { id: "m2", title: "Mission écartée", status: "dismissed", sourceFindingId: "c", deduction: "Ne compte pas." },
+    ],
+  );
+  expect(rows.map((row) => [row.finding.id, row.certainty, row.tone, row.deduction, row.missions.map((mission) => mission.id)])).toEqual([
+    ["a", "Observé", "green", "Un chantier rassure.", ["m1"]],
+    // « Observé » sans source consultée n'est pas observé.
+    ["b", "À vérifier", "orange", null, []],
+    // Une mission écartée n'est pas une suite proposée.
+    ["c", "Piste à qualifier", "blue", null, []],
+  ]);
+  expect(diagnosticSummary(rows)).toEqual({ findings: 3, sources: 1, missions: 1 });
+  expect(missingInputs({ website: null, googlePlaceId: null, targetClients: "Particuliers", offers: " ", monthlyRevenue: 4000, averageClientValue: null })).toEqual([
+    "Votre site internet, s'il existe", "Votre fiche Google, à confirmer dans le diagnostic", "Ce que vous proposez", "La valeur moyenne d'un client (facultatif)", "La performance réelle de vos concurrents : non accessible",
+  ]);
 });
 
 test("GH-280: rubric states, interrupted analyses, relaunch rules and the daily cap setting", () => {
