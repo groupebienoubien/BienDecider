@@ -99,6 +99,8 @@ const GUARDED_ROUTES: Guarded[] = [
   { method: "POST", path: "/api/onboarding/interpret", denied: 401 },
   { method: "POST", path: "/api/entreprise/ambition", denied: 401 },
   { method: "POST", path: "/api/entreprise/marque", denied: 401 },
+  { method: "POST", path: "/api/entreprise/marque/logo", denied: 401 },
+  { method: "DELETE", path: "/api/entreprise/marque/logo", denied: 401 },
   { method: "POST", path: "/api/contents/[id]/photo", denied: 401 },
   { method: "GET", path: "/api/contents/[id]/visuel", denied: 401 },
   { method: "GET", path: "/api/site/photos", denied: 401 },
@@ -1496,6 +1498,44 @@ test("a visual photo is controlled by the server, carried by versions, and its r
     expect(await (await upload(a, { file: file(png(800, 600)), alt: "Salle", number: "1" }, page.id)).json()).toMatchObject({ code: "M-97" });
   } finally {
     await prisma.company.deleteMany({ where: { id: { in: [a.id, b.id] } } });
+    await prisma.$disconnect();
+  }
+});
+
+test("the brand logo is controlled by the server before storage, and versions each visual (#290)", async ({ request }) => {
+  const prisma = openDatabase();
+  const marker = randomUUID().slice(0, 8);
+  const a = await prisma.company.create({ data: { ownerEmail: `security-logo-a-${marker}@example.invalid`, name: `Logo A ${marker}`, trade: "Artisan", servingArea: "Paris", brandPrimary: "#1f5f4a", brandAccent: "#e0a030", brandTone: "clair", brandConfirmedAt: new Date() } });
+  const headers = (origin = baseURL) => ({ Cookie: sessionCookie(a.ownerEmail, a.sessionVersion), Origin: origin });
+  const png = (width: number, height: number, extra = 0) => {
+    const head = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 0, 0, 0, 0, 0, 8, 2, 0, 0, 0]);
+    head.writeUInt32BE(width, 16);
+    head.writeUInt32BE(height, 20);
+    return Buffer.concat([head, Buffer.alloc(extra)]);
+  };
+  const upload = (buffer: Buffer, origin = baseURL) => request.post(`${baseURL}/api/entreprise/marque/logo`, { headers: headers(origin), multipart: { file: { name: "logo.png", mimeType: "image/png", buffer } } });
+  const mission = await prisma.mission.create({ data: { companyId: a.id, template: "social_post", channel: "facebook", title: "Publier un chantier", outcome: "Des demandes de devis", originalOutcome: "Des demandes de devis", finding: "Aucune publication", scope: { topic: "Nos chantiers" }, status: "active", position: 1 } });
+  const content = await prisma.missionContent.create({ data: { companyId: a.id, missionId: mission.id, channel: "facebook", format: "social_post", currentNumber: 1, visualComposition: "cadre_editorial", versions: { create: { number: 1, title: "Nos chantiers", body: "Une salle de bains refaite.", author: "paul", note: "Premier brouillon préparé par Paul" } } } });
+  try {
+    expect((await upload(png(200, 80), "https://attacker.invalid")).status()).toBe(403);
+    expect((await request.post(`${baseURL}/api/entreprise/marque/logo`, { headers: headers(), multipart: { other: "x" } })).status()).toBe(400);
+    expect(await (await upload(png(200, 80, 500 * 1024))).json()).toMatchObject({ error: "500 Ko au plus pour le logo." });
+    expect((await upload(Buffer.from("<svg onload=alert(1)></svg>"))).status()).toBe(415);
+    expect((await upload(png(0, 0))).status()).toBe(415);
+    // Sans logo, le retrait ne change rien et n'écrit rien.
+    const none = await request.delete(`${baseURL}/api/entreprise/marque/logo`, { headers: headers() });
+    expect(await none.json()).toMatchObject({ logo: null });
+    expect(await prisma.journalEntry.count({ where: { companyId: a.id, code: "J-33" } })).toBe(0);
+
+    // Logo présent (stockage absent en CI : posé en base) : la confirmation de la marque l'inscrit dans l'instantané et dans le visuel.
+    const logoUrl = "https://blob.example.invalid/logo.png";
+    await prisma.company.update({ where: { id: a.id }, data: { brandLogo: { url: logoUrl, pathname: `brand-logos/${a.id}/l1.png`, width: 200, height: 80 } } });
+    expect(await (await request.post(`${baseURL}/api/entreprise/marque`, { headers: headers(), data: { primary: "#123456", accent: "#e0a030", tone: "clair", confirmed: true } })).json()).toMatchObject({ changed: true });
+    expect(await prisma.contentVersion.findFirst({ where: { contentId: content.id, number: 2 } })).toMatchObject({ brandSnapshot: { logoUrl } });
+    expect(await (await request.get(`${baseURL}/api/contents/${content.id}/visuel?n=2`, { headers: headers() })).text()).toContain(logoUrl);
+    expect(await (await request.get(`${baseURL}/api/contents/${content.id}/visuel?n=1`, { headers: headers() })).status()).toBe(404);
+  } finally {
+    await prisma.company.deleteMany({ where: { id: a.id } });
     await prisma.$disconnect();
   }
 });

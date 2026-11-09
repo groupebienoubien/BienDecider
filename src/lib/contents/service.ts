@@ -19,6 +19,7 @@ import { sitePhotoStorage } from "@/lib/site/photo-store";
 import { PublishRefusedError } from "@/lib/execution-error";
 import { SITE_PHOTO_UNAVAILABLE, type SitePhotoCheck } from "@/lib/site/photos";
 import { rightsRequired, visualPhotoPathname, VISUAL_PHOTO_NOTE, VISUAL_PHOTO_REMOVED_NOTE, readVisualPhoto, type VisualPhoto } from "@/lib/brand/photo";
+import { readBrandLogo } from "@/lib/brand/rules";
 import { BRAND_COMPOSITION_LABELS, BRAND_REVIEW_NOTE, isBrandComposition, isBrandTone, normalizeHex, type BrandComposition, type BrandSnapshot } from "@/lib/brand/rules";
 
 /** Note de la version système d'une correction du profil (§4.5) ; définie avec les règles pures, qui refusent sa validation (M-92). */
@@ -114,11 +115,12 @@ async function write(writer: DraftWriter, request: DraftRequest) {
 /** Marque confirmée au moment de la version, si le contenu a un visuel ; null sinon (pas de visuel, ou marque encore à confirmer). */
 async function brandSnapshotFor(tx: Tx, companyId: string, composition: string | null): Promise<BrandSnapshot | null> {
   if (!isBrandComposition(composition)) return null;
-  const company = await tx.company.findUniqueOrThrow({ where: { id: companyId }, select: { name: true, brandPrimary: true, brandAccent: true, brandTone: true, brandConfirmedAt: true } });
+  const company = await tx.company.findUniqueOrThrow({ where: { id: companyId }, select: { name: true, brandPrimary: true, brandAccent: true, brandTone: true, brandConfirmedAt: true, brandLogo: true } });
   const primary = normalizeHex(company.brandPrimary);
   const accent = normalizeHex(company.brandAccent);
   if (!company.brandConfirmedAt || !primary || !accent || !isBrandTone(company.brandTone)) return null;
-  return { name: company.name, primary, accent, tone: company.brandTone, composition };
+  const logo = readBrandLogo(company.brandLogo, companyId);
+  return { name: company.name, primary, accent, tone: company.brandTone, composition, ...(logo ? { logoUrl: logo.url } : {}) };
 }
 
 /** Nouvelle version : la validation et la proposition en attente sont retirées ; la version lue protège contre une écriture concurrente (M-02). */

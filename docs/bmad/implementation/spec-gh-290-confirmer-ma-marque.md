@@ -2,7 +2,7 @@
 title: 'GH-290 — Confirmer ma marque avant de créer des visuels'
 type: 'feature'
 created: '2026-11-09'
-status: 'review'
+status: 'done'
 route: 'dispatch'
 baseline_commit: 'f6de8c2'
 context:
@@ -26,12 +26,17 @@ context:
 - **Modifier la marque** : une version système par visuel modifiable, validation retirée, refus s'il existe une programmation (M-94, annuler d'abord), J-32 « Identité de marque confirmée. Le visuel doit être validé à nouveau. ». Marque inchangée : rien n'est écrit.
 - **Instantané par version** (`ContentVersion.brandSnapshot` : nom, palette, ton, composition) : les archives ne changent pas rétroactivement.
 
-## Reporté (à traiter avant `Closes #290`)
+## Livré dans la seconde PR (lot Marque & visuel)
 
-- Logo PNG, JPEG ou WebP (500 Ko au plus) : ajouter, remplacer, retirer. Le kit et l'instantané sont prêts à l'accueillir.
-- Logo dans le visuel composé.
-- Parcours Playwright dans le navigateur (`tests/user-journey.spec.ts`) : confirmation, changement de couleur, version suivante, archive visible. Le serveur est couvert par `tests/security.spec.ts`.
-- Vérification du rendu à 360 px dans un navigateur réel (le SVG se met à l'échelle de son conteneur).
+- **Logo** PNG, JPEG ou WebP, 500 Ko au plus : ajouter, remplacer, retirer (`POST` et `DELETE /api/entreprise/marque/logo`). Type réel, taille et en-tête contrôlés avant tout stockage ; fichier sous `brand-logos/{entreprise}/` ; origine « Importé par vous ».
+- **Logo dans le visuel**, dans ses proportions, pour les deux compositions ; repris dans l'instantané de chaque version.
+- **Changer le logo** : comme la marque, une version de chaque visuel à valider à nouveau, refus si un visuel est programmé (M-94), J-33 au journal. L'ancien fichier n'est supprimé que si aucune archive ne le cite ; la suppression du compte efface logo et anciens logos.
+- **Stratégie > À valider par vous** : « Votre marque · à confirmer » avec « Confirmer ma marque », dès qu'un contenu peut porter un visuel (#283).
+- **Parcours navigateur à 360 px** (`tests/user-journey.spec.ts`) : marque attendue dans la Stratégie, visuel composé et validation refusée, case obligatoire, confirmation, changement de couleur, version suivante, archive inchangée, droits de la photo (#291), sans défilement horizontal.
+
+## Reporté
+
+- Import réel d'un logo dans le parcours navigateur : le stockage n'est pas configuré en CI ; le logo est posé en base pour le test serveur.
 
 ## Décisions
 

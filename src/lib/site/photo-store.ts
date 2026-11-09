@@ -93,6 +93,18 @@ export async function deleteCompanySitePhotoFiles(companyId: string): Promise<vo
   // Photos importées dans les visuels (#291) : mêmes règles, un fichier par adresse.
   const versions = await prisma.contentVersion.findMany({ where: { content: { companyId }, photo: { not: Prisma.DbNull } }, select: { photo: true } });
   const seen = new Set(photos.map((photo) => photo.url));
+  // Logo de la marque (#290) et anciens logos encore cités par les archives.
+  const company = await prisma.company.findUnique({ where: { id: companyId }, select: { brandLogo: true } });
+  const snapshots = await prisma.contentVersion.findMany({ where: { content: { companyId }, brandSnapshot: { not: Prisma.DbNull } }, select: { brandSnapshot: true } });
+  const logos = [company?.brandLogo, ...snapshots.map((version) => version.brandSnapshot)];
+  for (const value of logos) {
+    const record = value !== null && value !== undefined && typeof value === "object" && !Array.isArray(value) ? value : {};
+    const url = typeof record.url === "string" && typeof record.pathname === "string" ? record.url : typeof record.logoUrl === "string" ? record.logoUrl : null;
+    if (url && !seen.has(url)) {
+      seen.add(url);
+      photos.push({ url, pathname: typeof record.pathname === "string" ? record.pathname : url });
+    }
+  }
   for (const { photo } of versions) {
     const record = photo !== null && typeof photo === "object" && !Array.isArray(photo) ? photo : {};
     if (typeof record.url === "string" && typeof record.pathname === "string" && !seen.has(record.url)) {

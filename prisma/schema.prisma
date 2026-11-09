@@ -78,6 +78,7 @@ model Company {
   brandTone          String? // ton de marque confirmé : clair | chaleureux | expert
   brandOrigins       Json? // origine de chaque élément confirmé : site, proposal ou declared
   brandProposal      Json? // palette lue sur le site à l'inscription, proposée et non confirmée : { palette, source }
+  brandLogo          Json? // logo importé par le dirigeant (#290) : { url, pathname, width, height } ; PNG, JPEG ou WebP, 500 Ko au plus
   brandConfirmedAt   DateTime? // dernière confirmation de l'identité de marque ; null = visuels non validables
   profileOrigins     Json? // origine des sept champs de « Corriger mon profil » (#169) : observed, hypothesis, declared ou missing ; absent pour un compte d'avant #169
   channels        ChannelConnection[]

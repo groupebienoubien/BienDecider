@@ -2,7 +2,7 @@
 title: 'GH-291 — Importer une photo et confirmer les droits avant de valider un visuel'
 type: 'feature'
 created: '2026-11-09'
-status: 'review'
+status: 'done'
 route: 'dispatch'
 baseline_commit: '1e348fa'
 context:
@@ -39,7 +39,7 @@ context:
 
 - Lien « Confirmer ma marque » dans le refus de droits : déjà présent pour la marque (M-93) ; pas de lien propre aux droits (aucune page ne les gère).
 - Photo de réalisation (#317) : sa modification retirera la confirmation quand cette mission existera.
-- Parcours Playwright navigateur (import réel, `blob` non configuré en CI) : le serveur est couvert par `tests/security.spec.ts` avec une version seedée portant une photo.
+- Import réel dans le parcours navigateur : le stockage n'est pas configuré en CI. Le parcours (`tests/user-journey.spec.ts`, lot Marque & visuel) valide une version portant une photo posée en base : case des droits obligatoire, puis « Droits confirmés pour cette version ».
 
 ## Vérification
 
