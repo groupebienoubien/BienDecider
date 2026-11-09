@@ -2664,6 +2664,40 @@ test("GH-280: without a site, a model or Google, the rubrics say why and nothing
   expect(extractionPrompt({ declared: analysisInput, pages: [{ url: "https://x.test/", title: "", text: "x".repeat(30_000) }], google: null, palette: [], logo: null }).length).toBeLessThan(EXTRACTION_TEXT_MAX + 500);
 });
 
+test("GH-280: without a declared site, Paul reads the site of the Google listing, and the listing category proposes the trade", async () => {
+  const site = await startFakeSite();
+  const listing = (websiteUri?: string) => ({
+    apiKey: "test-key",
+    fetchImpl: (async (url: string | URL | Request) => {
+      const body = String(url).endsWith("places:searchText")
+        ? { places: [{ id: "ChIJatelierLumen01" }] }
+        : { id: "ChIJatelierLumen01", displayName: { text: "Atelier Lumen" }, googleMapsUri: "https://maps.google.com/?cid=42", primaryTypeDisplayName: { text: "Électricien" }, editorialSummary: { text: "Électricité générale à Lyon" }, websiteUri };
+      return new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
+    }) as typeof fetch,
+  });
+  const noWebsite = { ...analysisInput, website: "" };
+  const prompts: string[] = [];
+  const failing: Extractor = async (input) => { prompts.push(extractionPrompt(input)); return { ok: false }; };
+  try {
+    const read: string[] = [];
+    const fromListing = await runDraftAnalysis("d", noWebsite, { analysis: newAnalysis(noWebsite, "r"), save: async () => true, places: listing(analysisInput.website), extract: failing, readSite: (url) => { read.push(url); return readPublicSite(url, site.deps); } });
+    expect(read).toEqual([`${analysisInput.website}/`]);
+    expect(fromListing.rubrics.site).toEqual({ status: "read" });
+    expect(fromListing.findings.palette?.provenance.kind).toBe("observed");
+    expect(prompts[0]).toContain("Catégorie : Électricien");
+    expect(prompts[0]).toContain("Présentation : Électricité générale à Lyon");
+    // Le modèle n'a rien donné : la catégorie de la fiche devient l'activité proposée, à confirmer.
+    expect(fromListing.findings.trade).toEqual({ value: "Électricien", provenance: { kind: "hypothesis" } });
+
+    // Le site de la fiche est illisible : ce n'est pas une erreur, le dirigeant n'avait pas déclaré de site.
+    const unreadable = await runDraftAnalysis("d", noWebsite, { analysis: newAnalysis(noWebsite, "r"), save: async () => true, places: listing("https://illisible.test"), extract: failing, readSite: async () => ({ ok: false, reason: "unreadable" }) });
+    expect(unreadable.rubrics.site).toEqual({ status: "unavailable", reason: "no_site" });
+    expect(unreadable.findings.trade?.value).toBe("Électricien");
+  } finally {
+    await site.close();
+  }
+});
+
 test("GH-280: rubric states, interrupted analyses, relaunch rules and the daily cap setting", () => {
   expect(rubricsFor({ site: "pending", google: "pending", model: "pending" })).toEqual({ site: { status: "pending" }, google: { status: "pending" }, zone: { status: "pending" }, identity: { status: "pending" } });
   expect(rubricsFor({ site: "unreadable", google: "not_found", model: "skipped" })).toEqual({ site: { status: "unavailable", reason: "unreadable" }, google: { status: "not_found" }, zone: { status: "unavailable", reason: "unreadable" }, identity: { status: "unavailable", reason: "unreadable" } });
