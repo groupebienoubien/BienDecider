@@ -10,6 +10,10 @@
     {
       "path": "/api/cron/weekly-review",
       "schedule": "0 7 * * 1"
+    },
+    {
+      "path": "/api/cron/drafts",
+      "schedule": "30 3 * * *"
     }
   ]
 }

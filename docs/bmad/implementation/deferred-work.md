@@ -153,14 +153,11 @@
   summary: Aligner /canaux sur Paul copilote unique (« Préparé par l'équipe, publié par vous ») et mettre à jour son test.
   evidence: L'accueil présente Paul seul depuis #310 ; tests/brand.spec.ts vérifie encore le texte « l'équipe » de /canaux.
 - source_spec: `docs/bmad/implementation/spec-gh-279-parcours-entree-cinq-etapes.md`
-  summary: Purge quotidienne des brouillons expirés (cron), avec la trace anonyme de la visite écrite juste avant l'effacement.
-  evidence: À faire avec #311 (trace des visites, addendum §4.12 et §6) ; dans #279, un brouillon expiré est seulement ignoré à la lecture.
+  summary: Écrire la trace anonyme de la visite juste avant l'effacement d'un brouillon expiré.
+  evidence: À faire avec #311 (trace des visites, addendum §4.12 et §6). La purge quotidienne existe depuis le 2026-11-09 (`/api/cron/drafts`, vercel.json) : elle efface sans trace.
 - source_spec: `docs/bmad/implementation/spec-gh-279-parcours-entree-cinq-etapes.md`
   summary: Aiguillage §1.4 pour les pages de l'espace : sans session, aller à l'étape courante du brouillon ou à la page de découverte, au lieu de /login.
   evidence: #279 ne traite que les pages d'entrée ; changer la redirection de l'espace touche une quinzaine de pages et les tests qui attendent /login.
-- source_spec: `docs/bmad/implementation/spec-gh-279-parcours-entree-cinq-etapes.md`
-  summary: Normaliser l'adresse e-mail (minuscules) à l'inscription, à la connexion et à la réinitialisation.
-  evidence: Aucun `toLowerCase` dans src/app/api/auth ; « Claire@x.fr » et « claire@x.fr » donnent deux comptes et contournent le message neutre d'adresse déjà utilisée.
 - source_spec: `docs/bmad/implementation/spec-gh-279-parcours-entree-cinq-etapes.md`
   summary: Tester le mode POC (REQUIRE_EMAIL_VERIFICATION absente) chez au moins un consommateur, et adapter le texte du bandeau qui annonce encore un blocage de la diffusion.
   evidence: La CI pose la variable à true pour tout le job ; seul l'assistant pur est testé avec un environnement injecté.

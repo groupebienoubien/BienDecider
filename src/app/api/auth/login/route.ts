@@ -5,6 +5,7 @@ import { hashPassword, verifyPassword } from "@/lib/password";
 import { consumeIpAttempt, MAX_ATTEMPTS, recordFailedAttempt, refundIpAttempt } from "@/lib/auth-throttle";
 import { readJsonObject } from "@/lib/request-body";
 import { ACCOUNT_SUSPENDED_MESSAGE } from "@/lib/agents/agent-errors";
+import { findCompanyByOwnerEmail, normalizeOwnerEmail } from "@/lib/owner-email";
 
 function suspendedResponse() {
   return NextResponse.json({ error: ACCOUNT_SUSPENDED_MESSAGE }, { status: 403 });
@@ -25,7 +26,7 @@ function suspendedResponse() {
 export async function POST(request: NextRequest) {
   const body = await readJsonObject(request);
   if (!body) return NextResponse.json({ error: "Requête invalide" }, { status: 400 });
-  const email = typeof body.email === "string" ? body.email.trim() : "";
+  const email = typeof body.email === "string" ? normalizeOwnerEmail(body.email) : "";
   const { password } = body;
 
   if (!email || !email.includes("@") || email.length > 254) {
@@ -43,7 +44,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  let company = await prisma.company.findUnique({ where: { ownerEmail: email } });
+  let company = await findCompanyByOwnerEmail(email);
 
   if (company?.lockedUntil && company.lockedUntil > new Date()) {
     const minutes = Math.ceil((company.lockedUntil.getTime() - Date.now()) / 60000);
@@ -83,7 +84,7 @@ export async function POST(request: NextRequest) {
   await refundIpAttempt(ipAttempt);
   // Story 7.1 : le message de suspension n'est donné qu'après authentification, pour ne rien révéler à un tiers.
   if (company.suspendedAt) return suspendedResponse();
-  await setSessionEmail(email);
+  await setSessionEmail(company.ownerEmail);
   company = await prisma.company.update({
     where: { id: company.id },
     data: { loginCount: { increment: 1 }, lastLoginAt: new Date(), failedLoginAttempts: 0, lockedUntil: null },

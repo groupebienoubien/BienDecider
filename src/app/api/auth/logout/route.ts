@@ -6,5 +6,6 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Origine refusée" }, { status: 403 });
   }
   await clearSession();
-  return NextResponse.redirect(new URL("/login", request.url));
+  // 303 : le navigateur suit en GET ; une 307 renverrait le POST du formulaire vers /login, une page statique (405).
+  return NextResponse.redirect(new URL("/login", request.url), 303);
 }

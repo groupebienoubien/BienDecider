@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse, after } from "next/server";
-import { prisma } from "@/lib/prisma";
 import { consumeIpAttempt } from "@/lib/auth-throttle";
 import { createEmailToken, secondsUntilNextEmail } from "@/lib/email-tokens";
 import { readJsonObject } from "@/lib/request-body";
 import { sendServiceEmail } from "@/lib/service-mail";
 import { passwordResetEmail, passwordResetLink } from "@/lib/service-mail-templates";
+import { findCompanyByOwnerEmail, normalizeOwnerEmail } from "@/lib/owner-email";
 
 const GENERIC_MESSAGE = "Si un compte existe pour cette adresse, un lien vient d'être envoyé.";
 
@@ -14,7 +14,7 @@ export async function POST(request: NextRequest) {
   if (request.headers.get("origin") !== request.nextUrl.origin) return NextResponse.json({ error: "Origine refusée." }, { status: 403 });
   const body = await readJsonObject(request);
   if (!body) return NextResponse.json({ error: "Requête invalide" }, { status: 400 });
-  const email = typeof body.email === "string" ? body.email.trim() : "";
+  const email = typeof body.email === "string" ? normalizeOwnerEmail(body.email) : "";
   if (!email || !email.includes("@") || email.length > 254) return NextResponse.json({ error: "Indiquez une adresse e-mail valide." }, { status: 400 });
 
   const attempt = await consumeIpAttempt(request, "reset");
@@ -22,7 +22,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Trop de demandes depuis cette connexion. Réessayez plus tard." }, { status: 429, headers: { "Retry-After": String(attempt.retryAfterSeconds) } });
   }
 
-  const company = await prisma.company.findUnique({ where: { ownerEmail: email }, select: { id: true, ownerEmail: true } });
+  const company = await findCompanyByOwnerEmail(email);
   if (company) {
     after(async () => {
       try {
