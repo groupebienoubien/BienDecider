@@ -12,6 +12,8 @@ import { startSmtpSink } from "./support/smtp-sink";
 import { DRAFT_AMBITION, DRAFT_AMBITION_TERMS, createTestDraft, waitForAnalysis } from "./support/onboarding-draft";
 import { newAnalysis } from "../src/lib/onboarding/analysis-rules";
 import { readDraftState, retainedFromRules } from "../src/lib/onboarding/draft-rules";
+import { purgeExpiredDrafts, purgeOldTraces } from "../src/lib/onboarding/visit-trace";
+import { VISIT_TRACE_NOTICE } from "../src/lib/onboarding/visit-trace-rules";
 
 config({ quiet: true });
 
@@ -35,6 +37,7 @@ const GUARDED_ROUTES: Guarded[] = [
   { method: "PATCH", path: "/api/admin/usage-alerts", denied: 403 },
   { method: "PATCH", path: "/api/admin/llm-credit", denied: 403 },
   { method: "PATCH", path: "/api/admin/channel-access", denied: 403 },
+  { method: "GET", path: "/api/admin/mesures/export", denied: 403 },
   { method: "POST", path: "/api/channel-access", denied: 401 },
   { method: "POST", path: "/api/agencies/search", denied: 401 },
   { method: "GET", path: "/api/missions", denied: 401 },
@@ -126,7 +129,7 @@ const PUBLIC_ROUTES: Record<string, string> = {
   "/api/health": "sonde publique sans donnée métier",
 };
 
-const GUARDED_PAGES = ["/admin", "/admin/risques", "/admin/entreprises/identifiant-inexistant", "/compte", "/connexions", "/dashboard", "/diagnostic", "/equipe", "/entreprise", "/prospection", "/rapport", "/studio/identifiant-inexistant"];
+const GUARDED_PAGES = ["/admin", "/admin/mesures", "/admin/risques", "/admin/entreprises/identifiant-inexistant", "/compte", "/connexions", "/dashboard", "/diagnostic", "/equipe", "/entreprise", "/prospection", "/rapport", "/studio/identifiant-inexistant"];
 
 function requireSecret(): string {
   if (!process.env.SESSION_SECRET) throw new Error("SESSION_SECRET is required for security tests.");
@@ -1424,6 +1427,104 @@ test("brand confirmation gates visual validation, versions each visual and keeps
     expect((await versions()).length).toBe(4);
   } finally {
     await prisma.company.deleteMany({ where: { id: { in: [a.id, b.id] } } });
+    await prisma.$disconnect();
+  }
+});
+
+test("each onboarding draft leaves one anonymous visit trace, purged after 25 months; only administrators read the aggregated measures (#311, #296)", async ({ request, page }) => {
+  test.setTimeout(60000);
+  const admins = (process.env.ADMIN_EMAILS ?? "").split(",").map((email) => email.trim()).filter(Boolean);
+  test.skip(admins.length === 0, "Requires ADMIN_EMAILS on the server, as configured in CI.");
+  const prisma = openDatabase();
+  const marker = randomUUID().slice(0, 8);
+  const adminEmail = admins[0];
+  let adminCompany = await prisma.company.findUnique({ where: { ownerEmail: adminEmail } });
+  const createdAdmin = !adminCompany;
+  adminCompany ??= await prisma.company.create({ data: { ownerEmail: adminEmail, name: "Admin mesures test", trade: "Artisan", servingArea: "Paris" } });
+  const outsider = await prisma.company.create({ data: { ownerEmail: `security-measures-${marker}@example.invalid`, name: `Hors admin ${marker}`, trade: "Artisan", servingArea: "Paris" } });
+  const adminCookie = sessionCookie(adminEmail, adminCompany.sessionVersion);
+  const outsiderCookie = sessionCookie(outsider.ownerEmail, outsider.sessionVersion);
+  const email = `security-trace-${marker}@example.invalid`;
+  const password = "mot-de-passe-valide";
+  const identifying = { firstName: `Prenom${marker}`, companyName: `Entreprise tracee ${marker}`, website: `https://trace-${marker}.example`, location: "12 rue des Lilas, 69003 Lyon" };
+  const known = new Set((await prisma.visitTrace.findMany({ select: { id: true } })).map((trace) => trace.id));
+  const newTraces = async () => (await prisma.visitTrace.findMany()).filter((trace) => !known.has(trace.id));
+  const oldTrace = await prisma.visitTrace.create({ data: { startedOn: new Date("2020-01-15T00:00:00.000Z"), lastStep: 1, abandonedStep: 1, hasWebsite: false, accountCreated: false } });
+  const recentTrace = await prisma.visitTrace.create({ data: { startedOn: new Date(), lastStep: 2, abandonedStep: 2, hasWebsite: false, accountCreated: false } });
+  known.add(oldTrace.id);
+  known.add(recentTrace.id);
+  let companyId: string | null = null;
+  let expiredId: string | null = null;
+  try {
+    // L'étape 1 et la page de confidentialité annoncent la trace (FR-60).
+    expect(await (await request.get(`${baseURL}/bienvenue`)).text()).toContain(VISIT_TRACE_NOTICE);
+    expect(await (await request.get(`${baseURL}/confidentialite`)).text()).toContain(VISIT_TRACE_NOTICE);
+
+    // Inscription : une trace, écrite par la transaction qui efface le brouillon, sans aucune donnée identifiante.
+    const draft = await createTestDraft(prisma, { profile: identifying });
+    const signup = await request.post(`${baseURL}/api/auth/signup`, { headers: { "x-real-ip": `test-${randomUUID()}`, Cookie: draft.cookie }, data: { email, password, passwordConfirmation: password } });
+    expect(signup.status()).toBe(201);
+    companyId = (await prisma.company.findUniqueOrThrow({ where: { ownerEmail: email } })).id;
+    const missions = await prisma.mission.findMany({ where: { companyId }, orderBy: { position: "asc" }, select: { template: true } });
+    let traces = await newTraces();
+    expect(traces).toHaveLength(1);
+    expect(traces[0]).toMatchObject({ lastStep: 5, abandonedStep: null, trade: "Électricien", department: "69", hasWebsite: true, accountCreated: true, ambition: DRAFT_AMBITION_TERMS, proposedTemplates: missions.map((mission) => mission.template) });
+    const signupTrace = JSON.stringify(traces[0]);
+    for (const value of [...Object.values(identifying), "Lyon", email, companyId, draft.id, draft.token, DRAFT_AMBITION]) expect(signupTrace).not.toContain(value);
+    expect(Object.keys(traces[0]).sort()).toEqual(["abandonedStep", "accountCreated", "ambition", "analysisCostUsd", "department", "hasWebsite", "id", "lastStep", "proposedTemplates", "sourcesRead", "startedOn", "trade"]);
+
+    // Purge : le brouillon expiré est tracé (étape atteinte, étape d'abandon, activité hors catalogue) puis effacé, une seule fois.
+    const expired = await createTestDraft(prisma, { step: 3, expiresAt: new Date(Date.now() - 1000), profile: { ...identifying, location: "Bordeaux (33)", trade: `Boulangerie ${marker}` } });
+    expiredId = expired.id;
+    await prisma.onboardingDraft.update({ where: { id: expired.id }, data: { furthestStep: 4 } });
+    expect(await purgeExpiredDrafts(prisma)).toBeGreaterThanOrEqual(1);
+    expect(await prisma.onboardingDraft.count({ where: { id: expired.id } })).toBe(0);
+    await purgeExpiredDrafts(prisma);
+    traces = await newTraces();
+    const abandoned = traces.filter((trace) => !trace.accountCreated && trace.department === "33" && trace.lastStep === 4 && trace.abandonedStep === 3);
+    expect(abandoned).toHaveLength(1);
+    expect(abandoned[0]).toMatchObject({ trade: "Autre activité", ambition: null, proposedTemplates: [] });
+    expect(JSON.stringify(abandoned[0])).not.toContain(marker);
+
+    // Conservation : une trace de plus de 25 mois est effacée, une trace récente reste.
+    expect(await purgeOldTraces(prisma)).toBeGreaterThanOrEqual(1);
+    expect(await prisma.visitTrace.count({ where: { id: oldTrace.id } })).toBe(0);
+    expect(await prisma.visitTrace.count({ where: { id: recentTrace.id } })).toBe(1);
+
+    // Vue et export agrégés : administrateurs seulement ; aucun nom d'entreprise dans l'export.
+    const exportPath = `${baseURL}/api/admin/mesures/export`;
+    expect((await request.get(`${exportPath}?vue=visites`, { headers: { Cookie: outsiderCookie } })).status()).toBe(403);
+    expect((await request.get(`${exportPath}?vue=inconnue`, { headers: { Cookie: adminCookie } })).status()).toBe(400);
+    const visitsExport = await request.get(`${exportPath}?vue=visites`, { headers: { Cookie: adminCookie } });
+    expect(visitsExport.status()).toBe(200);
+    expect(visitsExport.headers()["content-type"]).toContain("text/csv");
+    const visitsCsvText = await visitsExport.text();
+    expect(visitsCsvText).toContain("Étape d'abandon");
+    for (const value of [...Object.values(identifying), marker]) expect(visitsCsvText).not.toContain(value);
+    const activationExport = await request.get(`${exportPath}?vue=activation&du=2020-01-01`, { headers: { Cookie: adminCookie } });
+    expect(activationExport.status()).toBe(200);
+    const activationCsvText = await activationExport.text();
+    expect(activationCsvText).toContain("Retour à J+7");
+    expect(activationCsvText).not.toContain(identifying.companyName);
+
+    await page.context().clearCookies();
+    await page.context().addCookies([{ name: "pepito_session", value: outsiderCookie.slice(outsiderCookie.indexOf("=") + 1), url: baseURL }]);
+    await page.goto(`${baseURL}/admin/mesures`);
+    await expect(page.getByText("Accès réservé")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Mesures d'activation" })).toHaveCount(0);
+    await page.context().clearCookies();
+    await page.context().addCookies([{ name: "pepito_session", value: adminCookie.slice(adminCookie.indexOf("=") + 1), url: baseURL }]);
+    await page.goto(`${baseURL}/admin/mesures`);
+    await expect(page.getByRole("heading", { name: "Mesures d'activation" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Visites du parcours d'entrée" })).toBeVisible();
+    await expect(page.getByRole("table", { name: "Entonnoir d'activation en huit étapes" }).getByRole("row")).toHaveCount(9);
+    await expect(page.getByRole("link", { name: identifying.companyName })).toBeVisible();
+  } finally {
+    await page.context().clearCookies();
+    if (expiredId) await prisma.onboardingDraft.deleteMany({ where: { id: expiredId } });
+    await prisma.visitTrace.deleteMany({ where: { id: { in: [oldTrace.id, recentTrace.id] } } });
+    await prisma.company.deleteMany({ where: { id: { in: [outsider.id, ...(companyId ? [companyId] : [])] } } });
+    if (createdAdmin) await prisma.company.delete({ where: { id: adminCompany.id } });
     await prisma.$disconnect();
   }
 });

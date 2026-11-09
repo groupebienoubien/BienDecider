@@ -1,8 +1,10 @@
+import Link from "next/link";
 import { currentSignupAvailability } from "@/lib/signup-control";
 import { SIGNUP_CLOSED_MESSAGE, SIGNUP_FULL_MESSAGE } from "@/lib/signup-rules";
 import { prefillFromPaul, prefillProfile } from "@/lib/onboarding/draft-rules";
 import { analysisView, limitedStepNotice, type DraftAnalysis, type Finding, type FirstFinding } from "@/lib/onboarding/analysis-rules";
 import { CERTAINTY_LABELS } from "@/lib/findings/certainty";
+import { VISIT_TRACE_NOTICE } from "@/lib/onboarding/visit-trace-rules";
 import { requireDraftPage } from "./guard";
 import { WelcomeFrame } from "./welcome-frame";
 import { AmbitionForm, DiscoveryStep, ProfileForm } from "./step-forms";
@@ -98,6 +100,10 @@ export default async function WelcomePage() {
           </div>
         )}
         <DiscoveryStep key="discover" profile={state.profile} analysis={analysisView(state.analysis)} />
+        {/* FR-60 (#311) : la trace anonyme est annoncée dès l'étape 1. */}
+        <p className="mt-6 text-sm text-[var(--bd-muted)]">
+          {VISIT_TRACE_NOTICE} <Link href="/confidentialite#trace-visites" className="underline">Ce que nous gardons, et combien de temps</Link>
+        </p>
       </WelcomeFrame>
     );
   }

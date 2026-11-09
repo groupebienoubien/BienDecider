@@ -53,7 +53,7 @@ export async function POST(request: NextRequest) {
 
   let draftId: string;
   if (draft) {
-    if (!(await saveDraft(draft.id, state))) return NextResponse.json({ error: "Reprenez à la première étape.", step: 1, href: stepHref(1) }, { status: 409 });
+    if (!(await saveDraft(draft.id, state, draft.furthestStep))) return NextResponse.json({ error: "Reprenez à la première étape.", step: 1, href: stepHref(1) }, { status: 409 });
     draftId = draft.id;
   } else {
     const attempt = await consumeIpAttempt(request, "draft");

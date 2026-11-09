@@ -77,6 +77,8 @@ jobs:
         run: npm run test:voice
       - name: Marque et visuel (rendu déterministe)
         run: npm run test:brand-kit
+      - name: Trace des visites et mesures d'activation (sans base)
+        run: npm run test:mesures
       - name: Backlog importer tests (no network)
         run: node --test scripts/sync-backlog.test.cjs
       - name: Wiki pages build and relative links resolve

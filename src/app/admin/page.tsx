@@ -137,6 +137,9 @@ export default async function AdminPage() {
             </div>
           ))}
         </section>
+        <p className="legend">
+          <Link href="/admin/mesures">Voir les mesures d&apos;activation</Link> : entonnoir en huit étapes par entreprise, cohortes d&apos;inscription et visites anonymes du parcours d&apos;entrée.
+        </p>
 
         {signupControl && <SignupControlForm open={signupControl.open} dailyCap={signupControl.dailyCap} todayCount={signupToday} />}
 
