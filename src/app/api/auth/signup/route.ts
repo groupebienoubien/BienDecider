@@ -17,6 +17,7 @@ import { writeJournal } from "@/lib/journal";
 import { ensureCreditGrant } from "@/lib/credits";
 import { startOnboardingAudit } from "@/lib/agents/onboarding-audit";
 import { AgentRunConflictError, AgentRunQuotaError } from "@/lib/agents/agent-errors";
+import { findCompanyByOwnerEmail, normalizeOwnerEmail } from "@/lib/owner-email";
 
 function signupFull() {
   return NextResponse.json({ error: SIGNUP_FULL_MESSAGE }, { status: 429, headers: { "Retry-After": String(secondsUntilNextSignupDay(new Date())) } });
@@ -41,7 +42,7 @@ export async function POST(request: NextRequest) {
   const body = await readJsonObject(request);
   if (!body) return NextResponse.json({ error: "Requête invalide" }, { status: 400 });
 
-  const email = typeof body.email === "string" ? body.email.trim() : "";
+  const email = typeof body.email === "string" ? normalizeOwnerEmail(body.email) : "";
   const { password, passwordConfirmation } = body;
 
   if (!isValidEmail(email)) return NextResponse.json({ error: ONBOARDING_MESSAGES["M-11"], code: "M-11", field: "email" }, { status: 400 });
@@ -67,7 +68,7 @@ export async function POST(request: NextRequest) {
   const ready = checkDraftForAccount(draft.state);
   if (!ready.ok) return NextResponse.json({ error: ready.error, code: ready.code, step: ready.step, href: stepHref(ready.step) }, { status: 409 });
 
-  if (await prisma.company.findUnique({ where: { ownerEmail: email }, select: { id: true } })) return addressUnavailable();
+  if (await findCompanyByOwnerEmail(email)) return addressUnavailable();
 
   // Une adresse déjà utilisée ne consomme pas d'emplacement : la réservation vient après ce contrôle.
   const slotDay = await reserveSignupSlot(control.dailyCap);

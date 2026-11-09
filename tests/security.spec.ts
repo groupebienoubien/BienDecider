@@ -117,6 +117,7 @@ const PUBLIC_ROUTES: Record<string, string> = {
   "/api/auth/verify-email": "le jeton à usage unique du lien reçu par e-mail fait foi, sans session (POST même origine)",
   "/api/cron/weekly-review": "protégée par CRON_SECRET, pas par la session",
   "/api/cron/publications": "protégée par CRON_SECRET, pas par la session (programmations, #261)",
+  "/api/cron/drafts": "protégée par CRON_SECRET, pas par la session (purge des brouillons expirés)",
   "/api/health": "sonde publique sans donnée métier",
 };
 
@@ -209,6 +210,8 @@ test("missing, unsigned and forged session cookies are refused everywhere", asyn
   for (const authorization of [undefined, "Bearer wrong-secret"]) {
     const publications = await request.get(`${baseURL}/api/cron/publications`, { headers: authorization ? { Authorization: authorization } : {} });
     expect([401, 500]).toContain(publications.status());
+    const drafts = await request.get(`${baseURL}/api/cron/drafts`, { headers: authorization ? { Authorization: authorization } : {} });
+    expect([401, 500]).toContain(drafts.status());
   }
 });
 
@@ -350,7 +353,7 @@ test("sessions expire and logout or password changes revoke every active cookie"
       expect((await request.get(`${baseURL}/api/companies`, { headers: { Cookie: cookie } })).status()).toBe(401);
     }
 
-    const login = await request.post(`${baseURL}/api/auth/login`, { data: { email, password: "nouveau-mot-de-passe" } });
+    const login = await request.post(`${baseURL}/api/auth/login`, { data: { email: ` ${email.toUpperCase()} `, password: "nouveau-mot-de-passe" } });
     expect(login.status()).toBe(200);
     const renewedCookie = login.headers()["set-cookie"].split(";")[0];
     expect((await request.get(`${baseURL}/api/companies`, { headers: { Cookie: renewedCookie } })).status()).toBe(200);
@@ -359,9 +362,26 @@ test("sessions expire and logout or password changes revoke every active cookie"
     expect(forgedLogout.status()).toBe(403);
     expect((await request.get(`${baseURL}/api/companies`, { headers: { Cookie: renewedCookie } })).status()).toBe(200);
     const logout = await request.post(`${baseURL}/api/auth/logout`, { headers: { Cookie: renewedCookie, Origin: baseURL }, maxRedirects: 0 });
-    expect(logout.status()).toBe(307);
+    // 303 : le navigateur suit en GET (une 307 renvoyait le POST vers /login, page statique : 405).
+    expect(logout.status()).toBe(303);
+    expect(new URL(logout.headers()["location"], baseURL).pathname).toBe("/login");
     expect((await request.get(`${baseURL}/api/companies`, { headers: { Cookie: renewedCookie } })).status()).toBe(401);
     expect((await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).sessionVersion).toBe(2);
+  } finally {
+    await prisma.company.delete({ where: { id: company.id } });
+    await prisma.$disconnect();
+  }
+});
+
+test("an account created before lowercase e-mails logs in whatever the case typed, and its session works", async ({ request }) => {
+  const prisma = openDatabase();
+  const stored = `Legacy-Case-${randomUUID()}@Example.invalid`;
+  const company = await prisma.company.create({ data: { ownerEmail: stored, passwordHash: await hashPassword("mot-de-passe-ancien"), name: "Casse Test", trade: "Artisan", servingArea: "Paris" } });
+  try {
+    const login = await request.post(`${baseURL}/api/auth/login`, { data: { email: stored.toLowerCase(), password: "mot-de-passe-ancien" } });
+    expect(login.status()).toBe(200);
+    const cookie = login.headers()["set-cookie"].split(";")[0];
+    expect((await request.get(`${baseURL}/api/companies`, { headers: { Cookie: cookie } })).status()).toBe(200);
   } finally {
     await prisma.company.delete({ where: { id: company.id } });
     await prisma.$disconnect();
