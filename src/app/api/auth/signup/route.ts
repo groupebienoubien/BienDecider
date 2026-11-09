@@ -11,6 +11,7 @@ import { SIGNUP_CLOSED_MESSAGE, SIGNUP_FULL_MESSAGE, secondsUntilNextSignupDay, 
 import { ADDRESS_UNAVAILABLE_MESSAGE, ONBOARDING_MESSAGES, RECOVER_ACCOUNT_HREF, checkDraftForAccount, confirmedOrigin, isValidEmail, starterPlan, stepHref, synthesisUsage } from "@/lib/onboarding/draft-rules";
 import { cleanOwnerName, type ProfileOrigins } from "@/lib/company-profile";
 import { clearDraftCookie, loadDraft } from "@/lib/onboarding/draft";
+import { brandProposalFromAnalysis } from "@/lib/brand/rules";
 import { analysisUsage, firstFindingRecords } from "@/lib/onboarding/analysis-rules";
 import { createMissionIn } from "@/lib/missions/service";
 import { writeJournal } from "@/lib/journal";
@@ -108,6 +109,8 @@ export async function POST(request: NextRequest) {
             targetClients: confirmedOrigin(draft.state, "targetClients"),
             offers: confirmedOrigin(draft.state, "offers"),
           } satisfies ProfileOrigins,
+          // Palette lue sur le site : proposée, jamais confirmée (#290) ; le dirigeant confirme sa marque dans Entreprise.
+          brandProposal: brandProposalFromAnalysis(draft.state.analysis) ?? undefined,
           ambitionText: ambition?.text ?? null,
           ambitionTerms: ambition ? { ...ambition.terms } : undefined,
           ambitionConfirmedAt: ambition ? now : null,

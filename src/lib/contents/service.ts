@@ -14,6 +14,7 @@ import {
 import { anthropicDraftWriter, type DraftRequest, type DraftWriter } from "@/lib/contents/writer";
 import { agencyNames } from "@/lib/agencies/service";
 import { cancelScheduledPublications } from "@/lib/contents/publish";
+import { BRAND_COMPOSITION_LABELS, BRAND_REVIEW_NOTE, isBrandComposition, isBrandTone, normalizeHex, type BrandComposition, type BrandSnapshot } from "@/lib/brand/rules";
 
 /** Note de la version système d'une correction du profil (§4.5) ; définie avec les règles pures, qui refusent sa validation (M-92). */
 export { PROFILE_REVIEW_NOTE };
@@ -62,7 +63,7 @@ export function snapshotOf(content: ContentWithMission): ContentSnapshot {
     currentDiffused: current.some((publication) => publication.status === "sent"),
     uncertain: current.some((publication) => publication.status === "uncertain" || publication.status === "sending"),
     recipients: format === "email" ? recipientsOf(content.mission) : null,
-    hasVisual: false,
+    hasVisual: isBrandComposition(content.visualComposition),
   };
 }
 
@@ -105,6 +106,16 @@ async function write(writer: DraftWriter, request: DraftRequest) {
   }
 }
 
+/** Marque confirmée au moment de la version, si le contenu a un visuel ; null sinon (pas de visuel, ou marque encore à confirmer). */
+async function brandSnapshotFor(tx: Tx, companyId: string, composition: string | null): Promise<BrandSnapshot | null> {
+  if (!isBrandComposition(composition)) return null;
+  const company = await tx.company.findUniqueOrThrow({ where: { id: companyId }, select: { name: true, brandPrimary: true, brandAccent: true, brandTone: true, brandConfirmedAt: true } });
+  const primary = normalizeHex(company.brandPrimary);
+  const accent = normalizeHex(company.brandAccent);
+  if (!company.brandConfirmedAt || !primary || !accent || !isBrandTone(company.brandTone)) return null;
+  return { name: company.name, primary, accent, tone: company.brandTone, composition };
+}
+
 /** Nouvelle version : la validation et la proposition en attente sont retirées ; la version lue protège contre une écriture concurrente (M-02). */
 async function addVersion(
   tx: Tx,
@@ -119,7 +130,10 @@ async function addVersion(
     data: { ...patch, currentNumber: number, validatedNumber: null, validatedAt: null, suggestion: Prisma.DbNull, version: { increment: 1 } },
   });
   if (written.count === 0) throw new MissionError("M-02");
-  const created = await tx.contentVersion.create({ data: { contentId: content.id, number, title: version.title, body: version.body, author: version.author, note: version.note } });
+  // Instantané de la marque (#290) : ce que le visuel de cette version utilise ; les archives ne changent pas rétroactivement.
+  const composition = patch.visualComposition !== undefined ? (patch.visualComposition as string | null) : content.visualComposition;
+  const brandSnapshot = await brandSnapshotFor(tx, content.companyId, composition);
+  const created = await tx.contentVersion.create({ data: { contentId: content.id, number, title: version.title, body: version.body, author: version.author, note: version.note, ...(brandSnapshot ? { brandSnapshot } : {}) } });
   await writeJournal(tx, { companyId: content.companyId, missionId: content.missionId, code: "J-19", actor: journal.actor, params: { n: String(number), origine: journal.origine, mission: content.mission.title } });
   return created;
 }
@@ -203,7 +217,35 @@ export async function markProfileChanged(tx: Tx, companyId: string): Promise<voi
   await writeJournal(tx, { companyId, code: "J-02", params: {} });
 }
 
-const ACTIONS = ["save", "restore", "variant", "accept_variant", "dismiss_variant", "validate", "reject", "next_version"] as const;
+/**
+ * Marque confirmée ou modifiée (#290), dans la transaction de la confirmation : refusée tant qu'un visuel est programmé (M-94,
+ * annuler d'abord) ; puis chaque contenu modifiable qui a un visuel reçoit une nouvelle version système, sans validation, avec
+ * l'instantané de la nouvelle marque. Un contenu en lecture seule ou diffusé est laissé tel quel (checkNewVersion le refuse).
+ */
+export async function markBrandChanged(tx: Tx, companyId: string): Promise<void> {
+  const contents = await tx.missionContent.findMany({
+    where: { companyId, currentNumber: { gt: 0 }, visualComposition: { not: null } },
+    include: { mission: true, publications: { select: { versionNumber: true, status: true } } },
+    orderBy: { createdAt: "asc" },
+  });
+  if (contents.some((content) => snapshotOf(content).scheduled)) throw new MissionError("M-94");
+  for (const content of contents) {
+    if (checkNewVersion(snapshotOf(content))) continue;
+    const current = await tx.contentVersion.findUniqueOrThrow({ where: { contentId_number: { contentId: content.id, number: content.currentNumber } } });
+    await addVersion(tx, content, { title: current.title, body: current.body, author: "system", note: BRAND_REVIEW_NOTE }, { origine: "recomposée avec la nouvelle marque", actor: "system" });
+  }
+}
+
+/** Un visuel est programmé : la marque ne se modifie pas avant l'annulation (lecture seule, pour l'interface). */
+export async function hasScheduledVisual(companyId: string): Promise<boolean> {
+  const contents = await prisma.missionContent.findMany({
+    where: { companyId, currentNumber: { gt: 0 }, visualComposition: { not: null } },
+    include: { mission: true, publications: { select: { versionNumber: true, status: true } } },
+  });
+  return contents.some((content) => snapshotOf(content).scheduled);
+}
+
+const ACTIONS = ["set_visual", "save", "restore", "variant", "accept_variant", "dismiss_variant", "validate", "reject", "next_version"] as const;
 export type ContentAction = (typeof ACTIONS)[number];
 
 export type ContentRequest = { action: ContentAction; number: number; input: Record<string, unknown> };
@@ -234,6 +276,18 @@ export async function applyContentAction(companyId: string, contentId: string, r
     const { content, snapshot, current } = await lockContent(tx, companyId, contentId, request.number);
     const done = async (balance: number | null = null) => ({ currentNumber: (await tx.missionContent.findUniqueOrThrow({ where: { id: content.id } })).currentNumber, balance });
     switch (request.action) {
+      case "set_visual": {
+        // Choisir ou retirer le visuel (#290) : une nouvelle version, validation retirée, avec l'instantané de la marque.
+        const requested = request.input.composition;
+        const composition: BrandComposition | null = requested === null ? null : isBrandComposition(requested) ? requested : null;
+        if (requested !== null && !composition) throw new MissionError("M-95");
+        const refusal = checkNewVersion(snapshot);
+        if (refusal) refuse(refusal);
+        if (composition === content.visualComposition) return done();
+        const note = composition ? `Visuel : ${BRAND_COMPOSITION_LABELS[composition]}` : "Visuel retiré";
+        await addVersion(tx, content, { title: current.title, body: current.body, author: "owner", note }, { origine: composition ? "recomposée avec un visuel" : "reprise sans visuel", actor: "owner" }, { visualComposition: composition });
+        return done();
+      }
       case "save": {
         const draft = validateDraft(request.input, snapshot.format);
         if (!draft.ok) refuse(draft);
@@ -267,7 +321,8 @@ export async function applyContentAction(companyId: string, contentId: string, r
       }
       case "validate": {
         const versions = await tx.contentVersion.findMany({ where: { contentId }, select: { number: true, author: true, note: true } });
-        const refusal = checkValidation(snapshot, current, { number: request.number, reviewed: request.input.reviewed === true, profileToReview: profileReviewPending(versions) });
+        const brand = await tx.company.findUniqueOrThrow({ where: { id: companyId }, select: { brandConfirmedAt: true } });
+        const refusal = checkValidation(snapshot, current, { number: request.number, reviewed: request.input.reviewed === true, profileToReview: profileReviewPending(versions), brandToConfirm: brand.brandConfirmedAt === null });
         if (refusal) refuse(refusal);
         const written = await tx.missionContent.updateMany({ where: { id: content.id, version: content.version }, data: { validatedNumber: current.number, validatedAt: new Date(), version: { increment: 1 } } });
         if (written.count === 0) throw new MissionError("M-02");

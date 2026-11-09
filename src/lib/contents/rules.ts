@@ -169,13 +169,15 @@ export function profileReviewPending(versions: readonly { number: number; author
 
 /**
  * Valider une version (§4.4), conditions dans l'ordre de la spécification.
- * Le profil relu (3) : refusé tant que le contenu est « à relire » après une correction du profil (M-92, #169) ; la réactivation (5)
- * et la marque du visuel (6) arrivent avec leurs US ; elles n'ont pas d'objet ici aujourd'hui.
+ * Le profil relu (3) : refusé tant que le contenu est « à relire » après une correction du profil (M-92, #169) ; la marque
+ * du visuel (6) : refusée tant que la marque n'est pas confirmée (M-93, #290) ; la réactivation (5) arrive avec son US.
  */
-export function checkValidation(content: ContentSnapshot, version: { number: number; body: string }, input: { number: number; reviewed: boolean; profileToReview?: boolean }): Refusal | null {
+export function checkValidation(content: ContentSnapshot, version: { number: number; body: string }, input: { number: number; reviewed: boolean; profileToReview?: boolean; brandToConfirm?: boolean }): Refusal | null {
   if (input.number !== content.currentNumber || version.number !== content.currentNumber) return { code: "M-02" };
   if (content.missionStatus !== "active") return { code: "M-47" };
   if (input.profileToReview) return { code: "M-92" };
+  // La marque du visuel (#290) : un visuel ne se valide pas tant que le dirigeant n'a pas confirmé son identité.
+  if (content.hasVisual && input.brandToConfirm) return { code: "M-93" };
   if (content.format === "email" && !content.recipients) return { code: "M-49" };
   const constraint = checkChannelConstraints(content, version.body);
   if (constraint) return constraint;

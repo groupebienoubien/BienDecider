@@ -73,6 +73,12 @@ model Company {
   ambitionText       String? // ambition en texte libre, conservée telle quelle (étape 3, spec §11)
   ambitionTerms      Json? // éléments retenus avec Paul : gain, horizon, budget média, recrutement (#282, spec §11)
   ambitionConfirmedAt DateTime? // dernière confirmation de l'ambition (« C'est bien ça »)
+  brandPrimary       String? // couleur principale confirmée (#290) : #rrggbb
+  brandAccent        String? // couleur d'accent confirmée : #rrggbb
+  brandTone          String? // ton de marque confirmé : clair | chaleureux | expert
+  brandOrigins       Json? // origine de chaque élément confirmé : site, proposal ou declared
+  brandProposal      Json? // palette lue sur le site à l'inscription, proposée et non confirmée : { palette, source }
+  brandConfirmedAt   DateTime? // dernière confirmation de l'identité de marque ; null = visuels non validables
   profileOrigins     Json? // origine des sept champs de « Corriger mon profil » (#169) : observed, hypothesis, declared ou missing ; absent pour un compte d'avant #169
   channels        ChannelConnection[]
   proposals       AgentProposal[]
@@ -685,6 +691,7 @@ model MissionContent {
   validatedNumber Int? // valide si egal a currentNumber
   validatedAt     DateTime?
   suggestion      Json? // variante proposee par Paul, creee seulement a l'acceptation
+  visualComposition String? // composition du visuel (#290) : photo_signature | cadre_editorial ; null = pas de visuel
   version         Int              @default(1) // concurrence optimiste
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
@@ -708,6 +715,7 @@ model ContentVersion {
   note            String?
   rejectedAt      DateTime?
   rejectionReason String?
+  brandSnapshot   Json? // instantané de la marque à la création de la version (#290) : nom, palette, ton, composition ; les archives ne bougent pas
   createdAt       DateTime       @default(now())
   content         MissionContent @relation(fields: [contentId], references: [id], onDelete: Cascade)
 

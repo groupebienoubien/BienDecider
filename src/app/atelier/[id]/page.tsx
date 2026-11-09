@@ -6,6 +6,7 @@ import { PageHeading } from "@/components/mockup-ui";
 import { getShellProps } from "@/lib/shell-data";
 import { requireWorkspaceCompany } from "@/lib/workspace";
 import { checklistFor, loadAtelierItems, loadContentDetail } from "@/lib/contents/view";
+import { visualOfVersion } from "@/lib/brand/service";
 import { ContentWorkbench } from "./content-workbench";
 
 export const dynamic = "force-dynamic";
@@ -20,6 +21,8 @@ export default async function ContentPage({ params, searchParams }: { params: Pr
   const [shell, items] = await Promise.all([getShellProps(company), loadAtelierItems(company.id)]);
   const requested = Number(v);
   const viewing = detail.versions.find((version) => version.number === requested) ?? detail.versions[0];
+  // Le visuel de la version vue : même rendu que la route d'image, d'après la marque conservée avec cette version (#290).
+  const visual = detail.visual.composition ? await visualOfVersion(company.id, id, viewing.number) : null;
 
   return (
     <AppShell {...shell}>
@@ -36,6 +39,8 @@ export default async function ContentPage({ params, searchParams }: { params: Pr
         items={items}
         checklist={checklistFor(detail.versions[0])}
         credits={company.creditBalance}
+        visualSvg={visual?.svg ?? null}
+        visualPreview={visual?.preview ?? false}
       />
     </AppShell>
   );
