@@ -24,6 +24,8 @@ export type VisualInput = {
   signature: string;
   /** Adresse d'une photo de l'entreprise ; absente, le visuel s'en passe. */
   photoUrl?: string | null;
+  /** Logo de la marque (#290), en haut à droite du visuel ; absent, la signature suffit. */
+  logoUrl?: string | null;
   /** Texte alternatif de la photo (#291), repris dans la description de l'image. */
   photoAlt?: string | null;
 };
@@ -83,6 +85,11 @@ export function renderVisual(input: VisualInput): string {
   const size = VISUAL_SIZE;
   const signature = escapeXml(input.signature.replace(/\s+/g, " ").trim().slice(0, 60));
   const url = input.photoUrl && /^https:\/\//.test(input.photoUrl) ? input.photoUrl : null;
+  const logoUrl = input.logoUrl && /^https:\/\//.test(input.logoUrl) ? input.logoUrl : null;
+  // Le logo garde ses proportions dans un cadre fixe : jamais déformé, jamais hors du visuel.
+  const logo = (x: number, y: number, plate: string | null) => logoUrl
+    ? `${plate ? `<rect x="${x - 16}" y="${y - 16}" width="232" height="132" rx="12" fill="${plate}"/>` : ""}<image href="${escapeXml(logoUrl)}" x="${x}" y="${y}" width="200" height="100" preserveAspectRatio="xMidYMid meet"/>`
+    : "";
   const label = url && input.photoAlt ? `${input.headline.slice(0, 100)}. Photo : ${input.photoAlt.slice(0, 200)}` : input.headline.slice(0, 100);
   const open = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}" width="100%" role="img" aria-label="${escapeXml(label)}" preserveAspectRatio="xMidYMid meet">`;
   const signatureLine = (x: number, y: number, fill: string) => `<text x="${x}" y="${y}" font-family="${FONT_STACK}" font-size="40" font-weight="600" fill="${fill}">${signature}</text>`;
@@ -99,6 +106,7 @@ export function renderVisual(input: VisualInput): string {
       `<rect x="80" y="${size - band + 40}" width="120" height="10" fill="${accent}"/>`,
       textBlock(fit.lines, 80, size - band + 40 + 20 + fit.size, fit.size, ink, 700),
       signatureLine(80, size - 56, ink),
+      logo(size - 80 - 200, 64, "#ffffff"),
       "</svg>",
     ].join("");
   }
@@ -117,6 +125,7 @@ export function renderVisual(input: VisualInput): string {
     textBlock(fit.lines, 140, top, fit.size, "#1a1a1a", 700),
     `<rect x="140" y="${size - 190}" width="${size - 280}" height="4" fill="${accent}"/>`,
     signatureLine(140, size - 120, primary),
+    logo(size - 140 - 200, size - 170, null),
     "</svg>",
   ].join("");
 }

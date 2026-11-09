@@ -3235,6 +3235,85 @@ test("GH-292: step 2 shows the first findings with their certainty, consequence,
   }
 });
 
+test("GH-290 GH-291 GH-283: confirm my brand, compose a visual, keep the archive and confirm the photo rights, at 360 px", async ({ page }) => {
+  const prisma = journeyDatabase();
+  const ownerEmail = `ux-marque-${randomUUID()}@example.invalid`;
+  const company = await prisma.company.create({ data: { ownerEmail, name: "Plomberie Martin", trade: "Plombier", servingArea: "Lyon" } });
+  try {
+    await page.context().addCookies([{ name: "pepito_session", value: createSessionToken(ownerEmail, company.sessionVersion, process.env.SESSION_SECRET!), url: baseURL, httpOnly: true, sameSite: "Lax" }]);
+    const mission = await prisma.mission.create({ data: { companyId: company.id, template: "social_post", channel: "facebook", title: "Publier un chantier", outcome: "Des demandes de devis", originalOutcome: "Des demandes de devis", finding: "Aucune publication depuis trois mois", scope: { topic: "Nos chantiers" }, status: "active", position: 1 } });
+    const content = await prisma.missionContent.create({ data: { companyId: company.id, missionId: mission.id, channel: "facebook", format: "social_post", currentNumber: 1, versions: { create: { number: 1, title: "Votre plombier à Lyon, disponible dès demain", body: "Une salle de bains refaite à neuf.", author: "paul", note: "Premier brouillon préparé par Paul" } } } });
+    await page.setViewportSize({ width: 360, height: 800 });
+
+    // Stratégie : la marque attend une décision.
+    await page.goto(`${baseURL}/strategie`);
+    const toValidate = page.getByRole("region", { name: "À valider par vous" });
+    await expect(toValidate).toContainText("Votre marque");
+    await expect(toValidate.getByRole("link", { name: "Confirmer ma marque" })).toHaveAttribute("href", "/entreprise#ma-marque");
+
+    // Atelier : un visuel composé, sa validation refusée tant que la marque n'est pas confirmée.
+    await page.goto(`${baseURL}/atelier/${content.id}`);
+    const visual = page.getByRole("region", { name: "Visuel" });
+    await visual.getByLabel("Composition").selectOption("photo_signature");
+    await visual.getByRole("button", { name: "Enregistrer le visuel" }).click();
+    await expect(visual.getByRole("group", { name: "Aperçu du visuel" }).locator("svg")).toBeVisible();
+    await expect(visual).toContainText("Confirmez votre marque avant de valider un visuel.");
+    await expect(page.getByRole("button", { name: "Valider cette version" })).toBeDisabled();
+    expect(await noHorizontalScroll(page)).toBe(true);
+
+    // Ma marque : la case est obligatoire, puis la marque est confirmée.
+    await visual.getByRole("link", { name: "Confirmer ma marque" }).click();
+    await expect(page).toHaveURL(/\/entreprise#ma-marque$/);
+    const brand = page.getByRole("region", { name: "Ma marque" });
+    await expect(brand).toContainText("À confirmer");
+    await expect(brand).toContainText("Identité proposée, non issue d'un site");
+    await brand.getByLabel("Couleur principale").fill("#1f5f4a");
+    await brand.getByRole("button", { name: "Confirmer ma marque" }).click();
+    await expect(brand.getByRole("alert").first()).toContainText("Je confirme ces éléments pour les prochaines créations");
+    await brand.getByLabel("Je confirme ces éléments pour les prochaines créations").check();
+    await brand.getByRole("button", { name: "Confirmer ma marque" }).click();
+    await expect(brand.getByRole("status")).toContainText("Marque confirmée");
+    await expect(brand).toContainText("Confirmé par vous");
+    expect(await noHorizontalScroll(page)).toBe(true);
+
+    // Changement de couleur : version suivante, l'archive garde l'ancienne couleur.
+    await brand.getByLabel("Couleur principale").fill("#123456");
+    await brand.getByLabel("Je confirme ces éléments pour les prochaines créations").check();
+    const saved = page.waitForResponse((response) => response.url().endsWith("/api/entreprise/marque") && response.request().method() === "POST");
+    await brand.getByRole("button", { name: "Mettre à jour ma marque" }).click();
+    expect((await saved).status()).toBe(200);
+    await page.goto(`${baseURL}/atelier/${content.id}`);
+    await expect(page.locator(".version-list")).toContainText("Marque modifiée : visuel à valider à nouveau");
+    await expect(page.getByRole("group", { name: "Aperçu du visuel" }).locator('rect[fill="#123456"]').first()).toBeAttached();
+    await page.goto(`${baseURL}/atelier/${content.id}?v=3`);
+    const archive = page.getByRole("group", { name: "Aperçu du visuel" });
+    await expect(archive.locator('rect[fill="#1f5f4a"]').first()).toBeAttached();
+    await expect(archive.locator('rect[fill="#123456"]')).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "Confirmer ma marque" })).toHaveCount(0);
+
+    // Photo importée (posée en base : pas de stockage en CI) : la case des droits s'ajoute à la relecture.
+    const current = await prisma.missionContent.findUniqueOrThrow({ where: { id: content.id } });
+    const number = current.currentNumber + 1;
+    await prisma.contentVersion.create({ data: { contentId: content.id, number, title: "Votre plombier à Lyon, disponible dès demain", body: "Une salle de bains refaite à neuf.", author: "owner", note: "Photo importée par vous, droits à reconfirmer", photo: { url: "https://blob.example.invalid/photo.jpg", pathname: `content-photos/${company.id}/${content.id}/p1.jpg`, alt: "Salle de bains refaite", width: 800, height: 600 } } });
+    await prisma.missionContent.update({ where: { id: content.id }, data: { currentNumber: number, version: { increment: 1 } } });
+    await page.goto(`${baseURL}/atelier/${content.id}`);
+    await expect(page.getByRole("region", { name: "Visuel" })).toContainText("Droits à confirmer à la validation.");
+    await page.getByRole("button", { name: "Valider cette version" }).click();
+    const dialog = page.getByRole("dialog", { name: `Valider la version V${number}` });
+    await dialog.getByLabel("J'ai relu le contenu et vérifié les informations qui engagent mon entreprise").check();
+    await expect(dialog.getByRole("button", { name: "Valider sans diffuser" })).toBeDisabled();
+    await dialog.getByLabel("Je confirme le visuel et les droits d'utilisation").check();
+    await dialog.getByRole("button", { name: "Valider sans diffuser" }).click();
+    await expect(dialog).toBeHidden();
+    await expect(page.getByRole("region", { name: "Visuel" })).toContainText("Droits confirmés pour cette version.");
+    expect((await prisma.contentVersion.findFirstOrThrow({ where: { contentId: content.id, number } })).rightsConfirmedAt).not.toBeNull();
+    expect(await noHorizontalScroll(page)).toBe(true);
+  } finally {
+    await prisma.company.deleteMany({ where: { id: company.id } });
+    await prisma.$disconnect();
+  }
+});
+
 test("GH-292: at signup the first findings become the starting diagnostic, read on Entreprise as findings leading to decisions", async ({ page }) => {
   const prisma = journeyDatabase();
   const website = "https://atelier-lumen.test";

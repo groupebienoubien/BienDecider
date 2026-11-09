@@ -156,7 +156,7 @@ export type BrandStatus = "to_confirm" | "confirmed";
 export const BRAND_STATUS_LABELS: Record<BrandStatus, string> = { to_confirm: "À confirmer", confirmed: "Confirmé par vous" };
 
 /** Instantané conservé avec chaque version : ce que le visuel de cette version a vraiment utilisé. */
-export type BrandSnapshot = { name: string; primary: string; accent: string; tone: BrandTone; composition: BrandComposition };
+export type BrandSnapshot = { name: string; primary: string; accent: string; tone: BrandTone; composition: BrandComposition; logoUrl?: string | null };
 
 export function readBrandSnapshot(value: unknown): BrandSnapshot | null {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
@@ -164,7 +164,27 @@ export function readBrandSnapshot(value: unknown): BrandSnapshot | null {
   const primary = normalizeHex(record.primary);
   const accent = normalizeHex(record.accent);
   if (typeof record.name !== "string" || !primary || !accent || !isBrandTone(record.tone) || !isBrandComposition(record.composition)) return null;
-  return { name: record.name, primary, accent, tone: record.tone, composition: record.composition };
+  const logoUrl = typeof record.logoUrl === "string" && /^https:\/\//.test(record.logoUrl) ? record.logoUrl : null;
+  return { name: record.name, primary, accent, tone: record.tone, composition: record.composition, ...(logoUrl ? { logoUrl } : {}) };
+}
+
+/** Logo de la marque (#290) : PNG, JPEG ou WebP, 500 Ko au plus. */
+export const BRAND_LOGO_MAX_BYTES = 500 * 1024;
+export const BRAND_LOGO_TOO_LARGE = "500 Ko au plus pour le logo.";
+export const BRAND_LOGO_ORIGIN = "Importé par vous";
+export type BrandLogo = { url: string; pathname: string; width: number; height: number };
+
+/** Lit le logo enregistré ; une valeur illisible, ou hors du dossier de l'entreprise, est ignorée. */
+export function readBrandLogo(value: unknown, companyId: string): BrandLogo | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
+  const { url, pathname, width, height } = value as Record<string, unknown>;
+  if (typeof url !== "string" || !/^https:\/\//.test(url) || typeof pathname !== "string" || !pathname.startsWith(`brand-logos/${companyId}/`)) return null;
+  if (!Number.isInteger(width) || !Number.isInteger(height)) return null;
+  return { url, pathname, width: width as number, height: height as number };
+}
+
+export function brandLogoPathname(companyId: string, id: string, extension: string): string {
+  return `brand-logos/${companyId}/${id}.${extension}`;
 }
 
 /** Note de la version système écrite quand la marque change (le visuel doit être validé à nouveau). */

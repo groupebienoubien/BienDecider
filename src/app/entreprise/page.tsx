@@ -118,7 +118,7 @@ export default async function EntreprisePage({ searchParams }: { searchParams: P
         <h3>Ce qu&apos;il nous manque</h3>
         <ul className="feedback-list">{missing.map((item) => <li key={item}>{item}</li>)}</ul>
       </section>
-      <BrandForm name={company.name} status={brand.status} kit={brand.kit} origins={brand.origins} fromSite={brand.fromSite} source={brand.source} locked={brandLocked} />
+      <BrandForm name={company.name} status={brand.status} kit={brand.kit} origins={brand.origins} fromSite={brand.fromSite} source={brand.source} locked={brandLocked} logo={brand.logo && { url: brand.logo.url }} logoAvailable={sitePhotoStorage.isConfigured()} />
       <div className="settings-grid section-space">
         <section className="setting-section">
           <h2>{company.name}</h2>

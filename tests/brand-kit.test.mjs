@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { brandProposalFromAnalysis, checkBrandInput, contrastRatio, normalizeHex, proposeBrand, readableOn, readBrandSnapshot } from "../src/lib/brand/rules.ts";
+import { brandLogoPathname, readBrandLogo, brandProposalFromAnalysis, checkBrandInput, contrastRatio, normalizeHex, proposeBrand, readableOn, readBrandSnapshot } from "../src/lib/brand/rules.ts";
 import { fitHeadline, renderVisual, wrapWords } from "../src/lib/brand/render.ts";
 
 const proposed = proposeBrand(null);
@@ -80,4 +80,29 @@ test("l'accroche s'ajuste au cadre : jamais plus de cinq lignes, jamais hors du 
 test("un instantané de marque illisible est ignoré", () => {
   assert.equal(readBrandSnapshot({ name: "A", primary: "#1f5f4a", accent: "#e0a030", tone: "clair" }), null);
   assert.deepEqual(readBrandSnapshot({ name: "A", primary: "#1F5F4A", accent: "#e0a030", tone: "clair", composition: "cadre_editorial" }), { name: "A", primary: "#1f5f4a", accent: "#e0a030", tone: "clair", composition: "cadre_editorial" });
+});
+
+test("le logo est rendu dans les deux compositions, de façon déterministe, et seulement en https", () => {
+  for (const composition of ["photo_signature", "cadre_editorial"]) {
+    const svg = renderVisual({ ...input, composition, logoUrl: "https://blob.example/logo.png" });
+    assert.equal(svg, renderVisual({ ...input, composition, logoUrl: "https://blob.example/logo.png" }));
+    assert.ok(svg.includes('href="https://blob.example/logo.png"'));
+    assert.ok(svg.includes('preserveAspectRatio="xMidYMid meet"'), "proportions gardées");
+  }
+  assert.ok(!renderVisual({ ...input, logoUrl: "javascript:alert(1)" }).includes("javascript:"));
+  assert.notEqual(renderVisual(input), renderVisual({ ...input, logoUrl: "https://blob.example/logo.png" }));
+});
+
+test("le logo enregistré doit venir du dossier de l'entreprise", () => {
+  const logo = { url: "https://blob.example/l.png", pathname: brandLogoPathname("co1", "id1", "png"), width: 200, height: 80 };
+  assert.deepEqual(readBrandLogo(logo, "co1"), logo);
+  assert.equal(readBrandLogo(logo, "co2"), null);
+  assert.equal(readBrandLogo({ ...logo, url: "http://blob.example/l.png" }, "co1"), null);
+  assert.equal(readBrandLogo(null, "co1"), null);
+});
+
+test("l'instantané garde le logo de la version, jamais une adresse non sûre", () => {
+  const base = { name: "A", primary: "#1f5f4a", accent: "#e0a030", tone: "clair", composition: "photo_signature" };
+  assert.equal(readBrandSnapshot({ ...base, logoUrl: "https://blob.example/l.png" }).logoUrl, "https://blob.example/l.png");
+  assert.equal(readBrandSnapshot({ ...base, logoUrl: "javascript:x" }).logoUrl, undefined);
 });

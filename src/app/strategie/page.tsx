@@ -36,6 +36,8 @@ export default async function StrategiePage() {
   const stepProvenance = stepMission ? missionProvenance(stepMission) : null;
   const toValidate = missions.filter((mission) => (mission.stage === "approve" || mission.stage === "verify" || mission.stage === "scheduled") && mission.contentId);
   const cancelledSchedules = await loadCancelledSchedules(company.id);
+  // Marque à confirmer (#283, #290) : tant qu'elle ne l'est pas, aucun visuel ne se valide. Montrée dès qu'un contenu peut porter un visuel.
+  const brandToConfirm = company.brandConfirmedAt === null && (await prisma.missionContent.count({ where: { companyId: company.id, format: "social_post", currentNumber: { gt: 0 } } })) > 0;
   const STAGE_LINE: Partial<Record<string, [string, string]>> = { verify: ["diffusion à vérifier", "Vérifier"], scheduled: ["diffusion programmée", "Voir la programmation"] };
   const firstName = firstNameOf(company.ownerName);
   const learnings = learningsOf(missions);
@@ -119,6 +121,13 @@ export default async function StrategiePage() {
             <Link href={`/atelier/${item.contentId}`}>Voir le contenu</Link>
           </div>
         ))}
+        {brandToConfirm && (
+          <div className="decision">
+            <Icon name="pencil" />
+            <span><strong>Votre marque</strong> · à confirmer avant de valider un visuel</span>
+            <Link href="/entreprise#ma-marque">Confirmer ma marque</Link>
+          </div>
+        )}
         <div className="decision">
           <Icon name="refresh-cw" />
           <span>{connected === 0 ? "Aucun canal connecté." : `${connected} canal${connected > 1 ? "aux" : ""} connecté${connected > 1 ? "s" : ""}.`}</span>
