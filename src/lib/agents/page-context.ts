@@ -25,7 +25,7 @@ async function loadElement(companyId: string, type: PaulElementType, id: string)
     return proposal && { id: proposal.id, type: "production", kind: proposal.kind, titre: proposal.title, statut: proposal.status, version: proposal.version, contenu: clip(proposal.content), raisonDuRejet: clip(proposal.rejectionReason) };
   }
   if (type === "finding") {
-    const finding = await prisma.auditFinding.findFirst({ where: { id, companyId } });
+    const finding = await prisma.auditFinding.findFirst({ where: { id, companyId, replacedAt: null } });
     // Certitude refaite selon la source (#168) : « Observé » seulement si la source a été consultée.
     return finding && {
       id: finding.id, type: "constat", categorie: finding.category, titre: finding.title, resume: clip(finding.content), ceQuiEstBien: clip(finding.whatWorks), aAmeliorer: clip(finding.toImprove),
@@ -33,6 +33,8 @@ async function loadElement(companyId: string, type: PaulElementType, id: string)
       statutDeLaSource: finding.sourceStatus ?? "non indiqué",
       source: safeSourceUrl(finding.sourceUrl),
       luLe: formatReadDate(finding.createdAt),
+      // Constat corrigé par le dirigeant (#169) : déclaré par lui, à tenir pour juste.
+      ...(finding.correctedAt ? { corrigeParLeDirigeantLe: formatReadDate(finding.correctedAt) } : {}),
     };
   }
   if (type === "mission") {

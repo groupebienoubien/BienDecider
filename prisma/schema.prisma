@@ -80,6 +80,8 @@ model Company {
   brandProposal      Json? // palette lue sur le site à l'inscription, proposée et non confirmée : { palette, source }
   brandLogo          Json? // logo importé par le dirigeant (#290) : { url, pathname, width, height } ; PNG, JPEG ou WebP, 500 Ko au plus
   brandConfirmedAt   DateTime? // dernière confirmation de l'identité de marque ; null = visuels non validables
+  availableCapacity  Int? // capacité disponible déclarée (#292) : nouveaux projets clients par mois, 0 à 99 ; null = à renseigner
+  capacityConfirmedAt DateTime? // dernière confirmation de la capacité ; à reconfirmer après 30 jours
   profileOrigins     Json? // origine des sept champs de « Corriger mon profil » (#169) : observed, hypothesis, declared ou missing ; absent pour un compte d'avant #169
   channels        ChannelConnection[]
   proposals       AgentProposal[]
@@ -343,9 +345,17 @@ model AuditFinding {
   agentRun    AgentRun? @relation(fields: [agentRunId], references: [id], onDelete: SetNull)
   createdAt   DateTime @default(now())
   missions    Mission[]
+  // Correction par le dirigeant (#169) : le constat est corrigé en place (certitude « declare », correctedAt) ; la version remplacée
+  // est archivée dans une nouvelle ligne (versionOfId, replacedAt), jamais présentée comme actuelle (src/lib/audit-findings.ts).
+  correctedAt DateTime? // dernière correction du dirigeant ; null pour un constat jamais corrigé ou revenu à sa version de Paul
+  replacedAt  DateTime? // non nul : version archivée, remplacée par une correction à cette date
+  versionOfId String? // version archivée : le constat courant dont elle est une version précédente
+  versionOf   AuditFinding?  @relation("FindingVersions", fields: [versionOfId], references: [id], onDelete: Cascade)
+  versions    AuditFinding[] @relation("FindingVersions")
 
   // Plafonds par exécution (story 3.2) : comptés par agentRunId.
   @@index([agentRunId])
+  @@index([versionOfId])
 }
 
 // Une lecture de source faite par le code (pas déclarée par le modèle) : ce que l'analyse a réellement pu lire. Jamais de contenu Google ici.
@@ -582,6 +592,8 @@ model Mission {
   sourceFindingId     String?
   sourceFinding       AuditFinding?  @relation(fields: [sourceFindingId], references: [id], onDelete: SetNull)
   deduction           String?
+  // Constat relié corrigé par le dirigeant (#169) : mission à réexaminer depuis cette date ; rien n'est relancé. Null une fois réexaminée.
+  findingReviewAt     DateTime?
   // US #284 : agent responsable (clé de PERSONAS, affiché comme un rôle de Paul) et risque ou limite (10 à 200 caractères, sans balise) ; nuls pour les missions du dirigeant et les anciennes.
   responsibleAgent    String?
   risk                String?

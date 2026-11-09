@@ -7,10 +7,13 @@ export type { AuditFindingsView } from "@/lib/audit-split";
 /** Client de lecture : la base, ou la transaction de l'appelant (acceptation d'une carte de Paul). */
 type FindingsClient = Pick<Prisma.TransactionClient, "auditFinding" | "agentRun">;
 
-/** Constats du dernier audit terminé et de l'audit d'avant, du plus récent au plus ancien. */
+/**
+ * Constats du dernier audit terminé et de l'audit d'avant, du plus récent au plus ancien.
+ * Une version remplacée par une correction du dirigeant (#169, `replacedAt`) n'est jamais présentée comme actuelle.
+ */
 export async function getAuditFindingsView(companyId: string, client: FindingsClient = prisma): Promise<AuditFindingsView<AuditFinding>> {
   const findings = await client.auditFinding.findMany({
-    where: { companyId },
+    where: { companyId, replacedAt: null },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
   });
   const runIds = [...new Set(findings.map((finding) => finding.agentRunId).filter((id): id is string => Boolean(id)))];

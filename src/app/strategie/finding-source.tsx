@@ -34,7 +34,8 @@ export function FindingSource({ source }: { source: MissionSourceFinding }) {
         <dl className="decision-reasons">
           <div><dt>Type</dt><dd>{category}</dd></div>
           <div><dt>Origine</dt><dd>{findingOrigin(source.category, source.sourceUrl)}</dd></div>
-          <div><dt>Lu le</dt><dd>{formatReadDate(source.createdAt)}</dd></div>
+          {/* Constat corrigé par le dirigeant (#169) : la date de sa correction, pas celle de la lecture remplacée. */}
+          <div><dt>{source.correctedAt ? "Corrigé par vous le" : "Lu le"}</dt><dd>{formatReadDate(source.correctedAt ?? source.createdAt)}</dd></div>
           <div><dt>Incertitude</dt><dd>{CERTAINTY_DETAILS[source.certainty]}</dd></div>
           {link && <div><dt>Source{source.sourceStatus ? ` (${source.sourceStatus})` : ""}</dt><dd><a href={link} target="_blank" rel="noreferrer" style={{ overflowWrap: "anywhere", wordBreak: "break-word" }}>{link}</a></dd></div>}
         </dl>

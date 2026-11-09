@@ -33,6 +33,8 @@ export type MissionView = StageMission & {
   deduction: string | null;
   /** Constat du diagnostic relié (#168) ; null s'il n'y en a pas ou s'il a été supprimé. */
   source: MissionSourceFinding | null;
+  /** Constat relié corrigé depuis par le dirigeant (#169) : mission à réexaminer, rien n'est relancé. */
+  findingReview: boolean;
   /** Rôle de Paul qui prépare la mission (#284), libellé visible ; null s'il n'est pas renseigné. */
   responsibleLabel: string | null;
   /** Risque ou limite rédigé par Paul (#284) ; null s'il n'est pas renseigné. */
@@ -74,6 +76,7 @@ function sourceOf(mission: MissionWithContent): MissionSourceFinding | null {
     sourceStatus: finding.sourceStatus,
     certainty: normalizeCertainty(finding.certainty, finding.sourceStatus, finding.sourceUrl),
     createdAt: finding.createdAt.toISOString(),
+    correctedAt: finding.correctedAt?.toISOString() ?? null,
   };
 }
 
@@ -126,6 +129,7 @@ function toView(mission: MissionWithContent, priorityId: string | null, connecte
     createdBy: mission.createdBy,
     deduction: mission.deduction,
     source: sourceOf(mission),
+    findingReview: mission.findingReviewAt !== null && mission.status !== "stopped" && mission.status !== "dismissed",
     responsibleLabel: responsibleLabel(mission.responsibleAgent),
     risk: mission.risk,
     templateLabel: MISSION_TEMPLATES[base.template]?.label ?? "Sur mesure",

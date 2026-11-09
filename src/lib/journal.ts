@@ -34,6 +34,10 @@ export const JOURNAL_TEXTS = {
   "J-31": "Idée cadrée en mission : {mission}.",
   "J-32": "Identité de marque confirmée. Le visuel doit être validé à nouveau.",
   "J-33": "Logo {action}. Le visuel doit être validé à nouveau.",
+  "J-34": "Constat corrigé : « {ancien} » devient « {nouveau} ». {suite}",
+  "J-35": "Correction annulée : « {constat} » redevient le constat actuel.",
+  "J-36": "Mission réexaminée après la correction de son constat : {mission}.",
+  "J-37": "Capacité disponible confirmée : {capacite}.",
 } as const;
 
 export type JournalCode = keyof typeof JOURNAL_TEXTS;

@@ -74,6 +74,11 @@ export const MISSION_MESSAGES = {
   "M-96": "Cochez « Je confirme le visuel et les droits d'utilisation » avant de valider.",
   "M-97": "Seules les publications de réseaux sociaux ont un visuel : la photo ne peut pas être ajoutée à ce contenu.",
   "M-95": "Choisissez l'une des deux compositions de visuel, ou retirez le visuel.",
+  // Corriger cette information (#169) et capacité disponible (#292).
+  "M-98": "Rien n'a changé : modifiez le constat ou son détail avant d'enregistrer.",
+  "M-99": "Précisez le constat (5 à 120 caractères) et son détail (10 à 600), sans balise HTML.",
+  "M-100": "Indiquez votre capacité disponible en nombre entier de 0 à 99 nouveaux projets clients par mois.",
+  "M-101": "Ce constat n'a pas de version remplacée à restaurer.",
 } as const;
 
 export type MissionMessageCode = keyof typeof MISSION_MESSAGES;

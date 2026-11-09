@@ -11,7 +11,7 @@ import { googlePlacesConfigured } from "@/lib/google-places";
 import { COMPETITOR_READ_CAP, describeOwnReading, readCompetitorGooglePlace, readOwnGooglePlace } from "@/lib/google-place";
 import { describeFacebookReading, knownFacebookPageUrl, proposeFacebookPage, readOwnFacebookPage } from "@/lib/facebook-page";
 import { runToolLoop } from "@/lib/usage";
-import { CERTAINTY_LEVELS, normalizeCertainty } from "@/lib/findings/certainty";
+import { CERTAINTY_LEVELS, DECLARED_CERTAINTY, normalizeCertainty } from "@/lib/findings/certainty";
 import { agentRunnerOptions, bindAgentTools } from "@/lib/agent-run-execution";
 import { AGENT_RUN_MAX_TURNS } from "@/lib/agent-run-limits";
 import {
@@ -187,6 +187,11 @@ export async function runMarketingAgent(
   // où web_fetch peut la voir, et en imposant un repli par web_search avant
   // tout constat "site inaccessible" — jamais une lecture partielle acceptée
   // comme suffisante.
+  // Constats corrigés par le dirigeant (#169) : un nouvel audit garde ce contexte au lieu de reproduire l'information remplacée.
+  const corrections = await prisma.auditFinding.findMany({ where: { companyId: company.id, certainty: DECLARED_CERTAINTY, replacedAt: null }, orderBy: [{ correctedAt: "desc" }, { id: "desc" }], take: 10, select: { title: true, content: true } });
+  const correctionsLine = corrections.length
+    ? `Corrections déclarées par le dirigeant sur des constats précédents (déclarations à respecter : ne les contredis pas sans source consultée, et n'en fais jamais un constat « observe ») :\n${corrections.map((item) => `- ${item.title} : ${item.content.replace(/\s+/g, " ").slice(0, 300)}`).join("\n")}`
+    : "";
   const websiteInstruction = company.website
     ? `Un site web est déclaré pour cette entreprise (son URL est donnée dans le message ci-dessous, pas ici) : utilise l'outil web_fetch pour le consulter EN ENTIER (page d'accueil, horaires, menu/services, contact) avant de conclure quoi que ce soit — une lecture partielle (ex: un seul extrait trouvé via web_search) n'est jamais suffisante. Lis ensuite les pages utiles de ce site (services ou tarifs, contact, témoignages), dans la limite des lectures disponibles. Si web_fetch échoue (erreur technique, page inaccessible), n'abandonne pas : fais une recherche web_search sur le nom de l'entreprise pour retrouver son contenu autrement. Ne signale "site inaccessible" qu'après avoir réellement essayé les deux.`
     : `Aucun site web n'a été déclaré. Enregistre un constat "site_web" signalant l'absence de site comme premier axe d'amélioration, sans inventer de contenu.`;
@@ -207,6 +212,7 @@ Réseaux sociaux déclarés : ${company.socialHandles ?? "aucun"}.
 ${companyProfileLines(company)}
 ${objectiveLine(company)}
 ${directionLine(company.direction)}
+${correctionsLine}
 
 Ton rôle a deux volets, à faire tous les deux sauf si un brief ci-dessous te demande de te concentrer sur un seul :
 1. Diagnostic : état des lieux honnête de la présence en ligne (site, réseaux) ET du positionnement face à 2-3 concurrents réels locaux — outil record_audit_finding.

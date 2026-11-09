@@ -104,6 +104,10 @@ const GUARDED_ROUTES: Guarded[] = [
   { method: "POST", path: "/api/entreprise/marque", denied: 401 },
   { method: "POST", path: "/api/entreprise/marque/logo", denied: 401 },
   { method: "DELETE", path: "/api/entreprise/marque/logo", denied: 401 },
+  { method: "POST", path: "/api/entreprise/capacite", denied: 401 },
+  { method: "POST", path: "/api/entreprise/constats/[id]/correction", denied: 401 },
+  { method: "DELETE", path: "/api/entreprise/constats/[id]/correction", denied: 401 },
+  { method: "POST", path: "/api/missions/[id]/reexamen", denied: 401 },
   { method: "POST", path: "/api/contents/[id]/photo", denied: 401 },
   { method: "GET", path: "/api/contents/[id]/visuel", denied: 401 },
   { method: "GET", path: "/api/site/photos", denied: 401 },
@@ -1635,6 +1639,105 @@ test("the brand logo is controlled by the server before storage, and versions ea
     expect(await prisma.contentVersion.findFirst({ where: { contentId: content.id, number: 2 } })).toMatchObject({ brandSnapshot: { logoUrl } });
     expect(await (await request.get(`${baseURL}/api/contents/${content.id}/visuel?n=2`, { headers: headers() })).text()).toContain(logoUrl);
     expect(await (await request.get(`${baseURL}/api/contents/${content.id}/visuel?n=1`, { headers: headers() })).status()).toBe(404);
+  } finally {
+    await prisma.company.deleteMany({ where: { id: a.id } });
+    await prisma.$disconnect();
+  }
+});
+
+test("correcting a finding keeps it in place, archives the replaced version, flags its missions without relaunching anything, and can be undone (#169)", async ({ request }) => {
+  const prisma = openDatabase();
+  const marker = randomUUID().slice(0, 8);
+  const a = await prisma.company.create({ data: { ownerEmail: `security-constat-a-${marker}@example.invalid`, name: `Constat A ${marker}`, trade: "Électricien", servingArea: "Lyon" } });
+  const b = await prisma.company.create({ data: { ownerEmail: `security-constat-b-${marker}@example.invalid`, name: `Constat B ${marker}`, trade: "Électricien", servingArea: "Lyon" } });
+  const headers = (company: typeof a, origin = baseURL) => ({ Cookie: sessionCookie(company.ownerEmail, company.sessionVersion), Origin: origin });
+  const readAt = new Date("2026-11-07T10:00:00.000Z");
+  const finding = await prisma.auditFinding.create({ data: { companyId: a.id, category: "site_web", title: "Votre site ne montre aucune réalisation.", content: "Vos clients ne voient pas ce que vous savez faire.", sourceUrl: "https://atelier.test/", sourceStatus: "consultée", certainty: "observe", createdAt: readAt } });
+  const missionData = { template: "site_page", channel: "site", title: "Montrer un chantier", outcome: "Des demandes", originalOutcome: "Des demandes", finding: "Aucune réalisation visible", scope: { page: "Nos chantiers" }, sourceFindingId: finding.id };
+  const active = await prisma.mission.create({ data: { companyId: a.id, ...missionData, status: "active", firstLaunchedAt: new Date(), position: 1 } });
+  const stopped = await prisma.mission.create({ data: { companyId: a.id, ...missionData, title: "Ancienne mission", status: "stopped", position: 2 } });
+  const content = await prisma.missionContent.create({ data: { companyId: a.id, missionId: active.id, channel: "site", format: "site_page", currentNumber: 1, validatedNumber: 1, validatedAt: new Date(), versions: { create: { number: 1, title: "Nos chantiers", body: "Une salle de bains refaite.", author: "paul", note: "Premier brouillon préparé par Paul" } } } });
+  await prisma.publication.create({ data: { companyId: a.id, missionId: active.id, contentId: content.id, versionNumber: 1, title: "Nos chantiers", channel: "site", channelLabel: "Votre site vitrine", mode: "confirmed", status: "scheduled", scheduledAt: new Date(Date.now() + 86_400_000), timezone: "Europe/Paris", idempotencyKey: `constat-${marker}` } });
+  const correct = (company: typeof a, data: unknown, origin = baseURL) => request.post(`${baseURL}/api/entreprise/constats/${finding.id}/correction`, { headers: headers(company, origin), data });
+  const undo = (company: typeof a) => request.delete(`${baseURL}/api/entreprise/constats/${finding.id}/correction`, { headers: headers(company) });
+  const live = () => prisma.auditFinding.findUniqueOrThrow({ where: { id: finding.id } });
+  const archives = () => prisma.auditFinding.findMany({ where: { versionOfId: finding.id }, orderBy: { replacedAt: "asc" } });
+  const reviewOf = async (id: string) => (await prisma.mission.findUniqueOrThrow({ where: { id } })).findingReviewAt;
+  const correction = { title: "Mon site montre douze chantiers.", content: "Les réalisations sont dans l'onglet Chantiers du site." };
+  try {
+    // Origine, isolation, bornes, et une correction identique : rien n'est écrit.
+    expect((await correct(a, correction, "https://attacker.invalid")).status()).toBe(403);
+    expect((await correct(b, correction)).status()).toBe(404);
+    expect((await undo(b)).status()).toBe(404);
+    expect(await (await correct(a, { ...correction, title: "Site" })).json()).toMatchObject({ code: "M-99", field: "title" });
+    expect(await (await correct(a, { ...correction, content: "<b>douze</b> chantiers en ligne" })).json()).toMatchObject({ code: "M-99", field: "content" });
+    expect(await (await correct(a, { title: finding.title, content: finding.content })).json()).toMatchObject({ code: "M-98" });
+    expect(await archives()).toHaveLength(0);
+    expect(await prisma.journalEntry.count({ where: { companyId: a.id, code: "J-34" } })).toBe(0);
+
+    // Correction : en place, déclarée et sans source ; la version remplacée est archivée avec sa source et sa date de lecture.
+    const saved = await correct(a, correction);
+    expect(saved.status()).toBe(200);
+    expect(await saved.json()).toMatchObject({ ok: true, id: finding.id, missions: 1 });
+    expect(await live()).toMatchObject({ ...correction, certainty: "declare", sourceUrl: null, sourceStatus: null, replacedAt: null, createdAt: readAt });
+    expect((await live()).correctedAt).not.toBeNull();
+    const [archived] = await archives();
+    expect(archived).toMatchObject({ companyId: a.id, title: finding.title, content: finding.content, certainty: "observe", sourceUrl: "https://atelier.test/", sourceStatus: "consultée", createdAt: readAt, correctedAt: null });
+    expect(archived.replacedAt).not.toBeNull();
+    expect(await prisma.auditFinding.count({ where: { companyId: a.id, replacedAt: null } })).toBe(1);
+    // La mission ouverte est à réexaminer, sans changement de statut, de contenu ni de programmation ; la mission arrêtée ne l'est pas.
+    expect(await prisma.mission.findUniqueOrThrow({ where: { id: active.id } })).toMatchObject({ status: "active", version: active.version });
+    expect(await reviewOf(active.id)).not.toBeNull();
+    expect(await reviewOf(stopped.id)).toBeNull();
+    expect(await prisma.publication.findFirstOrThrow({ where: { contentId: content.id } })).toMatchObject({ status: "scheduled" });
+    expect(await prisma.missionContent.findUniqueOrThrow({ where: { id: content.id } })).toMatchObject({ currentNumber: 1, validatedNumber: 1 });
+    expect(await prisma.journalEntry.findFirstOrThrow({ where: { companyId: a.id, code: "J-34" } })).toMatchObject({ actor: "owner", params: { ancien: finding.title, nouveau: correction.title, suite: "1 mission à réexaminer, rien n'est relancé." } });
+
+    // Deuxième correction, puis retour en arrière : d'abord la première correction (missions toujours à réexaminer), puis le constat de Paul.
+    expect((await correct(a, { ...correction, title: "Mon site montre quinze chantiers." })).status()).toBe(200);
+    expect(await archives()).toHaveLength(2);
+    expect((await undo(a)).status()).toBe(200);
+    expect(await live()).toMatchObject({ title: correction.title, certainty: "declare" });
+    expect(await reviewOf(active.id)).not.toBeNull();
+    expect((await undo(a)).status()).toBe(200);
+    expect(await live()).toMatchObject({ title: finding.title, certainty: "observe", sourceUrl: "https://atelier.test/", correctedAt: null });
+    expect(await archives()).toHaveLength(0);
+    expect(await reviewOf(active.id)).toBeNull();
+    expect(await (await undo(a)).json()).toMatchObject({ code: "M-101" });
+    expect(await prisma.journalEntry.count({ where: { companyId: a.id, code: "J-35" } })).toBe(2);
+
+    // « J'ai réexaminé cette mission » : le signal est retiré, J-36 ; une autre entreprise ne le peut pas.
+    expect((await correct(a, correction)).status()).toBe(200);
+    const reexamine = (company: typeof a, origin = baseURL) => request.post(`${baseURL}/api/missions/${active.id}/reexamen`, { headers: headers(company, origin) });
+    expect((await reexamine(a, "https://attacker.invalid")).status()).toBe(403);
+    expect((await reexamine(b)).status()).toBe(404);
+    expect(await (await reexamine(a)).json()).toMatchObject({ ok: true, changed: true });
+    expect(await reviewOf(active.id)).toBeNull();
+    expect(await (await reexamine(a)).json()).toMatchObject({ ok: true, changed: false });
+    expect(await prisma.journalEntry.count({ where: { companyId: a.id, code: "J-36", missionId: active.id } })).toBe(1);
+    expect(await prisma.publication.count({ where: { companyId: a.id, status: { not: "scheduled" } } })).toBe(0);
+  } finally {
+    await prisma.company.deleteMany({ where: { id: { in: [a.id, b.id] } } });
+    await prisma.$disconnect();
+  }
+});
+
+test("the available capacity is a declared landmark, bounded, reconfirmed on each save and traced (#292)", async ({ request }) => {
+  const prisma = openDatabase();
+  const marker = randomUUID().slice(0, 8);
+  const a = await prisma.company.create({ data: { ownerEmail: `security-capacite-${marker}@example.invalid`, name: `Capacité ${marker}`, trade: "Électricien", servingArea: "Lyon" } });
+  const save = (data: unknown, origin = baseURL) => request.post(`${baseURL}/api/entreprise/capacite`, { headers: { Cookie: sessionCookie(a.ownerEmail, a.sessionVersion), Origin: origin }, data });
+  try {
+    expect((await save({ capacity: 3 }, "https://attacker.invalid")).status()).toBe(403);
+    for (const capacity of [-1, 100, 2.5, "trois"]) expect(await (await save({ capacity })).json(), String(capacity)).toMatchObject({ code: "M-100" });
+    expect((await prisma.company.findUniqueOrThrow({ where: { id: a.id } })).availableCapacity).toBeNull();
+    expect(await (await save({ capacity: 3 })).json()).toMatchObject({ ok: true, capacity: 3 });
+    const confirmed = await prisma.company.findUniqueOrThrow({ where: { id: a.id } });
+    expect(confirmed.availableCapacity).toBe(3);
+    expect(confirmed.capacityConfirmedAt).not.toBeNull();
+    expect(await prisma.journalEntry.findFirstOrThrow({ where: { companyId: a.id, code: "J-37" } })).toMatchObject({ actor: "owner", params: { capacite: "3 nouveaux projets clients par mois" } });
+    expect(await (await save({ capacity: null })).json()).toMatchObject({ ok: true, capacity: null });
+    expect(await prisma.company.findUniqueOrThrow({ where: { id: a.id } })).toMatchObject({ availableCapacity: null, capacityConfirmedAt: null });
   } finally {
     await prisma.company.deleteMany({ where: { id: a.id } });
     await prisma.$disconnect();

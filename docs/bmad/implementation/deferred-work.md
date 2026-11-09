@@ -174,21 +174,21 @@
   summary: Cumuler le coût de toutes les analyses d'un même brouillon (chaque relance de la découverte remet le coût à 0) avant de le reprendre au compte.
   evidence: `newAnalysis` crée un coût nul à chaque relance ; seule la dernière analyse devient un `UsageEvent` à l'inscription. À traiter avec le cumul des coûts anonymes de #311.
 
-- source_spec: none
-  summary: Chiffrage facultatif de #169 (CA actuel, valeur moyenne d'un client) pour le calcul de l'écart (D8, FR-52).
-  evidence: Séparé de #169 par Samir le 2026-11-08 (périmètre « A seul ») ; livrable indépendant de la correction du profil.
-- source_spec: none
-  summary: Critères d'octobre de #169 sur les constats (« Corriger cette information » rattaché au constat, niveaux de certitude, trace de la correction, missions à réexaminer), à reprendre avec #292.
-  evidence: Séparé de #169 par Samir le 2026-11-08 (périmètre « A seul ») ; #292 affiche les niveaux de certitude de ces constats.
 - source_spec: `docs/bmad/implementation/spec-gh-169-corriger-mon-profil.md`
   summary: Relier « Prénom » (firstName) et « Votre prénom et nom » (ownerName, signature des e-mails) sur Entreprise, ou expliquer leur différence.
   evidence: Relecture #169 : corriger le prénom ne change pas la signature, et les deux champs se côtoient sans explication.
 - source_spec: `docs/bmad/implementation/spec-gh-292-constats-et-diagnostic.md`
   summary: FR-51, partie modèle : positionnement proposé « à challenger » (observé, supposé, à éviter), axes de positionnement et concurrence locale (acteur, angle, ce qu'il montre ou non, fiabilité), avec concurrents à confirmer ou écarter (un concurrent écarté n'est plus proposé).
   evidence: Aucune de ces données n'est produite ni stockée aujourd'hui ; l'audit de Paul (marketing) doit les rendre dans un format vérifiable, et un modèle de stockage (concurrents écartés) est à ajouter. Rien n'est affiché en attendant, pas même d'exemple.
-- source_spec: `docs/bmad/implementation/spec-gh-292-constats-et-diagnostic.md`
-  summary: « Corriger cette information » sur un constat (critères d'octobre de #169) et « Votre boussole » avec la capacité disponible à reconfirmer dans 30 jours.
-  evidence: Les repères existants (ambition, localisation, zone, clients) restent sur Entreprise ; la capacité n'a pas de champ en base.
-- source_spec: `docs/bmad/implementation/spec-gh-292-constats-et-diagnostic.md`
-  summary: Relier les trois missions de l'étape 4 aux premiers constats repris (`sourceFindingId`), et écrire un `SourceRead` pour le site lu avant compte.
-  evidence: Les missions de départ gardent leur constat rédigé par les règles (#284) ; la correspondance entre un modèle et un constat n'est pas définie. `SourceRead` ne connaît aujourd'hui que les avis Google.
+- source_spec: `docs/bmad/implementation/spec-gh-169-292-corriger-un-constat-et-reperes.md`
+  summary: Écrire un `SourceRead` pour le site lu avant compte, et l'afficher dans la couverture des sources du diagnostic de départ.
+  evidence: `getSourceCoverage` ne lit que les lectures d'un audit marketing terminé ; une ligne sans exécution n'apparaîtrait nulle part. `SourceRead` ne connaît aujourd'hui que les avis Google et la Page Facebook.
+- source_spec: `docs/bmad/implementation/spec-gh-169-292-corriger-un-constat-et-reperes.md`
+  summary: Montrer « À réexaminer » sur les cartes de la page Missions, et décider si les contenus d'une mission à réexaminer reçoivent aussi « à relire ».
+  evidence: Le signal apparaît sur Entreprise, la Stratégie et le détail de la mission ; la carte de la page Missions a déjà trois informations (charte §6.2), et aucun contenu n'est touché par une correction de constat (décision 2 de la story).
+- source_spec: `docs/bmad/implementation/spec-gh-169-292-corriger-un-constat-et-reperes.md`
+  summary: Vérifier qu'un nouvel audit respecte les corrections du dirigeant transmises dans son contexte, et décider du sort d'une correction quand l'audit suivant relève le même sujet.
+  evidence: Les corrections (certitude « declare ») sont données au prompt de l'audit, mais la CI n'a pas de modèle ; après un nouvel audit, le constat corrigé appartient à l'audit précédent et sort du diagnostic courant.
+- source_spec: `docs/bmad/implementation/spec-gh-169-292-corriger-un-constat-et-reperes.md`
+  summary: Capacité disponible : la garder (repère facultatif livré) ou la retirer, la maquette V5.2 ayant supprimé la limite de capacité.
+  evidence: Le critère de #292 la demande ; `maquette_v5.2/state.js` la supprime (« Plus de limite de temps ni de capacité »). Décision 4 de la story, à trancher par le PO.
