@@ -327,7 +327,9 @@ test("stories 11.1 to 11.3: Paul's first draft, versions, variant kept for one c
   await applyContentAction(company.id, first.id, { action: "reject", number: 1, input: { reason: "On ne tutoie pas nos clients" } }, writer);
   await applyContentAction(company.id, first.id, { action: "variant", number: 1, input: { variant: "custom", instruction: "Parlez de nos délais" } }, writer);
   const asked = requests[requests.length - 1];
-  expect(asked).toMatchObject({ base: { title: "Accroche 1" }, variant: { kind: "custom", instruction: "Parlez de nos délais" }, rejections: ["On ne tutoie pas nos clients"] });
+  // Les deux préparations simultanées appellent Paul ; seule celle qui gagne est enregistrée : la base est le titre réellement gardé en V1.
+  const storedFirst = await prisma.contentVersion.findFirstOrThrow({ where: { contentId: first.id, number: 1 } });
+  expect(asked).toMatchObject({ base: { title: storedFirst.title }, variant: { kind: "custom", instruction: "Parlez de nos délais" }, rejections: ["On ne tutoie pas nos clients"] });
   expect(buildDraftPrompt(asked)).toContain("« On ne tutoie pas nos clients »");
   expect(buildDraftPrompt(asked)).toContain("N'invente aucun prix");
   expect(await prisma.missionContent.findUniqueOrThrow({ where: { id: first.id } })).toMatchObject({ currentNumber: 1, suggestion: { basedOn: 1, title: expect.stringMatching(/^Accroche/) } });
