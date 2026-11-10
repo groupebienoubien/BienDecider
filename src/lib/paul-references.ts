@@ -40,7 +40,7 @@ export async function resolvePaulReferences(companyId: string, contents: string[
 
   const [proposals, findings, leads, missions] = await Promise.all([
     proposalIds.length ? prisma.agentProposal.findMany({ where: { companyId, id: { in: proposalIds } }, select: { id: true, title: true } }) : [],
-    findingIds.length ? prisma.auditFinding.findMany({ where: { companyId, id: { in: findingIds } }, select: { id: true, title: true } }) : [],
+    findingIds.length ? prisma.auditFinding.findMany({ where: { companyId, id: { in: findingIds }, replacedAt: null }, select: { id: true, title: true } }) : [],
     leadIds.length ? prisma.lead.findMany({ where: { companyId, id: { in: leadIds }, stage: { notIn: ["propose", "ecarte"] } }, select: { id: true, name: true } }) : [],
     missionIds.length ? prisma.mission.findMany({ where: { companyId, id: { in: missionIds } }, select: { id: true, title: true } }) : [],
   ]);

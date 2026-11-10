@@ -26,6 +26,11 @@ import { getSessionCompany } from "@/lib/session";
 import { getShellProps } from "@/lib/shell-data";
 import { listSitePhotos, sitePhotoStorage } from "@/lib/site/photo-store";
 import { AskPaulPositioning, DiscussFinding } from "./diagnostic-actions";
+import { FindingCorrection } from "./finding-correction";
+import { CapacityEditor } from "./capacity-editor";
+import { previousVersions } from "@/lib/findings/correction-service";
+import { capacityState } from "@/lib/capacity";
+import { clientGapLabel, computeBusinessTarget, formatEuros } from "@/lib/business-target";
 
 export const dynamic = "force-dynamic";
 
@@ -45,8 +50,10 @@ export default async function EntreprisePage({ searchParams }: { searchParams: P
   const brand = brandViewOf(company);
   // Diagnostic courant (#168) : ses constats, et les missions qui en découlent (#292).
   const linkedMissions = audits.latest.length
-    ? await prisma.mission.findMany({ where: { companyId: company.id, sourceFindingId: { in: audits.latest.map((finding) => finding.id) } }, select: { id: true, title: true, status: true, sourceFindingId: true, deduction: true }, orderBy: { position: "asc" } })
+    ? await prisma.mission.findMany({ where: { companyId: company.id, sourceFindingId: { in: audits.latest.map((finding) => finding.id) } }, select: { id: true, title: true, status: true, sourceFindingId: true, deduction: true, findingReviewAt: true }, orderBy: { position: "asc" } })
     : [];
+  // Version remplacée de chaque constat corrigé par le dirigeant (#169), montrée dans « Corriger cette information ».
+  const versions = await previousVersions(company.id, audits.latest.filter((finding) => finding.correctedAt).map((finding) => finding.id));
   const rows = decisionRows(audits.latest, linkedMissions);
   const summary = diagnosticSummary(rows);
   const missing = missingInputs(company);
@@ -58,16 +65,40 @@ export default async function EntreprisePage({ searchParams }: { searchParams: P
     { name: "Site", connected: Boolean(company.siteSlug), detail: company.siteSlug ? `/site/${company.siteSlug} · publié` : "Aucune page publiée" },
   ];
 
-  // Repères (#169, spécification §13) : ambition, localisation, zone et clients ; « À renseigner » quand une valeur est vide.
+  // Repères (#169, #292, spécification §13) : ambition, localisation, zone, clients et capacité disponible, chacun avec son statut
+  // et « Modifier » ; « À renseigner » quand une valeur est vide. L'écart chiffré (D8) n'apparaît que s'il est calculable.
   const ambitionTerms = readAmbitionTerms(company.ambitionTerms);
   const ambitionText = company.ambitionText?.trim() || company.objective;
   const hasAmbition = Boolean(ambitionText?.trim()) || (ambitionTerms?.gainPercent != null && ambitionTerms.horizonMonths != null);
   const filled = (value: string | null | undefined) => value?.trim() || null;
+  const confirmed = <Tag color="green">Confirmé</Tag>;
+  const fixProfile = (label: string) => <a className="small" href="#corriger-mon-profil">Modifier<span className="sr-only"> : {label}</span></a>;
+  const profileLandmark = (label: string, value: string | null) => ({ label, value, status: value ? confirmed : null, action: fixProfile(label), note: null });
+  const capacity = capacityState(company.availableCapacity, company.capacityConfirmedAt);
+  const target = computeBusinessTarget(company);
+  const clientGap = target ? clientGapLabel(target) : null;
+  const figures = (label: string) => <a className="small" href="/entreprise?tab=objectifs#corriger-mon-profil">{label}</a>;
   const landmarks = [
-    { label: "Ambition", value: hasAmbition ? capLabel(ambitionText, ambitionTerms) : null },
-    { label: "Localisation", value: filled(company.location) },
-    { label: "Zone", value: filled(company.servingArea) },
-    { label: "Clients", value: filled(company.targetClients) },
+    { label: "Ambition", value: hasAmbition ? capLabel(ambitionText, ambitionTerms) : null, status: hasAmbition && company.ambitionConfirmedAt ? confirmed : null, action: <a className="small" href="#modifier">Modifier avec Paul</a>, note: null },
+    profileLandmark("Localisation", filled(company.location)),
+    profileLandmark("Zone", filled(company.servingArea)),
+    profileLandmark("Clients", filled(company.targetClients)),
+    {
+      label: "Capacité disponible",
+      value: capacity.status === "missing" ? null : capacity.label,
+      status: capacity.status === "confirmed" ? confirmed : capacity.status === "stale" ? <Tag color="orange">À reconfirmer</Tag> : null,
+      action: <CapacityEditor capacity={capacity.status === "missing" ? null : capacity.capacity} />,
+      note: capacity.status === "missing" || !capacity.confirmedAt ? null : `Déclarée par vous le ${formatReadDate(capacity.confirmedAt)}${capacity.status === "confirmed" ? `, à reconfirmer avant le ${formatReadDate(capacity.reconfirmBy)}` : ""}.`,
+    },
+    target
+      ? {
+        label: "Écart à combler",
+        value: `${target.gap >= 0 ? "+" : ""}${formatEuros(target.gap)} par mois${clientGap ? `, ${clientGap.text}` : ""}`,
+        status: <Tag color="gray">Calculé</Tag>,
+        action: figures("Modifier mes chiffres"),
+        note: `Calculé à partir de vos chiffres déclarés${target.basis === "ambition" ? " et de votre ambition" : ""}.`,
+      }
+      : { label: "Chiffrage", value: null, status: null, action: figures("Ajouter mes chiffres"), note: "Facultatif : votre chiffre d'affaires actuel et la valeur moyenne d'un client suffisent pour calculer l'écart." },
   ];
 
   return (
@@ -99,16 +130,17 @@ export default async function EntreprisePage({ searchParams }: { searchParams: P
               <article key={row.finding.id} className="finding-row" aria-label={`Constat : ${row.finding.title}`}>
                 <div>
                   <p><strong>{row.finding.title}</strong></p>
-                  <p className="small muted">{row.origin} · lu le {formatReadDate(row.finding.createdAt)}</p>
+                  <p className="small muted">{row.origin} · {row.finding.correctedAt ? `corrigé par vous le ${formatReadDate(row.finding.correctedAt)}` : `lu le ${formatReadDate(row.finding.createdAt)}`}</p>
                   <Tag color={row.tone}>{row.certainty}</Tag>
                   <FindingSource source={row.finding} />
+                  <FindingCorrection finding={{ id: row.finding.id, title: row.finding.title, content: row.finding.content, certainty: row.certainty }} previous={versions.get(row.finding.id) ?? null} />
                 </div>
                 <Icon name="arrow-right" className="finding-arrow" />
                 <div><p>{row.deduction ?? "—"}</p></div>
                 <Icon name="arrow-right" className="finding-arrow" />
                 <div>
                   {row.missions.length
-                    ? row.missions.map((mission) => <p key={mission.id}><Link href={`/missions/${mission.id}`}>{mission.title}</Link></p>)
+                    ? row.missions.map((mission) => <p key={mission.id}><Link href={`/missions/${mission.id}`}>{mission.title}</Link>{mission.review && <> <Tag color="orange">À réexaminer</Tag></>}</p>)
                     : <DiscussFinding id={row.finding.id} title={row.finding.title} />}
                 </div>
               </article>
@@ -129,15 +161,14 @@ export default async function EntreprisePage({ searchParams }: { searchParams: P
               {landmarks.map((landmark) => (
                 <Fragment key={landmark.label}>
                   <dt>{landmark.label}</dt>
-                  <dd>{landmark.value ?? <span className="muted">À renseigner</span>}</dd>
+                  <dd>
+                    {landmark.value ?? <span className="muted">À renseigner</span>}
+                    {landmark.note && <span className="block small muted">{landmark.note}</span>}
+                    <span className="flex flex-wrap items-center gap-2">{landmark.status}{landmark.action}</span>
+                  </dd>
                 </Fragment>
               ))}
             </dl>
-            <p className="small">
-              <a href="#modifier">Modifier avec Paul</a>
-              {" · "}
-              <a href="#corriger-mon-profil">Corriger mon profil</a>
-            </p>
           </section>
           <section id="modifier" aria-labelledby="ambition-title" className="flex flex-col gap-3">
             <h3 id="ambition-title">Votre ambition</h3>

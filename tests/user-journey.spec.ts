@@ -3331,6 +3331,11 @@ test("GH-292: at signup the first findings become the starting diagnostic, read 
       ["Votre site ne montre aucune réalisation.", "observe", "consultée", `${website}/`, null],
       ["Vous semblez viser surtout les particuliers.", "piste", null, null, null],
     ]);
+    // Missions de départ reliées au premier constat de leur sujet : ici, seule une page du site a un constat « site_web ».
+    const observedId = findings.find((finding) => finding.certainty === "observe")!.id;
+    for (const mission of await prisma.mission.findMany({ where: { companyId: company.id }, select: { template: true, sourceFindingId: true } })) {
+      expect(mission.sourceFindingId, mission.template).toBe(mission.template === "site_page" ? observedId : null);
+    }
 
     await page.setViewportSize({ width: 360, height: 800 });
     await page.goto(`${baseURL}/entreprise`);
@@ -3352,6 +3357,98 @@ test("GH-292: at signup the first findings become the starting diagnostic, read 
   } finally {
     await prisma.onboardingDraft.deleteMany({ where: { id: draft.id } });
     await prisma.company.deleteMany({ where: { ownerEmail: email } });
+    await prisma.$disconnect();
+  }
+});
+
+test("GH-169 GH-292: correct a finding from Entreprise and come back to it, see its mission to re-examine, undo, and confirm the available capacity, at 360 px", async ({ page }) => {
+  const prisma = journeyDatabase();
+  const ownerEmail = `ux-constat-${randomUUID()}@example.invalid`;
+  const company = await prisma.company.create({ data: { ownerEmail, name: "Atelier Lumen", trade: "Électricien", servingArea: "Lyon", location: "Lyon", targetClients: "Particuliers", monthlyRevenue: 10000, averageClientValue: 2000, ambitionText: "+15 % de chiffre d'affaires en 12 mois", ambitionTerms: { gainPercent: 15, horizonMonths: 12, mediaBudgetPerMonth: null, recruitment: "unspecified" }, ambitionConfirmedAt: new Date() } });
+  const original = { title: "Votre site ne montre aucune réalisation.", content: "Vos clients ne voient pas ce que vous savez faire." };
+  const corrected = { title: "Mon site montre douze chantiers.", content: "Les réalisations sont dans l'onglet Chantiers du site." };
+  try {
+    await page.context().addCookies([{ name: "pepito_session", value: createSessionToken(ownerEmail, company.sessionVersion, process.env.SESSION_SECRET!), url: baseURL, httpOnly: true, sameSite: "Lax" }]);
+    const finding = await prisma.auditFinding.create({ data: { companyId: company.id, category: "site_web", ...original, sourceUrl: "https://atelier-lumen.test/", sourceStatus: "consultée", certainty: "observe" } });
+    const mission = await prisma.mission.create({ data: { companyId: company.id, template: "site_page", channel: "site", title: "Montrer un chantier", outcome: "Des demandes de devis", originalOutcome: "Des demandes de devis", finding: "Aucune réalisation visible", deduction: "Un chantier montré rassure les particuliers.", scope: { page: "Nos chantiers" }, sourceFindingId: finding.id, createdBy: "paul", status: "proposed", position: 1 } });
+    await page.setViewportSize({ width: 360, height: 800 });
+    await page.goto(`${baseURL}/entreprise`);
+    const diagnostic = page.getByRole("region", { name: "Diagnostic & positionnement" });
+    const row = diagnostic.getByRole("article", { name: `Constat : ${original.title}` });
+    await expect(row).toContainText("Observé");
+    const fix = row.getByRole("button", { name: /Corriger cette information/ });
+
+    // Le dialogue est rattaché au constat et prérempli ; Échap le ferme sans rien écrire et rend le focus au bouton.
+    await fix.click();
+    const dialog = page.getByRole("dialog", { name: "Corriger cette information" });
+    await expect(dialog.getByLabel("Constat", { exact: true })).toHaveValue(original.title);
+    await expect(dialog.getByLabel("Détail", { exact: true })).toHaveValue(original.content);
+    await expect(dialog).toContainText("Les missions issues de ce constat seront à réexaminer. Rien n'est relancé ni publié.");
+    expect(await noHorizontalScroll(page)).toBe(true);
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden();
+    await expect(fix).toBeFocused();
+    expect((await prisma.auditFinding.findUniqueOrThrow({ where: { id: finding.id } })).title).toBe(original.title);
+
+    // Rien de changé : refus annoncé ; puis la correction, et le retour au point de départ.
+    await fix.click();
+    await dialog.getByRole("button", { name: "Enregistrer la correction" }).click();
+    await expect(dialog.getByRole("alert")).toContainText("Rien n'a changé");
+    await dialog.getByLabel("Constat", { exact: true }).fill(corrected.title);
+    await dialog.getByLabel("Détail", { exact: true }).fill(corrected.content);
+    await dialog.getByRole("button", { name: "Enregistrer la correction" }).click();
+    await expect(dialog).toBeHidden();
+    const correctedRow = diagnostic.getByRole("article", { name: `Constat : ${corrected.title}` });
+    await expect(correctedRow).toContainText("Déclaré par vous");
+    await expect(correctedRow).toContainText("corrigé par vous le");
+    await expect(correctedRow.getByRole("link", { name: "Montrer un chantier" })).toBeVisible();
+    await expect(correctedRow).toContainText("À réexaminer");
+    await expect(correctedRow.getByRole("status")).toHaveText("Constat corrigé. 1 mission à réexaminer, rien n'est relancé.");
+    await expect(correctedRow.getByRole("button", { name: /Corriger cette information/ })).toBeFocused();
+    await expect(diagnostic.getByRole("article", { name: `Constat : ${original.title}` })).toHaveCount(0);
+    expect(await noHorizontalScroll(page)).toBe(true);
+
+    // La mission est signalée, sans changer de statut ; « J'ai réexaminé cette mission » retire le signal.
+    await page.goto(`${baseURL}/missions/${mission.id}`);
+    const review = page.getByRole("note", { name: "Mission à réexaminer" });
+    await expect(review).toContainText("Rien n'a été relancé ni publié.");
+    await review.getByRole("button", { name: "J'ai réexaminé cette mission" }).click();
+    await expect(review).toBeHidden();
+    expect(await prisma.mission.findUniqueOrThrow({ where: { id: mission.id } })).toMatchObject({ status: "proposed", findingReviewAt: null });
+
+    // Annuler la correction : le constat remplacé redevient le constat actuel, avec sa source.
+    await page.goto(`${baseURL}/entreprise`);
+    await diagnostic.getByRole("article", { name: `Constat : ${corrected.title}` }).getByRole("button", { name: /Corriger cette information/ }).click();
+    const replaced = dialog.getByRole("region", { name: "Constat remplacé" });
+    await expect(replaced).toContainText(original.title);
+    await expect(replaced).toContainText("Observé");
+    await replaced.getByRole("button", { name: "Revenir au constat remplacé" }).click();
+    await expect(dialog).toBeHidden();
+    await expect(diagnostic.getByRole("article", { name: `Constat : ${original.title}` })).toContainText("Observé");
+    expect(await prisma.journalEntry.findMany({ where: { companyId: company.id, code: { in: ["J-34", "J-35", "J-36"] } }, orderBy: { createdAt: "asc" }, select: { code: true } })).toEqual([{ code: "J-34" }, { code: "J-36" }, { code: "J-35" }]);
+
+    // Vos repères : l'écart part de l'ambition (D8), la capacité disponible se déclare puis s'affiche confirmée.
+    const landmarks = page.getByRole("region", { name: "Vos repères" });
+    await expect(landmarks).toContainText("ZoneLyonConfirmé");
+    await expect(landmarks).toContainText("Écart à combler");
+    await expect(landmarks).toContainText("Calculé à partir de vos chiffres déclarés et de votre ambition.");
+    await expect(landmarks).toContainText("Capacité disponibleÀ renseigner");
+    const editCapacity = landmarks.getByRole("button", { name: "Modifier la capacité disponible" });
+    await editCapacity.click();
+    const capacity = page.getByRole("dialog", { name: "Votre capacité disponible" });
+    await capacity.getByLabel("Nouveaux projets clients que vous pouvez prendre par mois").fill("120");
+    await capacity.getByRole("button", { name: "Confirmer ma capacité" }).click();
+    await expect(capacity.getByRole("alert")).toContainText("de 0 à 99 nouveaux projets clients par mois");
+    await capacity.getByLabel("Nouveaux projets clients que vous pouvez prendre par mois").fill("3");
+    await capacity.getByRole("button", { name: "Confirmer ma capacité" }).click();
+    await expect(capacity).toBeHidden();
+    await expect(landmarks).toContainText("3 nouveaux projets clients par mois");
+    await expect(landmarks).toContainText("à reconfirmer avant le");
+    await expect(editCapacity).toBeFocused();
+    expect(await noHorizontalScroll(page)).toBe(true);
+    expect((await prisma.company.findUniqueOrThrow({ where: { id: company.id } })).availableCapacity).toBe(3);
+  } finally {
+    await prisma.company.deleteMany({ where: { id: company.id } });
     await prisma.$disconnect();
   }
 });

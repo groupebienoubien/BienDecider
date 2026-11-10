@@ -174,6 +174,7 @@ export default async function StrategiePage() {
                 <Icon name="arrow-right" className="finding-arrow" />
                 <div>
                   <MissionTags status={mission.status} priority={mission.priority} />
+                  {mission.findingReview && <Tag color="orange">À réexaminer</Tag>}
                   <h3>{mission.title}</h3>
                   <p className="target"><Icon name="target" />{mission.outcome}</p>
                   <p className="small muted">{mission.templateLabel} · {mission.scopeSummary}</p>

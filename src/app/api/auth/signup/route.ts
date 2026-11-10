@@ -15,6 +15,7 @@ import { recordSignupTrace } from "@/lib/onboarding/visit-trace";
 import { brandProposalFromAnalysis } from "@/lib/brand/rules";
 import { analysisUsage, firstFindingRecords } from "@/lib/onboarding/analysis-rules";
 import { createMissionIn } from "@/lib/missions/service";
+import { starterFindingLinks } from "@/lib/findings/starter-links";
 import { writeJournal } from "@/lib/journal";
 import { ensureCreditGrant } from "@/lib/credits";
 import { startOnboardingAudit } from "@/lib/agents/onboarding-audit";
@@ -126,8 +127,10 @@ export async function POST(request: NextRequest) {
       });
       await ensureCreditGrant(tx, created.id);
       // Premiers constats de l'analyse anonyme (#292) : ils forment le diagnostic de départ, jusqu'au premier audit terminé.
+      // Créés un à un (trois au plus) : chaque mission de départ cite le constat de son sujet (`starterFindingLinks`).
       const constats = firstFindingRecords(draft.state.analysis);
-      if (constats.length) await tx.auditFinding.createMany({ data: constats.map((constat) => ({ companyId: created.id, ...constat })) });
+      const constatIds: string[] = [];
+      for (const constat of constats) constatIds.push((await tx.auditFinding.create({ data: { companyId: created.id, ...constat }, select: { id: true } })).id);
       // Le coût de l'analyse anonyme revient au compte, une seule fois : le brouillon vient d'être effacé dans cette transaction.
       const usage = analysisUsage(draft.state.analysis);
       if (usage) await tx.usageEvent.create({ data: { companyId: created.id, ...usage } });
@@ -138,9 +141,12 @@ export async function POST(request: NextRequest) {
       // Les missions de l'étape 4, dans le même ordre, « À décider » ; la première devient la priorité, sans J-08 ni lancement (#284).
       let priorityMissionId: string | null = null;
       const starters = starterPlan(draft.state).missions;
-      for (const starter of starters) {
+      const links = starterFindingLinks(starters.map((starter) => starter.template), constats.map((constat) => constat.category));
+      for (const [index, starter] of starters.entries()) {
         const { template, channel, title, outcome, finding, scope, stopRuleDays, deduction, responsibleAgent, risk } = starter;
-        const mission = await createMissionIn(tx, created.id, { template, channel, title, outcome, finding, scope, stopRuleDays }, "paul", undefined, { deduction, responsibleAgent, risk });
+        const link = links[index];
+        const sourceFindingId = link === null ? undefined : constatIds[link];
+        const mission = await createMissionIn(tx, created.id, { template, channel, title, outcome, finding, scope, stopRuleDays }, "paul", undefined, { deduction, responsibleAgent, risk, sourceFindingId });
         priorityMissionId ??= mission.id;
       }
       if (priorityMissionId) await tx.company.update({ where: { id: created.id }, data: { priorityMissionId } });

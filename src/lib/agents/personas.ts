@@ -25,6 +25,7 @@
  * générique.
  */
 import { businessTargetLines } from "@/lib/business-target";
+import { capacityPromptLine } from "@/lib/capacity";
 import { cleanOwnerName } from "@/lib/company-profile";
 
 export const PERSONAS = {
@@ -62,10 +63,10 @@ export type AgentKey = keyof typeof PERSONAS;
 
 /**
  * Objectif business à injecter dans les prompts : phrase libre du dirigeant
- * + écart chiffré (CA actuel / cible / clients nécessaires) si renseigné.
+ * + écart chiffré (CA actuel / cible / clients nécessaires) si renseigné, et capacité disponible déclarée (#292).
  */
 export function objectiveLine(
-  company: { objective: string | null } & Parameters<typeof businessTargetLines>[0],
+  company: { objective: string | null; availableCapacity?: number | null; capacityConfirmedAt?: Date | null } & Parameters<typeof businessTargetLines>[0],
 ): string {
   const parts: string[] = [];
   if (company.objective) {
@@ -73,6 +74,8 @@ export function objectiveLine(
   }
   const numbers = businessTargetLines(company);
   if (numbers) parts.push(numbers);
+  const capacity = capacityPromptLine(company.availableCapacity, company.capacityConfirmedAt);
+  if (capacity) parts.push(capacity);
   return parts.join("\n");
 }
 

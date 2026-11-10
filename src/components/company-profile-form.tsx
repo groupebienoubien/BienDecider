@@ -7,6 +7,7 @@ import { TradeCombobox } from "@/components/trade-combobox";
 import { PageHeading } from "@/components/mockup-ui";
 import { CORRECTION_FIELDS, PROFILE_FIELD_LABELS, PROFILE_TEXT_LIMITS, companyOriginLabel, readProfileOrigins, type CorrectionField, type ProfileOrigins } from "@/lib/company-profile";
 import { LIMITS } from "@/lib/onboarding/draft-rules";
+import { clientGapLabel, computeBusinessTarget, formatDecimal, formatEuros } from "@/lib/business-target";
 
 /** Limite de chaque champ de « Corriger mon profil », la même qu'aux étapes 1 et 2 du parcours d'entrée. */
 const CORRECTION_LIMITS: Record<CorrectionField, number> = {
@@ -57,6 +58,8 @@ export function CompanyProfileForm({ guided = false, embedded = false, initialTa
   const [targetDate, setTargetDate] = useState("");
   const [averageClientValue, setAverageClientValue] = useState("");
   const [newClientsPerMonth, setNewClientsPerMonth] = useState("");
+  // Ambition retenue (#282) : sans CA visé, l'écart du chiffrage facultatif en part (D8).
+  const [ambition, setAmbition] = useState<{ terms: unknown; confirmedAt: Date | null }>({ terms: null, confirmedAt: null });
   const [profileSentence, setProfileSentence] = useState("");
   const [profileInterpreted, setProfileInterpreted] = useState(false);
   const [profileLoaded, setProfileLoaded] = useState(false);
@@ -96,6 +99,7 @@ export function CompanyProfileForm({ guided = false, embedded = false, initialTa
         setTargetDate(c.targetDate ? String(c.targetDate).slice(0, 7) : "");
         setAverageClientValue(c.averageClientValue?.toString() ?? "");
         setNewClientsPerMonth(c.newClientsPerMonth?.toString() ?? "");
+        setAmbition({ terms: c.ambitionTerms ?? null, confirmedAt: c.ambitionConfirmedAt ? new Date(c.ambitionConfirmedAt) : null });
       })
       .catch(() => {})
       .finally(() => setProfileLoaded(true));
@@ -215,6 +219,18 @@ export function CompanyProfileForm({ guided = false, embedded = false, initialTa
     }
   }
 
+  // Écart calculé avec les chiffres saisis (D8) : celui que Paul citera, jamais une estimation de sa part.
+  const number = (value: string) => (value.trim() === "" || !Number.isFinite(Number(value)) ? null : Number(value));
+  const preview = computeBusinessTarget({
+    monthlyRevenue: number(monthlyRevenue), revenueTarget: number(revenueTarget), averageClientValue: number(averageClientValue), newClientsPerMonth: number(newClientsPerMonth),
+    targetDate: targetDate ? new Date(Number(targetDate.slice(0, 4)), Number(targetDate.slice(5, 7)), 0) : null,
+    ambitionTerms: ambition.terms, ambitionConfirmedAt: ambition.confirmedAt,
+  });
+  const previewGap = preview ? clientGapLabel(preview) : null;
+  const gapPreview = preview
+    ? `Écart calculé${preview.basis === "ambition" ? ` avec votre ambition (+${formatDecimal(preview.gainPercent ?? 0)} %)` : ""} : ${preview.gap >= 0 ? "+" : ""}${formatEuros(preview.gap)} par mois${previewGap ? `, ${previewGap.text}` : ""}.`
+    : "Indiquez au moins votre chiffre d'affaires actuel pour calculer l'écart.";
+
   const content = (
       <div>
         {guided ? (
@@ -292,9 +308,10 @@ export function CompanyProfileForm({ guided = false, embedded = false, initialTa
           </>}
           {!guided && <>
             <fieldset className="mt-1 rounded-lg border border-indigo-100 bg-indigo-50/40 p-3">
-              <legend className="px-1 text-sm font-medium">Votre objectif en chiffres</legend>
+              <legend className="px-1 text-sm font-medium">Chiffrage facultatif</legend>
               <p className="mb-3 text-xs text-slate-500">
-                Déclaratif et approximatif, ça suffit. BienDecider calcule l&apos;écart et le nombre de clients à aller chercher,
+                Votre chiffre d&apos;affaires actuel et la valeur moyenne d&apos;un client suffisent : sans chiffre d&apos;affaires visé,
+                l&apos;écart part de votre ambition. Déclaratif et approximatif, ça suffit. BienDecider calcule l&apos;écart et le nombre de clients à aller chercher,
                 puis mesure si ses actions vous en rapprochent. Ces chiffres servent à préparer votre travail avec nos prestataires
                 d&apos;IA ; ils ne sont pas publiés. Les informations de présentation de votre entreprise peuvent figurer
                 dans un contenu que vous approuvez avant publication.{" "}
@@ -310,6 +327,18 @@ export function CompanyProfileForm({ guided = false, embedded = false, initialTa
                     placeholder="CA mensuel actuel (€)"
                     value={monthlyRevenue}
                     onChange={(e) => setMonthlyRevenue(e.target.value)}
+                   
+                  />
+                </label>
+                <label htmlFor="profile-client-value" className="field">
+                  Valeur moyenne d&apos;un client (€ au total)
+                  <input
+                    id="profile-client-value"
+                    type="number"
+                    min={0}
+                    placeholder="Valeur moyenne d'un client (€)"
+                    value={averageClientValue}
+                    onChange={(e) => setAverageClientValue(e.target.value)}
                    
                   />
                 </label>
@@ -334,18 +363,6 @@ export function CompanyProfileForm({ guided = false, embedded = false, initialTa
                    
                   />
                 </label>
-                <label htmlFor="profile-client-value" className="field">
-                  Valeur moyenne d&apos;un client (€ au total)
-                  <input
-                    id="profile-client-value"
-                    type="number"
-                    min={0}
-                    placeholder="Valeur moyenne d'un client (€)"
-                    value={averageClientValue}
-                    onChange={(e) => setAverageClientValue(e.target.value)}
-                   
-                  />
-                </label>
                 <label htmlFor="profile-new-clients" className="field" style={{ gridColumn: "1 / -1" }}>
                   Nouveaux clients par mois aujourd&apos;hui (nombre par mois)
                   <input
@@ -365,6 +382,7 @@ export function CompanyProfileForm({ guided = false, embedded = false, initialTa
                 Valeur d&apos;un client = ce qu&apos;il vous rapporte en tout (pas un seul achat) — pour une activité
                 récurrente, comptez la durée de la relation.
               </p>
+              <p className="mt-2 text-sm" data-testid="gap-preview">{gapPreview}</p>
             </fieldset>
           </>}
 
