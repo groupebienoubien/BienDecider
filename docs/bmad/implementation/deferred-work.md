@@ -177,9 +177,9 @@
 - source_spec: `docs/bmad/implementation/spec-gh-169-corriger-mon-profil.md`
   summary: Relier « Prénom » (firstName) et « Votre prénom et nom » (ownerName, signature des e-mails) sur Entreprise, ou expliquer leur différence.
   evidence: Relecture #169 : corriger le prénom ne change pas la signature, et les deux champs se côtoient sans explication.
-- source_spec: `docs/bmad/implementation/spec-gh-292-constats-et-diagnostic.md`
-  summary: FR-51, partie modèle : positionnement proposé « à challenger » (observé, supposé, à éviter), axes de positionnement et concurrence locale (acteur, angle, ce qu'il montre ou non, fiabilité), avec concurrents à confirmer ou écarter (un concurrent écarté n'est plus proposé).
-  evidence: Aucune de ces données n'est produite ni stockée aujourd'hui ; l'audit de Paul (marketing) doit les rendre dans un format vérifiable, et un modèle de stockage (concurrents écartés) est à ajouter. Rien n'est affiché en attendant, pas même d'exemple.
+- source_spec: `docs/bmad/implementation/spec-gh-292-positionnement-concurrence.md`
+  summary: FR-51, partie modèle restante : positionnement proposé « à challenger » (observé, supposé, à éviter) et axes de positionnement (niveau, ce que font les concurrents, conseil), « Ce qu'il faut retenir » et « Ce que Paul en fait ».
+  evidence: Aucune de ces données n'est produite ni stockée aujourd'hui ; cela suppose un nouvel outil pour l'agent marketing et des décisions de produit sur leur forme (texte libre ou structuré). La concurrence locale (acteur, angle, ce qu'il montre ou non, fiabilité) et les concurrents à confirmer ou écarter sont livrés (`AuditFinding.competitorConfirmedAt`/`competitorDismissedAt`, `src/app/entreprise/competitor-actions.tsx`).
 - source_spec: `docs/bmad/implementation/spec-gh-169-292-corriger-un-constat-et-reperes.md`
   summary: Écrire un `SourceRead` pour le site lu avant compte, et l'afficher dans la couverture des sources du diagnostic de départ.
   evidence: `getSourceCoverage` ne lit que les lectures d'un audit marketing terminé ; une ligne sans exécution n'apparaîtrait nulle part. `SourceRead` ne connaît aujourd'hui que les avis Google et la Page Facebook.

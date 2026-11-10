@@ -38,6 +38,8 @@ export const JOURNAL_TEXTS = {
   "J-35": "Correction annulée : « {constat} » redevient le constat actuel.",
   "J-36": "Mission réexaminée après la correction de son constat : {mission}.",
   "J-37": "Capacité disponible confirmée : {capacite}.",
+  "J-38": "Concurrent écarté : {concurrent}. Il ne sera plus proposé.",
+  "J-39": "Concurrent confirmé : {concurrent}.",
 } as const;
 
 export type JournalCode = keyof typeof JOURNAL_TEXTS;

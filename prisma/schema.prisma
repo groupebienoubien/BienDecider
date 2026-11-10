@@ -352,6 +352,10 @@ model AuditFinding {
   versionOfId String? // version archivée : le constat courant dont elle est une version précédente
   versionOf   AuditFinding?  @relation("FindingVersions", fields: [versionOfId], references: [id], onDelete: Cascade)
   versions    AuditFinding[] @relation("FindingVersions")
+  // Concurrent potentiel à confirmer ou écarter (#292, FR-51, catégorie concurrence seulement) : un seul des deux est non nul.
+  // Un concurrent écarté n'est jamais reproposé par un audit suivant (src/lib/agents/marketing.ts lit les titres écartés).
+  competitorConfirmedAt DateTime?
+  competitorDismissedAt DateTime?
 
   // Plafonds par exécution (story 3.2) : comptés par agentRunId.
   @@index([agentRunId])

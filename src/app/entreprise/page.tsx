@@ -19,6 +19,8 @@ import { FindingSource } from "@/app/strategie/finding-source";
 import { getAuditFindingsView } from "@/lib/audit-findings";
 import { formatReadDate } from "@/lib/findings/certainty";
 import { decisionRows, diagnosticSummary, missingInputs } from "@/lib/findings/decisions";
+import { competitorRows } from "@/lib/findings/competitors";
+import { CompetitorActions } from "./competitor-actions";
 import { facebookConnectionView } from "@/lib/oauth/meta";
 import { prisma } from "@/lib/prisma";
 import { getRetainedFeedback } from "@/lib/retained-feedback";
@@ -56,6 +58,7 @@ export default async function EntreprisePage({ searchParams }: { searchParams: P
   const versions = await previousVersions(company.id, audits.latest.filter((finding) => finding.correctedAt).map((finding) => finding.id));
   const rows = decisionRows(audits.latest, linkedMissions);
   const summary = diagnosticSummary(rows);
+  const competitors = competitorRows(audits.latest);
   const missing = missingInputs(company);
   const facebook = facebookConnectionView(connections.find((connection) => connection.channel === "facebook"), company.id);
   const gmailConnected = connections.some((connection) => connection.channel === "gmail" && connection.status === "connecte");
@@ -143,6 +146,28 @@ export default async function EntreprisePage({ searchParams }: { searchParams: P
                     ? row.missions.map((mission) => <p key={mission.id}><Link href={`/missions/${mission.id}`}>{mission.title}</Link>{mission.review && <> <Tag color="orange">À réexaminer</Tag></>}</p>)
                     : <DiscussFinding id={row.finding.id} title={row.finding.title} />}
                 </div>
+              </article>
+            ))}
+          </>
+        )}
+        {competitors.length > 0 && (
+          <>
+            <h3>Concurrence locale</h3>
+            <p className="small muted">Un concurrent écarté n&apos;est plus proposé dans vos prochains diagnostics. Aucune performance n&apos;est affirmée sans source lue.</p>
+            {competitors.map((competitor) => (
+              <article key={competitor.id} className="finding-row" aria-label={`Concurrent : ${competitor.actor}`}>
+                <div>
+                  <p><strong>{competitor.actor}</strong></p>
+                  <p className="small">{competitor.angle}</p>
+                  <Tag color={competitor.tone}>{competitor.reliability}</Tag>
+                </div>
+                <Icon name="arrow-right" className="finding-arrow" />
+                <div>
+                  <p className="small"><strong>Montre</strong> : {competitor.shows}</p>
+                  <p className="small"><strong>Ne montre pas</strong> : {competitor.hides}</p>
+                </div>
+                <Icon name="arrow-right" className="finding-arrow" />
+                <div><CompetitorActions id={competitor.id} actor={competitor.actor} status={competitor.status} /></div>
               </article>
             ))}
           </>
