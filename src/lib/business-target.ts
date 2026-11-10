@@ -1,3 +1,5 @@
+import { readAmbitionTerms } from "./ambition-rules.ts";
+
 /**
  * Calcul déterministe (aucun appel modèle) de l'écart entre la situation
  * déclarée et l'objectif chiffré — cf. docs/archives/backlog.md "partenaire de
@@ -10,6 +12,9 @@ type BusinessFields = {
   targetDate: Date | null;
   averageClientValue: number | null;
   newClientsPerMonth: number | null;
+  /** Ambition V5.2 (#282) : sans CA visé, la cible part du gain et de l'horizon retenus (D8). */
+  ambitionTerms?: unknown;
+  ambitionConfirmedAt?: Date | null;
 };
 
 export type BusinessTarget = {
@@ -24,6 +29,10 @@ export type BusinessTarget = {
   extraClientsPerYear: number | null;
   /** Valeur d'un client déclarée, gardée pour choisir l'affichage sur la valeur non arrondie. */
   averageClientValue: number | null;
+  /** `declared` : CA visé saisi ; `ambition` : CA actuel augmenté du gain de l'ambition (D8). */
+  basis: "declared" | "ambition";
+  /** Gain de l'ambition retenu pour la cible, quand elle en part. */
+  gainPercent: number | null;
 };
 
 export type Period = "month" | "year";
@@ -64,17 +73,29 @@ export function clientGapLabel(
   return { count, period, text: `environ ${formatDecimal(count)} ${noun} de plus par ${period === "year" ? "an" : "mois"}` };
 }
 
-export function computeBusinessTarget(company: BusinessFields): BusinessTarget | null {
-  if (company.monthlyRevenue == null || company.revenueTarget == null) return null;
+const MONTH_MS = 1000 * 60 * 60 * 24 * 30.44;
+
+/**
+ * Écart chiffré (D8, FR-52) : le CA visé saisi s'il existe ; sinon le CA actuel augmenté du gain de l'ambition,
+ * à atteindre à l'horizon compté depuis la dernière confirmation de l'ambition. Sans CA actuel, aucun écart.
+ */
+export function computeBusinessTarget(company: BusinessFields, now: Date = new Date()): BusinessTarget | null {
+  if (company.monthlyRevenue == null) return null;
   const current = company.monthlyRevenue;
-  const target = company.revenueTarget;
+  const terms = company.revenueTarget == null ? readAmbitionTerms(company.ambitionTerms) : null;
+  const fromAmbition = terms?.gainPercent != null && current > 0;
+  if (company.revenueTarget == null && !fromAmbition) return null;
+  const target = company.revenueTarget ?? Math.round(current * (1 + terms!.gainPercent! / 100));
   const gap = target - current;
   const growthPct = current > 0 ? Math.round((gap / current) * 100) : 0;
 
   let monthsRemaining: number | null = null;
   if (company.targetDate) {
-    const ms = company.targetDate.getTime() - Date.now();
-    monthsRemaining = Math.max(0, Math.round(ms / (1000 * 60 * 60 * 24 * 30.44)));
+    const ms = company.targetDate.getTime() - now.getTime();
+    monthsRemaining = Math.max(0, Math.round(ms / MONTH_MS));
+  } else if (fromAmbition && terms?.horizonMonths != null) {
+    const elapsed = company.ambitionConfirmedAt ? Math.max(0, (now.getTime() - company.ambitionConfirmedAt.getTime()) / MONTH_MS) : 0;
+    monthsRemaining = Math.max(0, Math.round(terms.horizonMonths - elapsed));
   }
 
   const hasClientValue = company.averageClientValue != null && company.averageClientValue > 0 && gap > 0;
@@ -84,6 +105,8 @@ export function computeBusinessTarget(company: BusinessFields): BusinessTarget |
   return {
     current, target, gap, growthPct, monthsRemaining, extraClientsPerMonth, extraClientsPerYear,
     averageClientValue: company.averageClientValue,
+    basis: fromAmbition ? "ambition" : "declared",
+    gainPercent: fromAmbition ? terms!.gainPercent : null,
   };
 }
 
@@ -96,7 +119,7 @@ export function businessTargetLines(company: BusinessFields): string {
   const t = computeBusinessTarget(company);
   if (!t) return "";
   const lines = [
-    `Situation déclarée : ${formatEuros(t.current)}/mois de CA. Objectif : ${formatEuros(t.target)}/mois${
+    `Situation déclarée : ${formatEuros(t.current)}/mois de CA. Objectif${t.basis === "ambition" ? ` tiré de l'ambition (+${formatDecimal(t.gainPercent ?? 0)} %)` : ""} : ${formatEuros(t.target)}/mois${
       t.monthsRemaining != null ? ` d'ici ${t.monthsRemaining} mois` : ""
     }, soit ${t.gap >= 0 ? "+" : ""}${formatEuros(t.gap)}/mois (${t.growthPct >= 0 ? "+" : ""}${t.growthPct} %).`,
   ];

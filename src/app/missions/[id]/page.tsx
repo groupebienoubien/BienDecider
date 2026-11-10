@@ -18,6 +18,7 @@ import { listAgencies } from "@/lib/agencies/service";
 import { loadProfileToReview } from "@/lib/contents/view";
 import { PROFILE_REVIEW_BADGE } from "@/lib/contents/rules";
 import { ScopeEditor } from "./scope-editor";
+import { ReexamineButton } from "./reexamine-button";
 import { FindingSource } from "@/app/strategie/finding-source";
 import { missionProvenance } from "@/lib/findings/certainty";
 
@@ -63,7 +64,7 @@ export default async function MissionPage({ params }: { params: Promise<{ id: st
       <Link href="/missions" className="back-link"><Icon name="arrow-right" className="flip" />Toutes les missions</Link>
       <div className="page-heading mission-heading">
         <div>
-          <div className="tags"><MissionTags status={mission.status} priority={mission.priority} /><Tag color="blue">Paul coordonne</Tag></div>
+          <div className="tags"><MissionTags status={mission.status} priority={mission.priority} /><Tag color="blue">Paul coordonne</Tag>{mission.findingReview && <Tag color="orange">À réexaminer</Tag>}</div>
           <h1>{mission.title}</h1>
           <p><Icon name="target" /> {mission.outcome}</p>
         </div>
@@ -84,6 +85,13 @@ export default async function MissionPage({ params }: { params: Promise<{ id: st
             <p>{mission.finding}</p>
             <p className="small muted">{provenance.certainty} · {provenance.origin} · un test limité d&apos;abord, pour apprendre avant d&apos;élargir.</p>
             {provenance.source && <FindingSource source={provenance.source} />}
+            {/* Constat corrigé par le dirigeant (#169) : un signal, sans relance ni changement de statut. */}
+            {mission.findingReview && (
+              <div className="notice" role="note" aria-label="Mission à réexaminer">
+                <p>Vous avez corrigé le constat de cette mission : vérifiez que son objectif et son périmètre tiennent toujours. Rien n&apos;a été relancé ni publié.</p>
+                <ReexamineButton missionId={mission.id} />
+              </div>
+            )}
           </section>
 
           <section className="section-space" aria-labelledby="scope-title">

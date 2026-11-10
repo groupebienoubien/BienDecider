@@ -1,37 +1,42 @@
-import { CERTAINTY_LABELS, findingOrigin, normalizeCertainty, safeSourceUrl, type Certainty, type MissionSourceFinding } from "@/lib/findings/certainty";
+import { CERTAINTY_LABELS, CERTAINTY_TONES, findingOrigin, normalizeCertainty, safeSourceUrl, type MissionProvenance, type MissionSourceFinding } from "@/lib/findings/certainty";
 
 /**
  * « Diagnostic & positionnement » d'Entreprise (#292, FR-51, spécification §13.5) : règles pures. Chaque constat du diagnostic
  * courant devient une ligne « Constat · Certitude · Ce que Paul en déduit · Suite proposée » ; rien n'est déduit sans mission reliée.
  */
 
-type FindingLike = { id: string; title: string; category: string; content: string; sourceUrl: string | null; sourceStatus: string | null; certainty: string; createdAt: Date | string };
-type MissionLike = { id: string; title: string; status: string; sourceFindingId: string | null; deduction: string | null };
+type FindingLike = { id: string; title: string; category: string; content: string; sourceUrl: string | null; sourceStatus: string | null; certainty: string; createdAt: Date | string; correctedAt?: Date | string | null };
+type MissionLike = { id: string; title: string; status: string; sourceFindingId: string | null; deduction: string | null; findingReviewAt?: Date | string | null };
 
 export type DecisionRow = {
   finding: MissionSourceFinding;
   origin: string;
   certainty: string;
-  tone: "green" | "blue" | "orange";
+  tone: MissionProvenance["tone"];
   /** Déduction de Paul, seulement quand une mission en découle. */
   deduction: string | null;
-  missions: { id: string; title: string }[];
+  /** `review` : le constat a été corrigé depuis, la mission est à réexaminer (#169). */
+  missions: { id: string; title: string; review: boolean }[];
 };
 
-const TONES: Record<Certainty, DecisionRow["tone"]> = { observe: "green", piste: "blue", a_verifier: "orange" };
+/** Une mission arrêtée ou écartée n'est ni une suite proposée ni une mission à réexaminer. */
+export function isOpenMission(status: string): boolean {
+  return status !== "dismissed" && status !== "stopped";
+}
 
 /** Lignes du tableau, dans l'ordre du diagnostic ; une mission écartée ou arrêtée n'est pas une suite proposée. */
 export function decisionRows(findings: FindingLike[], missions: MissionLike[]): DecisionRow[] {
   return findings.map((finding) => {
     const certainty = normalizeCertainty(finding.certainty, finding.sourceStatus, finding.sourceUrl);
-    const linked = missions.filter((mission) => mission.sourceFindingId === finding.id && mission.status !== "dismissed" && mission.status !== "stopped");
+    const linked = missions.filter((mission) => mission.sourceFindingId === finding.id && isOpenMission(mission.status));
+    const correctedAt = finding.correctedAt ? new Date(finding.correctedAt).toISOString() : null;
     return {
-      finding: { id: finding.id, title: finding.title, category: finding.category, content: finding.content, sourceUrl: finding.sourceUrl, sourceStatus: finding.sourceStatus, certainty, createdAt: new Date(finding.createdAt).toISOString() },
+      finding: { id: finding.id, title: finding.title, category: finding.category, content: finding.content, sourceUrl: finding.sourceUrl, sourceStatus: finding.sourceStatus, certainty, createdAt: new Date(finding.createdAt).toISOString(), correctedAt },
       origin: findingOrigin(finding.category, finding.sourceUrl),
       certainty: CERTAINTY_LABELS[certainty],
-      tone: TONES[certainty],
+      tone: CERTAINTY_TONES[certainty],
       deduction: linked.find((mission) => mission.deduction?.trim())?.deduction?.trim() ?? null,
-      missions: linked.map((mission) => ({ id: mission.id, title: mission.title })),
+      missions: linked.map((mission) => ({ id: mission.id, title: mission.title, review: Boolean(mission.findingReviewAt) })),
     };
   });
 }

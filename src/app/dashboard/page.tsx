@@ -53,7 +53,7 @@ export default async function DashboardPage({ searchParams }: {
     }),
     prisma.lead.findMany({ where: { companyId: company.id, proposalId: { not: null } }, select: { proposalId: true, source: true } }),
     prisma.lead.findMany({ where: { companyId: company.id }, select: { stage: true } }),
-    prisma.auditFinding.count({ where: { companyId: company.id } }),
+    prisma.auditFinding.count({ where: { companyId: company.id, replacedAt: null } }),
     getConfiguredRiskLevels(),
     prisma.channelConnection.findUnique({ where: { companyId_channel: { companyId: company.id, channel: "facebook" } } }),
     getWeeklyDelta(company.id, weekStart),

@@ -79,6 +79,8 @@ jobs:
         run: npm run test:brand-kit
       - name: Trace des visites et mesures d'activation (sans base)
         run: npm run test:mesures
+      - name: Constats corrigés, capacité et chiffrage (règles pures)
+        run: npm run test:findings
       - name: Backlog importer tests (no network)
         run: node --test scripts/sync-backlog.test.cjs
       - name: Wiki pages build and relative links resolve

@@ -21,6 +21,7 @@
     "test:session": "node --experimental-strip-types --test tests/session-token.test.mjs",
     "test:brand-kit": "node --experimental-strip-types --test tests/brand-kit.test.mjs tests/photo-rules.test.mjs",
     "test:mesures": "node --experimental-strip-types --test tests/visit-trace.test.mjs tests/activation.test.mjs",
+    "test:findings": "node --experimental-strip-types --test tests/findings-rules.test.mjs",
     "test:voice": "node --experimental-strip-types --test tests/voice.test.mjs tests/chat-stream.test.mjs tests/chat-format.test.mjs",
     "test:database-url": "node --experimental-strip-types --test tests/database-url.test.mjs",
     "postinstall": "prisma generate"

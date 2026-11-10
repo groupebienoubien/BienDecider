@@ -592,7 +592,7 @@ test("GH-168: a finding is « Observé » only when its source was read; origin,
   expect(normalizeCertainty("piste", "accès limité", url)).toBe("piste");
   expect(normalizeCertainty("a_verifier", "consultée", url)).toBe("a_verifier");
   for (const bad of [undefined, null, "", "certain", 3]) expect(normalizeCertainty(bad, "consultée", url)).toBe("a_verifier");
-  expect(CERTAINTY_LABELS).toEqual({ observe: "Observé", piste: "Piste à qualifier", a_verifier: "À vérifier" });
+  expect(CERTAINTY_LABELS).toEqual({ observe: "Observé", piste: "Piste à qualifier", a_verifier: "À vérifier", declare: "Déclaré par vous" });
   expect(DECLARED_LABEL).toBe("Déclaré par vous");
 
   expect(findingOrigin("site_web", url)).toBe("Site web · atelier-lumen.fr");

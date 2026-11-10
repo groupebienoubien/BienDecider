@@ -3,23 +3,28 @@
  * de diagnostic, la Stratégie et les tests. Un constat n'est « Observé » que si sa source a été consultée.
  */
 
+/** Certitudes que l'agent peut donner (outil record_audit_finding) : jamais « declare », réservée à la correction du dirigeant. */
 export const CERTAINTY_LEVELS = ["observe", "piste", "a_verifier"] as const;
-export type Certainty = (typeof CERTAINTY_LEVELS)[number];
+/** Constat corrigé par le dirigeant (#169) : déclaré, sans source à consulter. */
+export const DECLARED_CERTAINTY = "declare";
+export type Certainty = (typeof CERTAINTY_LEVELS)[number] | typeof DECLARED_CERTAINTY;
+
+/** Libellé d'une mission créée par le dirigeant : son constat est déclaré, jamais observé. */
+export const DECLARED_LABEL = "Déclaré par vous";
 
 export const CERTAINTY_LABELS: Record<Certainty, string> = {
   observe: "Observé",
   piste: "Piste à qualifier",
   a_verifier: "À vérifier",
+  declare: DECLARED_LABEL,
 };
-
-/** Libellé d'une mission créée par le dirigeant : son constat est déclaré, jamais observé. */
-export const DECLARED_LABEL = "Déclaré par vous";
 
 /** Ce que la certitude ne garantit pas, dit dans la fenêtre « Voir la source ». */
 export const CERTAINTY_DETAILS: Record<Certainty, string> = {
   observe: "Source consultée par Paul : le constat décrit ce qui a été lu ce jour-là. La situation a pu changer depuis.",
   piste: "Paul en tire une piste sans preuve directe : elle reste à confirmer avec vous.",
   a_verifier: "La source n'a pas pu être lue entièrement : ce constat reste à vérifier.",
+  declare: "Information corrigée par vous : Paul la tient pour juste. Elle n'a pas de source à consulter.",
 };
 
 export const FINDING_CATEGORY_LABELS: Record<string, string> = {
@@ -32,12 +37,13 @@ export const FINDING_CATEGORY_LABELS: Record<string, string> = {
 export const SOURCE_CONSULTED = "consultée";
 
 export function isCertainty(value: unknown): value is Certainty {
-  return typeof value === "string" && (CERTAINTY_LEVELS as readonly string[]).includes(value);
+  return typeof value === "string" && (value === DECLARED_CERTAINTY || (CERTAINTY_LEVELS as readonly string[]).includes(value));
 }
 
 /**
  * Certitude enregistrée : celle donnée par l'agent, sauf « Observé » sans source consultée (statut « consultée »
  * et adresse http(s) présente), ramené à « À vérifier ». Une valeur absente ou inconnue vaut « À vérifier ».
+ * « Déclaré par vous » n'est écrit que par la correction du dirigeant (l'outil de l'agent ne l'accepte pas).
  */
 export function normalizeCertainty(certainty: unknown, sourceStatus: string | null | undefined, sourceUrl: string | null | undefined): Certainty {
   if (!isCertainty(certainty)) return "a_verifier";
@@ -84,6 +90,8 @@ export type MissionSourceFinding = {
   sourceStatus: string | null;
   certainty: Certainty;
   createdAt: string;
+  /** Date de la dernière correction du dirigeant (#169) ; absente ou nulle pour un constat de Paul. */
+  correctedAt?: string | null;
 };
 
 export type MissionProvenance = {
@@ -98,7 +106,7 @@ export type MissionProvenance = {
   source: MissionSourceFinding | null;
 };
 
-const TONES: Record<Certainty, MissionProvenance["tone"]> = { observe: "green", piste: "blue", a_verifier: "orange" };
+export const CERTAINTY_TONES: Record<Certainty, MissionProvenance["tone"]> = { observe: "green", piste: "blue", a_verifier: "orange", declare: "gray" };
 
 /** Colonnes 1 et 2 d'une ligne de mission : constat relié, mission de Paul sans constat, ou mission du dirigeant. */
 export function missionProvenance(mission: { createdBy: string; finding: string; deduction: string | null; source: MissionSourceFinding | null }): MissionProvenance {
@@ -112,7 +120,7 @@ export function missionProvenance(mission: { createdBy: string; finding: string;
       title: mission.source.title,
       origin: findingOrigin(mission.source.category, mission.source.sourceUrl),
       certainty: CERTAINTY_LABELS[certainty],
-      tone: TONES[certainty],
+      tone: CERTAINTY_TONES[certainty],
       note: mission.finding,
       deduction,
       source: { ...mission.source, certainty },
