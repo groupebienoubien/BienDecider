@@ -107,6 +107,7 @@ const GUARDED_ROUTES: Guarded[] = [
   { method: "POST", path: "/api/entreprise/capacite", denied: 401 },
   { method: "POST", path: "/api/entreprise/constats/[id]/correction", denied: 401 },
   { method: "DELETE", path: "/api/entreprise/constats/[id]/correction", denied: 401 },
+  { method: "POST", path: "/api/entreprise/concurrents/[id]/statut", denied: 401 },
   { method: "POST", path: "/api/missions/[id]/reexamen", denied: 401 },
   { method: "POST", path: "/api/contents/[id]/photo", denied: 401 },
   { method: "GET", path: "/api/contents/[id]/visuel", denied: 401 },
@@ -1716,6 +1717,38 @@ test("correcting a finding keeps it in place, archives the replaced version, fla
     expect(await (await reexamine(a)).json()).toMatchObject({ ok: true, changed: false });
     expect(await prisma.journalEntry.count({ where: { companyId: a.id, code: "J-36", missionId: active.id } })).toBe(1);
     expect(await prisma.publication.count({ where: { companyId: a.id, status: { not: "scheduled" } } })).toBe(0);
+  } finally {
+    await prisma.company.deleteMany({ where: { id: { in: [a.id, b.id] } } });
+    await prisma.$disconnect();
+  }
+});
+
+test("a competitor finding can be confirmed or dismissed, never both, isolated per company and traced (#292)", async ({ request }) => {
+  const prisma = openDatabase();
+  const marker = randomUUID().slice(0, 8);
+  const a = await prisma.company.create({ data: { ownerEmail: `security-concurrent-a-${marker}@example.invalid`, name: `Concurrent A ${marker}`, trade: "Électricien", servingArea: "Lyon" } });
+  const b = await prisma.company.create({ data: { ownerEmail: `security-concurrent-b-${marker}@example.invalid`, name: `Concurrent B ${marker}`, trade: "Électricien", servingArea: "Lyon" } });
+  const headers = (company: typeof a, origin = baseURL) => ({ Cookie: sessionCookie(company.ownerEmail, company.sessionVersion), Origin: origin });
+  const competitor = await prisma.auditFinding.create({ data: { companyId: a.id, category: "concurrence", title: "Plomberie Martin", content: "Met en avant la rapidité d'intervention.", whatWorks: "Avis nombreux", toImprove: "Pas de tarifs affichés", certainty: "piste" } });
+  const other = await prisma.auditFinding.create({ data: { companyId: a.id, category: "site_web", title: "Votre site ne montre aucune réalisation.", content: "—", certainty: "piste" } });
+  const act = (company: typeof a, findingId: string, action: string, origin = baseURL) => request.post(`${baseURL}/api/entreprise/concurrents/${findingId}/statut`, { headers: headers(company, origin), data: { action } });
+  const live = () => prisma.auditFinding.findUniqueOrThrow({ where: { id: competitor.id } });
+  try {
+    // Origine, isolation, et seul un constat « concurrence » peut être confirmé ou écarté.
+    expect((await act(a, competitor.id, "confirmer", "https://attacker.invalid")).status()).toBe(403);
+    expect((await act(b, competitor.id, "confirmer")).status()).toBe(404);
+    expect((await act(a, other.id, "confirmer")).status()).toBe(404);
+    expect((await act(a, competitor.id, "n-importe-quoi")).status()).toBe(400);
+
+    // Confirmer : statut « confirmed », journalisé.
+    expect(await (await act(a, competitor.id, "confirmer")).json()).toMatchObject({ ok: true, status: "confirmed" });
+    expect(await live()).toMatchObject({ competitorConfirmedAt: expect.any(Date), competitorDismissedAt: null });
+    expect(await prisma.journalEntry.findFirstOrThrow({ where: { companyId: a.id, code: "J-39" } })).toMatchObject({ actor: "owner", params: { concurrent: competitor.title } });
+
+    // Écarter l'emporte : jamais confirmé et écarté en même temps, journalisé.
+    expect(await (await act(a, competitor.id, "ecarter")).json()).toMatchObject({ ok: true, status: "dismissed" });
+    expect(await live()).toMatchObject({ competitorConfirmedAt: null, competitorDismissedAt: expect.any(Date) });
+    expect(await prisma.journalEntry.findFirstOrThrow({ where: { companyId: a.id, code: "J-38" } })).toMatchObject({ actor: "owner", params: { concurrent: competitor.title } });
   } finally {
     await prisma.company.deleteMany({ where: { id: { in: [a.id, b.id] } } });
     await prisma.$disconnect();

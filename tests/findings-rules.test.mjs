@@ -5,6 +5,7 @@ import { CORRECTION_BOUNDS, checkCorrection, clearsReview, correctedFields, jour
 import { starterFindingLinks } from "../src/lib/findings/starter-links.ts";
 import { CAPACITY_RECONFIRM_DAYS, capacityLabel, capacityPromptLine, capacityState, checkCapacity } from "../src/lib/capacity.ts";
 import { businessTargetLines, computeBusinessTarget } from "../src/lib/business-target.ts";
+import { competitorRows, dismissedCompetitorNames } from "../src/lib/findings/competitors.ts";
 
 const current = { title: "Votre site ne montre aucune réalisation.", content: "Vos clients ne voient pas ce que vous savez faire." };
 const finding = { ...current, whatWorks: "Un site clair", toImprove: "Montrer des chantiers", actionItems: [{ agent: "contenu", title: "Publier" }], sourceUrl: "https://atelier.test/", sourceStatus: "consultée", certainty: "observe", correctedAt: null };
@@ -104,4 +105,21 @@ test("D8 : sans CA visé, l'écart part de l'ambition ; un CA visé saisi garde 
   assert.equal(computeBusinessTarget({ ...base, monthlyRevenue: null, ...ambition }, now), null);
   assert.equal(computeBusinessTarget({ ...base, ambitionTerms: { ...ambition.ambitionTerms, gainPercent: null } }, now), null);
   assert.equal(computeBusinessTarget({ ...base, ambitionTerms: "illisible" }, now), null);
+});
+
+test("concurrence locale : seuls les constats « concurrence » deviennent une ligne, avec son statut (#292)", () => {
+  const base = { id: "f1", category: "concurrence", title: "Plomberie Martin", content: "Met en avant la rapidité d'intervention.", whatWorks: "Avis nombreux et récents", toImprove: "Pas de tarifs affichés", sourceUrl: "https://maps.example/martin", sourceStatus: "consultée", certainty: "observe" };
+  const other = { id: "f2", category: "site_web", title: "Site sans réalisation", content: "—", whatWorks: null, toImprove: null, sourceUrl: null, sourceStatus: null, certainty: "piste" };
+  assert.deepEqual(competitorRows([base, other]), [
+    { id: "f1", actor: "Plomberie Martin", angle: "Met en avant la rapidité d'intervention.", shows: "Avis nombreux et récents", hides: "Pas de tarifs affichés", reliability: "Observé", tone: "green", status: "pending" },
+  ]);
+  const confirmed = competitorRows([{ ...base, competitorConfirmedAt: new Date() }]);
+  assert.equal(confirmed[0].status, "confirmed");
+  const dismissed = competitorRows([{ ...base, competitorConfirmedAt: new Date(), competitorDismissedAt: new Date() }]);
+  // Écarté l'emporte sur confirmé si les deux dates sont posées par erreur.
+  assert.equal(dismissed[0].status, "dismissed");
+  // Sans whatWorks ni toImprove : repli, jamais une case vide.
+  assert.deepEqual(competitorRows([{ ...base, whatWorks: "  ", toImprove: null }])[0], { ...competitorRows([base])[0], shows: "—", hides: "—" });
+
+  assert.deepEqual(dismissedCompetitorNames([{ category: "concurrence", title: "Plomberie Martin", competitorDismissedAt: new Date() }, { category: "concurrence", title: "Plomberie Martin", competitorDismissedAt: new Date() }, { category: "concurrence", title: "Autre Plombier", competitorDismissedAt: null }, { category: "site_web", title: "Ignoré", competitorDismissedAt: new Date() }]), ["Plomberie Martin"]);
 });
