@@ -4,7 +4,8 @@ import {
   decideSocialSources,
   normalizeSocialProfileUrl,
   readSocialSourceDecisions,
-  socialCandidatesFromLinks
+  socialCandidatesFromLinks,
+  socialPublicationStatuses
 } from "../src/lib/onboarding/public-sources.ts";
 import { extractLinks, pickInternalPages } from "../src/lib/onboarding/site-reader.ts";
 
@@ -59,6 +60,18 @@ test("social confirmation is explicit, editable, and restricted to a public prof
     readSocialSourceDecisions(decisions)[0].confirmedUrl,
     "https://www.facebook.com/atelier.lumen.officiel"
   );
+});
+
+test("social publication access stays explicitly unread and unchecked per platform", () => {
+  const candidates = socialCandidatesFromLinks([
+    { url: new URL("https://www.facebook.com/atelier.lumen"), text: "Facebook" }
+  ], "https://example.test/contact", "2026-11-12T10:00:00.000Z");
+
+  assert.deepEqual(socialPublicationStatuses(candidates), [
+    { platform: "facebook", profile: "candidate_found", posts: "not_read", access: "not_checked" },
+    { platform: "instagram", profile: "not_identified_in_read_pages", posts: "not_read", access: "not_checked" },
+    { platform: "linkedin", profile: "not_identified_in_read_pages", posts: "not_read", access: "not_checked" }
+  ]);
 });
 
 test("purchase-path page selection stays bounded and spans page types", () => {

@@ -81,6 +81,12 @@ export async function POST(request: NextRequest) {
 
   const { profile, ambition } = draft.state;
   const analysis = analysisMatchesProfile(draft.state) ? draft.state.analysis : null;
+  const confirmedPlaceLink = draft.state.googlePlaceChoice?.status === "confirmed" ? analysis?.findings.google?.value : null;
+  const confirmedWebsiteCandidate = profile.website && confirmedPlaceLink
+    ? analysis?.findings.publicSources?.find((source) =>
+      source.platform === "website" && source.url === profile.website && source.source === confirmedPlaceLink
+    ) ?? null
+    : null;
   const passwordHash = await hashPassword(password as string);
   let company;
   try {
@@ -101,10 +107,14 @@ export async function POST(request: NextRequest) {
             website: {
               url: profile.website || null,
               status: profile.website ? "confirmed" : "rejected",
-              candidate: draft.state.analysis?.findings.publicSources?.find((source) => source.platform === "website") ?? null
+              candidate: confirmedWebsiteCandidate
             },
-            social: draft.state.socialSourceDecisions
+            social: draft.state.socialSourceDecisions,
+            ...(draft.state.googlePlaceChoice
+              ? { google: { status: draft.state.googlePlaceChoice.status, placeId: draft.state.googlePlaceChoice.status === "confirmed" ? draft.state.googlePlaceChoice.placeId : null } }
+              : {})
           },
+          googlePlaceId: draft.state.googlePlaceChoice?.status === "confirmed" ? draft.state.googlePlaceChoice.placeId : null,
           // Normalisé comme sur Entreprise (#169) : renvoyer le formulaire tel quel n'est pas une correction.
           firstName: cleanOwnerName(profile.firstName),
           ownerName: cleanOwnerName(profile.firstName),

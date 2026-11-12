@@ -1,4 +1,6 @@
 export type PublicSourcePlatform = "website" | "facebook" | "instagram" | "linkedin";
+export const SOCIAL_PLATFORMS = ["facebook", "instagram", "linkedin"] as const;
+export type SocialPlatform = (typeof SOCIAL_PLATFORMS)[number];
 
 export type PublicSourceCandidate = {
   platform: PublicSourcePlatform;
@@ -8,7 +10,7 @@ export type PublicSourceCandidate = {
 };
 
 export type SocialSourceDecision = {
-  platform: Exclude<PublicSourcePlatform, "website">;
+  platform: SocialPlatform;
   candidateUrl: string;
   confirmedUrl: string | null;
   status: "confirmed" | "rejected";
@@ -18,7 +20,26 @@ export type SocialSourceDecision = {
 
 type Link = { url: URL; text: string };
 
-function platformForHost(hostname: string): Exclude<PublicSourcePlatform, "website"> | null {
+export type SocialPublicationStatus = {
+  platform: SocialPlatform;
+  profile: "candidate_found" | "not_identified_in_read_pages";
+  posts: "not_read";
+  access: "not_checked";
+};
+
+/** Anonymous onboarding identifies links from read pages only; it never probes social posts or access. */
+export function socialPublicationStatuses(candidates: PublicSourceCandidate[]): SocialPublicationStatus[] {
+  return SOCIAL_PLATFORMS.map((platform) => ({
+    platform,
+    profile: candidates.some((candidate) => candidate.platform === platform)
+      ? "candidate_found"
+      : "not_identified_in_read_pages",
+    posts: "not_read",
+    access: "not_checked",
+  }));
+}
+
+function platformForHost(hostname: string): SocialPlatform | null {
   const host = hostname.toLowerCase().replace(/^www\./, "");
   if (host === "facebook.com" || host === "m.facebook.com") return "facebook";
   if (host === "instagram.com") return "instagram";
@@ -27,7 +48,7 @@ function platformForHost(hostname: string): Exclude<PublicSourcePlatform, "websi
 }
 
 export function normalizeSocialProfileUrl(
-  platform: Exclude<PublicSourcePlatform, "website">,
+  platform: SocialPlatform,
   value: string
 ): string | null {
   if (value.length > 600) return null;

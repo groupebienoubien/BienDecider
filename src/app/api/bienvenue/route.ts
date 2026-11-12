@@ -67,7 +67,9 @@ export async function POST(request: NextRequest) {
     }
     draftId = (await createDraft(state)).id;
   }
-  if (action.action === "discover") return launchAnalysis(request, draftId, state, now);
+  if (action.action === "discover" || (action.action === "confirm_profile" && state.step === 1) || (action.action === "back" && state.step === 1)) {
+    return launchAnalysis(request, draftId, state, now);
+  }
   // Recherche réelle de marché avant compte (#361, #362) : jamais bloquante pour cette transition, contrairement à l'analyse.
   if (action.action === "confirm_ambition") await launchIntelligence(request, draftId, state, now).catch((error: unknown) => console.error(`Recherche de marché non lancée pour le brouillon ${draftId} : ${errorLabel(error)}.`));
   return NextResponse.json({ step: state.step, href: stepHref(state.step) });
@@ -95,7 +97,16 @@ async function refund(...attempts: ThrottleResult[]) {
 
 /** Lance l'analyse de l'étape 1 : 3 par IP et par jour, plafond global du jour, jamais deux à la fois. */
 async function launchAnalysis(request: NextRequest, draftId: string, state: DraftState, now: Date) {
-  const input = { companyName: state.profile.companyName, location: state.profile.location, website: state.profile.website };
+  const sameIdentity = state.analysis?.input.companyName === state.profile.companyName
+    && state.analysis.input.location === state.profile.location;
+  const input = {
+    companyName: state.profile.companyName,
+    location: state.profile.location,
+    website: state.profile.website,
+    googlePlaceId: state.googlePlaceChoice?.status === "confirmed" ? state.googlePlaceChoice.placeId : null,
+    googlePlaceCandidateIds: sameIdentity ? state.analysis?.findings.googlePlaceCandidates ?? [] : [],
+    websiteRejected: state.websiteRejected,
+  };
   const href = stepHref(1);
   // La même entreprise déjà lue : rien à relancer, les constats restent.
   if (!needsNewAnalysis(state.analysis, input, now)) return NextResponse.json({ step: 1, href, analysis: analysisView(state.analysis, now) });

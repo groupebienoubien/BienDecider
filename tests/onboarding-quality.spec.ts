@@ -3,7 +3,7 @@ import { EMPTY_TERMS } from "../src/lib/ambition-rules";
 import { newAnalysis, ruleFirstFindings } from "../src/lib/onboarding/analysis-rules";
 import {
   analysisMatchesProfile, applyDraftAction, checkDraftForAccount, emptyDraft, intelligenceInputFor,
-  matchingIntelligence, prefillWebsite, starterMarketFinding, starterPlan, type DraftState,
+  matchingIntelligence, prefillWebsite, readDraftState, starterMarketFinding, starterPlan, type DraftState,
 } from "../src/lib/onboarding/draft-rules";
 import { buildMarketPrompt, runDraftIntelligence } from "../src/lib/onboarding/intelligence";
 import { INTELLIGENCE_MESSAGES, INTELLIGENCE_STALE_MS, intelligenceNotice, needsNewIntelligence, newIntelligence, readIntelligence } from "../src/lib/onboarding/intelligence-rules";
@@ -61,6 +61,66 @@ test("onboarding quality: a discovered website never overrides another company o
   for (const website of ["javascript:alert(1)", "https://example.test/<script>", `https://example.test/${"x".repeat(500)}`]) {
     expect(applyDraftAction({ ...state, step: 2 }, { action: "confirm_profile", ...state.profile, website }, NOW)).toMatchObject({ ok: false, kind: "invalid" });
   }
+});
+
+test("onboarding quality: a Google listing is read only after explicit selection and that choice survives the draft", () => {
+  const state = discoveredDraft();
+  const candidateIds = ["ChIJatelierLumen01", "ChIJatelierLumen02"];
+  const analysis = {
+    ...state.analysis!,
+    findings: { ...state.analysis!.findings, googlePlaceCandidates: candidateIds },
+  };
+  const candidates = { ...state, analysis };
+  const profile = { trade: "Restaurant", servingArea: "Maurepas", targetClients: "Familles", offers: "Déjeuner" };
+  expect(applyDraftAction(candidates, { action: "confirm_profile", ...profile }, NOW)).toMatchObject({
+    ok: false, kind: "invalid", error: "Choisissez la fiche de votre entreprise ou indiquez qu'aucune ne correspond.",
+  });
+
+  const choice = { status: "confirmed" as const, placeId: candidateIds[1] };
+  const selected = applyDraftAction(candidates, { action: "confirm_profile", ...profile, googlePlaceChoice: choice }, NOW);
+  expect(selected).toMatchObject({ ok: true, state: { step: 1, googlePlaceChoice: choice, profileConfirmed: false } });
+  if (!selected.ok) throw new Error("Google place selection failed");
+  const correctedWithSelection = applyDraftAction(candidates, {
+    action: "confirm_profile",
+    ...profile,
+    website: "https://atelier-lumen.example/",
+    googlePlaceChoice: choice
+  }, NOW);
+  expect(correctedWithSelection).toMatchObject({
+    ok: true,
+    state: {
+      step: 1,
+      profile: { website: "https://atelier-lumen.example/" },
+      googlePlaceChoice: choice,
+      profileConfirmed: false
+    }
+  });
+  if (!correctedWithSelection.ok) throw new Error("Concurrent website correction and place selection failed");
+
+  const input = {
+    companyName: state.profile.companyName, location: state.profile.location, website: "",
+    googlePlaceId: candidateIds[1], googlePlaceCandidateIds: candidateIds,
+  };
+  const selectedAnalysis = newAnalysis(input, "confirmed-place", NOW, "done");
+  selectedAnalysis.findings.googlePlaceCandidates = candidateIds;
+  const ready = { ...selected.state, step: 2 as const, analysis: selectedAnalysis };
+  const confirmed = applyDraftAction(ready, { action: "confirm_profile", ...profile, googlePlaceChoice: choice }, NOW);
+  expect(confirmed).toMatchObject({ ok: true, state: { step: 3, googlePlaceChoice: choice, profileConfirmed: true } });
+  if (!confirmed.ok) throw new Error("Profile confirmation failed");
+
+  const persisted = readDraftState({
+    step: confirmed.state.step,
+    profile: { ...confirmed.state.profile, googlePlaceChoice: confirmed.state.googlePlaceChoice, websiteRejected: confirmed.state.websiteRejected },
+    ambition: confirmed.state.ambition,
+    profileConfirmed: confirmed.state.profileConfirmed,
+    diagnosticReady: confirmed.state.diagnosticReady,
+    analysis: confirmed.state.analysis,
+  });
+  expect(persisted.googlePlaceChoice).toEqual(choice);
+  expect(analysisMatchesProfile(persisted)).toBe(true);
+
+  const rejected = applyDraftAction(candidates, { action: "confirm_profile", ...profile, googlePlaceChoice: { status: "rejected" } }, NOW);
+  expect(rejected).toMatchObject({ ok: true, state: { step: 3, googlePlaceChoice: { status: "rejected" } } });
 });
 
 test("onboarding quality: no input or failed reading never proves an absent website", () => {

@@ -2180,7 +2180,7 @@ function step4Draft(options: { read?: boolean; ambition?: string; terms?: Partia
     findings: { ...newAnalysis(input, "run-284").findings, offers: options.observedOffers ? observed(profile.offers) : null, targetClients: options.observedOffers ? observed(profile.targetClients) : null, trade: observed(profile.trade) },
   };
   return {
-    step: 4, profile, socialSourceDecisions: [], profileConfirmed: true, diagnosticReady: true, analysis,
+    step: 4, profile, socialSourceDecisions: [], googlePlaceChoice: null, websiteRejected: false, profileConfirmed: true, diagnosticReady: true, analysis,
     ambition: { text: options.ambition ?? "+20 % de chiffre d'affaires en 12 mois", terms: { ...EMPTY_TERMS, gainPercent: 20, horizonMonths: 12, ...options.terms } },
     intelligence: options.intelligence ?? null,
   };
@@ -2562,12 +2562,14 @@ const HOME_HTML = `<!doctype html><html><head><title>Atelier Lumen · Électrici
 <script>window.secret = "ne pas lire";</script></head>
 <body><h1>Atelier Lumen</h1><p>Rénovation électrique &amp; dépannage pour les particuliers.</p>
 <a href="/contact">Nous contacter</a> <a href="/nos-prestations">Nos prestations</a> <a href="/tarifs">Tarifs</a>
+<a href="/docs/menu.pdf">Notre menu PDF</a> <a href="/reservation">Réserver</a> <a href="/horaires">Horaires</a>
 <a href="https://autre-site.test/services">Services ailleurs</a> <a href="mailto:contact@atelier-lumen.test">Écrire</a></body></html>`;
 const PAGES: Record<string, string> = {
   "/": HOME_HTML,
   "/contact": "<title>Contact</title><p>Écrivez à contact@atelier-lumen.test ou appelez le 04 78 00 00 00.</p>",
   "/nos-prestations": "<title>Prestations</title><ul><li>Mise aux normes</li><li>Dépannage</li></ul>",
   "/tarifs": "<title>Tarifs</title><p>Devis gratuit</p>",
+  "/reservation": "<title>Réserver</title><script>window.widget = true;</script><a href=\"https://reservation.atelier-lumen.test/booking\">Réserver en ligne</a>",
 };
 
 async function startFakeSite() {
@@ -2595,14 +2597,20 @@ test("GH-280/GH-368: the home page and up to four internal pages of the same hos
     const result = await readPublicSite("https://atelier-lumen.test/", site.deps);
     expect(result).toMatchObject({ ok: true, url: "https://atelier-lumen.test/", readAt: "2026-11-07T10:00:00.000Z" });
     if (!result.ok) throw new Error("site");
-    expect(site.hits.sort()).toEqual(["/", "/contact", "/nos-prestations", "/tarifs"]);
-    expect(result.pages.map((page) => page.url)).toEqual(["https://atelier-lumen.test/", "https://atelier-lumen.test/contact", "https://atelier-lumen.test/nos-prestations", "https://atelier-lumen.test/tarifs"]);
+    expect(site.hits.sort()).toEqual(["/", "/contact", "/nos-prestations", "/reservation", "/tarifs"]);
+    expect(result.pages.map((page) => page.url)).toEqual(["https://atelier-lumen.test/", "https://atelier-lumen.test/contact", "https://atelier-lumen.test/nos-prestations", "https://atelier-lumen.test/tarifs", "https://atelier-lumen.test/reservation"]);
     expect(result.pages[0].title).toBe("Atelier Lumen · Électricien à Lyon");
     expect(result.pages[0].text).toContain("Électricien à Lyon et Villeurbanne depuis 2009.");
     expect(result.pages[0].text).toContain("Rénovation électrique & dépannage pour les particuliers.");
     expect(result.pages[0].text).not.toContain("ne pas lire");
     expect(result.palette).toEqual(["#176b50", "#e06a30"]);
     expect(result.logo).toBe("https://atelier-lumen.test/favicon.png");
+    expect(result.readLimitations).toEqual(expect.arrayContaining([
+      { url: "https://atelier-lumen.test/docs/menu.pdf", reason: "pdf" },
+      { url: "https://atelier-lumen.test/reservation", reason: "dynamic" },
+      { url: "https://reservation.atelier-lumen.test/booking", reason: "other_host" },
+      { url: "https://atelier-lumen.test/horaires", reason: "not_selected" },
+    ]));
   } finally {
     await site.close();
   }
@@ -2629,6 +2637,11 @@ test("GH-280: the analysis fills the four rubrics as it goes, keeps provenance a
   const saves: DraftAnalysis[] = [];
   const prompts: string[] = [];
   let calls = 0;
+  const confirmedInput = {
+    ...analysisInput,
+    googlePlaceId: "ChIJatelierLumen01",
+    googlePlaceCandidateIds: ["ChIJatelierLumen01"],
+  };
   const extract: Extractor = async (input) => {
     calls++;
     prompts.push(extractionPrompt(input));
@@ -2638,9 +2651,9 @@ test("GH-280: the analysis fills the four rubrics as it goes, keeps provenance a
     };
   };
   try {
-    const initial = newAnalysis(analysisInput, "run-1", new Date("2026-11-07T10:00:00.000Z"));
+    const initial = newAnalysis(confirmedInput, "run-1", new Date("2026-11-07T10:00:00.000Z"));
     expect(Object.values(initial.rubrics).every((rubric) => rubric.status === "pending")).toBe(true);
-    const result = await runDraftAnalysis("draft-1", analysisInput, {
+    const result = await runDraftAnalysis("draft-1", confirmedInput, {
       analysis: initial, save: async (next) => { saves.push(next); return true; },
       readSite: (url) => readPublicSite(url, site.deps), places: placesDeps, extract, now: () => new Date("2026-11-07T10:00:05.000Z"),
     });
@@ -2668,7 +2681,13 @@ test("GH-280: the analysis fills the four rubrics as it goes, keeps provenance a
     expect(readAnalysis(JSON.parse(JSON.stringify(result)))).toEqual(result);
 
     // Étape 2 préremplie en hypothèses ; rien n'est confirmé.
-    const state = { ...emptyDraft(), step: 2 as const, profile: { ...emptyDraft().profile, firstName: "Claire", companyName: "Atelier Lumen", location: "Lyon", website: analysisInput.website, offers: "Dépannage" }, analysis: result };
+    const state = {
+      ...emptyDraft(),
+      step: 2 as const,
+      profile: { ...emptyDraft().profile, firstName: "Claire", companyName: "Atelier Lumen", location: "Lyon", website: analysisInput.website, offers: "Dépannage" },
+      googlePlaceChoice: { status: "confirmed" as const, placeId: "ChIJatelierLumen01" },
+      analysis: result,
+    };
     expect(prefillProfile(state)).toEqual({
       values: { trade: "Électricien", servingArea: "Lyon et Villeurbanne", targetClients: "Particuliers propriétaires", offers: "Dépannage" },
       origins: { trade: "hypothesis", servingArea: "hypothesis", targetClients: "hypothesis", offers: "declared" },
@@ -2725,7 +2744,7 @@ test("GH-280: without a site, a model or Google, the rubrics say why and nothing
   expect(extractionPrompt({ declared: analysisInput, pages: [{ url: "https://x.test/", title: "", text: "x".repeat(30_000) }], google: null, palette: [], logo: null }).length).toBeLessThan(EXTRACTION_TEXT_MAX + 500);
 });
 
-test("GH-280: without a declared site, Paul reads the site of the Google listing, and the listing category proposes the trade", async () => {
+test("GH-367: Google listings stay candidates until the owner selects one", async () => {
   const site = await startFakeSite();
   const listing = (websiteUri?: string) => ({
     apiKey: "test-key",
@@ -2741,7 +2760,18 @@ test("GH-280: without a declared site, Paul reads the site of the Google listing
   const failing: Extractor = async (input) => { prompts.push(extractionPrompt(input)); return { ok: false }; };
   try {
     const read: string[] = [];
-    const fromListing = await runDraftAnalysis("d", noWebsite, { analysis: newAnalysis(noWebsite, "r"), save: async () => true, places: listing(analysisInput.website), extract: failing, readSite: (url) => { read.push(url); return readPublicSite(url, site.deps); } });
+    const candidate = await runDraftAnalysis("d", noWebsite, { analysis: newAnalysis(noWebsite, "r"), save: async () => true, places: listing(analysisInput.website), extract: failing, readSite: (url) => { read.push(url); return readPublicSite(url, site.deps); } });
+    expect(candidate.findings.googlePlaceCandidates).toEqual(["ChIJatelierLumen01"]);
+    expect(candidate.findings.google).toBeNull();
+    expect(candidate.findings.publicSources).toContainEqual({
+      platform: "website", url: `${analysisInput.website}/`, source: "https://maps.google.com/?cid=42",
+      readAt: expect.any(String),
+    });
+    expect(read).toEqual([]);
+    expect(prompts).toEqual([]);
+
+    const confirmedInput = { ...noWebsite, googlePlaceId: "ChIJatelierLumen01", googlePlaceCandidateIds: ["ChIJatelierLumen01"] };
+    const fromListing = await runDraftAnalysis("d", confirmedInput, { analysis: newAnalysis(confirmedInput, "r"), save: async () => true, places: listing(analysisInput.website), extract: failing, readSite: (url) => { read.push(url); return readPublicSite(url, site.deps); } });
     expect(read).toEqual([`${analysisInput.website}/`]);
     expect(fromListing.rubrics.site).toEqual({ status: "read" });
     expect(fromListing.findings.palette?.provenance.kind).toBe("observed");
@@ -2751,7 +2781,7 @@ test("GH-280: without a declared site, Paul reads the site of the Google listing
     expect(fromListing.findings.trade).toEqual({ value: "Électricien", provenance: { kind: "hypothesis" } });
 
     // Le site de la fiche est illisible : ce n'est pas une erreur, le dirigeant n'avait pas déclaré de site.
-    const unreadable = await runDraftAnalysis("d", noWebsite, { analysis: newAnalysis(noWebsite, "r"), save: async () => true, places: listing("https://illisible.test"), extract: failing, readSite: async () => ({ ok: false, reason: "unreadable" }) });
+    const unreadable = await runDraftAnalysis("d", { ...confirmedInput, googlePlaceCandidateIds: ["ChIJatelierLumen01"] }, { analysis: newAnalysis(confirmedInput, "r"), save: async () => true, places: listing("https://illisible.test"), extract: failing, readSite: async () => ({ ok: false, reason: "unreadable" }) });
     expect(unreadable.rubrics.site).toEqual({ status: "unavailable", reason: "no_site" });
     expect(unreadable.findings.trade?.value).toBe("Électricien");
   } finally {
@@ -2761,6 +2791,11 @@ test("GH-280: without a declared site, Paul reads the site of the Google listing
 
 test("GH-292: first findings — certainty comes from what was really read, never from the model, three at most, then become the starting diagnostic", async () => {
   const readAt = "2026-11-09T10:00:00.000Z";
+  const confirmedInput = {
+    ...analysisInput,
+    googlePlaceId: "ChIJatelierLumen01",
+    googlePlaceCandidateIds: ["ChIJatelierLumen01"],
+  };
   const read = { pages: [{ url: "https://atelier-lumen.test/", readAt }], google: { link: "https://maps.google.com/?cid=42", readAt } };
   const kept = keepFirstFindings([
     { topic: "site_web", fact: "Votre site ne montre aucune réalisation.", consequence: "Vos clients ne voient pas ce que vous savez faire.", source: "https://atelier-lumen.test" },
@@ -2796,12 +2831,12 @@ test("GH-292: first findings — certainty comes from what was really read, neve
   // Bout en bout : les constats du modèle sont contrôlés ; sans eux, les règles.
   const site = await startFakeSite();
   try {
-    const withModel = await runDraftAnalysis("d", analysisInput, { analysis: newAnalysis(analysisInput, "r"), save: async () => true, readSite: (url) => readPublicSite(url, site.deps), places: placesDeps, extract: async () => ({
+    const withModel = await runDraftAnalysis("d", confirmedInput, { analysis: newAnalysis(confirmedInput, "r"), save: async () => true, readSite: (url) => readPublicSite(url, site.deps), places: placesDeps, extract: async () => ({
       ok: true, model: "claude-sonnet-5-5", usage: { input_tokens: 10, output_tokens: 10 },
       value: { trade: "", servingArea: "", targetClients: "", offers: "", emails: [], phones: [], visualIdentity: "", findings: [{ topic: "fiche_google", fact: "Votre fiche Google n'a pas d'horaires.", consequence: "Un client peut se déplacer pour rien.", source: "google" }] },
     }) });
     expect(withModel.constats).toEqual([expect.objectContaining({ certainty: "observe", topic: "fiche_google", source: "https://maps.google.com/?cid=42" })]);
-    const withoutModel = await runDraftAnalysis("d", analysisInput, { analysis: newAnalysis(analysisInput, "r"), save: async () => true, readSite: (url) => readPublicSite(url, site.deps), places: placesDeps, extract: async () => ({ ok: false }) });
+    const withoutModel = await runDraftAnalysis("d", confirmedInput, { analysis: newAnalysis(confirmedInput, "r"), save: async () => true, readSite: (url) => readPublicSite(url, site.deps), places: placesDeps, extract: async () => ({ ok: false }) });
     expect(withoutModel.constats?.map((finding) => finding.topic)).toEqual(["fiche_google", "site_web"]);
     expect(withoutModel.constats?.every((finding) => finding.certainty === "observe")).toBe(true);
   } finally {
