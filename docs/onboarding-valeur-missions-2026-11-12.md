@@ -27,7 +27,7 @@ Méthode : lecture du parcours public, des règles, de la collecte, des agents, 
 | --- | --- | --- | --- |
 | P0 | Le choix des missions suit une liste ordonnée de modèles, avec une condition « site lu / objectif de demandes ». | Deux entreprises très différentes reçoivent presque les mêmes actions. L'objectif est répété dans les textes, pas réellement traduit en arbitrage. | Refonte UC-06/07. |
 | P0 | L'analyse initiale reçoit nom, ville et site, mais pas encore l'objectif ; la recherche de marché suivante ne reçoit pas les constats du site. | Les informations sont produites en silos ; un défaut observé ne détermine pas nécessairement la mission. | Refonte UC-03 à UC-07. |
-| P0 | La recherche de marché vise un seul concurrent et une seule opportunité. Avant correction, elle n'incluait même pas le nom ni le site de l'entreprise. | Homonymes, entreprise retrouvée comme son propre concurrent, comparaisons trop générales. | Identité et date ajoutées ; qualification métier à construire. |
+| P0 | La recherche de marché visait un seul concurrent et une seule opportunité. Avant correction, elle n'incluait même pas le nom ni le site de l'entreprise. | Homonymes, entreprise retrouvée comme son propre concurrent, comparaisons trop générales. | #370 : candidats comparés sur des dimensions communes, sourcés, datés et soumis au choix du dirigeant. |
 | P0 | L'analyse avant compte ne collecte pas de publications sociales. Son lecteur traite l'accueil et deux pages internes au plus. | Impossible d'affirmer avoir compris la communication Facebook, Instagram ou LinkedIn. | Limite désormais affichée ; collecte UC-04 à construire. |
 | P0 | Le site trouvé via Google pouvait être lu sans remplir le profil. La page suivante raisonnait sur le champ vide. | Contradiction « j'ai lu votre site / vous n'avez pas de site » ; répétition après inscription. | Correctif livré pour les sites effectivement lus. |
 | P0 | Un champ site vide devenait « vous n'avez pas encore de page ». | Recommandation de création sans avoir établi le besoin ; perte de confiance immédiate. | Assertion retirée avant et après compte. |
@@ -438,3 +438,9 @@ npx playwright test user-journey.spec.ts --workers=1 --grep 'onboarding quality'
 ```
 
 Les tests de cette passe ne certifient ni l'accès réel aux réseaux sociaux, ni la pertinence du futur moteur. Cette certification relève du corpus et des critères UC-12.
+
+## 12. US #370 — concurrents locaux comparables
+
+La recherche reçoit l'identité confirmée, le métier, la zone, les offres, la clientèle et l'ambition. Chaque candidat retenu doit être classé direct ou indirect, justifié, sourcé et comparé sur au moins une dimension renseignée des deux côtés. Le côté entreprise vient du profil confirmé ; une valeur concurrente absente n'est pas transformée en zéro ni en désavantage. Les doublons, le nom exact de l'entreprise, les sources invalides et les candidats sans comparaison exploitable sont écartés. Le prompt demande aussi de vérifier la localisation et d'écarter les homonymes et acteurs non comparables.
+
+Le parcours affiche la date de recherche, les faits et les valeurs comparées, puis permet de confirmer ou d'écarter chaque candidat. Les décisions sont conservées dans le brouillon ; une exclusion est transmise à la recherche suivante et transférée comme concurrent écarté à l'inscription, afin que les analyses du compte ne le reproposent pas. Ces constats ne déclenchent pas à eux seuls une mission ni une recommandation de prix. Les repères et leurs sources restent à vérifier par le dirigeant ; cette recherche ne garantit pas la disponibilité permanente d'une source publique ni l'exactitude de toute donnée de tiers.

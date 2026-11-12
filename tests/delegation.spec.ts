@@ -2180,7 +2180,7 @@ function step4Draft(options: { read?: boolean; ambition?: string; terms?: Partia
     findings: { ...newAnalysis(input, "run-284").findings, offers: options.observedOffers ? observed(profile.offers) : null, targetClients: options.observedOffers ? observed(profile.targetClients) : null, trade: observed(profile.trade) },
   };
   return {
-    step: 4, profile, socialSourceDecisions: [], googlePlaceChoice: null, websiteRejected: false, profileConfirmed: true, diagnosticReady: true, analysis,
+    step: 4, profile, socialSourceDecisions: [], competitorDecisions: [], googlePlaceChoice: null, websiteRejected: false, profileConfirmed: true, diagnosticReady: true, analysis,
     ambition: { text: options.ambition ?? "+20 % de chiffre d'affaires en 12 mois", terms: { ...EMPTY_TERMS, gainPercent: 20, horizonMonths: 12, ...options.terms } },
     intelligence: options.intelligence ?? null,
   };
@@ -2283,12 +2283,12 @@ function doneIntelligence(facts: Partial<Pick<DraftIntelligence, "competitor" | 
 }
 
 test("US #362/#363 : starterFacts ne reprend les faits que d'une recherche terminée", () => {
-  expect(starterFacts(null)).toEqual({ competitor: null, opportunity: null });
+  expect(starterFacts(null)).toEqual({ competitor: null, competitors: [], opportunity: null });
   const running = newIntelligence(INTELLIGENCE_INPUT, "run-362", new Date("2026-11-12T10:00:00Z"));
-  expect(starterFacts(running)).toEqual({ competitor: null, opportunity: null });
-  expect(starterFacts({ ...running, status: "failed" })).toEqual({ competitor: null, opportunity: null });
+  expect(starterFacts(running)).toEqual({ competitor: null, competitors: [], opportunity: null });
+  expect(starterFacts({ ...running, status: "failed" })).toEqual({ competitor: null, competitors: [], opportunity: null });
   const done = doneIntelligence({ competitor: COMPETITOR_FACT, opportunity: EVENT_FACT });
-  expect(starterFacts(done)).toEqual({ competitor: COMPETITOR_FACT, opportunity: EVENT_FACT });
+  expect(starterFacts(done)).toEqual({ competitor: COMPETITOR_FACT, competitors: [COMPETITOR_FACT], opportunity: EVENT_FACT });
 });
 
 test("US #363 : une opportunité réelle (événement) remplace l'action générique par une mission datée et sourcée, valide telle quelle", () => {

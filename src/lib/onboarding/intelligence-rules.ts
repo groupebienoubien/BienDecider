@@ -1,15 +1,102 @@
 import { z } from "zod";
 
 /**
- * Règles pures de la recherche réelle avant compte (#361, #362) : un concurrent et une opportunité trouvés par
+ * Règles pures de la recherche réelle avant compte (#361, #362, #370) : des comparables et une opportunité trouvés par
  * recherche web, jamais inventés. Même mécanique que l'analyse publique de l'étape 1 (#280, `analysis-rules.ts`),
  * en plus simple : deux faits au lieu de quatre rubriques, et aucune extraction du site.
  */
 
-export type IntelligenceInput = { companyName?: string; location?: string; website?: string; trade: string; servingArea: string; offers: string; targetClients: string; ambitionText: string };
+export type ExcludedCompetitor = { name: string; source: string };
+export type IntelligenceInput = { companyName?: string; location?: string; website?: string; trade: string; servingArea: string; offers: string; targetClients: string; ambitionText: string; excludedCompetitors?: ExcludedCompetitor[] };
 
-export type CompetitorFact = { name: string; fact: string; source: string };
+export type CompetitorDimension = "trade" | "servingArea" | "offers" | "targetClients";
+export type CompetitorComparison = { dimension: CompetitorDimension; businessValue: string; competitorValue: string };
+export type CompetitorFact = {
+  name: string;
+  fact: string;
+  source: string;
+  relationship?: "direct" | "indirect";
+  comparabilityReason?: string;
+  readAt?: string;
+  comparisons?: CompetitorComparison[];
+};
 export type OpportunityFact = { title: string; description: string; source: string; isEvent: boolean; eventEndDate: string | null };
+export type CompetitorDecision = { name: string; source: string; decision: "confirmed" | "dismissed" };
+
+function normalizedName(value: string): string {
+  return value.normalize("NFD").replace(/\p{Diacritic}/gu, "").toLocaleLowerCase("fr").replace(/[^a-z0-9]+/g, "");
+}
+
+function publicHttpUrl(value: unknown): string | null {
+  if (typeof value !== "string" || value.length > 600) return null;
+  try {
+    const url = new URL(value.trim());
+    if (!["http:", "https:"].includes(url.protocol) || !url.hostname || url.username || url.password) return null;
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+/** Ne conserve que des candidats comparés sur des informations des deux côtés et rattachés à une source publique. */
+export function readCompetitorFacts(raw: unknown, input: IntelligenceInput, now: Date): CompetitorFact[] {
+  if (!Array.isArray(raw)) return [];
+  const businessValues: Record<CompetitorDimension, string> = {
+    trade: input.trade,
+    servingArea: input.servingArea,
+    offers: input.offers,
+    targetClients: input.targetClients,
+  };
+  const companyName = normalizedName(input.companyName ?? "");
+  const ownHost = input.website ? (() => {
+    try { return new URL(input.website).hostname.toLocaleLowerCase("fr").replace(/^www\./, ""); } catch { return ""; }
+  })() : "";
+  const excludedNames = new Set((input.excludedCompetitors ?? []).map((item) => normalizedName(item.name)));
+  const seen = new Set<string>();
+  const result: CompetitorFact[] = [];
+
+  for (const candidate of raw) {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) continue;
+    const item = candidate as Record<string, unknown>;
+    if (typeof item.name !== "string" || typeof item.fact !== "string" || typeof item.comparabilityReason !== "string") continue;
+    if (item.relationship !== "direct" && item.relationship !== "indirect") continue;
+    const name = item.name.trim().replace(/\s*\(.*$/, "").split(",")[0]?.trim() ?? "";
+    const normalized = normalizedName(name);
+    const source = publicHttpUrl(item.source);
+    const fact = item.fact.trim();
+    const comparabilityReason = item.comparabilityReason.trim();
+    if (!name || !normalized || normalized === companyName || excludedNames.has(normalized) || seen.has(normalized)) continue;
+    if (!source || !fact || !comparabilityReason) continue;
+    if (ownHost && new URL(source).hostname.toLocaleLowerCase("fr").replace(/^www\./, "") === ownHost) continue;
+    if (!Array.isArray(item.comparisons)) continue;
+
+    const dimensions = new Set<CompetitorDimension>();
+    const comparisons: CompetitorComparison[] = [];
+    for (const rawComparison of item.comparisons) {
+      if (!rawComparison || typeof rawComparison !== "object" || Array.isArray(rawComparison)) continue;
+      const comparison = rawComparison as Record<string, unknown>;
+      const dimension = comparison.dimension;
+      const competitorValue = typeof comparison.competitorValue === "string" ? comparison.competitorValue.trim() : "";
+      if (!(dimension === "trade" || dimension === "servingArea" || dimension === "offers" || dimension === "targetClients")) continue;
+      const businessValue = businessValues[dimension].trim();
+      if (!businessValue || !competitorValue || dimensions.has(dimension)) continue;
+      dimensions.add(dimension);
+      comparisons.push({ dimension, businessValue: businessValue.slice(0, 200), competitorValue: competitorValue.slice(0, 300) });
+    }
+    if (comparisons.length === 0) continue;
+    seen.add(normalized);
+    result.push({
+      name: name.slice(0, 100),
+      fact: fact.slice(0, 300),
+      source,
+      relationship: item.relationship,
+      comparabilityReason: comparabilityReason.slice(0, 300),
+      readAt: now.toISOString(),
+      comparisons,
+    });
+  }
+  return result;
+}
 
 /** Recherches anonymes par connexion (IP) et par 24 h, comme l'analyse (#280, D2). */
 export const INTELLIGENCE_PER_IP_DAILY_LIMIT = 3;
@@ -23,6 +110,7 @@ export type DraftIntelligence = {
   finishedAt: string | null;
   input: IntelligenceInput;
   competitor: CompetitorFact | null;
+  competitors?: CompetitorFact[];
   opportunity: OpportunityFact | null;
   /** `model` : modèle réellement appelé, repris dans le `UsageEvent` du compte à l'inscription ; absent si rien n'a été appelé. */
   cost: { usd: number; inputTokens: number; outputTokens: number; model?: string };
@@ -42,7 +130,8 @@ export const INTELLIGENCE_MESSAGES = {
 export function newIntelligence(input: IntelligenceInput, runId: string, now = new Date(), status: DraftIntelligence["status"] = "running", limit?: IntelligenceLimit): DraftIntelligence {
   return {
     runId, status, startedAt: now.toISOString(), finishedAt: status === "running" ? null : now.toISOString(),
-    input: { ...input }, competitor: null, opportunity: null, cost: { usd: 0, inputTokens: 0, outputTokens: 0 },
+    input: { ...input, ...(input.excludedCompetitors ? { excludedCompetitors: input.excludedCompetitors.map((item) => ({ ...item })) } : {}) },
+    competitor: null, competitors: [], opportunity: null, cost: { usd: 0, inputTokens: 0, outputTokens: 0 },
     ...(status === "limited" && limit ? { limit } : {}),
   };
 }
@@ -72,7 +161,12 @@ export function needsNewIntelligence(current: DraftIntelligence | null, input: I
 
 export function sameIntelligenceInput(left: IntelligenceInput, right: IntelligenceInput): boolean {
   const fields = ["companyName", "location", "website", "trade", "servingArea", "offers", "targetClients", "ambitionText"] as const;
-  return fields.every((field) => (left[field] ?? "") === (right[field] ?? ""));
+  if (!fields.every((field) => (left[field] ?? "") === (right[field] ?? ""))) return false;
+  const exclusions = (input: IntelligenceInput) => (input.excludedCompetitors ?? [])
+    .map(({ name, source }) => `${name.trim().toLocaleLowerCase("fr")}\u0000${source.trim()}`)
+    .sort()
+    .join("\u0001");
+  return exclusions(left) === exclusions(right);
 }
 
 function limitScope(limit: IntelligenceLimit): string {
@@ -84,7 +178,7 @@ export function intelligenceNotice(intelligence: DraftIntelligence | null, now =
   if (!shown || shown.status === "running") return null;
   if (shown.status === "limited") return `Limite de recherches du jour atteinte ${shown.limit ? limitScope(shown.limit) : "pour l'ensemble des visiteurs"} : ${INTELLIGENCE_MESSAGES.limited}`;
   if (shown.status === "failed") return INTELLIGENCE_MESSAGES.failed;
-  if (!shown.competitor && !shown.opportunity) return "La recherche n'a retenu aucun repère de marché suffisamment solide. Les pistes restent fondées sur votre profil, pas sur une comparaison concurrentielle.";
+  if (!(shown.competitors?.length || shown.competitor) && !shown.opportunity) return "La recherche n'a retenu aucun repère de marché suffisamment solide. Les pistes restent fondées sur votre profil, pas sur une comparaison concurrentielle.";
   return null;
 }
 
@@ -95,14 +189,25 @@ export function intelligenceView(intelligence: DraftIntelligence | null, now = n
   return {
     status: shown.status,
     finished: intelligenceFinished(shown, now),
-    hasCompetitor: shown.competitor !== null,
+    hasCompetitor: Boolean(shown.competitors?.length || shown.competitor),
     hasOpportunity: shown.opportunity !== null,
     notice: intelligenceNotice(intelligence, now),
   };
 }
 export type IntelligenceView = NonNullable<ReturnType<typeof intelligenceView>>;
 
-const competitorSchema = z.object({ name: z.string().max(100), fact: z.string().max(300), source: z.string().max(600) });
+const comparisonSchema = z.object({
+  dimension: z.enum(["trade", "servingArea", "offers", "targetClients"]),
+  businessValue: z.string().max(200),
+  competitorValue: z.string().max(300),
+});
+const competitorSchema = z.object({
+  name: z.string().max(100), fact: z.string().max(300), source: z.string().max(600),
+  relationship: z.enum(["direct", "indirect"]).optional(),
+  comparabilityReason: z.string().max(300).optional(),
+  readAt: z.string().max(40).optional(),
+  comparisons: z.array(comparisonSchema).max(4).optional(),
+});
 const opportunitySchema = z.object({
   title: z.string().max(120), description: z.string().max(300), source: z.string().max(600),
   isEvent: z.boolean(), eventEndDate: z.string().max(20).nullable(),
@@ -112,8 +217,13 @@ const intelligenceSchema = z.object({
   status: z.enum(["running", "done", "limited", "failed"]),
   startedAt: z.string().max(40),
   finishedAt: z.string().max(40).nullable(),
-  input: z.object({ companyName: z.string().optional(), location: z.string().optional(), website: z.string().optional(), trade: z.string(), servingArea: z.string(), offers: z.string(), targetClients: z.string(), ambitionText: z.string() }),
+  input: z.object({
+    companyName: z.string().optional(), location: z.string().optional(), website: z.string().optional(),
+    trade: z.string(), servingArea: z.string(), offers: z.string(), targetClients: z.string(), ambitionText: z.string(),
+    excludedCompetitors: z.array(z.object({ name: z.string(), source: z.string() })).optional(),
+  }),
   competitor: competitorSchema.nullable(),
+  competitors: z.array(competitorSchema).optional(),
   opportunity: opportunitySchema.nullable(),
   cost: z.object({ usd: z.number(), inputTokens: z.number(), outputTokens: z.number(), model: z.string().max(100).optional() }),
   limit: z.object({ scope: z.enum(["ip", "global"]), retryAt: z.string().max(40) }).optional(),
