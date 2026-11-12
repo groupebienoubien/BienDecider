@@ -3115,7 +3115,7 @@ test("GH-280: step 2 shows Paul's hypotheses and what was observed, with its sou
     await expect(seen).toContainText("Chaque champ ci-dessous indique d'où vient sa valeur");
     const contact = seen.getByRole("listitem").filter({ hasText: "contact@atelier-lumen.test" });
     await expect(contact).toContainText("Observé sur atelier-lumen.test le 7 novembre 2026");
-    await expect(seen.getByRole("link", { name: "Votre fiche Google" })).toHaveAttribute("href", "https://maps.google.com/?cid=42");
+    await expect(seen.getByRole("link", { name: "Fiche Google repérée, à vérifier", exact: true })).toHaveAttribute("href", "https://maps.google.com/?cid=42");
     expect(await noHorizontalScroll(page)).toBe(true);
   } finally {
     await prisma.onboardingDraft.deleteMany({ where: { id: draft.id } });
