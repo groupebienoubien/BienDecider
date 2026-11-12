@@ -450,6 +450,11 @@ function secondOffer(offers: string): string | null {
   return offerList(offers)[1] ?? null;
 }
 
+/** Deuxième segment de clientèle cité, coupé comme les offres : à défaut d'une deuxième offre, une autre façon de varier le sujet. */
+function secondSegment(targetClients: string): string | null {
+  return targetClients.split(/[,;\n/·]|\s+et\s+/).map((part) => part.trim()).filter(Boolean)[1] ?? null;
+}
+
 /** Ce qui manque à l'ambition pour être une cible chiffrée (gain, horizon). */
 function missingTerms(terms: AmbitionTerms | undefined): string[] {
   const missing: string[] = [];
@@ -611,19 +616,44 @@ function starterBody(key: TemplateKey, state: DraftState): Pick<StarterMission, 
       };
     }
     case "social_post": {
-      // Une deuxième offre distincte évite de republier le même sujet que la page du site vitrine (#169).
-      const alt = secondOffer(profile.offers);
-      const topicOffer = alt ?? offer;
+      // Variante par rapport à la page du site vitrine, pour ne jamais republier le même sujet (#169) :
+      // 1) une deuxième offre distincte si l'entreprise en a déclaré plusieurs ;
+      // 2) à défaut, un deuxième segment de clientèle, le même offre mais un message qui lui parle ;
+      // 3) à défaut, un angle différent — preuve sociale ou offre limitée dans le temps selon l'ambition.
+      const altOffer = secondOffer(profile.offers);
+      const altSegment = altOffer ? null : secondSegment(profile.targetClients);
+      const urgent = ambitionTargetsRequests(ambitionText);
+      const topicOffer = altOffer ?? offer;
       const topicShort = clip(topicOffer, 60);
-      const topic = topicOffer.length >= 5 ? clip(topicOffer, 120) : clip(`Présenter ${topicOffer}`, 120);
-      const deduction = alt
-        ? `Vous visez ${clip(cap, 90)} : une publication sur ${topicShort} montre une autre facette de votre savoir-faire à ${clip(profile.targetClients, 60)}, sans dépense.`
-        : ambitionTargetsRequests(ambitionText)
-          ? `Vous visez ${clip(cap, 90)} : une publication sur ${topicShort} donne à ${clip(profile.targetClients, 60)} une raison concrète de vous contacter maintenant.`
-          : `Vous visez ${clip(cap, 90)} : une publication sur ${topicShort} montre votre savoir-faire à ${clip(profile.targetClients, 60)}, sans dépense.`;
+      let topic: string;
+      let title: string;
+      let finding: string;
+      let deduction: string;
+      if (altOffer) {
+        topic = topicOffer.length >= 5 ? clip(topicOffer, 120) : clip(`Présenter ${topicOffer}`, 120);
+        title = `Une publication sur ${clip(topicOffer, 55)}`;
+        finding = clip(`Vos clients : ${clip(profile.targetClients, 100)}. Votre offre : ${clip(topicOffer, 100)}.`, 300);
+        deduction = `Vous visez ${clip(cap, 90)} : une publication sur ${topicShort} montre une autre facette de votre savoir-faire à ${clip(profile.targetClients, 60)}, sans dépense.`;
+      } else if (altSegment) {
+        const segmentShort = clip(altSegment, 50);
+        topic = clip(`${offerShort} pour ${altSegment}`, 120);
+        title = `Une publication sur ${clip(offer, 40)} pour ${clip(altSegment, 30)}`;
+        finding = clip(`Vos clients : ${clip(profile.targetClients, 100)}. Votre offre : ${clip(offer, 100)}.`, 300);
+        deduction = `Vous visez ${clip(cap, 80)} : vous visez aussi ${segmentShort}, qui ne lit pas forcément votre page comme vos autres clients — une publication qui s'adresse à eux sur ${topicShort} ouvre cette cible sans dépense.`;
+      } else if (urgent) {
+        topic = clip(`${offerShort} : une offre limitée dans le temps`, 120);
+        title = `Une offre limitée dans le temps sur ${clip(offer, 45)}`;
+        finding = clip(`Vos clients : ${clip(profile.targetClients, 100)}. Votre offre : ${clip(offer, 100)}.`, 300);
+        deduction = `Vous visez ${clip(cap, 90)} : une offre limitée dans le temps sur ${topicShort} donne une raison d'agir maintenant, là où votre page reste une référence permanente.`;
+      } else {
+        topic = clip(`Un avis ou une réalisation récente sur ${offerShort}`, 120);
+        title = `Partager un avis ou une réalisation sur ${clip(offer, 40)}`;
+        finding = clip(`Vos clients : ${clip(profile.targetClients, 100)}. Votre offre : ${clip(offer, 100)}.`, 300);
+        deduction = `Vous visez ${clip(cap, 90)} : un avis ou une réalisation récente sur ${topicShort} prouve votre savoir-faire à ${clip(profile.targetClients, 50)}, autrement qu'une page de présentation.`;
+      }
       return {
-        title: `Une publication sur ${clip(topicOffer, 55)}`, outcome: MISSION_TEMPLATES.social_post.defaultOutcome,
-        finding: clip(`Vos clients : ${clip(profile.targetClients, 100)}. Votre offre : ${clip(topicOffer, 100)}.`, 300), scope: { topic },
+        title: clip(title, 80), outcome: MISSION_TEMPLATES.social_post.defaultOutcome,
+        finding, scope: { topic },
         deduction: clip(deduction, 300),
         origin: originOf(state, ["targetClients", "offers"]),
       };
