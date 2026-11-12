@@ -243,6 +243,31 @@ test("Mon compte shows the credit balance, the scale and the latest movements", 
   expect(company.id).toBeTruthy();
 });
 
+test("mission brief links server validation to the field and keeps the entered values at 320 px", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 720 });
+  await page.goto(`${baseURL}/missions/nouvelle`);
+  const finding = page.getByLabel("Le constat de départ", { exact: true });
+  const title = page.getByLabel("Nom de la mission", { exact: true });
+  const outcome = page.getByLabel("Résultat recherché", { exact: true });
+  const scope = page.getByLabel("Sujet de la publication", { exact: true });
+  await finding.fill("Aucune publication depuis trois mois.");
+  await title.fill("Titre <incorrect>");
+  await page.getByLabel("Type d'action", { exact: true }).selectOption("social_post");
+  await scope.fill("Une publication de présentation");
+  await outcome.fill("Deux demandes de devis");
+  await page.getByRole("button", { name: "Créer la mission" }).click();
+
+  await expect(page.getByRole("alert")).toContainText("sans balise HTML");
+  await expect(title).toHaveAttribute("aria-invalid", "true");
+  await expect(title).toHaveAttribute("aria-describedby", "title-hint title-error");
+  await expect(page.locator("#title-error")).toContainText("5 à 80 caractères");
+  await expect(title).toBeFocused();
+  await expect(finding).toHaveValue("Aucune publication depuis trois mois.");
+  await expect(scope).toHaveValue("Une publication de présentation");
+  await expect(outcome).toHaveValue("Deux demandes de devis");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+});
+
 test("V5.2 workspace: four pages, a single next decision, and a mission created, launched, paused, resumed and re-aimed", async ({ page, company }) => {
   test.setTimeout(90000);
   const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }) });
