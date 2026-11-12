@@ -14,6 +14,7 @@ import { clearDraftCookie, loadDraft } from "@/lib/onboarding/draft";
 import { recordSignupTrace } from "@/lib/onboarding/visit-trace";
 import { brandProposalFromAnalysis } from "@/lib/brand/rules";
 import { analysisUsage, firstFindingRecords } from "@/lib/onboarding/analysis-rules";
+import { intelligenceUsage } from "@/lib/onboarding/intelligence-rules";
 import { createMissionIn } from "@/lib/missions/service";
 import { starterFindingLinks } from "@/lib/findings/starter-links";
 import { writeJournal } from "@/lib/journal";
@@ -137,6 +138,9 @@ export async function POST(request: NextRequest) {
       // « Ce que nous retenons » rédigé par le modèle avant compte (#284) : son coût revient aussi au compte.
       const synthesis = synthesisUsage(ambition);
       if (synthesis) await tx.usageEvent.create({ data: { companyId: created.id, ...synthesis } });
+      // Recherche réelle de marché avant compte (#361, #362) : son coût revient aussi au compte, une seule fois.
+      const intelligence = intelligenceUsage(draft.state.intelligence);
+      if (intelligence) await tx.usageEvent.create({ data: { companyId: created.id, ...intelligence } });
       await writeJournal(tx, { companyId: created.id, code: "J-04", params: {}, actor: "owner" });
       // Les missions de l'étape 4, dans le même ordre, « À décider » ; la première devient la priorité, sans J-08 ni lancement (#284).
       let priorityMissionId: string | null = null;

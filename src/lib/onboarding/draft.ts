@@ -4,6 +4,7 @@ import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { readDraftState, type DraftState } from "@/lib/onboarding/draft-rules";
 import { analysisRunning, readAnalysis, type DraftAnalysis } from "@/lib/onboarding/analysis-rules";
+import { intelligenceRunning, readIntelligence, type DraftIntelligence } from "@/lib/onboarding/intelligence-rules";
 import { purgeExpiredDrafts } from "@/lib/onboarding/visit-trace";
 
 /**
@@ -101,6 +102,30 @@ export async function saveAnalysis(id: string, analysis: DraftAnalysis, now = ne
   const saved = await prisma.onboardingDraft.updateMany({
     where: { id, expiresAt: { gt: now }, analysis: { path: ["runId"], equals: analysis.runId } },
     data: { analysis: analysis as unknown as Prisma.InputJsonObject },
+  });
+  return saved.count > 0;
+}
+
+/**
+ * Pose une nouvelle recherche de marché « en cours » (#361, #362), sauf si une autre l'est déjà : même verrou que
+ * `startAnalysis`. La colonne `intelligence` est la seule écrite.
+ */
+export async function startIntelligence(id: string, intelligence: DraftIntelligence, now = new Date()): Promise<"started" | "busy" | "missing"> {
+  return prisma.$transaction(async (tx) => {
+    const rows = await tx.$queryRaw<{ intelligence: unknown; expiresAt: Date }[]>`SELECT "intelligence", "expiresAt" FROM "OnboardingDraft" WHERE "id" = ${id} FOR UPDATE`;
+    const row = rows[0];
+    if (!row || row.expiresAt <= now) return "missing";
+    if (intelligenceRunning(readIntelligence(row.intelligence), now)) return "busy";
+    await tx.onboardingDraft.update({ where: { id }, data: { intelligence: intelligence as unknown as Prisma.InputJsonObject } });
+    return "started";
+  });
+}
+
+/** Écrit l'état de la recherche `runId` (en arrière-plan) ; faux si le brouillon a disparu, expiré ou relancé une autre recherche. */
+export async function saveIntelligence(id: string, intelligence: DraftIntelligence, now = new Date()): Promise<boolean> {
+  const saved = await prisma.onboardingDraft.updateMany({
+    where: { id, expiresAt: { gt: now }, intelligence: { path: ["runId"], equals: intelligence.runId } },
+    data: { intelligence: intelligence as unknown as Prisma.InputJsonObject },
   });
   return saved.count > 0;
 }

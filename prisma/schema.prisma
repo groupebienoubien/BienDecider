@@ -841,6 +841,7 @@ model OnboardingDraft {
   profileConfirmed  Boolean  @default(false)
   diagnosticReady   Boolean  @default(false)
   analysis          Json? // analyse publique avant compte (#280) : rubriques, constats et leur provenance, coût estimé
+  intelligence      Json? // recherche réelle avant compte (#361) : concurrent et opportunité trouvés par recherche web, coût estimé
   createdAt         DateTime @default(now())
   expiresAt         DateTime
 
