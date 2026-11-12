@@ -435,10 +435,19 @@ export function ambitionTargetsRequests(text: string): boolean {
   return /\b(demandes?|devis|appels?|contacts?|rendez-vous|prospects?|nouveaux clients|nouvelles clientes?)\b/i.test(text);
 }
 
-/** Première offre citée : le texte jusqu'à la première virgule, point-virgule, barre ou « et ». */
+/** Offres distinctes, dans l'ordre cité, coupées sur virgule, point-virgule, barre ou « et ». */
+function offerList(offers: string): string[] {
+  return offers.split(/[,;\n/·]|\s+et\s+/).map((part) => part.trim()).filter(Boolean);
+}
+
+/** Première offre citée. */
 export function firstOffer(offers: string): string {
-  const first = offers.split(/[,;\n/·]|\s+et\s+/).map((part) => part.trim()).find(Boolean);
-  return first ?? offers.trim();
+  return offerList(offers)[0] ?? offers.trim();
+}
+
+/** Deuxième offre citée, distincte de la première : évite que deux missions portent sur le même sujet. */
+function secondOffer(offers: string): string | null {
+  return offerList(offers)[1] ?? null;
 }
 
 /** Ce qui manque à l'ambition pour être une cible chiffrée (gain, horizon). */
@@ -589,12 +598,12 @@ function starterBody(key: TemplateKey, state: DraftState): Pick<StarterMission, 
       const read = siteWasRead(state);
       const situation = !profile.website ? "Vous n'avez pas indiqué de site internet." : read ? `Vous visez : ${clip(cap, 150)}.` : "Paul n'a pas pu lire votre site.";
       const deduction = !profile.website
-        ? `Vous n'avez pas encore de page qui présente ${offerShort} : c'est le premier point d'entrée de vos clients.`
+        ? `Vous visez ${clip(cap, 100)} : vous n'avez pas encore de page qui présente ${offerShort}, pourtant le premier point d'entrée de vos clients.`
         : !read
-          ? `Votre site n'a pas pu être lu : une page claire sur ${offerShort} est le premier point d'entrée de vos clients.`
+          ? `Vous visez ${clip(cap, 100)} : votre site n'a pas pu être lu, mais une page claire sur ${offerShort} reste le premier point d'entrée de vos clients.`
           : ambitionTargetsRequests(ambitionText)
-            ? `Vous visez des demandes : une page claire sur ${offerShort} donne à vos clients un point d'entrée pour vous contacter.`
-            : `Une page dédiée à ${offerShort} donne à vos clients un point d'entrée de plus.`;
+            ? `Vous visez ${clip(cap, 100)} : une page claire sur ${offerShort} donne à vos clients un point d'entrée direct pour vous contacter.`
+            : `Vous visez ${clip(cap, 100)} : une page dédiée à ${offerShort} donne à vos clients de ${clip(profile.servingArea || profile.location, 50)} un point d'entrée de plus.`;
       return {
         title: `Présenter ${clip(offer, 45)} sur votre site vitrine`, outcome: MISSION_TEMPLATES.site_page.defaultOutcome,
         finding: clip(`Vos offres : ${clip(profile.offers, 100)}. ${situation}`, 300), scope: { page: clip(offer, 80) },
@@ -602,11 +611,20 @@ function starterBody(key: TemplateKey, state: DraftState): Pick<StarterMission, 
       };
     }
     case "social_post": {
-      const topic = offer.length >= 5 ? clip(offer, 120) : clip(`Présenter ${offer}`, 120);
+      // Une deuxième offre distincte évite de republier le même sujet que la page du site vitrine (#169).
+      const alt = secondOffer(profile.offers);
+      const topicOffer = alt ?? offer;
+      const topicShort = clip(topicOffer, 60);
+      const topic = topicOffer.length >= 5 ? clip(topicOffer, 120) : clip(`Présenter ${topicOffer}`, 120);
+      const deduction = alt
+        ? `Vous visez ${clip(cap, 90)} : une publication sur ${topicShort} montre une autre facette de votre savoir-faire à ${clip(profile.targetClients, 60)}, sans dépense.`
+        : ambitionTargetsRequests(ambitionText)
+          ? `Vous visez ${clip(cap, 90)} : une publication sur ${topicShort} donne à ${clip(profile.targetClients, 60)} une raison concrète de vous contacter maintenant.`
+          : `Vous visez ${clip(cap, 90)} : une publication sur ${topicShort} montre votre savoir-faire à ${clip(profile.targetClients, 60)}, sans dépense.`;
       return {
-        title: `Une publication sur ${clip(offer, 55)}`, outcome: MISSION_TEMPLATES.social_post.defaultOutcome,
-        finding: clip(`Vos clients : ${clip(profile.targetClients, 100)}. Votre offre : ${clip(offer, 100)}.`, 300), scope: { topic },
-        deduction: clip(`Une publication sur ${offerShort} montre votre savoir-faire à ${clip(profile.targetClients, 60)}, sans dépense.`, 300),
+        title: `Une publication sur ${clip(topicOffer, 55)}`, outcome: MISSION_TEMPLATES.social_post.defaultOutcome,
+        finding: clip(`Vos clients : ${clip(profile.targetClients, 100)}. Votre offre : ${clip(topicOffer, 100)}.`, 300), scope: { topic },
+        deduction: clip(deduction, 300),
         origin: originOf(state, ["targetClients", "offers"]),
       };
     }
@@ -614,24 +632,26 @@ function starterBody(key: TemplateKey, state: DraftState): Pick<StarterMission, 
       return {
         title: "Mettre à jour votre fiche Google", outcome: MISSION_TEMPLATES.google_profile.defaultOutcome,
         finding: clip(`Votre activité : ${clip(profile.trade, 100)}, sur ${clip(profile.servingArea, 100)}.`, 300), scope: {},
-        deduction: clip(`Les clients de ${clip(profile.servingArea, 60)} cherchent souvent sur Google : une fiche complète les aide à vous trouver.`, 300),
+        deduction: clip(`Vous visez ${clip(cap, 90)} : les clients de ${clip(profile.servingArea, 60)} cherchent souvent sur Google, une fiche complète les aide à vous trouver.`, 300),
         origin: originOf(state, ["trade", "servingArea"]),
       };
     case "review_reply":
       return {
         title: "Répondre à vos avis Google", outcome: MISSION_TEMPLATES.review_reply.defaultOutcome,
         finding: clip(`Vos clients : ${clip(profile.targetClients, 100)}, sur ${clip(profile.servingArea, 100)}.`, 300), scope: {},
-        deduction: "Répondre aux avis rassure les clients qui comparent avant de vous contacter.",
+        deduction: clip(`Vous visez ${clip(cap, 110)} : répondre aux avis rassure les clients qui comparent avant de vous contacter.`, 300),
         origin: originOf(state, ["targetClients", "servingArea"]),
       };
-    default:
+    default: {
+      const locality = clip(profile.servingArea || profile.location, 50);
       return {
-        title: "Une première action sur mesure", outcome: "Un premier pas concret vers votre ambition",
-        finding: clip(`Votre ambition : ${ambitionText || cap}`, 300),
-        scope: { description: clip(`Une action que vous menez vous-même vers votre ambition : ${ambitionText || cap}`, 300) }, stopRuleDays: 30,
-        deduction: "Aucun modèle ne couvre encore toute votre ambition : une action que vous menez vous-même permet de la tester.",
+        title: clip(`Une première action pour ${offer} à ${locality}`, 80), outcome: "Un premier pas concret vers votre ambition",
+        finding: clip(`Votre ambition : ${ambitionText || cap}. Vos clients : ${clip(profile.targetClients, 100)}.`, 300),
+        scope: { description: clip(`Une action que vous menez vous-même, ciblée sur ${clip(profile.targetClients, 60)} à ${locality}, vers votre ambition : ${ambitionText || cap}`, 300) }, stopRuleDays: 30,
+        deduction: clip(`Aucun modèle ne couvre encore ${clip(cap, 90)} : une action que vous menez vous-même, ciblée sur votre clientèle de ${locality}, permet de la tester sans attendre.`, 300),
         origin: ORIGIN_DECLARED,
       };
+    }
   }
 }
 
