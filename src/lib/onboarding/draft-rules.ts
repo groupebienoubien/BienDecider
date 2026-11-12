@@ -624,7 +624,7 @@ function starterBody(key: TemplateKey, state: DraftState, facts: StarterFacts = 
       return {
         title: `Présenter ${clip(offer, 45)} sur votre site vitrine`, outcome: MISSION_TEMPLATES.site_page.defaultOutcome,
         finding: clip(`Vos offres : ${clip(profile.offers, 100)}. ${situation}`, 300), scope: { page: clip(offer, 80) },
-        deduction: clip(deduction, 300), origin: originOf(state, ["offers"]),
+        deduction: clip(deduction, 500), origin: originOf(state, ["offers"]),
       };
     }
     case "social_post": {
@@ -671,7 +671,7 @@ function starterBody(key: TemplateKey, state: DraftState, facts: StarterFacts = 
       return {
         title: clip(title, 80), outcome: MISSION_TEMPLATES.social_post.defaultOutcome,
         finding, scope: { topic },
-        deduction: clip(deduction, 300),
+        deduction: clip(deduction, 500),
         origin: originOf(state, ["targetClients", "offers"]),
       };
     }
@@ -679,14 +679,14 @@ function starterBody(key: TemplateKey, state: DraftState, facts: StarterFacts = 
       return {
         title: "Mettre à jour votre fiche Google", outcome: MISSION_TEMPLATES.google_profile.defaultOutcome,
         finding: clip(`Votre activité : ${clip(profile.trade, 100)}, sur ${clip(profile.servingArea, 100)}.`, 300), scope: {},
-        deduction: clip(`Vous visez ${clip(cap, 90)} : les clients de ${clip(profile.servingArea, 60)} cherchent souvent sur Google, une fiche complète les aide à vous trouver.`, 300),
+        deduction: clip(`Vous visez ${clip(cap, 90)} : les clients de ${clip(profile.servingArea, 60)} cherchent souvent sur Google, une fiche complète les aide à vous trouver.`, 500),
         origin: originOf(state, ["trade", "servingArea"]),
       };
     case "review_reply":
       return {
         title: "Répondre à vos avis Google", outcome: MISSION_TEMPLATES.review_reply.defaultOutcome,
         finding: clip(`Vos clients : ${clip(profile.targetClients, 100)}, sur ${clip(profile.servingArea, 100)}.`, 300), scope: {},
-        deduction: clip(`Vous visez ${clip(cap, 110)} : répondre aux avis rassure les clients qui comparent avant de vous contacter.`, 300),
+        deduction: clip(`Vous visez ${clip(cap, 110)} : répondre aux avis rassure les clients qui comparent avant de vous contacter.`, 500),
         origin: originOf(state, ["targetClients", "servingArea"]),
       };
     default: {
@@ -700,7 +700,7 @@ function starterBody(key: TemplateKey, state: DraftState, facts: StarterFacts = 
           title: clip(`${titleVerb} ${opportunity.title}${when}`, 80), outcome: "Un premier pas concret vers votre ambition",
           finding: clip(`${opportunity.description} Source : ${opportunity.source}`, 300),
           scope: { description: clip(`${opportunity.isEvent ? "Participer à" : "Prendre contact avec"} ${opportunity.title} : ${opportunity.description}`, 300) }, stopRuleDays: 30,
-          deduction: clip(`Vous visez ${clip(cap, 100)} : ${opportunity.description}`, 300),
+          deduction: clip(`Vous visez ${clip(cap, 100)} : ${opportunity.description}`, 500),
           origin: ORIGIN_DECLARED,
         };
       }
@@ -708,7 +708,7 @@ function starterBody(key: TemplateKey, state: DraftState, facts: StarterFacts = 
         title: clip(`Une première action pour ${offer} à ${locality}`, 80), outcome: "Un premier pas concret vers votre ambition",
         finding: clip(`Votre ambition : ${ambitionText || cap}. Vos clients : ${clip(profile.targetClients, 100)}.`, 300),
         scope: { description: clip(`Une action que vous menez vous-même, ciblée sur ${clip(profile.targetClients, 60)} à ${locality}, vers votre ambition : ${ambitionText || cap}`, 300) }, stopRuleDays: 30,
-        deduction: clip(`Aucun modèle ne couvre encore ${clip(cap, 90)} : une action que vous menez vous-même, ciblée sur votre clientèle de ${locality}, permet de la tester sans attendre.`, 300),
+        deduction: clip(`Aucun modèle ne couvre encore ${clip(cap, 90)} : une action que vous menez vous-même, ciblée sur votre clientèle de ${locality}, permet de la tester sans attendre.`, 500),
         origin: ORIGIN_DECLARED,
       };
     }
