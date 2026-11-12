@@ -2,8 +2,9 @@ import { requireDraftPage } from "../guard";
 import { WelcomeFrame } from "../welcome-frame";
 import { InterestButton } from "../step-forms";
 import { MissionsIntelligenceWatcher } from "./missions-waiting";
-import { FIRST_BADGE, starterPlan } from "@/lib/onboarding/draft-rules";
-import { intelligenceView } from "@/lib/onboarding/intelligence-rules";
+import { FIRST_BADGE, matchingIntelligence, starterFacts, starterPlan } from "@/lib/onboarding/draft-rules";
+import { intelligenceRunning, intelligenceView } from "@/lib/onboarding/intelligence-rules";
+import { safeSourceUrl } from "@/lib/findings/certainty";
 import { RESPONSIBLE_LABELS } from "@/lib/missions/rules";
 
 /**
@@ -14,11 +15,21 @@ import { RESPONSIBLE_LABELS } from "@/lib/missions/rules";
  */
 export default async function WelcomeMissionsPage() {
   const state = await requireDraftPage("/bienvenue/missions");
+  if (intelligenceRunning(state.intelligence)) {
+    return (
+      <WelcomeFrame step={4} intro={<p>Nous terminons la recherche pour {state.profile.companyName} avant de vous présenter les pistes.</p>}>
+        <MissionsIntelligenceWatcher initial={intelligenceView(state.intelligence)} />
+      </WelcomeFrame>
+    );
+  }
   const { recap, retained, missions } = starterPlan(state);
+  const intelligence = matchingIntelligence(state);
+  const { competitor } = starterFacts(intelligence);
+  const competitorSource = safeSourceUrl(competitor?.source);
   return (
     <WelcomeFrame step={4} intro={<p>Voici trois premières pistes pour {recap.companyName}. Elles arriveront « À décider » dans votre stratégie : aucune n&apos;est lancée sans vous.</p>}>
       <div className="flex flex-col gap-6">
-        <MissionsIntelligenceWatcher initial={intelligenceView(state.intelligence)} />
+        <MissionsIntelligenceWatcher initial={intelligenceView(intelligence)} />
         <section aria-labelledby="recap-title" className="rounded-lg bg-[var(--bd-cream)] p-4">
           <h2 id="recap-title" className="text-sm font-semibold text-[var(--bd-ink)]">Votre entreprise</h2>
           <p className="mt-1 break-words text-base text-[var(--bd-ink)]">
@@ -32,6 +43,15 @@ export default async function WelcomeMissionsPage() {
             </ul>
           )}
         </section>
+
+        {competitor && (
+          <section aria-labelledby="market-title" className="rounded-lg border border-[var(--bd-line)] p-4 text-sm text-[var(--bd-ink)]">
+            <h2 id="market-title" className="font-semibold">Un repère de marché à vérifier</h2>
+            <p className="mt-2 break-words"><strong>{competitor.name}</strong> : {competitor.fact}</p>
+            {competitorSource && <a href={competitorSource} target="_blank" rel="noopener noreferrer" className="mt-1 inline-block underline">Consulter la source de ce repère</a>}
+            <p className="mt-2 text-[var(--bd-muted)]">Ce repère ne suffit pas à justifier une publication ni à conclure que cette entreprise est votre concurrent direct.</p>
+          </section>
+        )}
 
         <section aria-labelledby="retained-title">
           <h2 id="retained-title" className="font-[family-name:var(--font-sora)] text-lg font-semibold text-[var(--bd-ink)]">Ce que nous retenons</h2>

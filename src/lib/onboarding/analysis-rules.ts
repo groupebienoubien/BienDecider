@@ -51,6 +51,16 @@ export type AnalysisFindings = {
   logo: Finding | null;
   google: Finding | null;
   pages: { url: string; readAt: string }[];
+  publicSources?: {
+    platform: "website" | "facebook" | "instagram" | "linkedin";
+    url: string;
+    source: string;
+    readAt: string;
+  }[];
+  readLimitations?: {
+    url: string;
+    reason: "pdf" | "other_host" | "not_selected" | "unreadable" | "dynamic";
+  }[];
 };
 
 export type AnalysisInput = { companyName: string; location: string; website: string };
@@ -128,7 +138,7 @@ export function ruleFirstFindings(read: { site: { url: string; readAt: string } 
     findings.push({ topic: "site_web", fact: "Votre site est en ligne et lisible.", consequence: "Paul peut s'appuyer sur ce qu'il présente pour vos premiers contenus.", certainty: "observe", source: read.site.url.slice(0, 600), readAt: read.site.readAt });
   }
   if (!read.site && !read.google) {
-    findings.push({ topic: "site_web", fact: "Paul n'a trouvé ni site ni fiche Google pour votre entreprise.", consequence: "Vos clients ont peu de moyens de vous trouver en ligne : c'est une première piste à vérifier avec vous.", certainty: "piste", source: null, readAt: null });
+    findings.push({ topic: "site_web", fact: "Aucun site ni fiche Google n'a pu être identifié lors de cette lecture.", consequence: "Vérifiez les liens avec Paul : une recherche sans résultat ne prouve pas une absence de présence en ligne.", certainty: "piste", source: null, readAt: null });
   }
   return findings;
 }
@@ -284,6 +294,16 @@ const analysisSchema = z.object({
     trade: findingSchema.nullable(), servingArea: findingSchema.nullable(), targetClients: findingSchema.nullable(), offers: findingSchema.nullable(),
     tone: findingSchema.nullable(), contacts: z.array(findingSchema).max(10), palette: z.object({ value: z.array(z.string().regex(/^#[0-9a-f]{6}$/)).max(10), provenance: provenanceSchema }).nullable(),
     logo: findingSchema.nullable(), google: findingSchema.nullable(), pages: z.array(z.object({ url: z.string().max(600), readAt: z.string().max(40) })).max(5),
+    publicSources: z.array(z.object({
+      platform: z.enum(["website", "facebook", "instagram", "linkedin"]),
+      url: z.string().max(600),
+      source: z.string().max(600),
+      readAt: z.string().max(40)
+    })).max(11).optional(),
+    readLimitations: z.array(z.object({
+      url: z.string().max(600),
+      reason: z.enum(["pdf", "other_host", "not_selected", "unreadable", "dynamic"])
+    })).max(10).optional(),
   }),
   cost: z.object({ usd: z.number(), inputTokens: z.number(), outputTokens: z.number(), model: z.string().max(100).optional() }),
   limit: z.object({ scope: z.enum(["ip", "global"]), retryAt: z.string().max(40) }).optional(),

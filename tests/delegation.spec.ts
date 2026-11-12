@@ -2180,7 +2180,7 @@ function step4Draft(options: { read?: boolean; ambition?: string; terms?: Partia
     findings: { ...newAnalysis(input, "run-284").findings, offers: options.observedOffers ? observed(profile.offers) : null, targetClients: options.observedOffers ? observed(profile.targetClients) : null, trade: observed(profile.trade) },
   };
   return {
-    step: 4, profile, profileConfirmed: true, diagnosticReady: true, analysis,
+    step: 4, profile, socialSourceDecisions: [], profileConfirmed: true, diagnosticReady: true, analysis,
     ambition: { text: options.ambition ?? "+20 % de chiffre d'affaires en 12 mois", terms: { ...EMPTY_TERMS, gainPercent: 20, horizonMonths: 12, ...options.terms } },
     intelligence: options.intelligence ?? null,
   };
@@ -2247,7 +2247,7 @@ test("GH-284: step 4 missions are distinct, valid, sourced and the first one is 
   expect(noSite.map((mission) => [mission.template, mission.scopeLabel])).toEqual([
     ["site_page", "Rénovation électrique"], ["social_post", "dépannage"], ["custom", expect.stringContaining("Une action que vous menez vous-même")],
   ]);
-  expect(noSite[0].deduction).toBe("Vous visez +20 % de chiffre d'affaires en 12 mois : vous n'avez pas encore de page qui présente Rénovation électrique, pourtant le premier point d'entrée de vos clients.");
+  expect(noSite[0].deduction).toBe("Vous visez +20 % de chiffre d'affaires en 12 mois : vérifiez d'abord si une page présente déjà Rénovation électrique et permet de vous contacter, avant d'en créer une.");
   const google = starterPlan(step4Draft(), ["google_profile", "review_reply"]).missions;
   expect(google.map((mission) => mission.scopeLabel)).toEqual(["Votre fiche Google", "Aucun avis choisi"]);
   // Valeurs par défaut du modèle d'action : agent et risque.
@@ -2272,7 +2272,7 @@ test("GH-284: the finding cites its origin — « Lu sur le site » only for val
   expect(starterPlan(step4Draft({ observedOffers: true }), ["custom"]).missions[0]).toMatchObject({ origin: ORIGIN_DECLARED, finding: "Votre ambition : +20 % de chiffre d'affaires en 12 mois. Vos clients : Particuliers propriétaires." });
 });
 
-const INTELLIGENCE_INPUT = { trade: "Électricien", servingArea: "Lyon et alentours", offers: "Rénovation électrique, dépannage", targetClients: "Particuliers propriétaires", ambitionText: "+20 % de chiffre d'affaires en 12 mois" };
+const INTELLIGENCE_INPUT = { companyName: "Atelier Lumen", location: "Lyon", website: SITE, trade: "Électricien", servingArea: "Lyon et alentours", offers: "Rénovation électrique, dépannage", targetClients: "Particuliers propriétaires", ambitionText: "+20 % de chiffre d'affaires en 12 mois" };
 const COMPETITOR_FACT = { name: "Électricité Dupont", fact: "a une note de 4,8/5 sur 120 avis Google", source: "https://maps.example/dupont" };
 const EVENT_FACT = { title: "Salon de l'habitat de Lyon", description: "Un salon local où rencontrer des clients intéressés par vos services.", source: "https://salon.example", isEvent: true, eventEndDate: "2026-12-01" };
 const PARTNERSHIP_FACT = { title: "Syndic du Parc", description: "Un syndic local qui recommande des électriciens à sa copropriété.", source: "https://syndic.example", isEvent: false, eventEndDate: null };
@@ -2297,7 +2297,7 @@ test("US #363 : une opportunité réelle (événement) remplace l'action génér
   expect(mission.title).toMatch(/^Participer à Salon de l'habitat de Lyon/);
   expect(mission.title).toContain("2026-12-01");
   expect(mission.finding).toContain("Source : https://salon.example");
-  expect(mission.origin).toBe(ORIGIN_DECLARED);
+  expect(mission.origin).toBe("Recherche publique, à vérifier");
   expect(validateNewMission(mission, 0)).toMatchObject({ ok: true });
 });
 
@@ -2315,13 +2315,12 @@ test("US #363 : sans opportunité trouvée, la mission « Sur mesure » reste ce
   expect(withEmptyIntelligence).toEqual(withoutIntelligence);
 });
 
-test("US #363 : un concurrent réel enrichit la déduction de la publication, jamais en le dévalorisant", () => {
+test("US #363 : un concurrent ne justifie pas artificiellement une publication", () => {
   const intelligence = doneIntelligence({ competitor: COMPETITOR_FACT });
   const mission = starterPlan(step4Draft({ intelligence }), ["social_post"]).missions[0];
-  expect(mission.deduction).toContain("Électricité Dupont");
-  expect(mission.deduction).toContain("s'en inspirer peut vous aider à vous démarquer");
-  expect(mission.deduction).not.toMatch(/\b(mauvais|moins bien|pire)\b/i);
-  expect(mission.finding).toContain("Source : https://maps.example/dupont");
+  expect(mission).toEqual(starterPlan(step4Draft(), ["social_post"]).missions[0]);
+  expect(mission.deduction).not.toContain("Électricité Dupont");
+  expect(mission.finding).not.toContain(COMPETITOR_FACT.source);
   expect(validateNewMission(mission, 0)).toMatchObject({ ok: true });
 });
 
@@ -2590,15 +2589,14 @@ async function startFakeSite() {
   return { hits, deps: { resolve, fetchImpl, now: () => new Date("2026-11-07T10:00:00.000Z") }, close: () => new Promise<void>((done) => { server.closeAllConnections(); server.close(() => done()); }) };
 }
 
-test("GH-280: the home page and at most two internal pages of the same host are read, with text, palette and logo", async () => {
+test("GH-280/GH-368: the home page and up to four internal pages of the same host are read, with text, palette and logo", async () => {
   const site = await startFakeSite();
   try {
     const result = await readPublicSite("https://atelier-lumen.test/", site.deps);
     expect(result).toMatchObject({ ok: true, url: "https://atelier-lumen.test/", readAt: "2026-11-07T10:00:00.000Z" });
     if (!result.ok) throw new Error("site");
-    // Trois requêtes au plus : l'accueil, contact et prestations ; ni les tarifs (troisième page), ni l'autre site.
-    expect(site.hits.sort()).toEqual(["/", "/contact", "/nos-prestations"]);
-    expect(result.pages.map((page) => page.url)).toEqual(["https://atelier-lumen.test/", "https://atelier-lumen.test/contact", "https://atelier-lumen.test/nos-prestations"]);
+    expect(site.hits.sort()).toEqual(["/", "/contact", "/nos-prestations", "/tarifs"]);
+    expect(result.pages.map((page) => page.url)).toEqual(["https://atelier-lumen.test/", "https://atelier-lumen.test/contact", "https://atelier-lumen.test/nos-prestations", "https://atelier-lumen.test/tarifs"]);
     expect(result.pages[0].title).toBe("Atelier Lumen · Électricien à Lyon");
     expect(result.pages[0].text).toContain("Électricien à Lyon et Villeurbanne depuis 2009.");
     expect(result.pages[0].text).toContain("Rénovation électrique & dépannage pour les particuliers.");
@@ -2610,7 +2608,7 @@ test("GH-280: the home page and at most two internal pages of the same host are 
   }
   const base = new URL("https://atelier-lumen.test/");
   expect(pickInternalPages(extractLinks('<a href="/tarifs">Tarifs</a><a href="/services">Services</a><a href="/contact#form">Contact</a><a href="/contact">Contact</a>', base), base).map(String))
-    .toEqual(["https://atelier-lumen.test/contact", "https://atelier-lumen.test/services"]);
+    .toEqual(["https://atelier-lumen.test/contact", "https://atelier-lumen.test/services", "https://atelier-lumen.test/tarifs"]);
   expect(extractPalette('<div style="color:#fff;background:#000;border-color:#ccc"></div>')).toEqual([]);
   expect(extractLogo('<meta property="og:image" content="https://atelier-lumen.test/og.jpg"><link rel="apple-touch-icon" href="/apple.png">', base)).toBe("https://atelier-lumen.test/apple.png");
   expect(extractLogo('<link rel="icon" href="javascript:alert(1)">', base)).toBeNull();

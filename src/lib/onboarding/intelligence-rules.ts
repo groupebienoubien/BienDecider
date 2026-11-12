@@ -6,7 +6,7 @@ import { z } from "zod";
  * en plus simple : deux faits au lieu de quatre rubriques, et aucune extraction du site.
  */
 
-export type IntelligenceInput = { trade: string; servingArea: string; offers: string; targetClients: string; ambitionText: string };
+export type IntelligenceInput = { companyName?: string; location?: string; website?: string; trade: string; servingArea: string; offers: string; targetClients: string; ambitionText: string };
 
 export type CompetitorFact = { name: string; fact: string; source: string };
 export type OpportunityFact = { title: string; description: string; source: string; isEvent: boolean; eventEndDate: string | null };
@@ -35,6 +35,8 @@ export const INTELLIGENCE_STALE_MS = 90_000;
 export const INTELLIGENCE_MESSAGES = {
   limited: "Paul a atteint sa limite de recherches pour aujourd'hui : ce n'est pas une panne. Vos pistes restent fondées sur ce que vous avez déjà confirmé.",
   busy: "Paul recherche déjà votre secteur. Patientez quelques secondes.",
+  failed: "La recherche de marché n'a pas abouti. Les pistes ci-dessous restent exploratoires, fondées sur votre profil : elles ne constituent pas une analyse approfondie.",
+  missing: "Aucune recherche de marché à jour n'est disponible pour ce profil. Les pistes ci-dessous restent exploratoires ; revenez à votre ambition pour relancer la recherche.",
 } as const;
 
 export function newIntelligence(input: IntelligenceInput, runId: string, now = new Date(), status: DraftIntelligence["status"] = "running", limit?: IntelligenceLimit): DraftIntelligence {
@@ -65,8 +67,12 @@ export function needsNewIntelligence(current: DraftIntelligence | null, input: I
   if (!current) return true;
   if (intelligenceRunning(current, now)) return false;
   if (current.status === "limited" || current.status === "running" || current.status === "failed") return true;
-  return current.input.trade !== input.trade || current.input.servingArea !== input.servingArea || current.input.offers !== input.offers
-    || current.input.targetClients !== input.targetClients || current.input.ambitionText !== input.ambitionText;
+  return !sameIntelligenceInput(current.input, input);
+}
+
+export function sameIntelligenceInput(left: IntelligenceInput, right: IntelligenceInput): boolean {
+  const fields = ["companyName", "location", "website", "trade", "servingArea", "offers", "targetClients", "ambitionText"] as const;
+  return fields.every((field) => (left[field] ?? "") === (right[field] ?? ""));
 }
 
 function limitScope(limit: IntelligenceLimit): string {
@@ -77,7 +83,8 @@ export function intelligenceNotice(intelligence: DraftIntelligence | null, now =
   const shown = effectiveIntelligence(intelligence, now);
   if (!shown || shown.status === "running") return null;
   if (shown.status === "limited") return `Limite de recherches du jour atteinte ${shown.limit ? limitScope(shown.limit) : "pour l'ensemble des visiteurs"} : ${INTELLIGENCE_MESSAGES.limited}`;
-  if (shown.status === "failed") return INTELLIGENCE_MESSAGES.limited.replace("Paul a atteint sa limite de recherches pour aujourd'hui", "La recherche n'a pas pu aboutir");
+  if (shown.status === "failed") return INTELLIGENCE_MESSAGES.failed;
+  if (!shown.competitor && !shown.opportunity) return "La recherche n'a retenu aucun repère de marché suffisamment solide. Les pistes restent fondées sur votre profil, pas sur une comparaison concurrentielle.";
   return null;
 }
 
@@ -105,7 +112,7 @@ const intelligenceSchema = z.object({
   status: z.enum(["running", "done", "limited", "failed"]),
   startedAt: z.string().max(40),
   finishedAt: z.string().max(40).nullable(),
-  input: z.object({ trade: z.string(), servingArea: z.string(), offers: z.string(), targetClients: z.string(), ambitionText: z.string() }),
+  input: z.object({ companyName: z.string().optional(), location: z.string().optional(), website: z.string().optional(), trade: z.string(), servingArea: z.string(), offers: z.string(), targetClients: z.string(), ambitionText: z.string() }),
   competitor: competitorSchema.nullable(),
   opportunity: opportunitySchema.nullable(),
   cost: z.object({ usd: z.number(), inputTokens: z.number(), outputTokens: z.number(), model: z.string().max(100).optional() }),

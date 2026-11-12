@@ -1,8 +1,10 @@
 import { MISSION_TEMPLATES, availableTemplates, enabledChannels, type TemplateKey } from "@/lib/missions/templates";
 import { ANALYSIS_MESSAGES, RUBRIC_KEYS, RUBRIC_NAMES, analysisFinished, analysisRunning, readAnalysis, type DraftAnalysis, type Provenance } from "@/lib/onboarding/analysis-rules";
 import { EMPTY_TERMS, REINTERPRET_MESSAGE, capLabel, readAmbitionTerms, type AmbitionTerms } from "@/lib/ambition-rules";
-import { readIntelligence, type CompetitorFact, type DraftIntelligence, type OpportunityFact } from "@/lib/onboarding/intelligence-rules";
+import { INTELLIGENCE_MESSAGES, intelligenceRunning, readIntelligence, sameIntelligenceInput, type CompetitorFact, type DraftIntelligence, type IntelligenceInput, type OpportunityFact } from "@/lib/onboarding/intelligence-rules";
 import type { ResponsibleAgent } from "@/lib/missions/rules";
+import { safeSourceUrl } from "@/lib/findings/certainty";
+import { decideSocialSources, readSocialSourceDecisions, type SocialSourceDecision } from "@/lib/onboarding/public-sources";
 
 /** Vérifie le jeton d'une interprétation (`verifyInterpretation` côté serveur) ; injecté, car ce module est aussi lu par le client. */
 export type InterpretationVerifier = (text: string, terms: AmbitionTerms, token: unknown) => boolean;
@@ -41,6 +43,7 @@ export type DraftAmbition = { text: string; terms: AmbitionTerms; retained?: str
 export type DraftState = {
   step: DraftStep;
   profile: DraftProfile;
+  socialSourceDecisions: SocialSourceDecision[];
   ambition: DraftAmbition | null;
   profileConfirmed: boolean;
   diagnosticReady: boolean;
@@ -82,7 +85,7 @@ export const ONBOARDING_MESSAGES = {
   "M-12": "Le mot de passe doit contenir au moins 8 caractères.",
   "M-13": "Les deux mots de passe ne correspondent pas.",
 } as const;
-export type OnboardingCode = keyof typeof ONBOARDING_MESSAGES | "M-16" | "markup" | "analysis" | "reinterpret";
+export type OnboardingCode = keyof typeof ONBOARDING_MESSAGES | "M-16" | "markup" | "analysis" | "intelligence" | "reinterpret";
 
 /** Adresse déjà utilisée (FR-9 prévaut sur M-14) : le message ne dit pas qu'un compte existe. */
 export const ADDRESS_UNAVAILABLE_MESSAGE = "Nous ne pouvons pas créer de compte avec cette adresse. Si vous avez déjà un compte, retrouvez-le avec la connexion.";
@@ -119,7 +122,7 @@ export function emptyProfile(): DraftProfile {
 }
 
 export function emptyDraft(): DraftState {
-  return { step: 1, profile: emptyProfile(), ambition: null, profileConfirmed: false, diagnosticReady: false, analysis: null, intelligence: null };
+  return { step: 1, profile: emptyProfile(), socialSourceDecisions: [], ambition: null, profileConfirmed: false, diagnosticReady: false, analysis: null, intelligence: null };
 }
 
 /** Page de l'étape courante (spécification §1.4, addendum §9). */
@@ -242,11 +245,11 @@ export function checkAmbition(value: unknown): { ok: true; ambition: string } | 
 export type DraftAction =
   | { action: "discover"; firstName?: unknown; companyName?: unknown; location?: unknown; website?: unknown }
   | { action: "see_findings" }
-  | { action: "confirm_profile"; trade?: unknown; servingArea?: unknown; targetClients?: unknown; offers?: unknown }
+  | { action: "confirm_profile"; trade?: unknown; servingArea?: unknown; targetClients?: unknown; offers?: unknown; website?: unknown; socialSourceDecisions?: unknown }
   | { action: "interpret_ambition"; ambition?: unknown }
   | { action: "confirm_ambition"; ambition?: unknown; terms?: unknown; token?: unknown }
   | { action: "interested" }
-  | { action: "back"; step: unknown }
+  | { action: "back"; step: unknown; website?: unknown }
   | { action: "goto"; step: unknown };
 
 export const DRAFT_ACTIONS = ["discover", "see_findings", "confirm_profile", "interpret_ambition", "confirm_ambition", "interested", "back", "goto"] as const;
@@ -276,7 +279,31 @@ function back(state: DraftState, step: DraftStep): DraftState {
 /** L'analyse porte-t-elle sur l'entreprise saisie (nom, localisation, site) ? */
 export function analysisMatchesProfile(state: DraftState): boolean {
   const input = state.analysis?.input;
-  return input !== undefined && input.companyName === state.profile.companyName && input.location === state.profile.location && input.website === state.profile.website;
+  if (state.profileConfirmed && !state.profile.website && discoveredWebsite(state.analysis)) return false;
+  return input !== undefined && input.companyName === state.profile.companyName && input.location === state.profile.location
+    && (input.website === state.profile.website || (!input.website && discoveredWebsite(state.analysis) === state.profile.website));
+}
+
+function discoveredWebsite(analysis: DraftAnalysis | null): string {
+  const url = analysis?.status === "done" && analysis.rubrics.site.status === "read" ? analysis.findings.pages[0]?.url : "";
+  return url && url.length <= LIMITS.website && isValidWebsite(url) ? url : "";
+}
+
+export function prefillWebsite(state: DraftState): string {
+  return state.profile.website || (!state.profileConfirmed && analysisMatchesProfile(state) ? discoveredWebsite(state.analysis) : "");
+}
+
+export function intelligenceInputFor(state: DraftState): IntelligenceInput {
+  const { profile } = state;
+  return {
+    companyName: profile.companyName, location: profile.location, website: prefillWebsite(state),
+    trade: profile.trade, servingArea: profile.servingArea, offers: profile.offers,
+    targetClients: profile.targetClients, ambitionText: state.ambition?.text ?? "",
+  };
+}
+
+export function matchingIntelligence(state: DraftState): DraftIntelligence | null {
+  return state.intelligence && sameIntelligenceInput(state.intelligence.input, intelligenceInputFor(state)) ? state.intelligence : null;
 }
 
 /** L'étape n est-elle ouverte depuis l'étape n - 1 (étape précédente confirmée) ? */
@@ -284,6 +311,7 @@ function previousConfirmed(state: DraftState, step: DraftStep, now: Date): boole
   if (step === 1) return true;
   if (step === 2) return discoveryDone(state.profile) && analysisFinished(state.analysis, now) && analysisMatchesProfile(state);
   if (step === 3) return state.profileConfirmed;
+  if (step === 5 && intelligenceRunning(state.intelligence, now)) return false;
   return state.diagnosticReady;
 }
 
@@ -315,7 +343,30 @@ export function applyDraftAction(state: DraftState, request: DraftAction, now = 
       if (state.step !== 2) return { ok: false, kind: "wrong_step", step: state.step };
       const checked = checkProfile(request);
       if (!checked.ok) return invalid(checked);
-      return { ok: true, state: { ...state, step: 3, profile: { ...state.profile, ...checked.values }, profileConfirmed: true } };
+      const website = request.website === undefined ? state.profile.website : text(request.website);
+      const failure = checkFields([{ field: "website", value: website, max: LIMITS.website, missing: "M-04", optional: true }]);
+      if (failure) return invalid(failure);
+      const socialSourceDecisions = decideSocialSources(
+        state.analysis?.findings.publicSources ?? [],
+        request.socialSourceDecisions ?? []
+      );
+      if (!socialSourceDecisions) {
+        return invalid({
+          code: "M-05",
+          error: "Vérifiez ou écartez chaque lien social repéré.",
+          errors: {}
+        });
+      }
+      return {
+        ok: true,
+        state: {
+          ...state,
+          step: 3,
+          profile: { ...state.profile, ...checked.values, website },
+          socialSourceDecisions,
+          profileConfirmed: true
+        }
+      };
     }
     case "interpret_ambition": {
       // L'interprétation n'est jamais enregistrée : la route renvoie la reformulation et son jeton, le brouillon reste tel quel.
@@ -335,11 +386,28 @@ export function applyDraftAction(state: DraftState, request: DraftAction, now = 
     }
     case "interested": {
       if (state.step !== 4 || !state.diagnosticReady) return state.step === 4 ? invalidCode("M-08") : { ok: false, kind: "wrong_step", step: state.step };
+      if (intelligenceRunning(state.intelligence, now)) return { ok: false, kind: "busy", error: INTELLIGENCE_MESSAGES.busy };
       return { ok: true, state: { ...state, step: 5 } };
     }
     case "back": {
       if (!isDraftStep(request.step) || request.step >= state.step) return { ok: false, kind: "wrong_step", step: state.step };
-      return { ok: true, state: back(state, request.step) };
+      const next = back(state, request.step);
+      if (request.step === 1 && request.website !== undefined) {
+        const website = text(request.website);
+        const failure = checkFields([{ field: "website", value: website, max: LIMITS.website, missing: "M-04", optional: true }]);
+        if (failure) return invalid(failure);
+        const changed = website !== state.profile.website;
+        return {
+          ok: true,
+          state: {
+            ...next,
+            profile: { ...next.profile, website },
+            profileConfirmed: changed ? false : next.profileConfirmed,
+            socialSourceDecisions: changed ? [] : next.socialSourceDecisions
+          }
+        };
+      }
+      return { ok: true, state: next };
     }
     case "goto": {
       if (!isDraftStep(request.step)) return { ok: false, kind: "wrong_step", step: state.step };
@@ -378,9 +446,10 @@ export function isValidEmail(value: string): boolean {
 }
 
 /** Le brouillon permet-il de créer le compte (M-09, M-03, M-10) ? */
-export function checkDraftForAccount(state: DraftState): { ok: true } | { ok: false; code: OnboardingCode; error: string; step: DraftStep } {
+export function checkDraftForAccount(state: DraftState, now = new Date()): { ok: true } | { ok: false; code: OnboardingCode; error: string; step: DraftStep } {
   if (!state.profile.firstName) return { ok: false, code: "M-09", error: ONBOARDING_MESSAGES["M-09"], step: 1 };
   if (!state.profile.companyName) return { ok: false, code: "M-03-company", error: ONBOARDING_MESSAGES["M-03-company"], step: 1 };
+  if (intelligenceRunning(state.intelligence, now)) return { ok: false, code: "intelligence", error: INTELLIGENCE_MESSAGES.busy, step: 4 };
   if (state.step !== 5 || !state.diagnosticReady || !state.profileConfirmed) return { ok: false, code: "M-10", error: ONBOARDING_MESSAGES["M-10"], step: state.step };
   return { ok: true };
 }
@@ -398,10 +467,11 @@ export function clip(value: string, max: number): string {
 
 export const ORIGIN_SITE = "Lu sur le site";
 export const ORIGIN_DECLARED = "Vous nous avez dit";
-export type StarterOrigin = typeof ORIGIN_SITE | typeof ORIGIN_DECLARED;
+export const ORIGIN_RESEARCH = "Recherche publique, à vérifier";
+export type StarterOrigin = typeof ORIGIN_SITE | typeof ORIGIN_DECLARED | typeof ORIGIN_RESEARCH;
 export const FIRST_BADGE = "À examiner en premier";
 export const SITE_NOT_READ_NOTICE = "Paul n'a pas pu lire votre site : ce qui suit repose sur ce que vous nous avez dit.";
-export const SITE_NOT_GIVEN_NOTICE = "Sans site indiqué, Paul s'est fondé sur vos réponses.";
+export const SITE_NOT_GIVEN_NOTICE = "Aucun site n'a été lu pour cette analyse. Cela ne signifie pas que votre entreprise n'en possède pas.";
 export const TARGET_NOTICE = "C'est une cible, pas une promesse de résultat.";
 
 /** Modèles jamais proposés à l'étape 4 : aucune liste d'agences n'existe avant le compte. */
@@ -473,7 +543,7 @@ export function starterReserves(state: DraftState): string[] {
   const reserves: string[] = [];
   const analysis = analysisMatchesProfile(state) ? state.analysis : null;
   const unread = analysis ? RUBRIC_KEYS.filter((key) => analysis.rubrics[key].status !== "read").map((key) => RUBRIC_NAMES[key]) : [];
-  if (!state.profile.website) reserves.push("aucun site indiqué");
+  if (!state.profile.website && !siteWasRead(state)) reserves.push("aucun site indiqué");
   else if (!analysis) reserves.push("votre site n'a pas été lu");
   else if (unread.length) reserves.push(`rubriques non lues (${unread.join(", ")})`);
   const toConfirm = (Object.keys(PROFILE_FIELD_WORDS) as ProfileField[]).filter((field) => confirmedOrigin(state, field) === "hypothesis").map((field) => PROFILE_FIELD_WORDS[field]);
@@ -603,6 +673,15 @@ export function starterFacts(intelligence: DraftIntelligence | null): StarterFac
   return intelligence?.status === "done" ? { competitor: intelligence.competitor, opportunity: intelligence.opportunity } : NO_FACTS;
 }
 
+export function starterMarketFinding(state: DraftState) {
+  const { competitor } = starterFacts(matchingIntelligence(state));
+  if (!competitor) return null;
+  return {
+    category: "concurrence", title: clip(competitor.name, 80), content: competitor.fact,
+    sourceUrl: safeSourceUrl(competitor.source), sourceStatus: null, certainty: "a_verifier" as const,
+  };
+}
+
 /** Corps d'une mission de l'étape 4 : constat, déduction, titre, résultat et périmètre propres au modèle. */
 function starterBody(key: TemplateKey, state: DraftState, facts: StarterFacts = NO_FACTS): Pick<StarterMission, "title" | "outcome" | "finding" | "scope" | "deduction" | "origin"> & { stopRuleDays?: number } {
   const { profile } = state;
@@ -613,11 +692,9 @@ function starterBody(key: TemplateKey, state: DraftState, facts: StarterFacts = 
   switch (key) {
     case "site_page": {
       const read = siteWasRead(state);
-      const situation = !profile.website ? "Vous n'avez pas indiqué de site internet." : read ? `Vous visez : ${clip(cap, 150)}.` : "Paul n'a pas pu lire votre site.";
-      const deduction = !profile.website
-        ? `Vous visez ${clip(cap, 100)} : vous n'avez pas encore de page qui présente ${offerShort}, pourtant le premier point d'entrée de vos clients.`
-        : !read
-          ? `Vous visez ${clip(cap, 100)} : votre site n'a pas pu être lu, mais une page claire sur ${offerShort} reste le premier point d'entrée de vos clients.`
+      const situation = read ? `Vous visez : ${clip(cap, 150)}.` : !profile.website ? "Aucun site n'a été lu ; son existence reste à vérifier." : "Paul n'a pas pu lire votre site.";
+      const deduction = !read
+          ? `Vous visez ${clip(cap, 100)} : vérifiez d'abord si une page présente déjà ${offerShort} et permet de vous contacter, avant d'en créer une.`
           : ambitionTargetsRequests(ambitionText)
             ? `Vous visez ${clip(cap, 100)} : une page claire sur ${offerShort} donne à vos clients un point d'entrée direct pour vous contacter.`
             : `Vous visez ${clip(cap, 100)} : une page dédiée à ${offerShort} donne à vos clients de ${clip(profile.servingArea || profile.location, 50)} un point d'entrée de plus.`;
@@ -663,11 +740,6 @@ function starterBody(key: TemplateKey, state: DraftState, facts: StarterFacts = 
         finding = clip(`Vos clients : ${clip(profile.targetClients, 100)}. Votre offre : ${clip(offer, 100)}.`, 300);
         deduction = `Vous visez ${clip(cap, 90)} : un avis ou une réalisation récente sur ${topicShort} prouve votre savoir-faire à ${clip(profile.targetClients, 50)}, autrement qu'une page de présentation.`;
       }
-      // Fait de marché réel trouvé par la recherche (#362) : renforce la raison sans jamais dévaloriser le concurrent cité.
-      if (facts.competitor) {
-        deduction = clip(`${deduction} À proximité, ${clip(facts.competitor.name, 60)} ${clip(facts.competitor.fact, 100)} : s'en inspirer peut vous aider à vous démarquer.`, 300);
-        finding = clip(`${finding} Source : ${facts.competitor.source}`, 300);
-      }
       return {
         title: clip(title, 80), outcome: MISSION_TEMPLATES.social_post.defaultOutcome,
         finding, scope: { topic },
@@ -701,7 +773,7 @@ function starterBody(key: TemplateKey, state: DraftState, facts: StarterFacts = 
           finding: clip(`${opportunity.description} Source : ${opportunity.source}`, 300),
           scope: { description: clip(`${opportunity.isEvent ? "Participer à" : "Prendre contact avec"} ${opportunity.title} : ${opportunity.description}`, 300) }, stopRuleDays: 30,
           deduction: clip(`Vous visez ${clip(cap, 100)} : ${opportunity.description}`, 500),
-          origin: ORIGIN_DECLARED,
+          origin: ORIGIN_RESEARCH,
         };
       }
       return {
@@ -723,11 +795,11 @@ function starterBody(key: TemplateKey, state: DraftState, facts: StarterFacts = 
 export function starterPlan(state: DraftState, available?: readonly TemplateKey[]): StarterPlan {
   const { profile } = state;
   const notes: string[] = [];
-  if (!profile.website) notes.push(SITE_NOT_GIVEN_NOTICE);
+  if (!profile.website && !siteWasRead(state)) notes.push(SITE_NOT_GIVEN_NOTICE);
   else if (!siteWasRead(state)) notes.push(SITE_NOT_READ_NOTICE);
   const missing = missingTerms(state.ambition?.terms);
   if (missing.length) notes.push(`La cible reste à préciser : ${missing.join(" et ")} ${missing.length > 1 ? "ne sont pas indiqués" : "n'est pas indiqué"}.`);
-  const facts = starterFacts(state.intelligence);
+  const facts = starterFacts(matchingIntelligence(state));
   const missions = rankStarterTemplates(state, available).map((key, index): StarterMission => {
     const template = MISSION_TEMPLATES[key];
     const raw = starterBody(key, state, facts);
@@ -756,7 +828,10 @@ export function starterPlan(state: DraftState, available?: readonly TemplateKey[
 export function readDraftState(row: { step: number; profile: unknown; ambition: unknown; profileConfirmed: boolean; diagnosticReady: boolean; analysis?: unknown; intelligence?: unknown }): DraftState {
   const raw = row.profile !== null && typeof row.profile === "object" && !Array.isArray(row.profile) ? (row.profile as Record<string, unknown>) : {};
   const profile = emptyProfile();
-  for (const key of Object.keys(profile) as (keyof DraftProfile)[]) profile[key] = typeof raw[key] === "string" ? (raw[key] as string) : "";
+  for (const key of ["firstName", "companyName", "location", "website", "trade", "servingArea", "targetClients", "offers"] as const) {
+    profile[key] = typeof raw[key] === "string" ? (raw[key] as string) : "";
+  }
+  const socialSourceDecisions = readSocialSourceDecisions(raw.socialSourceDecisions);
   const ambitionRaw = row.ambition !== null && typeof row.ambition === "object" && !Array.isArray(row.ambition) ? (row.ambition as Record<string, unknown>) : {};
   // « Ce que nous retenons » et son coût (#284) : illisibles, ils sont ignorés (les règles prennent le relais à l'étape 4).
   const retained = readRetained(ambitionRaw.retained);
@@ -764,6 +839,7 @@ export function readDraftState(row: { step: number; profile: unknown; ambition: 
   return {
     step: isDraftStep(row.step) ? row.step : 1,
     profile,
+    socialSourceDecisions,
     // Une ambition d'avant #282 (texte seul) garde des éléments vides.
     ambition: typeof ambitionRaw.text === "string"
       ? { text: ambitionRaw.text, terms: readAmbitionTerms(ambitionRaw.terms) ?? { ...EMPTY_TERMS }, ...(retained ? { retained } : {}), ...(retainedCost ? { retainedCost } : {}) }
@@ -802,7 +878,7 @@ export function prefillProfile(state: DraftState): ProfilePrefill {
   const values = { trade: "", servingArea: "", targetClients: "", offers: "" };
   const origins = { trade: "missing", servingArea: "missing", targetClients: "missing", offers: "missing" } as ProfilePrefill["origins"];
   for (const field of fields) {
-    const found = state.analysis?.findings[field];
+    const found = analysisMatchesProfile(state) ? state.analysis?.findings[field] : null;
     if (state.profile[field]) [values[field], origins[field]] = [state.profile[field], "declared"];
     else if (found?.value) [values[field], origins[field]] = [clip(found.value, LIMITS[field]), found.provenance.kind];
     // Une localisation n'est pas une zone d'intervention : la reprendre est une proposition de Paul, à confirmer.

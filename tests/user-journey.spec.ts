@@ -7,7 +7,9 @@ import { encryptGmailToken } from "../src/lib/oauth/gmail";
 import { companyProfileLines, objectiveLine } from "../src/lib/agents/personas";
 import { getRejectionContext } from "../src/lib/agents/rejection-context";
 import { createSessionToken } from "../src/lib/session-token";
-import { createTestDraft, discoverThenSeeFindings, interpretThenConfirmAmbition, testIpHeader } from "./support/onboarding-draft";
+import { createTestDraft, discoverThenSeeFindings, interpretThenConfirmAmbition, testIpHeader, waitForIntelligence } from "./support/onboarding-draft";
+import { intelligenceInputFor, readDraftState } from "../src/lib/onboarding/draft-rules";
+import { INTELLIGENCE_MESSAGES, newIntelligence } from "../src/lib/onboarding/intelligence-rules";
 
 config({ quiet: true });
 
@@ -2734,8 +2736,34 @@ async function draftToAccountStep(page: Page) {
   const post = (data: Record<string, unknown>) => page.request.post(`${baseURL}/api/bienvenue`, { headers: { Origin: baseURL }, data });
   expect((await post({ action: "confirm_profile", trade: "Électricien", servingArea: "Lyon", targetClients: "Particuliers", offers: "Rénovation électrique" })).status(), "confirm_profile").toBe(200);
   expect((await interpretThenConfirmAmbition(page.request, baseURL, "Plus de chantiers cette année")).confirmed.status(), "confirm_ambition").toBe(200);
+  await waitForIntelligence(page.request, baseURL);
   expect((await post({ action: "interested" })).status(), "interested").toBe(200);
 }
+
+test("onboarding quality: no missions or account shortcut while research is running; failure is explicit", async ({ page }) => {
+  const prisma = journeyDatabase();
+  const draft = await createTestDraft(prisma, { step: 4 });
+  try {
+    const row = await prisma.onboardingDraft.findUniqueOrThrow({ where: { id: draft.id } });
+    const intelligence = newIntelligence(intelligenceInputFor(readDraftState(row)), randomUUID());
+    await prisma.onboardingDraft.update({ where: { id: draft.id }, data: { intelligence } });
+    await page.context().addCookies([{ name: "pepito_draft", value: draft.token, url: baseURL, httpOnly: true, sameSite: "Lax" }]);
+    await page.goto(`${baseURL}/bienvenue/missions`);
+    await expect(page.getByRole("status")).toContainText("Vos pistes seront affichées à la fin");
+    await expect(page.getByRole("list", { name: "Trois premières pistes" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Ça m'intéresse" })).toHaveCount(0);
+    for (const data of [{ action: "interested" }, { action: "goto", step: 5 }]) {
+      expect((await page.request.post(`${baseURL}/api/bienvenue`, { headers: { Origin: baseURL }, data })).status()).toBe(409);
+    }
+    await prisma.onboardingDraft.update({ where: { id: draft.id }, data: { intelligence: { ...intelligence, status: "failed", finishedAt: new Date().toISOString() } } });
+    await expect(page.getByRole("status")).toContainText(INTELLIGENCE_MESSAGES.failed, { timeout: 10_000 });
+    await expect(page.getByRole("button", { name: "Ça m'intéresse" })).toBeVisible();
+    expect(await noHorizontalScroll(page)).toBe(true);
+  } finally {
+    await prisma.onboardingDraft.deleteMany({ where: { id: draft.id } });
+    await prisma.$disconnect();
+  }
+});
 
 test("GH-279: five anonymous steps, back and reload keep the answers, and the account comes last", async ({ page }) => {
   test.setTimeout(120000);
@@ -2817,7 +2845,7 @@ test("GH-279: five anonymous steps, back and reload keep the answers, and the ac
     await expect(page).toHaveURL(`${baseURL}/bienvenue/missions`);
     await expect(stepHeading(page, "Un cap. Trois premières pistes.")).toBeFocused();
     const pistes = page.getByRole("list", { name: "Trois premières pistes" }).getByRole("listitem");
-    await expect(pistes).toHaveCount(3);
+    await expect(pistes).toHaveCount(3, { timeout: 95_000 });
     await expect(pistes.first()).toContainText("Résultat recherché");
     // #284 : rappel, « Ce que nous retenons », la première piste repérée, l'origine et le périmètre de chaque piste.
     await expect(page.getByRole("heading", { name: "Ce que nous retenons" })).toBeVisible();
@@ -2845,7 +2873,7 @@ test("GH-279: five anonymous steps, back and reload keep the answers, and the ac
     await expect(page.getByLabel("Votre ambition")).toHaveValue("+20 % de chiffre d'affaires en 12 mois, sans embaucher");
     await page.getByRole("button", { name: "Interpréter" }).click();
     await page.getByRole("button", { name: "C'est bien ça" }).click();
-    await page.getByRole("button", { name: "Ça m'intéresse" }).click();
+    await page.getByRole("button", { name: "Ça m'intéresse" }).click({ timeout: 95_000 });
     await expect(page).toHaveURL(`${baseURL}/bienvenue/compte`);
     await expect(stepHeading(page, "Retrouvez votre stratégie.")).toBeFocused();
     expect(await prisma.company.count({ where: { ownerEmail: email } })).toBe(0);
@@ -3087,7 +3115,7 @@ test("GH-280: step 2 shows Paul's hypotheses and what was observed, with its sou
     await expect(seen).toContainText("Chaque champ ci-dessous indique d'où vient sa valeur");
     const contact = seen.getByRole("listitem").filter({ hasText: "contact@atelier-lumen.test" });
     await expect(contact).toContainText("Observé sur atelier-lumen.test le 7 novembre 2026");
-    await expect(seen.getByRole("link", { name: "Votre fiche Google" })).toHaveAttribute("href", "https://maps.google.com/?cid=42");
+    await expect(seen.getByRole("link", { name: "Fiche Google repérée, à vérifier", exact: true })).toHaveAttribute("href", "https://maps.google.com/?cid=42");
     expect(await noHorizontalScroll(page)).toBe(true);
   } finally {
     await prisma.onboardingDraft.deleteMany({ where: { id: draft.id } });

@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { currentSignupAvailability } from "@/lib/signup-control";
 import { SIGNUP_CLOSED_MESSAGE, SIGNUP_FULL_MESSAGE } from "@/lib/signup-rules";
-import { prefillFromPaul, prefillProfile } from "@/lib/onboarding/draft-rules";
+import { analysisMatchesProfile, prefillFromPaul, prefillProfile, prefillWebsite } from "@/lib/onboarding/draft-rules";
 import { analysisView, limitedStepNotice, type DraftAnalysis, type Finding, type FirstFinding } from "@/lib/onboarding/analysis-rules";
 import { CERTAINTY_LABELS } from "@/lib/findings/certainty";
 import { VISIT_TRACE_NOTICE } from "@/lib/onboarding/visit-trace-rules";
@@ -52,18 +52,52 @@ function FirstFindings({ constats }: { constats: FirstFinding[] }) {
 
 /** Ce que l'analyse a observé (source et date de lecture) ; rien n'est présenté comme observé sans avoir été lu. */
 function ObservedFindings({ analysis, guessed }: { analysis: DraftAnalysis; guessed: boolean }) {
-  const { contacts, palette, google } = analysis.findings;
-  if (!contacts.length && !palette && !google) return null;
+  const { contacts, palette, google, pages, publicSources = [], readLimitations = [] } = analysis.findings;
+  if (!contacts.length && !palette && !google && !pages.length && !publicSources.length && !readLimitations.length) return null;
   return (
     <section aria-labelledby="observed-title" className="mb-6 flex flex-col gap-3 rounded-lg bg-[var(--bd-cream)] p-4">
       <h2 id="observed-title" className="text-base font-semibold text-[var(--bd-ink)]">Ce que Paul a observé</h2>
       <ul className="flex flex-col gap-2 text-sm text-[var(--bd-ink)]">
+        {pages.map((page, index) => (
+          <li key={page.url}>
+            <a href={page.url} target="_blank" rel="noopener noreferrer" className="break-all font-semibold text-[var(--bd-brand)] underline">
+              {index === 0 ? "Site lu" : "Page consultée"} : {sourceName(page.url)}
+            </a>
+            <span className="block text-[var(--bd-muted)]">
+              Consulté le {readDate(page.readAt)}{index === 0 ? ". Vérifiez ci-dessous qu'il s'agit bien du vôtre." : "."}
+            </span>
+          </li>
+        ))}
+        {readLimitations.map((limitation) => (
+          <li key={`${limitation.url}:${limitation.reason}`} className="break-all">
+            <a href={limitation.url} target="_blank" rel="noopener noreferrer" className="font-semibold text-[var(--bd-brand)] underline">
+              Page non lue : {sourceName(limitation.url)}
+            </a>
+            <span className="block text-[var(--bd-muted)]">
+              {limitation.reason === "pdf" && "Document PDF non lu."}
+              {limitation.reason === "other_host" && "Page sur un autre hôte, non lue."}
+              {limitation.reason === "not_selected" && "Page pertinente hors de la sélection bornée."}
+              {limitation.reason === "unreadable" && "Page illisible ou inaccessible."}
+              {limitation.reason === "dynamic" && "Contenu probablement dynamique, lecture partielle."}
+            </span>
+          </li>
+        ))}
         {google && (
           <li>
-            <a href={google.value} target="_blank" rel="noopener noreferrer" className="font-semibold text-[var(--bd-brand)] underline">Votre fiche Google</a>
+            <a href={google.value} target="_blank" rel="noopener noreferrer" className="font-semibold text-[var(--bd-brand)] underline">Fiche Google repérée, à vérifier</a>
             <span className="block text-[var(--bd-muted)]">{observedLine(google)}</span>
           </li>
         )}
+        {publicSources.map((candidate) => (
+          <li key={`${candidate.platform}:${candidate.url}`} className="break-all">
+            <a href={candidate.url} target="_blank" rel="noopener noreferrer" className="font-semibold text-[var(--bd-brand)] underline">
+              {candidate.platform === "website" ? "Site candidat" : `Profil ${candidate.platform} candidat`} : {candidate.url}
+            </a>
+            <span className="block text-[var(--bd-muted)]">
+              Repéré sur {sourceName(candidate.source)}, le {readDate(candidate.readAt)}. À confirmer ou écarter.
+            </span>
+          </li>
+        ))}
         {contacts.map((contact) => (
           <li key={contact.value} className="break-words">
             <span className="font-semibold">Contact public : {contact.value}</span>
@@ -110,16 +144,24 @@ export default async function WelcomePage() {
   if (state.step === 2) {
     const prefill = prefillProfile(state);
     const guessed = prefillFromPaul(prefill);
+    const analysis = analysisMatchesProfile(state) ? state.analysis : null;
     return (
       <WelcomeFrame step={2} intro={<p>{state.profile.firstName}, {guessed ? `voici ce que Paul a compris de ${state.profile.companyName}. Vérifiez, corrigez ou complétez, puis confirmez.` : `décrivez en quelques mots l'activité de ${state.profile.companyName}. Complétez ou corrigez, puis confirmez.`}</p>}>
-        {state.analysis?.status === "limited" && (
+        {analysis?.status === "limited" && (
           <p role="status" className="mb-6 rounded-lg border border-[var(--bd-line-strong)] bg-[var(--bd-attention-light)] p-4 text-sm font-semibold text-[var(--bd-ink)]">
-            {limitedStepNotice(state.analysis.limit)}
+            {limitedStepNotice(analysis.limit)}
           </p>
         )}
-        {state.analysis?.constats && <FirstFindings constats={state.analysis.constats} />}
-        {state.analysis && <ObservedFindings analysis={state.analysis} guessed={guessed} />}
-        <ProfileForm key="profile" prefill={prefill} />
+        {analysis?.constats && <FirstFindings constats={analysis.constats} />}
+        {analysis && <ObservedFindings analysis={analysis} guessed={guessed} />}
+        <p className="mb-4 text-sm text-[var(--bd-muted)]">Cette première lecture couvre le site et les informations Google accessibles. Les publications Facebook, Instagram et LinkedIn ne sont pas analysées à cette étape.</p>
+        <ProfileForm
+          key="profile"
+          prefill={prefill}
+          website={prefillWebsite(state)}
+          publicSources={analysis?.findings.publicSources ?? []}
+          socialSourceDecisions={state.socialSourceDecisions}
+        />
       </WelcomeFrame>
     );
   }

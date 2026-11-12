@@ -4,15 +4,16 @@ import https from "node:https";
 import { isIP } from "node:net";
 import { Readable } from "node:stream";
 import zlib from "node:zlib";
+import { socialCandidatesFromLinks, type PublicSourceCandidate } from "./public-sources.ts";
 
 /**
  * Lecteur du site public d'une entreprise, avant tout compte (#280, spécification §1.3).
  * Protégé contre le SSRF : http(s) seulement, ports 80 et 443, chaque adresse résolue doit être publique
  * (IPv4 et IPv6), la connexion se fait à l'adresse vérifiée, chaque redirection (3 au plus) est revérifiée.
- * Chaque page : 8 secondes et 1 Mo au plus, `text/html` seulement. Accueil, plus deux pages internes du même hôte.
+ * Chaque page : 8 secondes et 1 Mo au plus, `text/html` seulement. Accueil, plus quatre pages internes au plus.
  */
 
-export const SITE_READ_LIMITS = { timeoutMs: 8_000, maxBytes: 1_000_000, maxRedirects: 3, internalPages: 2, textPerPage: 6_000 } as const;
+export const SITE_READ_LIMITS = { timeoutMs: 8_000, maxBytes: 1_000_000, maxRedirects: 3, internalPages: 4, textPerPage: 6_000 } as const;
 
 export type ResolvedAddress = { address: string; family: 4 | 6 };
 export type SiteResolver = (hostname: string) => Promise<ResolvedAddress[]>;
@@ -22,8 +23,21 @@ export type SiteReaderDeps = { resolve?: SiteResolver; fetchImpl?: SiteTransport
 
 export type SiteFailure = "refused" | "unreadable";
 export type SitePage = { url: string; title: string; text: string };
+export type SiteReadLimitation = {
+  url: string;
+  reason: "pdf" | "other_host" | "not_selected" | "unreadable" | "dynamic";
+};
 export type SiteReadResult =
-  | { ok: true; url: string; readAt: string; pages: SitePage[]; palette: string[]; logo: string | null }
+  | {
+      ok: true;
+      url: string;
+      readAt: string;
+      pages: SitePage[];
+      socialSources?: PublicSourceCandidate[];
+      readLimitations?: SiteReadLimitation[];
+      palette: string[];
+      logo: string | null
+    }
   | { ok: false; reason: SiteFailure };
 
 const HEADERS = {
@@ -402,9 +416,15 @@ export function extractLinks(html: string, base: URL): PageLink[] {
   return links;
 }
 
-const PAGE_KEYWORDS = ["contact", "services", "service", "prestations", "prestation", "tarifs", "tarif"];
+const PAGE_KEYWORD_GROUPS = [
+  ["contact", "coordonnees", "coordonnées", "about", "a-propos", "qui-sommes-nous"],
+  ["offres", "offre", "services", "service", "prestations", "prestation", "menu", "catalogue"],
+  ["tarifs", "tarif", "prix"],
+  ["reservation", "réservation", "booking", "devis", "rendez-vous"],
+  ["horaires", "heures", "realisations", "réalisations", "projets", "portfolio"]
+];
 
-/** Deux pages internes au plus, du même hôte, repérées par les mots de leur lien (contact, services, prestations, tarifs). */
+/** Pages utiles au parcours d'achat, bornées et limitées au même hôte. */
 export function pickInternalPages(links: PageLink[], home: URL, max: number = SITE_READ_LIMITS.internalPages): URL[] {
   const homeKey = `${home.origin}${home.pathname.replace(/\/+$/, "")}`;
   const ranked: { url: URL; rank: number }[] = [];
@@ -418,7 +438,9 @@ export function pickInternalPages(links: PageLink[], home: URL, max: number = SI
       // Chemin mal encodé : lu tel quel.
     }
     const haystack = `${path} ${link.text.toLowerCase()}`;
-    const rank = PAGE_KEYWORDS.findIndex((word) => haystack.includes(word));
+    const rank = PAGE_KEYWORD_GROUPS.findIndex((words) =>
+      words.some((word) => haystack.includes(word))
+    );
     if (rank < 0) continue;
     const url = new URL(link.url);
     url.hash = "";
@@ -427,8 +449,7 @@ export function pickInternalPages(links: PageLink[], home: URL, max: number = SI
     seen.add(key);
     ranked.push({ url, rank });
   }
-  // Un mot par page de préférence : contact, puis services ou prestations, puis tarifs.
-  const groupOf = (rank: number) => (rank === 0 ? 0 : rank <= 4 ? 1 : 2);
+  const groupOf = (rank: number) => rank;
   const picked: URL[] = [];
   const groups = new Set<number>();
   for (const candidate of [...ranked].sort((a, b) => a.rank - b.rank)) {
@@ -499,7 +520,7 @@ function truncate(text: string, max: number): string {
 }
 
 /**
- * Lit l'accueil puis jusqu'à deux pages internes du même hôte (trois requêtes au plus, chacune protégée).
+ * Lit l'accueil puis jusqu'à quatre pages internes du même hôte (cinq requêtes au plus, chacune protégée).
  * Une page interne illisible est ignorée ; seul l'accueil décide de la rubrique.
  */
 export async function readPublicSite(address: string, deps: SiteReaderDeps = {}): Promise<SiteReadResult> {
@@ -512,8 +533,59 @@ export async function readPublicSite(address: string, deps: SiteReaderDeps = {})
   const home = await readPage(start, deps, start.hostname);
   if (!home.ok) return home;
   const readAt = (deps.now?.() ?? new Date()).toISOString();
-  const internal = pickInternalPages(extractLinks(home.html, home.url), home.url);
+  const homeLinks = extractLinks(home.html, home.url);
+  const internal = pickInternalPages(homeLinks, home.url);
   const others = await Promise.all(internal.map((url) => readPage(url, deps, home.url.hostname)));
-  const pages: SitePage[] = [home, ...others].flatMap((page) => page.ok ? [{ url: page.url.toString(), title: extractTitle(page.html), text: truncate(htmlToText(page.html), SITE_READ_LIMITS.textPerPage) }] : []);
-  return { ok: true, url: home.url.toString(), readAt, pages, palette: extractPalette(home.html), logo: extractLogo(home.html, home.url) };
+  const readPages = [home, ...others];
+  const pages: SitePage[] = readPages.flatMap((page) => page.ok ? [{ url: page.url.toString(), title: extractTitle(page.html), text: truncate(htmlToText(page.html), SITE_READ_LIMITS.textPerPage) }] : []);
+  const coverageLinks = readPages.flatMap((page) =>
+    page.ok ? extractLinks(page.html, page.url) : []
+  );
+  const readLimitations: SiteReadLimitation[] = [];
+  const limitedUrls = new Set<string>();
+  const addLimitation = (url: string, reason: SiteReadLimitation["reason"]) => {
+    if (limitedUrls.has(url) || readLimitations.length >= 10) return;
+    limitedUrls.add(url);
+    readLimitations.push({ url: url.slice(0, 600), reason });
+  };
+  for (let index = 0; index < others.length; index += 1) {
+    const page = others[index];
+    if (!page.ok) {
+      addLimitation(internal[index].toString(), "unreadable");
+    } else if (htmlToText(page.html).length < 80 && /<script\b/i.test(page.html)) {
+      addLimitation(page.url.toString(), "dynamic");
+    }
+  }
+  if (htmlToText(home.html).length < 80 && /<script\b/i.test(home.html)) {
+    addLimitation(home.url.toString(), "dynamic");
+  }
+  const baseHost = home.url.hostname.replace(/^www\./i, "").toLowerCase();
+  const selected = new Set(internal.map((url) => `${url.origin}${url.pathname.replace(/\/+$/, "")}${url.search}`));
+  for (const link of coverageLinks) {
+    const url = new URL(link.url);
+    url.hash = "";
+    if (/\.pdf$/i.test(url.pathname)) {
+      addLimitation(url.toString(), "pdf");
+      continue;
+    }
+    const host = url.hostname.toLowerCase();
+    if (host !== home.url.hostname.toLowerCase() && host.endsWith(`.${baseHost}`)) {
+      addLimitation(url.toString(), "other_host");
+      continue;
+    }
+    const haystack = `${url.pathname.toLowerCase()} ${link.text.toLowerCase()}`;
+    const relevant = PAGE_KEYWORD_GROUPS.some((words) => words.some((word) => haystack.includes(word)));
+    const key = `${url.origin}${url.pathname.replace(/\/+$/, "")}${url.search}`;
+    if (host === home.url.hostname.toLowerCase() && relevant && !selected.has(key)) {
+      addLimitation(url.toString(), "not_selected");
+    }
+  }
+  const socialSources = readPages.flatMap((page) =>
+    page.ok
+      ? socialCandidatesFromLinks(extractLinks(page.html, page.url), page.url.toString(), readAt)
+      : []
+  ).filter((candidate, index, sources) =>
+    sources.findIndex((source) => source.url === candidate.url) === index
+  ).slice(0, 8);
+  return { ok: true, url: home.url.toString(), readAt, pages, socialSources, readLimitations, palette: extractPalette(home.html), logo: extractLogo(home.html, home.url) };
 }

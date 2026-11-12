@@ -64,6 +64,8 @@ Prérequis : Node.js, une clé API Anthropic (https://console.anthropic.com/), u
 
 ## Tests du parcours
 
+Audit de l'onboarding, correctifs de confiance et cas d'usage priorisés pour l'analyse publique et les missions orientées objectif : [Onboarding et valeur des missions — 12 novembre 2026](docs/onboarding-valeur-missions-2026-11-12.md). Le moteur approfondi décrit dans ce document reste à réaliser ; les correctifs ciblés ne constituent pas une refonte complète.
+
 Gmail manuel : voir [docs/oauth-setup.md](docs/oauth-setup.md) pour `GMAIL_OAUTH_CLIENT_ID`, `GMAIL_OAUTH_CLIENT_SECRET` et `OAUTH_TOKEN_ENCRYPTION_KEY`. Callback `/api/oauth/gmail/callback`, scopes Gmail send + identité standard, aucun accès en lecture aux emails. Sans ces variables, la connexion reste désactivée. Tests locaux : `npm run test:gmail` (aucun réseau).
 
 Test public de marque (aucune donnée créée ni appel agent) : `npm run test:brand`, avec un serveur local actif et Chromium installé. Vérifie les métadonnées, la langue, les liens de contact et les pages publiques de 320 à 1440 px. Tests unitaires de la voix et du flux de réponse de Paul (aucun réseau, aucune base) : `npm run test:voice`.
