@@ -2152,7 +2152,7 @@ test("Partenariats: the agency list belongs to its company, the scope names one 
     // Choix dans la page de la mission : 2 agences au plus, résumé nommé.
     await page.context().addCookies([{ name: "pepito_session", value: headers(a).Cookie.slice(headers(a).Cookie.indexOf("=") + 1), url: baseURL }]);
     await page.goto(`${baseURL}/missions/${mission.id}`);
-    const choice = page.getByRole("group", { name: "Agences à contacter (1 ou 2)" });
+    const choice = page.getByRole("group", { name: "Partenaires à contacter (1 ou 2)" });
     await expect(choice).toContainText(`parc-${marker}@example.invalid`);
     await expect(choice).not.toContainText("Agence voisine");
     await choice.getByRole("checkbox", { name: /Agence du Parc/ }).check();

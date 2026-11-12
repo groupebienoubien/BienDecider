@@ -34,7 +34,7 @@ context:
   - « Déclaré par vous » vaut pour les missions créées par le dirigeant.
 - Un constat n'est « Observé » que si sa source a été consultée (`sourceStatus` = « consultée » et `sourceUrl` présente). Le code ramène toute autre combinaison à « À vérifier », quoi qu'en dise l'agent.
 - Les constats existants reçoivent un niveau par la migration : « Observé » si la source a été consultée, « À vérifier » sinon. Aucune autre donnée n'est réécrite.
-- `Mission.sourceFindingId` (clé étrangère, `SetNull`) et `Mission.deduction` (10 à 300 caractères, texte nettoyé comme `finding`) sont tous les deux facultatifs.
+- `Mission.sourceFindingId` (clé étrangère, `SetNull`) et `Mission.deduction` (10 à 500 caractères, texte nettoyé comme `finding`) sont tous les deux facultatifs. La fourchette est plus large que celle du constat (10 à 300) pour permettre à Paul de croiser plusieurs constats dans sa raison.
 - `propose_mission` accepte `findingId` et `deduction`. Un `findingId` doit appartenir à l'entreprise et au diagnostic courant (`splitAudits().latest`), sinon l'outil refuse et l'explique à Paul. `get_current_status` expose les constats courants (id, titre, catégorie, certitude).
 - Ligne de mission, colonne 1 :
 
@@ -115,7 +115,7 @@ context:
 
 ## Implementation Notes
 
-- `parseMissionBody` n'existe pas : la déduction est validée par `validateDeduction` (`src/lib/missions/rules.ts`), avec les règles du constat (10 à 300 caractères, sans balise, M-20).
+- `parseMissionBody` n'existe pas : la déduction est validée par `validateDeduction` (`src/lib/missions/rules.ts`), 10 à 500 caractères sans balise (M-20) — plus large que le constat pour permettre de croiser plusieurs constats dans la raison.
 - `createMissionIn` reçoit un dernier argument `provenance` ({ sourceFindingId, deduction }) ; il revérifie le constat avec `findCurrentFinding` (`src/lib/audit-findings.ts`) dans la transaction et crée la mission sans lien s'il n'est plus courant. La déduction est gardée.
 - `CATEGORY_LABELS` est défini dans le module pur (`FINDING_CATEGORY_LABELS`) et réexporté par `finding-card.tsx` : un composant serveur ne peut pas lire une constante d'un module client.
 - La certitude est refaite à la lecture (vue, `get_current_status`) par `normalizeCertainty`, en plus de l'écriture.

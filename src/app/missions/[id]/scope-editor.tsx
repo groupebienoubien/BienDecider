@@ -65,7 +65,7 @@ export function ScopeEditor({ missionId, version, template, scope, channel, chan
     setSending(false);
     if (!response.ok) setError(payload?.error ?? "Recherche impossible pour le moment.");
     else startRefresh(() => {
-      setSaved(`${payload.added} agence${payload.added > 1 ? "s" : ""} ajoutée${payload.added > 1 ? "s" : ""} à la liste.`);
+      setSaved(`${payload.added} partenaire${payload.added > 1 ? "s" : ""} ajouté${payload.added > 1 ? "s" : ""} à la liste.`);
       router.refresh();
     });
   }
@@ -103,7 +103,7 @@ export function ScopeEditor({ missionId, version, template, scope, channel, chan
         <form onSubmit={(event) => { event.preventDefault(); void run({ action: "set_scope", scope: { agencyIds: chosen } }, "Périmètre enregistré."); }}>
           {agencies.length > 0 ? (
             <fieldset className="agency-choice">
-              <legend>Agences à contacter (1 ou 2)</legend>
+              <legend>Partenaires à contacter (1 ou 2)</legend>
               <ul>
                 {agencies.map((agency) => (
                   <li key={agency.id}>
@@ -117,12 +117,12 @@ export function ScopeEditor({ missionId, version, template, scope, channel, chan
               </ul>
             </fieldset>
           ) : (
-            <p className="small muted">Aucune agence dans votre liste. Paul cherche des agences de votre zone qui peuvent vous recommander, avec leur e-mail professionnel publié et la source.</p>
+            <p className="small muted">Aucun partenaire dans votre liste. Paul cherche des partenaires de votre zone qui peuvent vous recommander, avec leur e-mail professionnel publié et la source.</p>
           )}
-          <small>Un e-mail par agence, que vous relisez et confirmez ; aucune relance automatique.</small>
+          <small>Un e-mail par partenaire, que vous relisez et confirmez ; aucune relance automatique.</small>
           <div className="heading-actions">
             {agencies.length > 0 && <button type="submit" disabled={busy || chosen.length === 0}>Enregistrer le périmètre</button>}
-            <button type="button" disabled={busy} onClick={() => void search()}>{agencies.length ? "Chercher d'autres agences avec Paul" : "Chercher des agences avec Paul"}</button>
+            <button type="button" disabled={busy} onClick={() => void search()}>{agencies.length ? "Chercher d'autres partenaires avec Paul" : "Chercher des partenaires avec Paul"}</button>
           </div>
         </form>
       )}

@@ -605,7 +605,7 @@ test("GH-168: a finding is « Observé » only when its source was read; origin,
 
   expect(validateDeduction(undefined)).toEqual({ ok: true, deduction: null });
   expect(validateDeduction("  Un site sans contact perd des demandes  ")).toEqual({ ok: true, deduction: "Un site sans contact perd des demandes" });
-  for (const bad of ["court", "a".repeat(301), "<b>Un site sans contact</b>", 42]) expect(validateDeduction(bad)).toEqual({ ok: false, code: "M-20" });
+  for (const bad of ["court", "a".repeat(501), "<b>Un site sans contact</b>", 42]) expect(validateDeduction(bad)).toEqual({ ok: false, code: "M-20" });
 
   const payload = { template: "social_post", channel: "facebook", title: "Publier un chantier", outcome: "Des demandes de devis", finding: "Aucune publication depuis trois mois", scope: {} };
   expect(missionCreatePayloadSchema.safeParse({ ...payload, findingId: "cl_finding-1", deduction: "  Montrer un chantier relance les demandes  " })).toMatchObject({ success: true, data: { findingId: "cl_finding-1", deduction: "Montrer un chantier relance les demandes" } });
