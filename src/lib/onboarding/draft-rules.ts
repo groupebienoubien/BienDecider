@@ -1,6 +1,7 @@
 import { MISSION_TEMPLATES, availableTemplates, enabledChannels, type TemplateKey } from "@/lib/missions/templates";
 import { ANALYSIS_MESSAGES, RUBRIC_KEYS, RUBRIC_NAMES, analysisFinished, analysisRunning, readAnalysis, type DraftAnalysis, type Provenance } from "@/lib/onboarding/analysis-rules";
 import { EMPTY_TERMS, REINTERPRET_MESSAGE, capLabel, readAmbitionTerms, type AmbitionTerms } from "@/lib/ambition-rules";
+import { readIntelligence, type CompetitorFact, type DraftIntelligence, type OpportunityFact } from "@/lib/onboarding/intelligence-rules";
 import type { ResponsibleAgent } from "@/lib/missions/rules";
 
 /** Vérifie le jeton d'une interprétation (`verifyInterpretation` côté serveur) ; injecté, car ce module est aussi lu par le client. */
@@ -45,6 +46,8 @@ export type DraftState = {
   diagnosticReady: boolean;
   /** Analyse publique de l'étape 1 (#280), écrite à part : jamais enregistrée par `saveDraft`. */
   analysis: DraftAnalysis | null;
+  /** Recherche réelle de marché avant compte (#361, #362), écrite à part comme l'analyse ci-dessus. */
+  intelligence: DraftIntelligence | null;
 };
 
 export const STEP_TITLES: Record<DraftStep, string> = {
@@ -116,7 +119,7 @@ export function emptyProfile(): DraftProfile {
 }
 
 export function emptyDraft(): DraftState {
-  return { step: 1, profile: emptyProfile(), ambition: null, profileConfirmed: false, diagnosticReady: false, analysis: null };
+  return { step: 1, profile: emptyProfile(), ambition: null, profileConfirmed: false, diagnosticReady: false, analysis: null, intelligence: null };
 }
 
 /** Page de l'étape courante (spécification §1.4, addendum §9). */
@@ -591,8 +594,17 @@ export function starterScopeLabel(template: TemplateKey, scope: Record<string, u
   }
 }
 
+/** Faits trouvés par la recherche réelle avant compte (#362), quand la recherche a abouti. */
+export type StarterFacts = { competitor: CompetitorFact | null; opportunity: OpportunityFact | null };
+const NO_FACTS: StarterFacts = { competitor: null, opportunity: null };
+
+/** Faits à utiliser dans les pistes : seulement ceux d'une recherche terminée, jamais une recherche en cours ou interrompue. */
+export function starterFacts(intelligence: DraftIntelligence | null): StarterFacts {
+  return intelligence?.status === "done" ? { competitor: intelligence.competitor, opportunity: intelligence.opportunity } : NO_FACTS;
+}
+
 /** Corps d'une mission de l'étape 4 : constat, déduction, titre, résultat et périmètre propres au modèle. */
-function starterBody(key: TemplateKey, state: DraftState): Pick<StarterMission, "title" | "outcome" | "finding" | "scope" | "deduction" | "origin"> & { stopRuleDays?: number } {
+function starterBody(key: TemplateKey, state: DraftState, facts: StarterFacts = NO_FACTS): Pick<StarterMission, "title" | "outcome" | "finding" | "scope" | "deduction" | "origin"> & { stopRuleDays?: number } {
   const { profile } = state;
   const offer = firstOffer(profile.offers) || profile.trade;
   const offerShort = clip(offer, 60);
@@ -651,6 +663,11 @@ function starterBody(key: TemplateKey, state: DraftState): Pick<StarterMission, 
         finding = clip(`Vos clients : ${clip(profile.targetClients, 100)}. Votre offre : ${clip(offer, 100)}.`, 300);
         deduction = `Vous visez ${clip(cap, 90)} : un avis ou une réalisation récente sur ${topicShort} prouve votre savoir-faire à ${clip(profile.targetClients, 50)}, autrement qu'une page de présentation.`;
       }
+      // Fait de marché réel trouvé par la recherche (#362) : renforce la raison sans jamais dévaloriser le concurrent cité.
+      if (facts.competitor) {
+        deduction = clip(`${deduction} À proximité, ${clip(facts.competitor.name, 60)} ${clip(facts.competitor.fact, 100)} : s'en inspirer peut vous aider à vous démarquer.`, 300);
+        finding = clip(`${finding} Source : ${facts.competitor.source}`, 300);
+      }
       return {
         title: clip(title, 80), outcome: MISSION_TEMPLATES.social_post.defaultOutcome,
         finding, scope: { topic },
@@ -674,6 +691,19 @@ function starterBody(key: TemplateKey, state: DraftState): Pick<StarterMission, 
       };
     default: {
       const locality = clip(profile.servingArea || profile.location, 50);
+      // Opportunité réelle trouvée par la recherche (#362) : remplace l'action générique par du concret, daté et sourcé.
+      if (facts.opportunity) {
+        const { opportunity } = facts;
+        const titleVerb = opportunity.isEvent ? "Participer à" : "Contacter";
+        const when = opportunity.isEvent && opportunity.eventEndDate ? ` (d'ici le ${opportunity.eventEndDate})` : "";
+        return {
+          title: clip(`${titleVerb} ${opportunity.title}${when}`, 80), outcome: "Un premier pas concret vers votre ambition",
+          finding: clip(`${opportunity.description} Source : ${opportunity.source}`, 300),
+          scope: { description: clip(`${opportunity.isEvent ? "Participer à" : "Prendre contact avec"} ${opportunity.title} : ${opportunity.description}`, 300) }, stopRuleDays: 30,
+          deduction: clip(`Vous visez ${clip(cap, 100)} : ${opportunity.description}`, 300),
+          origin: ORIGIN_DECLARED,
+        };
+      }
       return {
         title: clip(`Une première action pour ${offer} à ${locality}`, 80), outcome: "Un premier pas concret vers votre ambition",
         finding: clip(`Votre ambition : ${ambitionText || cap}. Vos clients : ${clip(profile.targetClients, 100)}.`, 300),
@@ -697,9 +727,10 @@ export function starterPlan(state: DraftState, available?: readonly TemplateKey[
   else if (!siteWasRead(state)) notes.push(SITE_NOT_READ_NOTICE);
   const missing = missingTerms(state.ambition?.terms);
   if (missing.length) notes.push(`La cible reste à préciser : ${missing.join(" et ")} ${missing.length > 1 ? "ne sont pas indiqués" : "n'est pas indiqué"}.`);
+  const facts = starterFacts(state.intelligence);
   const missions = rankStarterTemplates(state, available).map((key, index): StarterMission => {
     const template = MISSION_TEMPLATES[key];
-    const raw = starterBody(key, state);
+    const raw = starterBody(key, state, facts);
     // Les textes du brouillon ne portent jamais de chevrons (refusés à la création, qui annulerait l'inscription).
     const body = {
       ...raw, title: noAngles(raw.title), outcome: noAngles(raw.outcome), finding: noAngles(raw.finding), deduction: noAngles(raw.deduction),
@@ -722,7 +753,7 @@ export function starterPlan(state: DraftState, available?: readonly TemplateKey[
 }
 
 /** Lecture défensive du brouillon stocké : toute valeur illisible redevient vide. */
-export function readDraftState(row: { step: number; profile: unknown; ambition: unknown; profileConfirmed: boolean; diagnosticReady: boolean; analysis?: unknown }): DraftState {
+export function readDraftState(row: { step: number; profile: unknown; ambition: unknown; profileConfirmed: boolean; diagnosticReady: boolean; analysis?: unknown; intelligence?: unknown }): DraftState {
   const raw = row.profile !== null && typeof row.profile === "object" && !Array.isArray(row.profile) ? (row.profile as Record<string, unknown>) : {};
   const profile = emptyProfile();
   for (const key of Object.keys(profile) as (keyof DraftProfile)[]) profile[key] = typeof raw[key] === "string" ? (raw[key] as string) : "";
@@ -740,6 +771,7 @@ export function readDraftState(row: { step: number; profile: unknown; ambition: 
     profileConfirmed: row.profileConfirmed,
     diagnosticReady: row.diagnosticReady,
     analysis: readAnalysis(row.analysis ?? null),
+    intelligence: readIntelligence(row.intelligence ?? null),
   };
 }
 

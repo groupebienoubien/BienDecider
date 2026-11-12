@@ -60,8 +60,9 @@ import { firstNameOf } from "../src/lib/workspace";
 import { workspacePageLabel } from "../src/components/workspace-nav";
 import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH, passwordPolicyError } from "../src/lib/password-policy";
 import { startSmtpSink } from "./support/smtp-sink";
-import { ADDRESS_UNAVAILABLE_MESSAGE, FIRST_BADGE, ORIGIN_DECLARED, ORIGIN_SITE, SITE_NOT_GIVEN_NOTICE, SITE_NOT_READ_NOTICE, SYNTHESIS_USAGE_AGENT, TARGET_NOTICE, ambitionTargetsRequests, applyDraftAction, checkAmbition, checkDiscovery, checkDraftForAccount, clip, emptyDraft, firstOffer, isValidEmail, isValidWebsite, parseDraftAction, prefillFromPaul, prefillProfile, profileFieldIssue, profileOriginLabel, rankStarterTemplates, readDraftState, readRetained, retainedFromRules, starterPlan, stepHref, synthesisUsage, withRetained, type DraftState } from "../src/lib/onboarding/draft-rules";
+import { ADDRESS_UNAVAILABLE_MESSAGE, FIRST_BADGE, ORIGIN_DECLARED, ORIGIN_SITE, SITE_NOT_GIVEN_NOTICE, SITE_NOT_READ_NOTICE, SYNTHESIS_USAGE_AGENT, TARGET_NOTICE, ambitionTargetsRequests, applyDraftAction, checkAmbition, checkDiscovery, checkDraftForAccount, clip, emptyDraft, firstOffer, isValidEmail, isValidWebsite, parseDraftAction, prefillFromPaul, prefillProfile, profileFieldIssue, profileOriginLabel, rankStarterTemplates, readDraftState, readRetained, retainedFromRules, starterFacts, starterPlan, stepHref, synthesisUsage, withRetained, type DraftState } from "../src/lib/onboarding/draft-rules";
 import { anonymousSynthesisModel, writeRetained, type SynthesisModel } from "../src/lib/onboarding/synthesis";
+import { intelligenceUsage, newIntelligence, type DraftIntelligence } from "../src/lib/onboarding/intelligence-rules";
 import { PERSONAS } from "../src/lib/agents/personas";
 import { RESPONSIBLE_AGENTS, RESPONSIBLE_LABELS, validateResponsibleAgent, validateRisk } from "../src/lib/missions/rules";
 import { AMBITION_TARGET_NOTICE, EMPTY_TERMS, GAIN_QUESTION, HORIZON_QUESTION, RECRUITMENT_UNSPECIFIED_NOTE, REINTERPRET_MESSAGE, boundAmbition, capLabel, interpretationFrom, parseAmbition, readAmbitionTerms, reformulation, type AmbitionTerms } from "../src/lib/ambition-rules";
@@ -2170,7 +2171,7 @@ const READ_AT = "2026-11-08T09:00:00.000Z";
 const observed = (value: string) => ({ value, provenance: { kind: "observed" as const, source: "atelier-lumen.fr", readAt: READ_AT } });
 
 /** Brouillon à l'étape 4 : profil confirmé, ambition confirmée, analyse lue (`done`) ou absente. */
-function step4Draft(options: { read?: boolean; ambition?: string; terms?: Partial<AmbitionTerms>; observedOffers?: boolean } = {}): DraftState {
+function step4Draft(options: { read?: boolean; ambition?: string; terms?: Partial<AmbitionTerms>; observedOffers?: boolean; intelligence?: DraftState["intelligence"] } = {}): DraftState {
   const profile = { ...filledProfile, website: options.read === false ? "" : SITE, offers: "Rénovation électrique, dépannage" };
   const input = { companyName: profile.companyName, location: profile.location, website: profile.website };
   const analysis = options.read === false ? null : {
@@ -2181,6 +2182,7 @@ function step4Draft(options: { read?: boolean; ambition?: string; terms?: Partia
   return {
     step: 4, profile, profileConfirmed: true, diagnosticReady: true, analysis,
     ambition: { text: options.ambition ?? "+20 % de chiffre d'affaires en 12 mois", terms: { ...EMPTY_TERMS, gainPercent: 20, horizonMonths: 12, ...options.terms } },
+    intelligence: options.intelligence ?? null,
   };
 }
 
@@ -2268,6 +2270,66 @@ test("GH-284: the finding cites its origin — « Lu sur le site » only for val
   expect(starterPlan({ ...corrected, profile: { ...corrected.profile, companyName: "Autre" } }, ["social_post"]).missions[0].origin).toBe(ORIGIN_DECLARED);
   // « Sur mesure » cite l'ambition : toujours « Vous nous avez dit ».
   expect(starterPlan(step4Draft({ observedOffers: true }), ["custom"]).missions[0]).toMatchObject({ origin: ORIGIN_DECLARED, finding: "Votre ambition : +20 % de chiffre d'affaires en 12 mois. Vos clients : Particuliers propriétaires." });
+});
+
+const INTELLIGENCE_INPUT = { trade: "Électricien", servingArea: "Lyon et alentours", offers: "Rénovation électrique, dépannage", targetClients: "Particuliers propriétaires", ambitionText: "+20 % de chiffre d'affaires en 12 mois" };
+const COMPETITOR_FACT = { name: "Électricité Dupont", fact: "a une note de 4,8/5 sur 120 avis Google", source: "https://maps.example/dupont" };
+const EVENT_FACT = { title: "Salon de l'habitat de Lyon", description: "Un salon local où rencontrer des clients intéressés par vos services.", source: "https://salon.example", isEvent: true, eventEndDate: "2026-12-01" };
+const PARTNERSHIP_FACT = { title: "Syndic du Parc", description: "Un syndic local qui recommande des électriciens à sa copropriété.", source: "https://syndic.example", isEvent: false, eventEndDate: null };
+
+function doneIntelligence(facts: Partial<Pick<DraftIntelligence, "competitor" | "opportunity">>): DraftIntelligence {
+  const running = newIntelligence(INTELLIGENCE_INPUT, "run-362", new Date("2026-11-12T10:00:00Z"));
+  return { ...running, status: "done", finishedAt: running.startedAt, competitor: facts.competitor ?? null, opportunity: facts.opportunity ?? null };
+}
+
+test("US #362/#363 : starterFacts ne reprend les faits que d'une recherche terminée", () => {
+  expect(starterFacts(null)).toEqual({ competitor: null, opportunity: null });
+  const running = newIntelligence(INTELLIGENCE_INPUT, "run-362", new Date("2026-11-12T10:00:00Z"));
+  expect(starterFacts(running)).toEqual({ competitor: null, opportunity: null });
+  expect(starterFacts({ ...running, status: "failed" })).toEqual({ competitor: null, opportunity: null });
+  const done = doneIntelligence({ competitor: COMPETITOR_FACT, opportunity: EVENT_FACT });
+  expect(starterFacts(done)).toEqual({ competitor: COMPETITOR_FACT, opportunity: EVENT_FACT });
+});
+
+test("US #363 : une opportunité réelle (événement) remplace l'action générique par une mission datée et sourcée, valide telle quelle", () => {
+  const intelligence = doneIntelligence({ opportunity: EVENT_FACT });
+  const mission = starterPlan(step4Draft({ intelligence }), ["custom"]).missions[0];
+  expect(mission.title).toMatch(/^Participer à Salon de l'habitat de Lyon/);
+  expect(mission.title).toContain("2026-12-01");
+  expect(mission.finding).toContain("Source : https://salon.example");
+  expect(mission.origin).toBe(ORIGIN_DECLARED);
+  expect(validateNewMission(mission, 0)).toMatchObject({ ok: true });
+});
+
+test("US #363 : une opportunité de partenariat (pas un événement) invite à contacter l'organisation, sans date", () => {
+  const intelligence = doneIntelligence({ opportunity: PARTNERSHIP_FACT });
+  const mission = starterPlan(step4Draft({ intelligence }), ["custom"]).missions[0];
+  expect(mission.title).toMatch(/^Contacter Syndic du Parc/);
+  expect(mission.title).not.toContain("(");
+  expect(mission.finding).toContain("Source : https://syndic.example");
+});
+
+test("US #363 : sans opportunité trouvée, la mission « Sur mesure » reste celle des règles existantes (#359, #360)", () => {
+  const withEmptyIntelligence = starterPlan(step4Draft({ intelligence: doneIntelligence({}) }), ["custom"]).missions[0];
+  const withoutIntelligence = starterPlan(step4Draft(), ["custom"]).missions[0];
+  expect(withEmptyIntelligence).toEqual(withoutIntelligence);
+});
+
+test("US #363 : un concurrent réel enrichit la déduction de la publication, jamais en le dévalorisant", () => {
+  const intelligence = doneIntelligence({ competitor: COMPETITOR_FACT });
+  const mission = starterPlan(step4Draft({ intelligence }), ["social_post"]).missions[0];
+  expect(mission.deduction).toContain("Électricité Dupont");
+  expect(mission.deduction).toContain("s'en inspirer peut vous aider à vous démarquer");
+  expect(mission.deduction).not.toMatch(/\b(mauvais|moins bien|pire)\b/i);
+  expect(mission.finding).toContain("Source : https://maps.example/dupont");
+  expect(validateNewMission(mission, 0)).toMatchObject({ ok: true });
+});
+
+test("US #361 : le coût de la recherche anonyme ne revient au compte que s'il est positif et le modèle connu", () => {
+  const running = newIntelligence(INTELLIGENCE_INPUT, "run-362", new Date("2026-11-12T10:00:00Z"));
+  expect(intelligenceUsage(running)).toBeNull();
+  const costed = { ...running, status: "done" as const, cost: { usd: 0.02, inputTokens: 2000, outputTokens: 400, model: "claude-sonnet-5-5" } };
+  expect(intelligenceUsage(costed)).toEqual({ agent: "onboarding_intelligence", model: "claude-sonnet-5-5", inputTokens: 2000, outputTokens: 400, costUsd: 0.02 });
 });
 
 test("GH-284: the recap, the cap and the reserves — site not read, target to refine", () => {

@@ -125,6 +125,7 @@ const PUBLIC_ROUTES: Record<string, string> = {
   "/api/auth/signup": "inscription publique avec création explicite de compte, à l'étape 5 du brouillon anonyme",
   "/api/bienvenue": "parcours d'entrée anonyme : brouillon lié au cookie pepito_draft, sans compte ni session (POST même origine)",
   "/api/bienvenue/analyse": "progression de l'analyse publique du brouillon (#280), lue avec le cookie pepito_draft, sans session (GET, état des rubriques seulement)",
+  "/api/bienvenue/intelligence": "progression de la recherche de marché du brouillon (#361, #362), lue avec le cookie pepito_draft, sans session (GET, statut seulement)",
   "/api/auth/forgot-password": "demande de lien de réinitialisation : réponse identique que le compte existe ou non (POST même origine)",
   "/api/auth/reset-password": "le jeton à usage unique du lien reçu par e-mail fait foi, sans session (POST même origine)",
   "/api/auth/verify-email": "le jeton à usage unique du lien reçu par e-mail fait foi, sans session (POST même origine)",
@@ -2287,6 +2288,35 @@ test("GH-280: the public analysis refuses internal sites, a second launch and a 
   } finally {
     for (const context of visitors) await context.dispose();
     await prisma.onboardingDraft.deleteMany({ where: { id: { in: draftIds } } });
+    await prisma.$disconnect();
+  }
+});
+
+test("US #361/#362: the market research progress is readable with the draft cookie, without the input or the cost, and refuses a stranger", async ({ playwright }) => {
+  const prisma = openDatabase();
+  const draft = await createTestDraft(prisma, { step: 4 });
+  const running = {
+    runId: "run-en-cours", status: "running", startedAt: new Date().toISOString(), finishedAt: null,
+    input: { trade: "Électricien", servingArea: "Lyon", offers: "Rénovation électrique", targetClients: "Particuliers", ambitionText: "+20 % de chiffre d'affaires en 12 mois" },
+    competitor: null, opportunity: null, cost: { usd: 0, inputTokens: 0, outputTokens: 0 },
+  };
+  await prisma.onboardingDraft.update({ where: { id: draft.id }, data: { intelligence: running } });
+  const holder = await playwright.request.newContext();
+  const stranger = await playwright.request.newContext();
+  try {
+    const progress = await holder.get(`${baseURL}/api/bienvenue/intelligence`, { headers: { Cookie: draft.cookie } });
+    expect(progress.status()).toBe(200);
+    const body = await progress.json();
+    expect(body).toMatchObject({ step: 4, intelligence: { status: "running", finished: false, hasCompetitor: false, hasOpportunity: false } });
+    expect(JSON.stringify(body)).not.toMatch(/inputTokens|ambitionText|usd|servingArea/);
+
+    const none = await stranger.get(`${baseURL}/api/bienvenue/intelligence`);
+    expect(none.status()).toBe(404);
+    expect(await none.json()).toMatchObject({ href: "/bienvenue" });
+  } finally {
+    await holder.dispose();
+    await stranger.dispose();
+    await prisma.onboardingDraft.deleteMany({ where: { id: draft.id } });
     await prisma.$disconnect();
   }
 });

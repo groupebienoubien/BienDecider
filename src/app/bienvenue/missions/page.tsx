@@ -1,13 +1,16 @@
 import { requireDraftPage } from "../guard";
 import { WelcomeFrame } from "../welcome-frame";
 import { InterestButton } from "../step-forms";
+import { MissionsIntelligenceWatcher } from "./missions-waiting";
 import { FIRST_BADGE, starterPlan } from "@/lib/onboarding/draft-rules";
+import { intelligenceView } from "@/lib/onboarding/intelligence-rules";
 import { RESPONSIBLE_LABELS } from "@/lib/missions/rules";
 
 /**
- * Étape 4 (#284, FR-8) : le rappel de l'entreprise et du cap, « Ce que nous retenons », puis trois missions fondées sur le
- * profil confirmé, l'analyse et l'ambition. Aucun appel de modèle ici : « Ce que nous retenons » a été écrit au clic
- * « C'est bien ça » (ou vient des règles). Rien n'est créé ni lancé avant le compte.
+ * Étape 4 (#284, FR-8, #361-#364) : le rappel de l'entreprise et du cap, « Ce que nous retenons », puis trois missions
+ * fondées sur le profil confirmé, l'analyse, l'ambition et, quand elle a abouti, une recherche réelle de marché lancée
+ * à la confirmation de l'ambition (étape 3). Aucun appel de modèle ici au chargement : la recherche tourne en tâche de
+ * fond, cette page affiche l'attente puis se rafraîchit. Rien n'est créé ni lancé avant le compte.
  */
 export default async function WelcomeMissionsPage() {
   const state = await requireDraftPage("/bienvenue/missions");
@@ -15,6 +18,7 @@ export default async function WelcomeMissionsPage() {
   return (
     <WelcomeFrame step={4} intro={<p>Voici trois premières pistes pour {recap.companyName}. Elles arriveront « À décider » dans votre stratégie : aucune n&apos;est lancée sans vous.</p>}>
       <div className="flex flex-col gap-6">
+        <MissionsIntelligenceWatcher initial={intelligenceView(state.intelligence)} />
         <section aria-labelledby="recap-title" className="rounded-lg bg-[var(--bd-cream)] p-4">
           <h2 id="recap-title" className="text-sm font-semibold text-[var(--bd-ink)]">Votre entreprise</h2>
           <p className="mt-1 break-words text-base text-[var(--bd-ink)]">

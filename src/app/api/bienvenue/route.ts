@@ -2,14 +2,16 @@ import { randomUUID } from "node:crypto";
 import { after, NextRequest, NextResponse } from "next/server";
 import { getSessionEmail } from "@/lib/session";
 import { readJsonObject } from "@/lib/request-body";
-import { consumeGlobalAnalysis, consumeIpAttempt, refundIpAttempt, type ThrottleResult } from "@/lib/auth-throttle";
+import { consumeGlobalAnalysis, consumeGlobalIntelligence, consumeIpAttempt, refundIpAttempt, type ThrottleResult } from "@/lib/auth-throttle";
 import { applyDraftAction, checkInterpretation, emptyDraft, parseDraftAction, stepHref, withRetained, type DraftState } from "@/lib/onboarding/draft-rules";
 import { anonymousSynthesisModel, writeRetained } from "@/lib/onboarding/synthesis";
 import { signInterpretation, verifyInterpretation } from "@/lib/ambition-token";
 import { anonymousAmbitionModel, interpretAmbition } from "@/lib/ambition";
 import { ANALYSIS_MESSAGES, analysisView, limitedNotice, needsNewAnalysis, newAnalysis } from "@/lib/onboarding/analysis-rules";
-import { createDraft, loadDraft, saveAnalysis, saveDraft, startAnalysis } from "@/lib/onboarding/draft";
+import { needsNewIntelligence, newIntelligence, type IntelligenceInput } from "@/lib/onboarding/intelligence-rules";
+import { createDraft, loadDraft, saveAnalysis, saveDraft, saveIntelligence, startAnalysis, startIntelligence } from "@/lib/onboarding/draft";
 import { errorLabel, runDraftAnalysis } from "@/lib/onboarding/analysis";
+import { runDraftIntelligence } from "@/lib/onboarding/intelligence";
 
 // L'analyse publique (#280) se déroule après la réponse, dans la durée de la route.
 export const maxDuration = 60;
@@ -66,6 +68,8 @@ export async function POST(request: NextRequest) {
     draftId = (await createDraft(state)).id;
   }
   if (action.action === "discover") return launchAnalysis(request, draftId, state, now);
+  // Recherche réelle de marché avant compte (#361, #362) : jamais bloquante pour cette transition, contrairement à l'analyse.
+  if (action.action === "confirm_ambition") await launchIntelligence(request, draftId, state, now).catch((error: unknown) => console.error(`Recherche de marché non lancée pour le brouillon ${draftId} : ${errorLabel(error)}.`));
   return NextResponse.json({ step: state.step, href: stepHref(state.step) });
 }
 
@@ -138,4 +142,48 @@ async function launchAnalysis(request: NextRequest, draftId: string, state: Draf
   after(() => runDraftAnalysis(draftId, input, { analysis, save: (next) => saveAnalysis(draftId, next) })
     .catch((error: unknown) => console.error(`Analyse du brouillon ${draftId} en échec : ${errorLabel(error)}.`)));
   return NextResponse.json({ step: 1, href, analysis: analysisView(analysis, now) });
+}
+
+/**
+ * Lance la recherche réelle de marché pour l'étape 4 (#361, #362) : plafonnée par IP et pour tous, comme l'analyse.
+ * À la différence de l'analyse, un refus (plafond, conflit) ne bloque jamais la confirmation de l'ambition : la
+ * recherche est simplement absente, et les pistes se rabattent sur les règles existantes (#359, #360).
+ */
+async function launchIntelligence(request: NextRequest, draftId: string, state: DraftState, now: Date): Promise<void> {
+  const input: IntelligenceInput = { trade: state.profile.trade, servingArea: state.profile.servingArea, offers: state.profile.offers, targetClients: state.profile.targetClients, ambitionText: state.ambition?.text ?? "" };
+  // Le même profil déjà cherché : rien à relancer, les faits restent.
+  if (!needsNewIntelligence(state.intelligence, input, now)) return;
+
+  const runId = randomUUID();
+  const perIp = await consumeIpAttempt(request, "intelligence");
+  let limited = perIp?.limited ? perIp : null;
+  let global: ThrottleResult = null;
+  if (!limited) {
+    global = await consumeGlobalIntelligence();
+    if (global?.limited) {
+      await refund(perIp);
+      limited = global;
+    }
+  }
+  if (limited) {
+    // Pas de recherche : le brouillon le garde, l'étape 4 s'ouvre avec les pistes actuelles (#359, #360).
+    const limit = { scope: limited === perIp ? "ip" as const : "global" as const, retryAt: new Date(now.getTime() + limited.retryAfterSeconds * 1000).toISOString() };
+    await startIntelligence(draftId, newIntelligence(input, runId, now, "limited", limit), now).catch(() => undefined);
+    return;
+  }
+
+  const intelligence = newIntelligence(input, runId, now);
+  let started: Awaited<ReturnType<typeof startIntelligence>>;
+  try {
+    started = await startIntelligence(draftId, intelligence, now);
+  } catch (error) {
+    await refund(perIp, global);
+    throw error;
+  }
+  if (started !== "started") {
+    await refund(perIp, global);
+    return;
+  }
+  after(() => runDraftIntelligence(draftId, { intelligence, save: (next) => saveIntelligence(draftId, next) })
+    .catch((error: unknown) => console.error(`Recherche de marché du brouillon ${draftId} en échec : ${errorLabel(error)}.`)));
 }
