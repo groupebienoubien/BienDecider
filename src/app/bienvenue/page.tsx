@@ -5,6 +5,7 @@ import { analysisMatchesProfile, prefillFromPaul, prefillProfile, prefillWebsite
 import { analysisView, limitedStepNotice, type DraftAnalysis, type Finding, type FirstFinding } from "@/lib/onboarding/analysis-rules";
 import { CERTAINTY_LABELS } from "@/lib/findings/certainty";
 import { VISIT_TRACE_NOTICE } from "@/lib/onboarding/visit-trace-rules";
+import { placeMapsLink, readPlaceCandidate } from "@/lib/google-places";
 import { requireDraftPage } from "./guard";
 import { WelcomeFrame } from "./welcome-frame";
 import { AmbitionForm, DiscoveryStep, ProfileForm } from "./step-forms";
@@ -145,6 +146,14 @@ export default async function WelcomePage() {
     const prefill = prefillProfile(state);
     const guessed = prefillFromPaul(prefill);
     const analysis = analysisMatchesProfile(state) ? state.analysis : null;
+    const googlePlaceCandidates = await Promise.all(
+      (analysis?.findings.googlePlaceCandidates ?? []).map(async (id) => {
+        const result = await readPlaceCandidate(id);
+        return result.ok
+          ? result.value
+          : { id, name: "Détails indisponibles", address: null, link: placeMapsLink(id), category: null, website: null };
+      })
+    );
     return (
       <WelcomeFrame step={2} intro={<p>{state.profile.firstName}, {guessed ? `voici ce que Paul a compris de ${state.profile.companyName}. Vérifiez, corrigez ou complétez, puis confirmez.` : `décrivez en quelques mots l'activité de ${state.profile.companyName}. Complétez ou corrigez, puis confirmez.`}</p>}>
         {analysis?.status === "limited" && (
@@ -161,6 +170,10 @@ export default async function WelcomePage() {
           website={prefillWebsite(state)}
           publicSources={analysis?.findings.publicSources ?? []}
           socialSourceDecisions={state.socialSourceDecisions}
+          googlePlaceCandidates={googlePlaceCandidates}
+          googlePlaceChoice={state.googlePlaceChoice}
+          websiteRejected={state.websiteRejected}
+          googleStatus={analysis?.rubrics.google.status ?? null}
         />
       </WelcomeFrame>
     );

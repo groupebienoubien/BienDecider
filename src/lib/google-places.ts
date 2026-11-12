@@ -17,6 +17,10 @@ export type PlacesResult<T> = { ok: true; value: T } | { ok: false; reason: Plac
 export type PlacesDeps = { fetchImpl?: typeof fetch; apiKey?: string };
 
 export type PlaceIdentity = { id: string; name: string; address: string | null; link: string };
+export type PlaceCandidate = PlaceIdentity & {
+  category: string | null;
+  website: string | null;
+};
 export type PlaceReview = { rating: number | null; text: string; publishedAgo: string | null };
 export type PlaceDetails = PlaceIdentity & {
   rating: number | null; ratingCount: number | null; reviews: PlaceReview[];
@@ -153,6 +157,20 @@ function httpUrl(value: string | undefined): string | null {
   } catch {
     return null;
   }
+}
+
+/** Informations minimales d'une fiche candidate, sans lire les avis avant sa confirmation. */
+export async function readPlaceCandidate(placeId: string, deps: PlacesDeps = {}): Promise<PlacesResult<PlaceCandidate>> {
+  const result = await readPlace(placeId, "id,displayName,formattedAddress,googleMapsUri,primaryTypeDisplayName,websiteUri", deps);
+  if (!result.ok) return result;
+  return {
+    ok: true,
+    value: {
+      ...identityOf(result.value, placeId),
+      category: shortText(result.value.primaryTypeDisplayName?.text, 80),
+      website: httpUrl(result.value.websiteUri),
+    },
+  };
 }
 
 /** Note, volume et avis d'une fiche, lus en direct (jamais conservés). */

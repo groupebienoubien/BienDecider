@@ -50,6 +50,8 @@ export type AnalysisFindings = {
   palette: Finding<string[]> | null;
   logo: Finding | null;
   google: Finding | null;
+  /** Place IDs candidats uniquement ; les détails sont relus à l'affichage, jamais conservés dans le brouillon. */
+  googlePlaceCandidates?: string[];
   pages: { url: string; readAt: string }[];
   publicSources?: {
     platform: "website" | "facebook" | "instagram" | "linkedin";
@@ -63,7 +65,14 @@ export type AnalysisFindings = {
   }[];
 };
 
-export type AnalysisInput = { companyName: string; location: string; website: string };
+export type AnalysisInput = {
+  companyName: string;
+  location: string;
+  website: string;
+  googlePlaceId?: string | null;
+  googlePlaceCandidateIds?: string[];
+  websiteRejected?: boolean;
+};
 
 /** Analyses anonymes par connexion (IP) et par 24 h (#280, D2). */
 export const ANALYSIS_PER_IP_DAILY_LIMIT = 3;
@@ -197,7 +206,7 @@ export function limitedStepNotice(limit: AnalysisLimit | undefined, now = new Da
 }
 
 export function emptyFindings(): AnalysisFindings {
-  return { trade: null, servingArea: null, targetClients: null, offers: null, tone: null, contacts: [], palette: null, logo: null, google: null, pages: [] };
+  return { trade: null, servingArea: null, targetClients: null, offers: null, tone: null, contacts: [], palette: null, logo: null, google: null, googlePlaceCandidates: [], pages: [] };
 }
 
 export function newAnalysis(input: AnalysisInput, runId: string, now = new Date(), status: DraftAnalysis["status"] = "running", limit?: AnalysisLimit): DraftAnalysis {
@@ -207,7 +216,13 @@ export function newAnalysis(input: AnalysisInput, runId: string, now = new Date(
     : { site: input.website ? pending : { status: "unavailable", reason: "no_site" }, google: pending, zone: pending, identity: input.website ? pending : { status: "unavailable", reason: "no_site" } };
   return {
     runId, status, startedAt: now.toISOString(), finishedAt: status === "limited" ? now.toISOString() : null,
-    input: { ...input }, rubrics, findings: emptyFindings(), cost: { usd: 0, inputTokens: 0, outputTokens: 0 },
+    input: {
+      ...input,
+      googlePlaceId: input.googlePlaceId ?? null,
+      googlePlaceCandidateIds: input.googlePlaceCandidateIds ?? [],
+      websiteRejected: input.websiteRejected ?? false,
+    },
+    rubrics, findings: emptyFindings(), cost: { usd: 0, inputTokens: 0, outputTokens: 0 },
     ...(status === "limited" && limit ? { limit } : {}),
   };
 }
@@ -266,7 +281,16 @@ export function needsNewAnalysis(current: DraftAnalysis | null, input: AnalysisI
   if (analysisRunning(current, now)) return false;
   // Refusée par le quota, ou interrompue (« en cours » au-delà du délai) : on peut relancer.
   if (current.status === "limited" || current.status === "running") return true;
-  return current.input.companyName !== input.companyName || current.input.location !== input.location || current.input.website !== input.website;
+  if (
+    current.input.googlePlaceId === undefined ||
+    current.input.googlePlaceCandidateIds === undefined ||
+    current.input.websiteRejected === undefined
+  ) return true;
+  return current.input.companyName !== input.companyName
+    || current.input.location !== input.location
+    || current.input.website !== input.website
+    || (current.input.googlePlaceId ?? null) !== (input.googlePlaceId ?? null)
+    || (current.input.websiteRejected ?? false) !== (input.websiteRejected ?? false);
 }
 
 /** Message affiché sous les rubriques, s'il y a lieu (quota, service indisponible, site illisible ou refusé). */
@@ -288,12 +312,18 @@ const analysisSchema = z.object({
   status: z.enum(["running", "done", "limited"]),
   startedAt: z.string().max(40),
   finishedAt: z.string().max(40).nullable(),
-  input: z.object({ companyName: z.string(), location: z.string(), website: z.string() }),
+  input: z.object({
+    companyName: z.string(), location: z.string(), website: z.string(),
+    googlePlaceId: z.string().max(256).nullable().optional(),
+    googlePlaceCandidateIds: z.array(z.string().max(256)).max(3).optional(),
+    websiteRejected: z.boolean().optional(),
+  }),
   rubrics: z.object({ site: rubricSchema, google: rubricSchema, zone: rubricSchema, identity: rubricSchema }),
   findings: z.object({
     trade: findingSchema.nullable(), servingArea: findingSchema.nullable(), targetClients: findingSchema.nullable(), offers: findingSchema.nullable(),
     tone: findingSchema.nullable(), contacts: z.array(findingSchema).max(10), palette: z.object({ value: z.array(z.string().regex(/^#[0-9a-f]{6}$/)).max(10), provenance: provenanceSchema }).nullable(),
     logo: findingSchema.nullable(), google: findingSchema.nullable(), pages: z.array(z.object({ url: z.string().max(600), readAt: z.string().max(40) })).max(5),
+    googlePlaceCandidates: z.array(z.string().max(256)).max(3).optional(),
     publicSources: z.array(z.object({
       platform: z.enum(["website", "facebook", "instagram", "linkedin"]),
       url: z.string().max(600),

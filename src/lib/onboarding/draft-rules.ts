@@ -5,6 +5,7 @@ import { INTELLIGENCE_MESSAGES, intelligenceRunning, readIntelligence, sameIntel
 import type { ResponsibleAgent } from "@/lib/missions/rules";
 import { safeSourceUrl } from "@/lib/findings/certainty";
 import { decideSocialSources, readSocialSourceDecisions, type SocialSourceDecision } from "@/lib/onboarding/public-sources";
+import { isPlaceId } from "@/lib/google-places";
 
 /** Vérifie le jeton d'une interprétation (`verifyInterpretation` côté serveur) ; injecté, car ce module est aussi lu par le client. */
 export type InterpretationVerifier = (text: string, terms: AmbitionTerms, token: unknown) => boolean;
@@ -44,6 +45,8 @@ export type DraftState = {
   step: DraftStep;
   profile: DraftProfile;
   socialSourceDecisions: SocialSourceDecision[];
+  googlePlaceChoice: GooglePlaceChoice | null;
+  websiteRejected: boolean;
   ambition: DraftAmbition | null;
   profileConfirmed: boolean;
   diagnosticReady: boolean;
@@ -52,6 +55,8 @@ export type DraftState = {
   /** Recherche réelle de marché avant compte (#361, #362), écrite à part comme l'analyse ci-dessus. */
   intelligence: DraftIntelligence | null;
 };
+
+export type GooglePlaceChoice = { status: "confirmed"; placeId: string } | { status: "rejected" };
 
 export const STEP_TITLES: Record<DraftStep, string> = {
   1: "Votre entreprise. Notre point de départ.",
@@ -122,7 +127,7 @@ export function emptyProfile(): DraftProfile {
 }
 
 export function emptyDraft(): DraftState {
-  return { step: 1, profile: emptyProfile(), socialSourceDecisions: [], ambition: null, profileConfirmed: false, diagnosticReady: false, analysis: null, intelligence: null };
+  return { step: 1, profile: emptyProfile(), socialSourceDecisions: [], googlePlaceChoice: null, websiteRejected: false, ambition: null, profileConfirmed: false, diagnosticReady: false, analysis: null, intelligence: null };
 }
 
 /** Page de l'étape courante (spécification §1.4, addendum §9). */
@@ -245,11 +250,11 @@ export function checkAmbition(value: unknown): { ok: true; ambition: string } | 
 export type DraftAction =
   | { action: "discover"; firstName?: unknown; companyName?: unknown; location?: unknown; website?: unknown }
   | { action: "see_findings" }
-  | { action: "confirm_profile"; trade?: unknown; servingArea?: unknown; targetClients?: unknown; offers?: unknown; website?: unknown; socialSourceDecisions?: unknown }
+  | { action: "confirm_profile"; trade?: unknown; servingArea?: unknown; targetClients?: unknown; offers?: unknown; website?: unknown; websiteRejected?: unknown; googlePlaceChoice?: unknown; socialSourceDecisions?: unknown }
   | { action: "interpret_ambition"; ambition?: unknown }
   | { action: "confirm_ambition"; ambition?: unknown; terms?: unknown; token?: unknown }
   | { action: "interested" }
-  | { action: "back"; step: unknown; website?: unknown }
+  | { action: "back"; step: unknown; website?: unknown; websiteRejected?: unknown }
   | { action: "goto"; step: unknown };
 
 export const DRAFT_ACTIONS = ["discover", "see_findings", "confirm_profile", "interpret_ambition", "confirm_ambition", "interested", "back", "goto"] as const;
@@ -258,8 +263,24 @@ export const DRAFT_ACTIONS = ["discover", "see_findings", "confirm_profile", "in
 export function parseDraftAction(body: Record<string, unknown>): DraftAction | null {
   const action = DRAFT_ACTIONS.find((candidate) => candidate === body.action);
   if (!action) return null;
-  if (action === "back" || action === "goto") return { action, step: body.step };
+  if (action === "back") return {
+    action,
+    step: body.step,
+    ...("website" in body ? { website: body.website } : {}),
+    ...("websiteRejected" in body ? { websiteRejected: body.websiteRejected } : {})
+  };
+  if (action === "goto") return { action, step: body.step };
   return { ...body, action } as DraftAction;
+}
+
+function readGooglePlaceChoice(value: unknown): GooglePlaceChoice | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  if (raw.status === "rejected") return { status: "rejected" };
+  if (raw.status === "confirmed" && isPlaceId(raw.placeId)) {
+    return { status: "confirmed", placeId: raw.placeId };
+  }
+  return null;
 }
 
 /** L'ambition sans « Ce que nous retenons » ; le coût déjà dépensé reste, pour être repris au compte. */
@@ -279,9 +300,16 @@ function back(state: DraftState, step: DraftStep): DraftState {
 /** L'analyse porte-t-elle sur l'entreprise saisie (nom, localisation, site) ? */
 export function analysisMatchesProfile(state: DraftState): boolean {
   const input = state.analysis?.input;
+  if (
+    input?.googlePlaceId === undefined ||
+    input.googlePlaceCandidateIds === undefined ||
+    input.websiteRejected === undefined
+  ) return false;
   if (state.profileConfirmed && !state.profile.website && discoveredWebsite(state.analysis)) return false;
   return input !== undefined && input.companyName === state.profile.companyName && input.location === state.profile.location
-    && (input.website === state.profile.website || (!input.website && discoveredWebsite(state.analysis) === state.profile.website));
+    && (input.website === state.profile.website || (!input.website && discoveredWebsite(state.analysis) === state.profile.website))
+    && (input.googlePlaceId ?? null) === (state.googlePlaceChoice?.status === "confirmed" ? state.googlePlaceChoice.placeId : null)
+    && (input.websiteRejected ?? false) === state.websiteRejected;
 }
 
 function discoveredWebsite(analysis: DraftAnalysis | null): string {
@@ -290,7 +318,7 @@ function discoveredWebsite(analysis: DraftAnalysis | null): string {
 }
 
 export function prefillWebsite(state: DraftState): string {
-  return state.profile.website || (!state.profileConfirmed && analysisMatchesProfile(state) ? discoveredWebsite(state.analysis) : "");
+  return state.profile.website || (!state.websiteRejected && !state.profileConfirmed && analysisMatchesProfile(state) ? discoveredWebsite(state.analysis) : "");
 }
 
 export function intelligenceInputFor(state: DraftState): IntelligenceInput {
@@ -327,8 +355,21 @@ export function applyDraftAction(state: DraftState, request: DraftAction, now = 
       const checked = checkDiscovery(request);
       if (!checked.ok) return invalid(checked);
       const changed = (Object.keys(checked.values) as (keyof typeof checked.values)[]).some((key) => state.profile[key] !== checked.values[key]);
+      const identityChanged = state.profile.companyName !== checked.values.companyName || state.profile.location !== checked.values.location;
       // L'étape 1 reste affichée le temps de l'analyse ; un profil modifié se reconfirme à l'étape 2.
-      return { ok: true, state: { ...state, step: 1, profile: { ...state.profile, ...checked.values }, profileConfirmed: changed ? false : state.profileConfirmed } };
+      return {
+        ok: true,
+        state: {
+          ...state,
+          step: 1,
+          profile: { ...state.profile, ...checked.values },
+          profileConfirmed: changed ? false : state.profileConfirmed,
+          ...(identityChanged ? { googlePlaceChoice: null, socialSourceDecisions: [] } : {}),
+          ...(identityChanged || state.profile.website !== checked.values.website
+            ? { websiteRejected: false, socialSourceDecisions: [] }
+            : {}),
+        }
+      };
     }
     case "see_findings": {
       if (state.step !== 1) return { ok: false, kind: "wrong_step", step: state.step };
@@ -346,6 +387,45 @@ export function applyDraftAction(state: DraftState, request: DraftAction, now = 
       const website = request.website === undefined ? state.profile.website : text(request.website);
       const failure = checkFields([{ field: "website", value: website, max: LIMITS.website, missing: "M-04", optional: true }]);
       if (failure) return invalid(failure);
+      if (request.websiteRejected !== undefined && typeof request.websiteRejected !== "boolean") {
+        return invalid({ code: "M-05", error: "Vérifiez le choix du site.", errors: {} });
+      }
+      if (request.websiteRejected === true && website) {
+        return invalid({ code: "M-05", error: "Un site renseigné ne peut pas être écarté.", errors: {} });
+      }
+      const candidateIds = state.analysis?.findings.googlePlaceCandidates ?? [];
+      const googlePlaceChoice = request.googlePlaceChoice === undefined
+        ? state.googlePlaceChoice
+        : readGooglePlaceChoice(request.googlePlaceChoice);
+      if (
+        (candidateIds.length > 0 && !googlePlaceChoice) ||
+        (googlePlaceChoice?.status === "confirmed" && !candidateIds.includes(googlePlaceChoice.placeId)) ||
+        (googlePlaceChoice?.status === "rejected" && candidateIds.length === 0)
+      ) {
+        return invalid({
+          code: "M-05",
+          error: candidateIds.length
+            ? "Choisissez la fiche de votre entreprise ou indiquez qu'aucune ne correspond."
+            : "Cette fiche Google n'est plus disponible. Relancez la découverte.",
+          errors: {}
+        });
+      }
+      const selectedPlaceId = googlePlaceChoice?.status === "confirmed" ? googlePlaceChoice.placeId : null;
+      const analyzedPlaceId = state.analysis?.input.googlePlaceId ?? null;
+      if (selectedPlaceId !== analyzedPlaceId) {
+        return {
+          ok: true,
+          state: {
+            ...state,
+            step: 1,
+            profile: { ...state.profile, ...checked.values, website },
+            socialSourceDecisions: [],
+            googlePlaceChoice,
+            profileConfirmed: false,
+            websiteRejected: typeof request.websiteRejected === "boolean" ? request.websiteRejected : state.websiteRejected
+          }
+        };
+      }
       const socialSourceDecisions = decideSocialSources(
         state.analysis?.findings.publicSources ?? [],
         request.socialSourceDecisions ?? []
@@ -364,6 +444,8 @@ export function applyDraftAction(state: DraftState, request: DraftAction, now = 
           step: 3,
           profile: { ...state.profile, ...checked.values, website },
           socialSourceDecisions,
+          googlePlaceChoice,
+          websiteRejected: typeof request.websiteRejected === "boolean" ? request.websiteRejected : state.websiteRejected,
           profileConfirmed: true
         }
       };
@@ -397,13 +479,17 @@ export function applyDraftAction(state: DraftState, request: DraftAction, now = 
         const failure = checkFields([{ field: "website", value: website, max: LIMITS.website, missing: "M-04", optional: true }]);
         if (failure) return invalid(failure);
         const changed = website !== state.profile.website;
+        const websiteRejected = typeof request.websiteRejected === "boolean"
+          ? request.websiteRejected
+          : !website && Boolean(discoveredWebsite(state.analysis));
         return {
           ok: true,
           state: {
             ...next,
             profile: { ...next.profile, website },
             profileConfirmed: changed ? false : next.profileConfirmed,
-            socialSourceDecisions: changed ? [] : next.socialSourceDecisions
+            socialSourceDecisions: changed || websiteRejected !== state.websiteRejected ? [] : next.socialSourceDecisions,
+            websiteRejected
           }
         };
       }
@@ -832,6 +918,7 @@ export function readDraftState(row: { step: number; profile: unknown; ambition: 
     profile[key] = typeof raw[key] === "string" ? (raw[key] as string) : "";
   }
   const socialSourceDecisions = readSocialSourceDecisions(raw.socialSourceDecisions);
+  const googlePlaceChoice = readGooglePlaceChoice(raw.googlePlaceChoice);
   const ambitionRaw = row.ambition !== null && typeof row.ambition === "object" && !Array.isArray(row.ambition) ? (row.ambition as Record<string, unknown>) : {};
   // « Ce que nous retenons » et son coût (#284) : illisibles, ils sont ignorés (les règles prennent le relais à l'étape 4).
   const retained = readRetained(ambitionRaw.retained);
@@ -840,6 +927,8 @@ export function readDraftState(row: { step: number; profile: unknown; ambition: 
     step: isDraftStep(row.step) ? row.step : 1,
     profile,
     socialSourceDecisions,
+    googlePlaceChoice,
+    websiteRejected: raw.websiteRejected === true,
     // Une ambition d'avant #282 (texte seul) garde des éléments vides.
     ambition: typeof ambitionRaw.text === "string"
       ? { text: ambitionRaw.text, terms: readAmbitionTerms(ambitionRaw.terms) ?? { ...EMPTY_TERMS }, ...(retained ? { retained } : {}), ...(retainedCost ? { retainedCost } : {}) }

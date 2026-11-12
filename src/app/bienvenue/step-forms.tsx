@@ -5,9 +5,10 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { TradeCombobox } from "@/components/trade-combobox";
 import { AmbitionEditor } from "@/components/ambition-editor";
-import { LIMITS, profileOriginLabel, type DraftProfile, type ProfilePrefill } from "@/lib/onboarding/draft-rules";
-import type { AnalysisView } from "@/lib/onboarding/analysis-rules";
-import type { PublicSourceCandidate, SocialSourceDecision } from "@/lib/onboarding/public-sources";
+import { LIMITS, profileOriginLabel, type DraftProfile, type GooglePlaceChoice, type ProfilePrefill } from "@/lib/onboarding/draft-rules";
+import type { AnalysisView, RubricStatus } from "@/lib/onboarding/analysis-rules";
+import { socialPublicationStatuses, type PublicSourceCandidate, type SocialSourceDecision } from "@/lib/onboarding/public-sources";
+import type { PlaceCandidate } from "@/lib/google-places";
 import { FieldError, FormError, INPUT_CLASS, PRIMARY_BUTTON, SECONDARY_BUTTON, useDraftAction, type FieldErrors } from "./journey-client";
 
 /** Bouton secondaire bordé : « Découvrir » une fois les constats prêts (un seul bouton principal par écran). */
@@ -215,19 +216,32 @@ export function ProfileForm({
   prefill,
   website: initialWebsite,
   publicSources,
-  socialSourceDecisions
+  socialSourceDecisions,
+  googlePlaceCandidates,
+  googlePlaceChoice: initialGooglePlaceChoice,
+  websiteRejected,
+  googleStatus
 }: {
   prefill: ProfilePrefill;
   website: string;
   publicSources: PublicSourceCandidate[];
   socialSourceDecisions: SocialSourceDecision[];
+  googlePlaceCandidates: PlaceCandidate[];
+  googlePlaceChoice: GooglePlaceChoice | null;
+  websiteRejected: boolean;
+  googleStatus: RubricStatus | null;
 }) {
   const { busy, error, errors, send } = useDraftAction();
   const correct = useDraftAction();
   const [values, setValues] = useState(prefill.values);
   const [website, setWebsite] = useState(initialWebsite);
+  const [googlePlaceChoice, setGooglePlaceChoice] = useState(initialGooglePlaceChoice);
+  const placeChoiceKey = (choice: GooglePlaceChoice | null) =>
+    choice?.status === "confirmed" ? choice.placeId : choice?.status ?? "";
+  const googlePlaceChanged = placeChoiceKey(googlePlaceChoice) !== placeChoiceKey(initialGooglePlaceChoice);
   const websiteCandidates = publicSources.filter((candidate) => candidate.platform === "website");
   const socialCandidates = publicSources.filter((candidate) => candidate.platform !== "website");
+  const socialPublicationStatus = socialPublicationStatuses(socialCandidates);
   const [socialChoices, setSocialChoices] = useState(() => socialCandidates.map((candidate) => {
     const saved = socialSourceDecisions.find((decision) => decision.candidateUrl === candidate.url);
     return {
@@ -244,14 +258,22 @@ export function ProfileForm({
   return (
     <form noValidate className="flex flex-col gap-5" onSubmit={(event) => {
       event.preventDefault();
+      const websiteValue = website.trim();
+      const rejectedWebsite = !websiteValue && (websiteRejected || Boolean(initialWebsite.trim()));
       if (website.trim() && website.trim() !== initialWebsite.trim()) {
-        void correct.send({ action: "back", step: 1, website });
+        void correct.send({ action: "back", step: 1, website, websiteRejected: false });
+        return;
+      }
+      if (rejectedWebsite && !websiteRejected) {
+        void correct.send({ action: "back", step: 1, website: "", websiteRejected: true });
         return;
       }
       void send({
         action: "confirm_profile",
         ...values,
-        website,
+        website: websiteValue,
+        websiteRejected: rejectedWebsite,
+        googlePlaceChoice,
         socialSourceDecisions: socialChoices.map((choice) => ({
           candidateUrl: choice.candidateUrl,
           confirmedUrl: choice.confirmed ? choice.confirmedUrl : null,
@@ -260,6 +282,62 @@ export function ProfileForm({
       });
     }}>
       <TextField id="website" label="Votre site (facultatif)" hint="Adresse renseignée ou repérée pendant la lecture. Vérifiez-la : elle sera conservée dans votre profil après confirmation." value={website} onChange={setWebsite} errors={errors} max={LIMITS.website} required={false} type="url" />
+      {googlePlaceCandidates.length > 0 && (
+        <fieldset className="flex flex-col gap-3 rounded-lg border border-[var(--bd-line)] p-4">
+          <legend className="px-1 text-sm font-semibold">Fiches Google candidates — à confirmer</legend>
+          <p className={HINT}>Une fiche n&apos;est pas attribuée à votre entreprise d&apos;après son seul nom. Vérifiez l&apos;adresse et l&apos;activité, puis choisissez la vôtre ou indiquez qu&apos;aucune ne correspond.</p>
+          {googlePlaceCandidates.map((candidate) => {
+            const websiteCandidate = websiteCandidates.find((source) => source.source === candidate.link);
+            return (
+              <label key={candidate.id} className="flex cursor-pointer flex-col gap-1 border-t border-[var(--bd-line)] pt-3">
+                <span className="flex items-start gap-2">
+                  <input
+                    type="radio"
+                    name="google-place-choice"
+                    value={candidate.id}
+                    checked={googlePlaceChoice?.status === "confirmed" && googlePlaceChoice.placeId === candidate.id}
+                    onChange={() => setGooglePlaceChoice({ status: "confirmed", placeId: candidate.id })}
+                  />
+                  <span className="flex flex-col gap-1">
+                    <span className="font-semibold">{candidate.name}</span>
+                    {candidate.address && <span className={HINT}>{candidate.address}</span>}
+                    {candidate.category && <span className={HINT}>Activité indiquée : {candidate.category}</span>}
+                    <a href={candidate.link} target="_blank" rel="noopener noreferrer" className="break-all text-sm text-[var(--bd-brand)] underline" onClick={(event) => event.stopPropagation()}>
+                      Vérifier cette fiche Google
+                    </a>
+                    {websiteCandidate && (
+                      <span className={HINT}>
+                        Site candidat : <a href={websiteCandidate.url} target="_blank" rel="noopener noreferrer" className="break-all underline" onClick={(event) => event.stopPropagation()}>{websiteCandidate.url}</a>
+                      </span>
+                    )}
+                  </span>
+                </span>
+              </label>
+            );
+          })}
+          <label className="flex min-h-11 items-center gap-2 border-t border-[var(--bd-line)] pt-3 text-sm">
+            <input
+              type="radio"
+              name="google-place-choice"
+              value="none"
+              checked={googlePlaceChoice?.status === "rejected"}
+              onChange={() => setGooglePlaceChoice({ status: "rejected" })}
+            />
+            Aucune de ces fiches ne correspond à mon entreprise
+          </label>
+        </fieldset>
+      )}
+      {!googlePlaceCandidates.length && googleStatus === "not_found" && (
+        <p role="status" className={HINT}>Fiche Google non identifiée pendant cette recherche. Cela ne permet pas de conclure qu&apos;elle n&apos;existe pas.</p>
+      )}
+      {!googlePlaceCandidates.length && googleStatus === "unavailable" && (
+        <p role="status" className={HINT}>Fiche Google non lue : le service de recherche est indisponible. Aucune conclusion n&apos;est tirée sur votre présence en ligne.</p>
+      )}
+      {googlePlaceChanged && googlePlaceChoice?.status === "confirmed" && (
+        <p role="status" className="rounded-md bg-[var(--bd-cream)] p-3 text-sm text-[var(--bd-ink)]">
+          Après votre choix, Paul relira cette fiche et son site public. Vous pourrez ensuite confirmer ou corriger les liens avant de continuer.
+        </p>
+      )}
       {websiteCandidates.length > 0 && (
         <fieldset className="flex flex-col gap-2 rounded-lg border border-[var(--bd-line)] p-4">
           <legend className="px-1 text-sm font-semibold">Sites candidats — aucun n&apos;est confirmé</legend>
@@ -325,6 +403,35 @@ export function ProfileForm({
       ) : (
         <p className={HINT}>Aucun profil social public fiable n&apos;a été identifié dans les pages lues. Cela ne signifie pas que vous n&apos;avez pas de présence en ligne.</p>
       )}
+      <section aria-labelledby="social-publications-title" className="flex flex-col gap-2 rounded-lg border border-[var(--bd-line)] p-4">
+        <h2 id="social-publications-title" className="text-sm font-semibold">État de lecture des publications sociales</h2>
+        <p className={HINT}>Aucune publication n&apos;est lue à cette étape. L&apos;accès aux publications n&apos;a pas été vérifié ; nous ne déduisons ni compte privé, ni mur de connexion, ni inactivité.</p>
+        <ul className="flex flex-col gap-1 text-sm text-[var(--bd-ink)]">
+          {socialPublicationStatus.map((status) => {
+            const candidates = socialCandidates.filter((candidate) => candidate.platform === status.platform);
+            const confirmed = candidates.some((candidate) => {
+              const choice = socialChoices.find((item) => item.candidateUrl === candidate.url);
+              const saved = socialSourceDecisions.find((decision) => decision.candidateUrl === candidate.url);
+              return Boolean(choice?.confirmed && saved?.status === "confirmed" && saved.confirmedUrl === choice.confirmedUrl);
+            });
+            const markedConfirmed = candidates.some((candidate) =>
+              socialChoices.find((choice) => choice.candidateUrl === candidate.url)?.confirmed
+            );
+            const profileStatus = status.profile === "candidate_found"
+              ? confirmed
+                ? "Profil confirmé par vous."
+                : markedConfirmed
+                  ? "Profil marqué comme officiel ici ; validez le formulaire pour enregistrer ce choix."
+                  : "Profil candidat, à confirmer ou écarter."
+              : "Aucun profil repéré dans les pages consultées ; cela n'en prouve pas l'absence.";
+            return (
+              <li key={status.platform}>
+                <span className="font-semibold">{status.platform} :</span> {profileStatus} Publications non lues ; accès non vérifié.
+              </li>
+            );
+          })}
+        </ul>
+      </section>
       <div className="flex flex-col gap-1.5">
         <TradeCombobox id="trade" label="Votre activité" value={values.trade} onChange={set("trade")} invalid={Boolean(errors.trade)} describedBy={[tradeOrigin ? "trade-origin" : null, errors.trade ? "trade-error" : null].filter(Boolean).join(" ") || undefined} />
         {tradeOrigin && <p id="trade-origin" className={HINT}>{tradeOrigin}</p>}
@@ -337,7 +444,11 @@ export function ProfileForm({
       <FormError error={error ?? correct.error} errors={errors} />
       <div className="flex flex-wrap items-center gap-3">
         <button type="submit" className={PRIMARY_BUTTON} disabled={pending}>
-          {website.trim() && website.trim() !== initialWebsite.trim() ? "Retourner relire ce site" : "Oui, c'est bien moi"}
+          {website.trim() && website.trim() !== initialWebsite.trim()
+            ? "Retourner relire ce site"
+            : googlePlaceChanged && googlePlaceChoice?.status === "confirmed"
+              ? "Relire cette fiche et son site"
+              : "Oui, c'est bien moi"}
         </button>
         <button type="button" className={SECONDARY_BUTTON} disabled={pending} onClick={() => correct.send({ action: "back", step: 1 })}>Non, corriger mes informations</button>
       </div>
