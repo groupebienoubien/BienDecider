@@ -18,7 +18,7 @@ import { createMissionIn } from "@/lib/missions/service";
 import { starterFindingLinks } from "@/lib/findings/starter-links";
 import { writeJournal } from "@/lib/journal";
 import { ensureCreditGrant } from "@/lib/credits";
-import { startOnboardingAudit } from "@/lib/agents/onboarding-audit";
+import { startOnboardingAudit, startOnboardingGrowthSearch } from "@/lib/agents/onboarding-audit";
 import { AgentRunConflictError, AgentRunQuotaError } from "@/lib/agents/agent-errors";
 import { findCompanyByOwnerEmail, normalizeOwnerEmail } from "@/lib/owner-email";
 
@@ -167,7 +167,7 @@ export async function POST(request: NextRequest) {
   await setSessionEmail(email);
   await clearDraftCookie();
 
-  // Premier audit, au mieux : un refus (quota, adresse à confirmer, conflit) ne bloque pas l'inscription.
+  // Premier audit et première recherche de pistes, au mieux : un refus (quota, adresse à confirmer, conflit) ne bloque pas l'inscription.
   try {
     await startOnboardingAudit(company.id);
   } catch (error) {
@@ -175,6 +175,15 @@ export async function POST(request: NextRequest) {
       console.error(`Premier audit refusé au lancement (${error.reason ?? "conflit"}) : ${error.message}`);
     } else {
       console.error("Erreur inattendue à la création du premier audit :", error);
+    }
+  }
+  try {
+    await startOnboardingGrowthSearch(company.id);
+  } catch (error) {
+    if (error instanceof AgentRunQuotaError || error instanceof AgentRunConflictError) {
+      console.error(`Première recherche de pistes refusée au lancement (${error.reason ?? "conflit"}) : ${error.message}`);
+    } else {
+      console.error("Erreur inattendue à la création de la première recherche de pistes :", error);
     }
   }
 
