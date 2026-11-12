@@ -2320,7 +2320,7 @@ test("US #363 : un concurrent réel enrichit la déduction de la publication, ja
   const mission = starterPlan(step4Draft({ intelligence }), ["social_post"]).missions[0];
   expect(mission.deduction).toContain("Électricité Dupont");
   expect(mission.deduction).toContain("s'en inspirer peut vous aider à vous démarquer");
-  expect(mission.deduction).not.toMatch(/mauvais|moins bien|pire/i);
+  expect(mission.deduction).not.toMatch(/\b(mauvais|moins bien|pire)\b/i);
   expect(mission.finding).toContain("Source : https://maps.example/dupont");
   expect(validateNewMission(mission, 0)).toMatchObject({ ok: true });
 });
