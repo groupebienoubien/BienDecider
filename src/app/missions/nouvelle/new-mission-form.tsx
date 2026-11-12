@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Icon } from "@/components/icon";
 import { PaulButton } from "@/components/mission-actions";
+import { missionFormErrors, type MissionFormErrors, type MissionFormField } from "@/lib/missions/form-errors";
 
 export type TemplateOption = { key: string; label: string; contentFormat: string; defaultOutcome: string; stopRuleDays: number | null; channels: { key: string; label: string }[] };
 
@@ -28,6 +29,7 @@ export function NewMissionForm({ templates, launchCost, idea = null }: { templat
   const [stopRuleDays, setStopRuleDays] = useState("30");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [fieldErrors, setFieldErrors] = useState<MissionFormErrors>({});
   const field = SCOPE_FIELD[templateKey];
 
   function chooseTemplate(key: string) {
@@ -35,13 +37,24 @@ export function NewMissionForm({ templates, launchCost, idea = null }: { templat
     setTemplateKey(key);
     setChannel(next?.channels[0]?.key ?? "");
     setScopeValue("");
+    setFieldErrors((current) => ({ ...current, template: undefined, channel: undefined, scope: undefined, stopRuleDays: undefined }));
     if (!outcomeTouched) setOutcome(next?.defaultOutcome ?? "");
+  }
+
+  function fieldDescription(fieldName: MissionFormField) {
+    return `${fieldName}-hint${fieldErrors[fieldName] ? ` ${fieldName}-error` : ""}`;
+  }
+
+  function clearFieldError(fieldName: MissionFormField) {
+    setFieldErrors((current) => ({ ...current, [fieldName]: undefined }));
+    setError("");
   }
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     setBusy(true);
     setError("");
+    setFieldErrors({});
     const body = {
       template: templateKey,
       title,
@@ -59,7 +72,15 @@ export function NewMissionForm({ templates, launchCost, idea = null }: { templat
     if (!response || !response.ok || typeof missionId !== "string") {
       // Idée cadrée ou retirée ailleurs : renvoyer son identifiant échouerait toujours.
       const stale = idea && response?.status === 404;
-      setError(stale ? "Cette idée n'est plus à cadrer : rechargez la page pour créer la mission sans elle." : response && !response.ok ? (payload?.error ?? generic) : generic);
+      const message = stale ? "Cette idée n'est plus à cadrer : rechargez la page pour créer la mission sans elle." : response && !response.ok ? (payload?.error ?? generic) : generic;
+      const invalidFields = missionFormErrors(payload?.code, {
+        finding, title, outcome, scopeValue, stopRuleDays, templateKey,
+        hasChannelChoice: Boolean(template && template.channels.length > 1),
+      });
+      setError(message);
+      setFieldErrors(invalidFields);
+      const firstInvalid = Object.keys(invalidFields)[0] as MissionFormField | undefined;
+      if (firstInvalid) requestAnimationFrame(() => document.getElementById(firstInvalid)?.focus());
       setBusy(false);
       return;
     }
@@ -69,49 +90,63 @@ export function NewMissionForm({ templates, launchCost, idea = null }: { templat
 
   return (
     <form className="new-mission-form stack" onSubmit={submit}>
-      <label className="field">
-        Le constat de départ
-        <textarea rows={3} minLength={10} maxLength={300} required value={finding} onChange={(event) => setFinding(event.target.value)} />
-      </label>
+      <div className="field">
+        <label htmlFor="finding">Le constat de départ</label>
+        <textarea id="finding" rows={3} minLength={10} maxLength={300} required value={finding} aria-invalid={fieldErrors.finding ? true : undefined} aria-describedby={fieldDescription("finding")} onChange={(event) => { setFinding(event.target.value); clearFieldError("finding"); }} />
+        <p id="finding-error" className="small warning" hidden={!fieldErrors.finding}>{fieldErrors.finding}</p>
+        <p id="finding-hint" className="small muted">10 à 300 caractères, sans balise HTML.</p>
+      </div>
       <div className="form-grid">
-        <label className="field">
-          Nom de la mission
-          <input minLength={5} maxLength={80} required value={title} onChange={(event) => setTitle(event.target.value)} />
-        </label>
-        <label className="field">
-          Type d&apos;action
-          <select value={templateKey} onChange={(event) => chooseTemplate(event.target.value)}>
+        <div className="field">
+          <label htmlFor="title">Nom de la mission</label>
+          <input id="title" minLength={5} maxLength={80} required value={title} aria-invalid={fieldErrors.title ? true : undefined} aria-describedby={fieldDescription("title")} onChange={(event) => { setTitle(event.target.value); clearFieldError("title"); }} />
+          <p id="title-error" className="small warning" hidden={!fieldErrors.title}>{fieldErrors.title}</p>
+          <p id="title-hint" className="small muted">5 à 80 caractères, sans balise HTML.</p>
+        </div>
+        <div className="field">
+          <label htmlFor="template">Type d&apos;action</label>
+          <select id="template" value={templateKey} aria-invalid={fieldErrors.template ? true : undefined} aria-describedby={fieldDescription("template")} onChange={(event) => chooseTemplate(event.target.value)}>
             {templates.map((candidate) => <option key={candidate.key} value={candidate.key}>{candidate.label} · {candidate.contentFormat}</option>)}
           </select>
-        </label>
+          <p id="template-error" className="small warning" hidden={!fieldErrors.template}>{fieldErrors.template}</p>
+          <p id="template-hint" className="small muted">Choisissez une action disponible dans le catalogue.</p>
+        </div>
       </div>
       {template && template.channels.length > 1 && (
-        <label className="field">
-          Canal
-          <select value={channel} onChange={(event) => setChannel(event.target.value)}>
+        <div className="field">
+          <label htmlFor="channel">Canal</label>
+          <select id="channel" value={channel} aria-invalid={fieldErrors.channel ? true : undefined} aria-describedby={fieldDescription("channel")} onChange={(event) => { setChannel(event.target.value); clearFieldError("channel"); }}>
             {template.channels.map((option) => <option key={option.key || "none"} value={option.key}>{option.label}</option>)}
           </select>
-        </label>
+          <p id="channel-error" className="small warning" hidden={!fieldErrors.channel}>{fieldErrors.channel}</p>
+          <p id="channel-hint" className="small muted">Choisissez le canal de destination.</p>
+        </div>
       )}
       {template && template.channels.length === 1 && <p className="small muted">Canal : {template.channels[0].label}</p>}
       {field && (
-        <label className="field">
-          {field.label}
+        <div className="field">
+          <label htmlFor="scope">{field.label}</label>
           {field.multiline
-            ? <textarea rows={3} minLength={field.min} maxLength={field.max} required={field.required} value={scopeValue} onChange={(event) => setScopeValue(event.target.value)} />
-            : <input minLength={field.min} maxLength={field.max} required={field.required} value={scopeValue} onChange={(event) => setScopeValue(event.target.value)} />}
-        </label>
+            ? <textarea id="scope" rows={3} minLength={field.min} maxLength={field.max} required={field.required} value={scopeValue} aria-invalid={fieldErrors.scope ? true : undefined} aria-describedby={fieldDescription("scope")} onChange={(event) => { setScopeValue(event.target.value); clearFieldError("scope"); }} />
+            : <input id="scope" minLength={field.min} maxLength={field.max} required={field.required} value={scopeValue} aria-invalid={fieldErrors.scope ? true : undefined} aria-describedby={fieldDescription("scope")} onChange={(event) => { setScopeValue(event.target.value); clearFieldError("scope"); }} />}
+          <p id="scope-error" className="small warning" hidden={!fieldErrors.scope}>{fieldErrors.scope}</p>
+          <p id="scope-hint" className="small muted">{field.min} à {field.max} caractères{field.required ? ", sans balise HTML" : " au maximum"}.</p>
+        </div>
       )}
       {templateKey === "custom" && (
-        <label className="field">
-          Règle d&apos;arrêt (en jours, de 7 à 90)
-          <input type="number" min={7} max={90} required value={stopRuleDays} onChange={(event) => setStopRuleDays(event.target.value)} />
-        </label>
+        <div className="field">
+          <label htmlFor="stopRuleDays">Règle d&apos;arrêt (en jours, de 7 à 90)</label>
+          <input id="stopRuleDays" type="number" min={7} max={90} required value={stopRuleDays} aria-invalid={fieldErrors.stopRuleDays ? true : undefined} aria-describedby={fieldDescription("stopRuleDays")} onChange={(event) => { setStopRuleDays(event.target.value); clearFieldError("stopRuleDays"); }} />
+          <p id="stopRuleDays-error" className="small warning" hidden={!fieldErrors.stopRuleDays}>{fieldErrors.stopRuleDays}</p>
+          <p id="stopRuleDays-hint" className="small muted">7 à 90 jours.</p>
+        </div>
       )}
-      <label className="field">
-        Résultat recherché
-        <textarea rows={2} minLength={5} maxLength={120} required placeholder="Ex. Obtenir deux échanges qualifiés" value={outcome} onChange={(event) => { setOutcome(event.target.value); setOutcomeTouched(true); }} />
-      </label>
+      <div className="field">
+        <label htmlFor="outcome">Résultat recherché</label>
+        <textarea id="outcome" rows={2} minLength={5} maxLength={120} required placeholder="Ex. Obtenir deux échanges qualifiés" value={outcome} aria-invalid={fieldErrors.outcome ? true : undefined} aria-describedby={fieldDescription("outcome")} onChange={(event) => { setOutcome(event.target.value); setOutcomeTouched(true); clearFieldError("outcome"); }} />
+        <p id="outcome-error" className="small warning" hidden={!fieldErrors.outcome}>{fieldErrors.outcome}</p>
+        <p id="outcome-hint" className="small muted">5 à 120 caractères, sans balise HTML.</p>
+      </div>
       <small>La création ne consomme aucun crédit et n&apos;autorise aucun envoi. Le lancement coûtera {launchCost} crédits.</small>
       {error && <p role="alert" className="warning">{error}</p>}
       <div className="heading-actions">
