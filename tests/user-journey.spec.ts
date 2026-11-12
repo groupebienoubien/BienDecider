@@ -3091,7 +3091,7 @@ test("GH-280: step 2 shows Paul's hypotheses and what was observed, with its sou
   try {
     await prisma.onboardingDraft.update({ where: { id: draft.id }, data: { profileConfirmed: false, analysis: {
       runId: "run-vue", status: "done", startedAt: readAt, finishedAt: readAt,
-      input: { companyName: "Atelier Lumen", location: "Lyon", website: "https://atelier-lumen.test" },
+      input: { companyName: "Atelier Lumen", location: "Lyon", website: "https://atelier-lumen.test", googlePlaceId: null, googlePlaceCandidateIds: [], websiteRejected: false },
       rubrics: { site: { status: "read" }, google: { status: "read" }, zone: { status: "read" }, identity: { status: "read" } },
       findings: {
         trade: { value: "Électricien", provenance: { kind: "hypothesis" } }, servingArea: { value: "Lyon et Villeurbanne", provenance: { kind: "hypothesis" } },
@@ -3131,7 +3131,7 @@ test("GH-281: step 2 says where each field comes from, and « Non, corriger mes 
   try {
     await prisma.onboardingDraft.update({ where: { id: draft.id }, data: { profileConfirmed: false, analysis: {
       runId: "run-corriger", status: "done", startedAt: readAt, finishedAt: readAt,
-      input: { companyName: "Atelier Lumen", location: "Lyon", website },
+      input: { companyName: "Atelier Lumen", location: "Lyon", website, googlePlaceId: null, googlePlaceCandidateIds: [], websiteRejected: false },
       rubrics: { site: { status: "read" }, google: { status: "not_found" }, zone: { status: "read" }, identity: { status: "read" } },
       findings: {
         trade: { value: "Électricien", provenance: { kind: "hypothesis" } }, servingArea: null,
@@ -3191,7 +3191,7 @@ test("GH-169: the origins from the analysis, kept unchanged at step 2, are store
   try {
     await prisma.onboardingDraft.update({ where: { id: draft.id }, data: { analysis: {
       runId: "run-origines", status: "done", startedAt: readAt, finishedAt: readAt,
-      input: { companyName: "Atelier Lumen", location: "Lyon", website },
+      input: { companyName: "Atelier Lumen", location: "Lyon", website, googlePlaceId: null, googlePlaceCandidateIds: [], websiteRejected: false },
       rubrics: { site: { status: "read" }, google: { status: "not_found" }, zone: { status: "read" }, identity: { status: "read" } },
       findings: {
         trade: { value: "Électricien", provenance: { kind: "hypothesis" } }, servingArea: null,
@@ -3225,7 +3225,7 @@ test("GH-169: the origins from the analysis, kept unchanged at step 2, are store
 function analysisWithConstats(website: string, readAt: string) {
   return {
     runId: "run-constats", status: "done", startedAt: readAt, finishedAt: readAt,
-    input: { companyName: "Atelier Lumen", location: "Lyon", website },
+    input: { companyName: "Atelier Lumen", location: "Lyon", website, googlePlaceId: null, googlePlaceCandidateIds: [], websiteRejected: false },
     rubrics: { site: { status: "read" }, google: { status: "not_found" }, zone: { status: "read" }, identity: { status: "read" } },
     findings: { trade: null, servingArea: null, targetClients: null, offers: null, tone: null, contacts: [], palette: null, logo: null, google: null, pages: [{ url: `${website}/`, readAt }] },
     cost: { usd: 0, inputTokens: 0, outputTokens: 0 },
