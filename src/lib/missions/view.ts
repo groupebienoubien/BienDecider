@@ -9,6 +9,7 @@ import { MISSION_TEMPLATES, type TemplateKey } from "@/lib/missions/templates";
 import { responsibleLabel, type MissionStatus } from "@/lib/missions/rules";
 import { isUpToDate, stopRuleDue } from "@/lib/missions/report";
 import { listAgencies } from "@/lib/agencies/service";
+import { readMissionDecisionPlan, type MissionDecisionPlan } from "@/lib/missions/decision-plan";
 
 export type MissionActionData = {
   id: string;
@@ -20,6 +21,7 @@ export type MissionActionData = {
   channelLabel: string;
   scopeSummary: string;
   stopRuleDays: number | null;
+  decisionPlan: MissionDecisionPlan | null;
   launched: boolean;
 };
 
@@ -43,6 +45,7 @@ export type MissionView = StageMission & {
   channelLabel: string;
   scopeSummary: string;
   scope: Record<string, unknown>;
+  decisionPlan: MissionDecisionPlan | null;
   stopRuleDays: number | null;
   hasValidatedVersion: boolean;
   contentId: string | null;
@@ -136,6 +139,7 @@ function toView(mission: MissionWithContent, priorityId: string | null, connecte
     channelLabel: label,
     scopeSummary: summary,
     scope,
+    decisionPlan: readMissionDecisionPlan(scope.decisionPlan),
     stopRuleDays: mission.stopRuleDays,
     hasValidatedVersion: mission.hasValidatedVersion,
     contentId: mission.content && mission.content.currentNumber > 0 ? mission.content.id : null,
@@ -149,6 +153,7 @@ function toView(mission: MissionWithContent, priorityId: string | null, connecte
       channelLabel: label,
       scopeSummary: summary,
       stopRuleDays: mission.stopRuleDays,
+      decisionPlan: readMissionDecisionPlan(scope.decisionPlan),
       launched: mission.firstLaunchedAt !== null,
     },
     ...resultsOf(mission),

@@ -4,6 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { requireLocalDatabase } from "./support/local-database";
 import { createSessionToken } from "../src/lib/session-token";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { createMissionDecisionPlan } from "../src/lib/missions/decision-plan";
 
 // Next n'utilise un vrai AsyncLocalStorage que s'il est exposé globalement au
 // chargement de ses modules (le serveur Next le fait au démarrage). Sans lui,
@@ -2423,7 +2424,7 @@ test("GH-168: Paul links a mission only to a current finding of the company; acc
     const status = JSON.parse(await paul.tool("get_current_status").run({}));
     expect(status.constats).toEqual([{ id: current.id, titre: "Le site ne montre aucun contact", categorie: "Site web", certitude: "Observé" }]);
 
-    const mission = { template: "social_post", title: "Montrer un chantier", outcome: "Des demandes de devis", finding: "Le site ne montre aucun contact", scope: { topic: "Nos chantiers" } };
+    const mission = { template: "social_post", title: "Montrer un chantier", outcome: "Des demandes de devis en 7 jours", finding: "Le site ne montre aucun contact", scope: { topic: "Nos chantiers" }, decisionPlan: createMissionDecisionPlan("social_post", { topic: "Nos chantiers" }, "Tester un chantier avec contact visible avant d'élargir la diffusion.") };
     const deduction = "Un chantier publié avec un numéro visible peut ramener des demandes.";
     for (const findingId of [foreign.id, old.id, "inconnu"]) {
       expect(await paul.tool("propose_mission").run({ ...mission, findingId, deduction })).toContain("ce constat n'est pas dans le diagnostic actuel");
@@ -2498,7 +2499,7 @@ test("GH-288: Paul has only proposal tools, names no other agent, and checks eac
     expect(await paul.tool("propose_dismiss").run({ missionId: active.id })).toContain(renderMissionMessage("M-22"));
     expect(await paul.tool("propose_pause").run({ missionId: foreign.id })).toContain("Aucune carte créée");
     expect(await paul.tool("propose_mission_launch").run({ missionId: active.id })).toContain("déjà en cours");
-    expect(await paul.tool("propose_mission").run({ template: "social_post", title: "abc", outcome: "Des demandes", finding: "Un constat assez long" })).toContain(renderMissionMessage("M-20"));
+    expect(await paul.tool("propose_mission").run({ template: "social_post", title: "abc", outcome: "Des demandes en 7 jours", finding: "Un constat assez long", decisionPlan: createMissionDecisionPlan("social_post", {}, "Tester une publication avant d'élargir la diffusion.") })).toContain(renderMissionMessage("M-20"));
     expect(await prisma.paulPendingAction.count({ where: { companyId: company.id } })).toBe(0);
 
     // Au plus trois cartes par réponse, tous types confondus ; rien n'est appliqué avant l'acceptation.
@@ -3686,7 +3687,7 @@ test("story 5.5: deleting an account deletes its photo files first, best effort,
   }
 });
 
-const IDEA_MISSION = { template: "custom", channel: null, title: "Salon du quartier", outcome: "Dix contacts utiles", finding: "Un salon a lieu près de chez moi en mai", scope: { description: "Tenir un stand au salon de mon quartier" }, stopRuleDays: 21 };
+const IDEA_MISSION = { template: "custom", channel: null, title: "Salon du quartier", outcome: "Dix contacts utiles en 21 jours", finding: "Un salon a lieu près de chez moi en mai", scope: { description: "Tenir un stand au salon de mon quartier" }, stopRuleDays: 21, decisionPlan: createMissionDecisionPlan("custom", {}, "Tester le salon auprès de la clientèle locale avant d'autres démarches.") };
 
 test("GH-312: an idea is noted only on « Noter l'idée », with J-16 and the prefilled frame; « Garder le cap actuel » notes nothing", async ({ company }) => {
   const { prisma } = await import("../src/lib/prisma");

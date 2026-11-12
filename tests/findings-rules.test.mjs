@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { CERTAINTY_LABELS, CERTAINTY_LEVELS, CERTAINTY_TONES, isCertainty, normalizeCertainty } from "../src/lib/findings/certainty.ts";
 import { CORRECTION_BOUNDS, checkCorrection, clearsReview, correctedFields, journalQuote, reviewSuite, versionFields } from "../src/lib/findings/correction.ts";
-import { starterFindingLinks } from "../src/lib/findings/starter-links.ts";
 import { CAPACITY_RECONFIRM_DAYS, capacityLabel, capacityPromptLine, capacityState, checkCapacity } from "../src/lib/capacity.ts";
 import { businessTargetLines, computeBusinessTarget } from "../src/lib/business-target.ts";
 import { competitorRows, dismissedCompetitorNames } from "../src/lib/findings/competitors.ts";
@@ -50,14 +49,6 @@ test("J-34 dit combien de missions sont à réexaminer, et cite le constat sur u
   assert.equal(reviewSuite(3), "3 missions à réexaminer, rien n'est relancé.");
   assert.equal(journalQuote("Un constat\nsur deux lignes"), "Un constat sur deux lignes");
   assert.equal(journalQuote("a".repeat(100)).length, 80);
-});
-
-test("les missions de départ citent le constat de leur sujet, un constat libre d'abord", () => {
-  assert.deepEqual(starterFindingLinks(["site_page", "social_post", "google_profile"], ["site_web", "fiche_google"]), [0, null, 1]);
-  // Deux missions de la fiche Google, un seul constat : il fonde les deux.
-  assert.deepEqual(starterFindingLinks(["google_profile", "review_reply", "custom"], ["fiche_google", "site_web"]), [0, 0, null]);
-  assert.deepEqual(starterFindingLinks(["google_profile", "review_reply"], ["fiche_google", "fiche_google"]), [0, 1]);
-  assert.deepEqual(starterFindingLinks(["site_page", "toString"], []), [null, null]);
 });
 
 test("la capacité disponible : 0 à 99, effaçable, confirmée 30 jours puis à reconfirmer", () => {

@@ -281,7 +281,7 @@ export type GroupCell = { label: string; visits: number | null; accounts: number
 export type VisitAggregate = {
   total: number;
   accounts: number;
-  /** Visiteurs arrivés à « Un cap. Trois premières pistes. » (étape 4), et ceux d'entre eux qui ont créé un compte. */
+  /** Visiteurs arrivés à « Un cap. Vos premières missions. » (étape 4), et ceux d'entre eux qui ont créé un compte. */
   reachedPlan: number;
   reachedPlanAccounts: number;
   withWebsite: number;
@@ -363,7 +363,7 @@ const cellValue = (value: number | null) => (value === null ? MASKED_LABEL : val
 export function visitsCsv(aggregate: VisitAggregate, labels: { step: (step: number) => string; rubric: (key: RubricKey) => string; template: (key: string) => string; period: string }): string {
   const lines: (string | number)[][] = [["Dimension", "Valeur", "Visites", "Comptes créés"]];
   lines.push(["Période", labels.period, aggregate.total, aggregate.accounts]);
-  lines.push(["Étape 4 atteinte", "Un cap. Trois premières pistes.", aggregate.reachedPlan, aggregate.reachedPlanAccounts]);
+  lines.push(["Étape 4 atteinte", "Un cap. Vos premières missions.", aggregate.reachedPlan, aggregate.reachedPlanAccounts]);
   for (const row of aggregate.byStep) lines.push(["Étape atteinte", labels.step(row.step), row.reached, ""], ["Étape d'abandon", labels.step(row.step), row.abandoned, ""]);
   for (const row of aggregate.byTrade) lines.push(["Activité", row.label, cellValue(row.visits), cellValue(row.accounts)]);
   for (const row of aggregate.byDepartment) lines.push(["Département", row.label, cellValue(row.visits), cellValue(row.accounts)]);
@@ -374,4 +374,3 @@ export function visitsCsv(aggregate: VisitAggregate, labels: { step: (step: numb
   lines.push(["Coût moyen avant compte, visites sans compte (USD)", "", aggregate.averageCostWithoutAccount === null ? "—" : aggregate.averageCostWithoutAccount.toFixed(2), ""]);
   return toCsv(lines);
 }
-

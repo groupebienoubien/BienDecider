@@ -11,6 +11,7 @@ export type Certainty = (typeof CERTAINTY_LEVELS)[number] | typeof DECLARED_CERT
 
 /** Libellé d'une mission créée par le dirigeant : son constat est déclaré, jamais observé. */
 export const DECLARED_LABEL = "Déclaré par vous";
+export const PROFILE_CONFIRMED_PREFIX = "Profil confirmé : ";
 
 export const CERTAINTY_LABELS: Record<Certainty, string> = {
   observe: "Observé",
@@ -124,6 +125,17 @@ export function missionProvenance(mission: { createdBy: string; finding: string;
       note: mission.finding,
       deduction,
       source: { ...mission.source, certainty },
+    };
+  }
+  if (mission.finding.startsWith(PROFILE_CONFIRMED_PREFIX)) {
+    return {
+      title: "Votre profil confirmé",
+      origin: "Profil confirmé à l'inscription",
+      certainty: DECLARED_LABEL,
+      tone: "gray",
+      note: mission.finding.slice(PROFILE_CONFIRMED_PREFIX.length),
+      deduction,
+      source: null,
     };
   }
   return { title: "Constat relevé par Paul", origin: "Conversation avec Paul", certainty: CERTAINTY_LABELS.a_verifier, tone: "orange", note: mission.finding, deduction, source: null };

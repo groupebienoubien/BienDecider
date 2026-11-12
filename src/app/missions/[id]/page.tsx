@@ -21,6 +21,7 @@ import { ScopeEditor } from "./scope-editor";
 import { ReexamineButton } from "./reexamine-button";
 import { FindingSource } from "@/app/strategie/finding-source";
 import { missionProvenance } from "@/lib/findings/certainty";
+import { MissionEvidenceList } from "@/components/mission-evidence";
 
 export const dynamic = "force-dynamic";
 
@@ -129,6 +130,15 @@ export default async function MissionPage({ params }: { params: Promise<{ id: st
             <dt>Résultat</dt><dd>{mission.outcome}</dd>
             {mission.responsibleLabel && <><dt>Préparée par</dt><dd>{mission.responsibleLabel}</dd></>}
             {mission.risk && <><dt>Risque ou limite</dt><dd>{mission.risk}</dd></>}
+            {mission.decisionPlan && <>
+              <dt>Pourquoi cette priorité</dt><dd>{mission.decisionPlan.selectionReason}</dd>
+              <dt>Indicateur</dt><dd>{mission.decisionPlan.indicator}</dd>
+              <dt>Saisie du résultat</dt><dd>{mission.decisionPlan.collectionMethod}</dd>
+              <dt>Effort</dt><dd>{mission.decisionPlan.effort}</dd>
+              <dt>Prérequis</dt><dd>{mission.decisionPlan.prerequisites}</dd>
+              <dt>Votre action</dt><dd>{mission.decisionPlan.ownerAction}</dd>
+              {mission.decisionPlan.evidence && <><dt>Faits retenus</dt><dd><MissionEvidenceList evidence={mission.decisionPlan.evidence} /></dd></>}
+            </>}
             <dt>Coût</dt><dd>{mission.actions.launched ? "Lancée : crédits déjà réglés" : `${LAUNCH_COST_CREDITS} crédits au lancement`}</dd>
             <dt>Dépenses externes</dt><dd>0 € engagé</dd>
             <dt>Règle d&apos;arrêt</dt><dd>{mission.stopRuleDays ? `Bilan à ${mission.stopRuleDays} jours` : "—"}</dd>

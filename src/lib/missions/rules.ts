@@ -1,6 +1,7 @@
 import type { MissionMessageCode } from "@/lib/missions/messages";
 import { channelLabel, isChannelEnabled, isMissionChannel, type MissionChannel } from "@/lib/missions/channels";
 import { MISSION_TEMPLATES, availableTemplates, isTemplateKey, resolveStopRuleDays, type MissionTemplate, type TemplateKey } from "@/lib/missions/templates";
+import { missionDecisionPlanSchema, type MissionDecisionPlan } from "@/lib/missions/decision-plan";
 
 /** Règles pures des missions (spécification §2.2) : le serveur les applique, l'interface et Paul n'en ont aucune qui leur soit propre. */
 export const LAUNCH_COST_CREDITS = 3;
@@ -28,7 +29,7 @@ function checkChannel(template: MissionTemplate, channel: unknown): { ok: true; 
   return { ok: true, channel };
 }
 
-export type NewMission = { template: TemplateKey; channel: MissionChannel | null; title: string; outcome: string; finding: string; scope: Record<string, unknown>; stopRuleDays: number };
+export type NewMission = { template: TemplateKey; channel: MissionChannel | null; title: string; outcome: string; finding: string; scope: Record<string, unknown>; stopRuleDays: number; decisionPlan: MissionDecisionPlan };
 
 export function validateNewMission(body: unknown, openOwnerMissions: number): { ok: true; value: NewMission } | MissionFailure {
   const input = body !== null && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>) : {};
@@ -47,7 +48,9 @@ export function validateNewMission(body: unknown, openOwnerMissions: number): { 
   // Hors « Sur mesure », le périmètre peut se compléter avant le lancement ; s'il est donné, il doit être valide.
   const scope = template.key !== "custom" && Object.keys(given).length === 0 ? { ok: true as const, scope: {} } : template.validateScope(given);
   if (!scope.ok) return failure(scope.code);
-  return { ok: true, value: { template: template.key, channel: channel.channel, title, outcome, finding, scope: scope.scope, stopRuleDays: stop.days } };
+  const decisionPlan = missionDecisionPlanSchema.safeParse(input.decisionPlan);
+  if (!decisionPlan.success) return failure("M-20");
+  return { ok: true, value: { template: template.key, channel: channel.channel, title, outcome, finding, scope: scope.scope, stopRuleDays: stop.days, decisionPlan: decisionPlan.data } };
 }
 
 /**

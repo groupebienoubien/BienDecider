@@ -66,6 +66,18 @@ Prérequis : Node.js, une clé API Anthropic (https://console.anthropic.com/), u
 
 Audit de l'onboarding, correctifs de confiance et cas d'usage priorisés pour l'analyse publique et les missions orientées objectif : [Onboarding et valeur des missions — 12 novembre 2026](docs/onboarding-valeur-missions-2026-11-12.md). Le moteur approfondi décrit dans ce document reste à réaliser ; les correctifs ciblés ne constituent pas une refonte complète.
 
+Les nouvelles premières missions sont sélectionnées et rédigées avec **Opus 5.5**, raisonnement adaptatif et effort élevé, après la recherche de marché (les autres agents restent sur Sonnet). Le dossier comprend les constats observés, sources et dates, le profil confirmé, l'objectif, les contraintes et les limites de lecture. Le plan validé est conservé dans le brouillon puis transféré à l'inscription, sans nouvelle génération. Un échec ou un quota atteint n'est pas remplacé par des missions génériques. Les anciens brouillons conservent leur ancien plan : revenir à l'étape Ambition et confirmer l'objectif lance la nouvelle préparation. Les missions déjà créées ne sont pas réécrites.
+
+Tests du plan sans appel externe ni écriture en base : `node -r dotenv/config node_modules/@playwright/test/cli.js test mission-planning.spec.ts onboarding-quality.spec.ts --workers=1`. La configuration `.env` est chargée pour les imports serveur, mais ces tests ne consultent pas la base. Évaluation payante sur deux entreprises fictives avec le vrai modèle, sans accès à la base, dans PowerShell :
+
+```powershell
+$env:MISSION_PLANNER_LIVE = "1"
+node -r dotenv/config .\node_modules\@playwright\test\cli.js test mission-planning.spec.ts --grep "live Opus comparison" --workers=1
+Remove-Item Env:\MISSION_PLANNER_LIVE
+```
+
+L'appel de planification est limité à 6 500 tokens de sortie et 60 secondes, après une recherche de marché bornée à 60 secondes au total. La route dispose de 180 secondes ; la progression considère un traitement interrompu après ce délai comme un échec. Coût, modèle et tokens de planification ont leur propre événement `onboarding_mission_planning` à l'inscription.
+
 Gmail manuel : voir [docs/oauth-setup.md](docs/oauth-setup.md) pour `GMAIL_OAUTH_CLIENT_ID`, `GMAIL_OAUTH_CLIENT_SECRET` et `OAUTH_TOKEN_ENCRYPTION_KEY`. Callback `/api/oauth/gmail/callback`, scopes Gmail send + identité standard, aucun accès en lecture aux emails. Sans ces variables, la connexion reste désactivée. Tests locaux : `npm run test:gmail` (aucun réseau).
 
 Test public de marque (aucune donnée créée ni appel agent) : `npm run test:brand`, avec un serveur local actif et Chromium installé. Vérifie les métadonnées, la langue, les liens de contact et les pages publiques de 320 à 1440 px. Tests unitaires de la voix et du flux de réponse de Paul (aucun réseau, aucune base) : `npm run test:voice`.

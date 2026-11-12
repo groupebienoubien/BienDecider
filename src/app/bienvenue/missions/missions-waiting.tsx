@@ -64,7 +64,7 @@ export function MissionsIntelligenceWatcher({ initial }: { initial: Intelligence
   return (
     <div className="flex flex-col gap-2">
       <p role="status" aria-live="polite" className="rounded-md border border-[var(--bd-line-strong)] bg-[var(--bd-cream)] p-3 text-sm font-semibold text-[var(--bd-ink)]">
-        Paul recherche votre secteur, vos concurrents et les opportunités du moment. Vos pistes seront affichées à la fin de cette recherche.
+        Paul recherche votre secteur, puis compare et prépare les missions à partir des constats et de votre objectif. Vos pistes seront affichées à la fin de cette préparation.
       </p>
       {error && <p role="alert" className="text-sm text-[var(--bd-error)]">{error}</p>}
     </div>

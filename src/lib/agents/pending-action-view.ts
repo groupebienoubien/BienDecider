@@ -5,6 +5,7 @@ import { MISSION_TEMPLATES, TEMPLATE_KEYS } from "@/lib/missions/templates";
 import { scopeSummary } from "@/lib/missions/scope";
 import { IDEA_TEXT_MAX, isIdeaId, validateIdeaText } from "@/lib/idea-text";
 import { validateDeduction } from "@/lib/missions/rules";
+import { missionDecisionPlanSchema } from "@/lib/missions/decision-plan";
 
 /**
  * Partie pure des propositions de Paul (cartes « Paul · proposition à confirmer », spécification §16.3) :
@@ -172,6 +173,7 @@ export const missionCreatePayloadSchema = z.object({
   outcome: shortText(120),
   finding: shortText(300),
   scope: z.record(z.string(), z.unknown()),
+  decisionPlan: missionDecisionPlanSchema.optional(),
   stopRuleDays: z.number().int().min(7).max(90).optional(),
   // Idée notée que cette mission cadre (US #312) : retirée à l'acceptation, dans la même transaction.
   ideaId: z.string().refine(isIdeaId).optional(),
@@ -266,6 +268,13 @@ const DESCRIBERS: Record<PendingActionType, Describer> = {
       `Constat : ${finding}`,
       ...(parsed.data.findingId ? ["Fondée sur un constat du diagnostic"] : []),
       ...(parsed.data.deduction ? [`Déduction de Paul : ${parsed.data.deduction}`] : []),
+      ...(parsed.data.decisionPlan ? [
+        `Pourquoi cette priorité : ${parsed.data.decisionPlan.selectionReason}`,
+        `Indicateur : ${parsed.data.decisionPlan.indicator}`,
+        `Saisie : ${parsed.data.decisionPlan.collectionMethod}`,
+        `Effort et prérequis : ${parsed.data.decisionPlan.effort} ${parsed.data.decisionPlan.prerequisites}`,
+        `Votre action : ${parsed.data.decisionPlan.ownerAction}`,
+      ] : []),
       `Périmètre : ${scopeSummary(template, scope)} · Règle d'arrêt : ${days ? `${days} jours` : "—"}`,
       ...(parsed.data.ideaId ? ["Elle cadre une idée notée, qui sera retirée de la liste."] : []),
       "Elle sera à décider : rien n'est lancé sans votre confirmation du cadre.",

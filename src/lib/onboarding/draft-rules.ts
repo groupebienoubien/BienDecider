@@ -3,6 +3,9 @@ import { ANALYSIS_MESSAGES, RUBRIC_KEYS, RUBRIC_NAMES, analysisFinished, analysi
 import { EMPTY_TERMS, REINTERPRET_MESSAGE, capLabel, readAmbitionTerms, type AmbitionTerms } from "@/lib/ambition-rules";
 import { INTELLIGENCE_MESSAGES, intelligenceRunning, readIntelligence, sameIntelligenceInput, type CompetitorDecision, type CompetitorFact, type DraftIntelligence, type IntelligenceInput, type OpportunityFact } from "@/lib/onboarding/intelligence-rules";
 import type { ResponsibleAgent } from "@/lib/missions/rules";
+import { createMissionDecisionPlan, type MissionDecisionPlan, type MissionEvidence } from "@/lib/missions/decision-plan";
+import { checkMissionProposal } from "@/lib/onboarding/mission-planning-rules";
+import { ambitionTargetsRequests, evaluateMissionObjective, hasNoAdditionalTime, hasNoAvailableCapacity, hasSatisfactoryBookingPage, needsWeekdayClarification } from "@/lib/missions/decision-rules";
 import { safeSourceUrl } from "@/lib/findings/certainty";
 import { decideSocialSources, readSocialSourceDecisions, type SocialSourceDecision } from "@/lib/onboarding/public-sources";
 import { isPlaceId } from "@/lib/google-places";
@@ -39,7 +42,7 @@ export type RetainedCost = { usd: number; inputTokens: number; outputTokens: num
  * `retained` (#284) : « Ce que nous retenons », 2 ou 3 phrases écrites au clic « C'est bien ça », effacées par un retour
  * avant l'étape 4 ; `retainedCost` : coût cumulé de ces rédactions, repris au compte à l'inscription.
  */
-export type DraftAmbition = { text: string; terms: AmbitionTerms; retained?: string[]; retainedCost?: RetainedCost };
+export type DraftAmbition = { text: string; terms: AmbitionTerms; retained?: string[]; retainedCost?: RetainedCost; planningVersion?: 1 };
 
 export type DraftState = {
   step: DraftStep;
@@ -63,7 +66,7 @@ export const STEP_TITLES: Record<DraftStep, string> = {
   1: "Votre entreprise. Notre point de départ.",
   2: "Paul semble avoir compris votre entreprise.",
   3: "Qu'aimeriez-vous changer ?",
-  4: "Un cap. Trois premières pistes.",
+  4: "Un cap. Vos premières missions.",
   5: "Retrouvez votre stratégie.",
 };
 
@@ -326,11 +329,54 @@ export function prefillWebsite(state: DraftState): string {
 export function intelligenceInputFor(state: DraftState): IntelligenceInput {
   const { profile } = state;
   const excludedCompetitors = state.competitorDecisions.filter((item) => item.decision === "dismissed").map(({ name, source }) => ({ name, source }));
+  const analysis = analysisMatchesProfile(state) && state.analysis?.status === "done" ? state.analysis : null;
+  const evidence: MissionEvidence[] = [];
+  for (const key of ["trade", "servingArea", "offers", "targetClients"] as const) {
+    if (profile[key].trim()) evidence.push({
+      id: `profile:${key}`, fact: clip(`${PROFILE_FIELD_WORDS[key]} : ${profile[key]}`.replace(/[<>]/g, ""), 300),
+      kind: "declared", topic: "profile", source: null, readAt: null,
+    });
+  }
+  for (const [index, finding] of (analysis?.constats ?? []).entries()) {
+    if (finding.certainty !== "observe" || !finding.source || !safeSourceUrl(finding.source) || !finding.readAt || finding.topic === "reseaux_sociaux") continue;
+    evidence.push({
+      id: `analysis:${index}`, fact: finding.fact, kind: "observed",
+      topic: finding.topic, source: finding.source, readAt: finding.readAt,
+    });
+  }
+  for (const key of ["trade", "servingArea", "offers", "targetClients", "tone"] as const) {
+    const finding = analysis?.findings[key];
+    if (!finding || finding.provenance.kind !== "observed" || !safeSourceUrl(finding.provenance.source)) continue;
+    evidence.push({
+      id: `extraction:${key}`, fact: clip(`${key === "tone" ? "Présentation" : PROFILE_FIELD_WORDS[key]} : ${finding.value}`.replace(/[<>]/g, ""), 300),
+      kind: "observed", topic: "site_web", source: finding.provenance.source, readAt: finding.provenance.readAt,
+    });
+  }
+  for (const [index, finding] of (analysis?.findings.contacts ?? []).entries()) {
+    if (finding.provenance.kind !== "observed" || !safeSourceUrl(finding.provenance.source)) continue;
+    evidence.push({
+      id: `contact:${index}`, fact: clip(`Contact lu : ${finding.value}`.replace(/[<>]/g, ""), 300),
+      kind: "observed", topic: "site_web", source: finding.provenance.source, readAt: finding.provenance.readAt,
+    });
+  }
   return {
     companyName: profile.companyName, location: profile.location, website: prefillWebsite(state),
     trade: profile.trade, servingArea: profile.servingArea, offers: profile.offers,
     targetClients: profile.targetClients, ambitionText: state.ambition?.text ?? "",
     ...(excludedCompetitors.length ? { excludedCompetitors } : {}),
+    planningContext: {
+      analysisRunId: analysis?.runId ?? null, evidence: evidence.slice(0, 30),
+      limitations: [
+        "Les publications sociales n'ont pas été lues ; les liens de profils ne prouvent ni leur activité ni leur performance.",
+        ...(analysis ? RUBRIC_KEYS.filter((key) => analysis.rubrics[key].status !== "read").map((key) => `${RUBRIC_NAMES[key]} : non lu.`) : ["Aucune analyse publique à jour."]),
+        ...(analysis?.findings.readLimitations ?? []).map((item) => clip(`${item.url} : ${item.reason}`, 600)),
+      ].slice(0, 30),
+      hypotheses: (analysis?.constats ?? []).map((finding) => clip(finding.consequence, 300)),
+      mediaBudgetPerMonth: state.ambition?.terms.mediaBudgetPerMonth ?? null,
+      recruitment: state.ambition?.terms.recruitment ?? "unspecified",
+      socialProfiles: state.socialSourceDecisions.flatMap((item) =>
+        item.status === "confirmed" && item.confirmedUrl ? [{ platform: item.platform, url: item.confirmedUrl }] : []),
+    },
   };
 }
 
@@ -338,6 +384,8 @@ export function matchingIntelligence(state: DraftState): DraftIntelligence | nul
   if (!state.intelligence) return null;
   const stored = { ...state.intelligence.input, excludedCompetitors: undefined };
   const current = { ...intelligenceInputFor(state), excludedCompetitors: undefined };
+  // Les anciens brouillons ne possèdent pas encore de dossier de planification ; leur prochaine recherche le crée.
+  if (!stored.planningContext) current.planningContext = undefined;
   return sameIntelligenceInput(stored, current) ? state.intelligence : null;
 }
 
@@ -471,7 +519,7 @@ export function applyDraftAction(state: DraftState, request: DraftAction, now = 
       if (!confirmed.ok) return invalid(confirmed);
       // « Ce que nous retenons » est écrit ensuite par la route (#284) ; le coût des rédactions précédentes reste.
       const previousCost = state.ambition?.retainedCost;
-      return { ok: true, state: { ...state, step: 4, ambition: { text: checked.ambition, terms: confirmed.terms, ...(previousCost ? { retainedCost: previousCost } : {}) }, diagnosticReady: true } };
+      return { ok: true, state: { ...state, step: 4, ambition: { text: checked.ambition, terms: confirmed.terms, planningVersion: 1, ...(previousCost ? { retainedCost: previousCost } : {}) }, diagnosticReady: true } };
     }
     case "competitor_decision": {
       if (state.step !== 4 || !state.diagnosticReady) return { ok: false, kind: "wrong_step", step: state.step };
@@ -616,11 +664,6 @@ export function siteWasRead(state: DraftState): boolean {
   return analysisMatchesProfile(state) && state.analysis?.status === "done" && state.analysis.rubrics.site.status === "read";
 }
 
-/** L'ambition vise-t-elle des demandes (devis, appels, rendez-vous, nouveaux clients) ? */
-export function ambitionTargetsRequests(text: string): boolean {
-  return /\b(demandes?|devis|appels?|contacts?|rendez-vous|prospects?|nouveaux clients|nouvelles clientes?)\b/i.test(text);
-}
-
 /** Offres distinctes, dans l'ordre cité, coupées sur virgule, point-virgule, barre ou « et ». */
 function offerList(offers: string): string[] {
   return offers.split(/[,;\n/·]|\s+et\s+/).map((part) => part.trim()).filter(Boolean);
@@ -641,8 +684,9 @@ function secondSegment(targetClients: string): string | null {
   return targetClients.split(/[,;\n/·]|\s+et\s+/).map((part) => part.trim()).filter(Boolean)[1] ?? null;
 }
 
-/** Ce qui manque à l'ambition pour être une cible chiffrée (gain, horizon). */
-function missingTerms(terms: AmbitionTerms | undefined): string[] {
+/** Les éléments chiffrés sont facultatifs dès qu'un objectif libre a été confirmé. */
+function missingTerms(text: string | null | undefined, terms: AmbitionTerms | undefined): string[] {
+  if (text?.trim()) return [];
   const missing: string[] = [];
   if (!terms || terms.gainPercent === null) missing.push("le gain visé");
   if (!terms || terms.horizonMonths === null) missing.push("l'horizon");
@@ -661,7 +705,7 @@ export function starterReserves(state: DraftState): string[] {
   else if (unread.length) reserves.push(`rubriques non lues (${unread.join(", ")})`);
   const toConfirm = (Object.keys(PROFILE_FIELD_WORDS) as ProfileField[]).filter((field) => confirmedOrigin(state, field) === "hypothesis").map((field) => PROFILE_FIELD_WORDS[field]);
   if (toConfirm.length) reserves.push(`valeurs à confirmer (${toConfirm.join(", ")})`);
-  const missing = missingTerms(state.ambition?.terms);
+  const missing = missingTerms(state.ambition?.text, state.ambition?.terms);
   if (missing.length) reserves.push(`${missing.join(" et ")} à préciser`);
   return reserves;
 }
@@ -746,6 +790,7 @@ export type StarterMission = {
   first: boolean;
   responsibleAgent: ResponsibleAgent;
   risk: string;
+  decisionPlan: MissionDecisionPlan;
 };
 
 export type StarterRecap = { companyName: string; location: string; trade: string; servingArea: string; details: string[]; cap: string; notes: string[] };
@@ -754,14 +799,51 @@ const noAngles = (value: string) => value.replace(/[<>]/g, "");
 export type StarterPlan = { recap: StarterRecap; retained: string[]; missions: StarterMission[] };
 
 /**
- * Rang des modèles de l'étape 4 (Design Notes de #284), parmi les modèles disponibles sans les agences :
- * la page du site d'abord si le site n'a pas été lu ou si l'ambition vise des demandes ; puis la publication ;
- * puis la fiche Google et les avis si leur canal s'ouvre ; « Sur mesure » en dernier recours. Trois au plus.
+ * Classement déterministe des pistes étayées par les informations confirmées : une lecture de site est nécessaire
+ * avant de proposer une page, les déclarations d'offre/clientèle peuvent justifier un test de publication, et une
+ * mission sur mesure exige une occasion de marché réellement trouvée. Les modèles sans preuve exploitable sont omis.
  */
 export function rankStarterTemplates(state: DraftState, available: readonly TemplateKey[] = availableTemplates().map((template) => template.key)): TemplateKey[] {
-  const sitePriority = !siteWasRead(state) || ambitionTargetsRequests(state.ambition?.text ?? "");
-  const order: TemplateKey[] = [...(sitePriority ? ["site_page" as const] : []), "social_post", "google_profile", "review_reply", ...(sitePriority ? [] : ["site_page" as const]), "custom"];
+  const intelligence = matchingIntelligence(state);
+  if (!intelligence?.planning && (state.ambition?.planningVersion === 1 || state.intelligence?.planning)) return [];
+  if (intelligence?.planning) {
+    if (intelligence.planning.status !== "done") return [];
+    const checked = checkMissionProposal(intelligence.planning.proposal, intelligence, available);
+    return checked.ok ? checked.value.missions.map((mission) => mission.template) : [];
+  }
+  const ambition = state.ambition?.text ?? "";
+  if (!evaluateMissionObjective({ template: "custom", objective: ambition }).allowed) return [];
+  const hasOfferAndAudience = Boolean(state.profile.offers.trim() && state.profile.targetClients.trim());
+  const requests = ambitionTargetsRequests(ambition);
+  const facts = starterFacts(matchingIntelligence(state));
+  const order: TemplateKey[] = [
+    ...(requests && state.profile.offers.trim() && evaluateMissionObjective({ template: "site_page", objective: ambition }).allowed && siteWasRead(state) ? ["site_page" as const] : []),
+    ...(requests && hasOfferAndAudience && evaluateMissionObjective({ template: "social_post", objective: ambition }).allowed ? ["social_post" as const] : []),
+    ...(facts.opportunity && evaluateMissionObjective({ template: "custom", objective: ambition }).allowed ? ["custom" as const] : []),
+  ];
   return order.filter((key) => available.includes(key) && !STARTER_EXCLUDED.includes(key)).slice(0, 3);
+}
+
+function starterSelectionReason(template: TemplateKey, index: number, state: DraftState): string {
+  const ambition = state.ambition?.text ?? "";
+  const siteRead = siteWasRead(state);
+  const satisfactoryPage = hasSatisfactoryBookingPage(ambition);
+  if (template === "site_page") {
+    return index === 0
+      ? "Objectif : demandes ; site lu. La page passe avant une publication comme point d'entrée vérifiable. Fiche/avis : aucun constat ; sur-mesure : aucune occasion trouvée. Contenu à retravailler à confirmer."
+      : "Votre objectif vise des demandes et le site a été lu ; cette page reste une piste vérifiable après le premier test.";
+  }
+  if (template === "social_post") {
+    const pageDecision = !siteRead
+      ? "Page écartée : site non lu."
+      : satisfactoryPage
+        ? "Page écartée : réservation déjà satisfaisante."
+        : index > 0
+          ? "Page prioritaire : point d'entrée vérifiable."
+          : "Page non retenue dans ce catalogue.";
+    return `Objectif demandes ; offre et clientèle confirmées. ${pageDecision} Fiche/avis : aucun constat ; sur-mesure : aucune occasion trouvée.`;
+  }
+  return "Cette piste est retenue parce qu'une occasion de marché a été trouvée ; le périmètre et les moyens restent à confirmer avec vous.";
 }
 
 /** Résumé du périmètre proposé (§6.3). */
@@ -924,10 +1006,32 @@ export function starterPlan(state: DraftState, available?: readonly TemplateKey[
   const notes: string[] = [];
   if (!profile.website && !siteWasRead(state)) notes.push(SITE_NOT_GIVEN_NOTICE);
   else if (!siteWasRead(state)) notes.push(SITE_NOT_READ_NOTICE);
-  const missing = missingTerms(state.ambition?.terms);
+  const missing = missingTerms(state.ambition?.text, state.ambition?.terms);
   if (missing.length) notes.push(`La cible reste à préciser : ${missing.join(" et ")} ${missing.length > 1 ? "ne sont pas indiqués" : "n'est pas indiqué"}.`);
+  if (state.ambition?.terms.mediaBudgetPerMonth === 0) notes.push("Budget média nul : seules des pistes sans dépense publicitaire sont proposées.");
+  if (needsWeekdayClarification(state.ambition?.text ?? "")) notes.push("Pour choisir un test adapté à votre objectif en semaine : quels jours ou créneaux voulez-vous remplir, et quelle capacité avez-vous alors ?");
+  else if (hasNoAdditionalTime(state.ambition?.text ?? "")) notes.push("Vous indiquez ne pas avoir de temps supplémentaire : aucune piste nécessitant une action de votre part n'est proposée.");
+  else if (hasNoAvailableCapacity(state.ambition?.text ?? "")) notes.push("Votre capacité d'accueil semble atteinte : je n'oriente pas vers une acquisition supplémentaire sans capacité confirmée.");
+  if (hasSatisfactoryBookingPage(state.ambition?.text ?? "")) notes.push("Vous indiquez que votre page ou réservation est déjà satisfaisante : elle n'est pas proposée à refaire.");
   const facts = starterFacts(matchingIntelligence(state));
-  const missions = rankStarterTemplates(state, available).map((key, index): StarterMission => {
+  const intelligence = matchingIntelligence(state);
+  const planning = intelligence?.planning;
+  const checkedPlan = planning?.status === "done" && intelligence
+    ? checkMissionProposal(planning.proposal, intelligence, available)
+    : null;
+  if ((planning || state.ambition?.planningVersion === 1 || state.intelligence?.planning) && (!checkedPlan || !checkedPlan.ok)) notes.push(INTELLIGENCE_MESSAGES.planningFailed);
+  if (checkedPlan?.ok && checkedPlan.value.notice) notes.push(checkedPlan.value.notice);
+  const templates = rankStarterTemplates(state, available);
+  if (templates.length === 0 && !needsWeekdayClarification(state.ambition?.text ?? "") && !hasNoAdditionalTime(state.ambition?.text ?? "") && !hasNoAvailableCapacity(state.ambition?.text ?? "")) {
+    notes.push("Je n'ai pas assez d'éléments pour justifier une mission sans supposer un problème. Précisez votre offre, votre clientèle ou la contrainte qui compte le plus avec Paul.");
+  }
+  const missions = checkedPlan?.ok ? checkedPlan.value.missions.map((mission, index): StarterMission => ({
+    ...mission,
+    origin: mission.decisionPlan.evidence?.every((item) => item.kind === "declared") ? ORIGIN_DECLARED
+      : mission.decisionPlan.evidence?.some((item) => item.topic === "opportunite") ? ORIGIN_RESEARCH : ORIGIN_SITE,
+    scopeLabel: starterScopeLabel(mission.template, mission.scope),
+    first: index === 0, responsibleAgent: MISSION_TEMPLATES[mission.template].defaultAgent,
+  })) : templates.map((key, index): StarterMission => {
     const template = MISSION_TEMPLATES[key];
     const raw = starterBody(key, state, facts);
     // Les textes du brouillon ne portent jamais de chevrons (refusés à la création, qui annulerait l'inscription).
@@ -940,13 +1044,14 @@ export function starterPlan(state: DraftState, available?: readonly TemplateKey[
     return {
       template: key, channel: key === "custom" ? null : enabledChannels(template)[0] ?? null, ...body,
       scopeLabel: starterScopeLabel(key, body.scope), first: index === 0, responsibleAgent: template.defaultAgent, risk: template.defaultRisk,
+      decisionPlan: createMissionDecisionPlan(key, body.scope, starterSelectionReason(key, index, state)),
     };
   });
   // Rappel : sans partie vide, et sans la zone quand elle répète la localisation.
   const details = [profile.location, profile.trade, profile.servingArea === profile.location ? "" : profile.servingArea].filter(Boolean);
   return {
     recap: { companyName: profile.companyName, location: profile.location, trade: profile.trade, servingArea: profile.servingArea, details, cap: capLabel(state.ambition?.text, state.ambition?.terms), notes },
-    retained: state.ambition?.retained ?? retainedFromRules(state),
+    retained: checkedPlan?.ok ? checkedPlan.value.retained : state.ambition?.retained ?? retainedFromRules(state),
     missions,
   };
 }
@@ -988,7 +1093,7 @@ export function readDraftState(row: { step: number; profile: unknown; ambition: 
     websiteRejected: raw.websiteRejected === true,
     // Une ambition d'avant #282 (texte seul) garde des éléments vides.
     ambition: typeof ambitionRaw.text === "string"
-      ? { text: ambitionRaw.text, terms: readAmbitionTerms(ambitionRaw.terms) ?? { ...EMPTY_TERMS }, ...(retained ? { retained } : {}), ...(retainedCost ? { retainedCost } : {}) }
+      ? { text: ambitionRaw.text, terms: readAmbitionTerms(ambitionRaw.terms) ?? { ...EMPTY_TERMS }, ...(retained ? { retained } : {}), ...(retainedCost ? { retainedCost } : {}), ...(ambitionRaw.planningVersion === 1 ? { planningVersion: 1 as const } : {}) }
       : null,
     profileConfirmed: row.profileConfirmed,
     diagnosticReady: row.diagnosticReady,

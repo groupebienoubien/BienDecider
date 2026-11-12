@@ -24,7 +24,7 @@ export async function waitForIntelligence(request: APIRequestContext, baseURL: s
     if (!response.ok()) return false;
     const { intelligence } = await response.json();
     return intelligence === null || intelligence?.finished === true;
-  }, { timeout: 95_000, intervals: [300, 600, 1200] }).toBe(true);
+  }, { timeout: 185_000, intervals: [300, 600, 1200] }).toBe(true);
 }
 
 /** Étape 1 par l'API du parcours : « Découvrir », fin de l'analyse, puis « Voir les constats » (étape 2). */

@@ -83,6 +83,8 @@ jobs:
         run: npm run test:findings
       - name: Recherche de marché avant compte (règles pures)
         run: npm run test:intelligence
+      - name: Planification des missions et qualité onboarding (modèle simulé, sans base)
+        run: npx playwright test mission-planning.spec.ts onboarding-quality.spec.ts --workers=1
       - name: Backlog importer tests (no network)
         run: node --test scripts/sync-backlog.test.cjs
       - name: Wiki pages build and relative links resolve

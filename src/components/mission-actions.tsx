@@ -129,6 +129,14 @@ export function MissionActions({ mission, credits, launchCost, variant }: { miss
           <dt>Coût en crédits</dt><dd>{mission.launched ? "Reprise sans frais" : `${cost} crédits · solde ${credits}`}</dd>
           <dt>Dépenses externes</dt><dd>0 € engagé</dd>
           <dt>Règle d&apos;arrêt</dt><dd>{mission.stopRuleDays ? `${mission.stopRuleDays} jours` : "—"}</dd>
+          {mission.decisionPlan && <>
+            <dt>Pourquoi cette priorité</dt><dd>{mission.decisionPlan.selectionReason}</dd>
+            <dt>Indicateur</dt><dd>{mission.decisionPlan.indicator}</dd>
+            <dt>Saisie du résultat</dt><dd>{mission.decisionPlan.collectionMethod}</dd>
+            <dt>Effort</dt><dd>{mission.decisionPlan.effort}</dd>
+            <dt>Prérequis</dt><dd>{mission.decisionPlan.prerequisites}</dd>
+            <dt>Votre action</dt><dd>{mission.decisionPlan.ownerAction}</dd>
+          </>}
         </dl>
         {short && <p className="warning">Crédits insuffisants : il en faut {cost}, il vous en reste {credits}. <a href="mailto:contact@biendecider.com">Écrivez-nous</a></p>}
         <p className="notice">Paul coordonne la préparation. Lancer n&apos;envoie et ne publie rien : chaque envoi ou publication reste soumis à votre confirmation.</p>
