@@ -692,6 +692,9 @@
 .mq.workspace-v52 .task-list p{margin:2px 0 0}
 .mq.workspace-v52 .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:0 20px}
 .mq.workspace-v52 .new-mission-form{max-width:760px}
+.mq.workspace-v52 .new-mission-form .field>label{display:block}
+.mq.workspace-v52 .new-mission-form .field>input,.mq.workspace-v52 .new-mission-form .field>textarea,.mq.workspace-v52 .new-mission-form .field>select{display:block}
+.mq.workspace-v52 .new-mission-form .field>p{margin:4px 0 0;font-weight:400}
 .mq.workspace-v52 .paul-brief{background:white;border-left:3px solid var(--green);padding:12px 16px;font-size:13px;max-width:760px}
 .mq.workspace-v52 .metrics-3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin:0 0 24px}
 .mq.workspace-v52 .metrics-3 div{background:white;border:1px solid var(--line);border-radius:6px;padding:14px}
