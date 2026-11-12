@@ -2243,9 +2243,9 @@ test("GH-284: step 4 missions are distinct, valid, sourced and the first one is 
   // Périmètres (§6.3) et déduction de la page du site sans site.
   const noSite = starterPlan(step4Draft({ read: false }), ["social_post", "site_page", "custom"]).missions;
   expect(noSite.map((mission) => [mission.template, mission.scopeLabel])).toEqual([
-    ["site_page", "Rénovation électrique"], ["social_post", "Rénovation électrique"], ["custom", expect.stringContaining("Une action que vous menez vous-même")],
+    ["site_page", "Rénovation électrique"], ["social_post", "dépannage"], ["custom", expect.stringContaining("Une action que vous menez vous-même")],
   ]);
-  expect(noSite[0].deduction).toBe("Vous n'avez pas encore de page qui présente Rénovation électrique : c'est le premier point d'entrée de vos clients.");
+  expect(noSite[0].deduction).toBe("Vous visez +20 % de chiffre d'affaires en 12 mois : vous n'avez pas encore de page qui présente Rénovation électrique, pourtant le premier point d'entrée de vos clients.");
   const google = starterPlan(step4Draft(), ["google_profile", "review_reply"]).missions;
   expect(google.map((mission) => mission.scopeLabel)).toEqual(["Votre fiche Google", "Aucun avis choisi"]);
   // Valeurs par défaut du modèle d'action : agent et risque.
@@ -2258,7 +2258,7 @@ test("GH-284: step 4 missions are distinct, valid, sourced and the first one is 
 test("GH-284: the finding cites its origin — « Lu sur le site » only for values observed and kept as they were", () => {
   const declared = starterPlan(step4Draft(), ["social_post"]).missions[0];
   expect(declared.origin).toBe(ORIGIN_DECLARED);
-  expect(declared.finding).toBe("Vos clients : Particuliers propriétaires. Votre offre : Rénovation électrique.");
+  expect(declared.finding).toBe("Vos clients : Particuliers propriétaires. Votre offre : dépannage.");
   const seen = starterPlan(step4Draft({ observedOffers: true }), ["social_post"]).missions[0];
   expect(seen.origin).toBe(ORIGIN_SITE);
   // Une valeur observée puis corrigée par le dirigeant redevient « Vous nous avez dit ».
@@ -2267,7 +2267,7 @@ test("GH-284: the finding cites its origin — « Lu sur le site » only for val
   // Une analyse d'une autre entreprise ne compte pas.
   expect(starterPlan({ ...corrected, profile: { ...corrected.profile, companyName: "Autre" } }, ["social_post"]).missions[0].origin).toBe(ORIGIN_DECLARED);
   // « Sur mesure » cite l'ambition : toujours « Vous nous avez dit ».
-  expect(starterPlan(step4Draft({ observedOffers: true }), ["custom"]).missions[0]).toMatchObject({ origin: ORIGIN_DECLARED, finding: "Votre ambition : +20 % de chiffre d'affaires en 12 mois" });
+  expect(starterPlan(step4Draft({ observedOffers: true }), ["custom"]).missions[0]).toMatchObject({ origin: ORIGIN_DECLARED, finding: "Votre ambition : +20 % de chiffre d'affaires en 12 mois. Vos clients : Particuliers propriétaires." });
 });
 
 test("GH-284: the recap, the cap and the reserves — site not read, target to refine", () => {
