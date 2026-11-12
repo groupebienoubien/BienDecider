@@ -3,8 +3,7 @@ import { after, NextRequest, NextResponse } from "next/server";
 import { getSessionEmail } from "@/lib/session";
 import { readJsonObject } from "@/lib/request-body";
 import { consumeGlobalAnalysis, consumeGlobalIntelligence, consumeIpAttempt, refundIpAttempt, type ThrottleResult } from "@/lib/auth-throttle";
-import { applyDraftAction, checkInterpretation, emptyDraft, intelligenceInputFor, parseDraftAction, stepHref, withRetained, type DraftState } from "@/lib/onboarding/draft-rules";
-import { anonymousSynthesisModel, writeRetained } from "@/lib/onboarding/synthesis";
+import { applyDraftAction, checkInterpretation, emptyDraft, intelligenceInputFor, parseDraftAction, stepHref, type DraftState } from "@/lib/onboarding/draft-rules";
 import { signInterpretation, verifyInterpretation } from "@/lib/ambition-token";
 import { anonymousAmbitionModel, interpretAmbition } from "@/lib/ambition";
 import { ANALYSIS_MESSAGES, analysisView, limitedNotice, needsNewAnalysis, newAnalysis } from "@/lib/onboarding/analysis-rules";
@@ -14,7 +13,7 @@ import { errorLabel, runDraftAnalysis } from "@/lib/onboarding/analysis";
 import { runDraftIntelligence } from "@/lib/onboarding/intelligence";
 
 // L'analyse publique (#280) se déroule après la réponse, dans la durée de la route.
-export const maxDuration = 60;
+export const maxDuration = 180;
 
 /**
  * Parcours d'entrée anonyme (#279, spécification §1.2) : POST `{ action, … }`.
@@ -45,13 +44,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: result.error, code: result.code, errors: result.errors }, { status: 422 });
   }
 
-  let state = result.state;
-  if (action.action === "confirm_ambition") {
-    // « Ce que nous retenons » (#284) : rédigé à ce clic, jamais au chargement de l'étape 4 ; les règles prennent le relais sans bloquer.
-    const model = await anonymousSynthesisModel(() => consumeIpAttempt(request, "synthesis"));
-    const synthesis = await writeRetained(state, { model });
-    state = withRetained(state, synthesis.retained, synthesis.cost);
-  }
+  const state = result.state;
 
   let draftId: string;
   if (draft) {
@@ -158,7 +151,7 @@ async function launchAnalysis(request: NextRequest, draftId: string, state: Draf
 /**
  * Lance la recherche réelle de marché pour l'étape 4 (#361, #362) : plafonnée par IP et pour tous, comme l'analyse.
  * À la différence de l'analyse, un refus (plafond, conflit) ne bloque jamais la confirmation de l'ambition : la
- * recherche est simplement absente, et les pistes se rabattent sur les règles existantes (#359, #360).
+ * recherche et planification restent absentes avec un avertissement explicite ; pas de nouvelles missions génériques.
  */
 async function launchIntelligence(request: NextRequest, draftId: string, state: DraftState, now: Date): Promise<void> {
   const input = intelligenceInputFor(state);
@@ -177,7 +170,7 @@ async function launchIntelligence(request: NextRequest, draftId: string, state: 
     }
   }
   if (limited) {
-    // Pas de recherche : le brouillon le garde, l'étape 4 s'ouvre avec les pistes actuelles (#359, #360).
+    // Le quota couvre la recherche et la planification : aucune inférence supplémentaire après un refus.
     const limit = { scope: limited === perIp ? "ip" as const : "global" as const, retryAt: new Date(now.getTime() + limited.retryAfterSeconds * 1000).toISOString() };
     await startIntelligence(draftId, newIntelligence(input, runId, now, "limited", limit), now);
     return;

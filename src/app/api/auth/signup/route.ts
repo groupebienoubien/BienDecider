@@ -8,15 +8,15 @@ import { readSignupControl, releaseSignupSlot, reserveSignupSlot, todaySignupCou
 import { sendVerificationEmail } from "@/lib/email-verification";
 import { passwordPolicyError } from "@/lib/password-policy";
 import { SIGNUP_CLOSED_MESSAGE, SIGNUP_FULL_MESSAGE, secondsUntilNextSignupDay, signupAvailability } from "@/lib/signup-rules";
-import { ADDRESS_UNAVAILABLE_MESSAGE, ONBOARDING_MESSAGES, RECOVER_ACCOUNT_HREF, analysisMatchesProfile, checkDraftForAccount, confirmedOrigin, isValidEmail, starterMarketFindings, starterPlan, stepHref, synthesisUsage } from "@/lib/onboarding/draft-rules";
+import { ADDRESS_UNAVAILABLE_MESSAGE, ONBOARDING_MESSAGES, RECOVER_ACCOUNT_HREF, analysisMatchesProfile, checkDraftForAccount, clip, confirmedOrigin, isValidEmail, starterMarketFindings, starterPlan, stepHref, synthesisUsage } from "@/lib/onboarding/draft-rules";
 import { cleanOwnerName, type ProfileOrigins } from "@/lib/company-profile";
 import { clearDraftCookie, loadDraft } from "@/lib/onboarding/draft";
 import { recordSignupTrace } from "@/lib/onboarding/visit-trace";
 import { brandProposalFromAnalysis } from "@/lib/brand/rules";
 import { analysisUsage, firstFindingRecords } from "@/lib/onboarding/analysis-rules";
-import { intelligenceUsage } from "@/lib/onboarding/intelligence-rules";
+import { PROFILE_CONFIRMED_PREFIX } from "@/lib/findings/certainty";
+import { intelligenceUsage, missionPlanningUsage } from "@/lib/onboarding/intelligence-rules";
 import { createMissionIn } from "@/lib/missions/service";
-import { starterFindingLinks } from "@/lib/findings/starter-links";
 import { writeJournal } from "@/lib/journal";
 import { ensureCreditGrant } from "@/lib/credits";
 import { startOnboardingAudit, startOnboardingGrowthSearch } from "@/lib/agents/onboarding-audit";
@@ -147,10 +147,14 @@ export async function POST(request: NextRequest) {
       });
       await ensureCreditGrant(tx, created.id);
       // Premiers constats de l'analyse anonyme (#292) : ils forment le diagnostic de départ, jusqu'au premier audit terminé.
-      // Créés un à un (trois au plus) : chaque mission de départ cite le constat de son sujet (`starterFindingLinks`).
+      // Les constats restent au diagnostic. Une mission de départ ne s'y rattache que si elle en cite explicitement un ;
+      // le classement par catégorie seul ne démontre pas de lien causal.
       const constats = firstFindingRecords(analysis);
-      const constatIds: string[] = [];
-      for (const constat of constats) constatIds.push((await tx.auditFinding.create({ data: { companyId: created.id, ...constat }, select: { id: true } })).id);
+      const sourceFindingIds = new Map<string, string>();
+      for (const [index, constat] of constats.entries()) {
+        const saved = await tx.auditFinding.create({ data: { companyId: created.id, ...constat } });
+        sourceFindingIds.set(`analysis:${index}`, saved.id);
+      }
       for (const marketFinding of starterMarketFindings(draft.state, now)) {
         await tx.auditFinding.create({ data: { companyId: created.id, ...marketFinding } });
       }
@@ -163,16 +167,18 @@ export async function POST(request: NextRequest) {
       // Recherche réelle de marché avant compte (#361, #362) : son coût revient aussi au compte, une seule fois.
       const intelligence = intelligenceUsage(draft.state.intelligence);
       if (intelligence) await tx.usageEvent.create({ data: { companyId: created.id, ...intelligence } });
+      const planning = missionPlanningUsage(draft.state.intelligence);
+      if (planning) await tx.usageEvent.create({ data: { companyId: created.id, ...planning } });
       await writeJournal(tx, { companyId: created.id, code: "J-04", params: {}, actor: "owner" });
-      // Les missions de l'étape 4, dans le même ordre, « À décider » ; la première devient la priorité, sans J-08 ni lancement (#284).
+      // Les missions étayées de l'étape 4, dans le même ordre, « À décider » ; la première devient la priorité, sans lancement (#284).
       let priorityMissionId: string | null = null;
       const starters = starterPlan(draft.state).missions;
-      const links = starterFindingLinks(starters.map((starter) => starter.template), constats.map((constat) => constat.category));
-      for (const [index, starter] of starters.entries()) {
-        const { template, channel, title, outcome, finding, scope, stopRuleDays, deduction, responsibleAgent, risk } = starter;
-        const link = links[index];
-        const sourceFindingId = link === null ? undefined : constatIds[link];
-        const mission = await createMissionIn(tx, created.id, { template, channel, title, outcome, finding, scope, stopRuleDays }, "paul", undefined, { deduction, responsibleAgent, risk, sourceFindingId });
+      for (const starter of starters) {
+        const { template, channel, title, outcome, finding, scope, stopRuleDays, deduction, responsibleAgent, risk, decisionPlan } = starter;
+        const sourceEvidence = decisionPlan.evidence?.find((item) => sourceFindingIds.has(item.id));
+        const mission = await createMissionIn(tx, created.id, {
+          template, channel, title, outcome, finding: decisionPlan.evidence ? finding : clip(`${PROFILE_CONFIRMED_PREFIX}${finding}`, 300), scope, stopRuleDays, decisionPlan,
+        }, "paul", undefined, { deduction, responsibleAgent, risk, sourceFindingId: sourceEvidence ? sourceFindingIds.get(sourceEvidence.id) : undefined });
         priorityMissionId ??= mission.id;
       }
       if (priorityMissionId) await tx.company.update({ where: { id: created.id }, data: { priorityMissionId } });

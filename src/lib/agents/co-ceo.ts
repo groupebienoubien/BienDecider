@@ -36,6 +36,9 @@ import { STAGE_LABELS, nextStep } from "@/lib/missions/stage";
 import { MISSION_CHANNELS, channelLabel, isChannelEnabled } from "@/lib/missions/channels";
 import { TEMPLATE_KEYS, availableTemplates, enabledChannels } from "@/lib/missions/templates";
 import { scopeSummary } from "@/lib/missions/scope";
+import { missionDecisionPlanSchema } from "@/lib/missions/decision-plan";
+import { evaluateMissionObjective } from "@/lib/missions/decision-rules";
+import { readAmbitionTerms } from "@/lib/ambition-rules";
 import { PAUL_VERSION_CREDITS } from "@/lib/credits";
 import { IDEA_MAX, countOpenIdeas, findOpenIdea, listOpenIdeas, validateIdeaText } from "@/lib/ideas";
 
@@ -72,6 +75,19 @@ function catalogueLines(): string {
     const channels = enabledChannels(template).map(channelLabel);
     return `${template.label} (template ${template.key}) : ${template.contentFormat} ; canaux : ${template.key === "custom" ? `${channels.join(", ")} ou hors canal` : channels.join(", ")}`;
   }).join(" ; ");
+}
+
+function missionConstraintLines(company: { ambitionTerms: unknown }): string {
+  const terms = readAmbitionTerms(company.ambitionTerms);
+  if (!terms) return "";
+  const lines: string[] = [];
+  if (terms.mediaBudgetPerMonth !== null) {
+    lines.push(terms.mediaBudgetPerMonth === 0
+      ? "Limite confirmée : budget média de 0 € par mois ; n'invente aucune dépense publicitaire."
+      : `Budget média indicatif déclaré : ${terms.mediaBudgetPerMonth} € par mois ; ne le dépasse pas et ne le présente pas comme une dépense autorisée.`);
+  }
+  if (terms.recruitment === "no") lines.push("Limite confirmée : aucune embauche prévue ; n'attribue pas la mission à une nouvelle personne.");
+  return lines.join("\n");
 }
 
 /**
@@ -332,9 +348,10 @@ async function runCoCeoTurnImpl(
       template: z.enum(TEMPLATE_KEYS).describe("Modèle d'action (template) du catalogue"),
       channel: z.enum(MISSION_CHANNELS).nullable().optional().describe("Canal de la mission ; null ou omis pour « Sur mesure » hors canal, ou quand le modèle n'a qu'un canal actif"),
       title: z.string().describe("Titre court et concret, 5 à 80 caractères, sans balise"),
-      outcome: z.string().describe("Résultat recherché, 5 à 120 caractères, écrit pour le dirigeant"),
+      outcome: z.string().describe("Résultat recherché, 5 à 120 caractères, cible sans promesse avec un horizon explicite"),
       finding: z.string().describe("Constat de départ qui justifie le test, 10 à 300 caractères ; ce que le dirigeant a dit ou ce que tu as relevé, jamais inventé"),
       scope: z.record(z.string(), z.unknown()).optional().describe("Périmètre dans la forme du modèle (voir propose_scope) ; obligatoire pour « Sur mesure » : {\"description\": …}"),
+      decisionPlan: missionDecisionPlanSchema.describe("Plan obligatoire : raison comparative (priorité, alternatives écartées, inconnues), indicateur, saisie, effort, prérequis et action du dirigeant. Chaque texte entre 5 et 240 caractères, sans balise."),
       stopRuleDays: z.number().int().optional().describe("Règle d'arrêt en jours (7 à 90), seulement pour « Sur mesure »"),
       ideaId: z.string().optional().describe("Identifiant de l'idée notée que cette mission cadre (get_current_status, idees.ouvertes[].id) ; l'idée sera retirée à l'acceptation ; le constat (finding) reprend alors le texte de l'idée, complété seulement s'il fait moins de 10 caractères. Omettre sinon."),
       findingId: z.string().optional().describe("Identifiant du constat du diagnostic dont découle la mission (get_current_status, constats[].id). À donner dès qu'un constat la fonde ; omettre si elle vient seulement de la conversation."),
@@ -342,6 +359,13 @@ async function runCoCeoTurnImpl(
     }),
     run: async (input) => {
       const { ideaId, findingId, deduction, ...mission } = input;
+      const objectiveDecision = evaluateMissionObjective({
+        template: mission.template,
+        objective: company.objective ?? "",
+        availableCapacity: company.availableCapacity,
+        capacityConfirmedAt: company.capacityConfirmedAt,
+      });
+      if (!objectiveDecision.allowed) return `Aucune carte créée : ${objectiveDecision.reason}`;
       if (ideaId !== undefined && !(await findOpenIdea(companyId, ideaId))) {
         return "Aucune carte créée : cette idée n'est plus à cadrer (absente, retirée ou déjà cadrée). Relis idees avec get_current_status.";
       }
@@ -352,12 +376,13 @@ async function runCoCeoTurnImpl(
       // Une déduction vide vaut absente : elle ne fait pas refuser la proposition.
       const checkedDeduction = validateDeduction(deduction?.trim() ? deduction : undefined);
       if (!checkedDeduction.ok) return "Aucune carte créée : la déduction doit faire 10 à 500 caractères, sans balise HTML. Reformule-la.";
+      if (!isTargetWithDeadline(mission.outcome)) return "Aucune carte créée : formule une cible avec un horizon explicite, sans promesse ni résultat garanti.";
       const open = await prisma.mission.count({ where: { companyId, createdBy: { in: ["owner", "paul"] }, status: { not: "stopped" } } });
       const checked = validateNewMission({ ...mission, scope: mission.scope ?? {} }, open);
       if (!checked.ok) return `Aucune carte créée : ${renderMissionMessage(checked.code, checked.params)} Reformule avec le dirigeant.`;
       const { value } = checked;
       return withCard("mission_create", {
-        template: value.template, channel: value.channel, title: value.title, outcome: value.outcome, finding: value.finding, scope: value.scope,
+        template: value.template, channel: value.channel, title: value.title, outcome: value.outcome, finding: value.finding, scope: value.scope, decisionPlan: value.decisionPlan,
         ...(value.template === "custom" ? { stopRuleDays: value.stopRuleDays } : {}),
         ...(ideaId !== undefined ? { ideaId } : {}),
         ...(findingId !== undefined ? { findingId } : {}),
@@ -449,17 +474,20 @@ Site : ${company.website ?? "non renseigné"}
 Réseaux sociaux : ${company.socialHandles ?? "non renseignés"}
 ${companyProfileLines(company)}
 ${objectiveLine(company)}
+${missionConstraintLines(company)}
 ${directionLine(company.direction)}
 
 Comment BienDecider fonctionne : la Stratégie relie l'ambition, les constats et les missions, et met en avant le prochain pas. Une mission est un test limité issu d'un constat : modèle d'action, canal, résultat recherché, périmètre, règle d'arrêt. Statuts : À décider, En cours, En pause, Arrêtée, Écartée. Le dirigeant garde le dernier mot.
 Modèles de mission proposés aujourd'hui : ${catalogueLines()}. Une demande hors de ces modèles peut devenir une mission « Sur mesure ».
 Règles strictes, non négociables :
+- Un objectif libre suffit : ne demande pas de pourcentage par défaut. Si un détail change vraiment l'arbitrage (par exemple les jours ou la capacité pour remplir la semaine), demande seulement ce détail manquant et réutilise le profil confirmé.
 - Ne dis JAMAIS qu'une chose a été faite sans avoir appelé l'outil correspondant DANS CE TOUR. Avant de répondre sur les missions, la priorité, le prochain pas ou les crédits, et avant toute proposition, appelle get_current_status. Ne devine jamais.
 - Chaque état de get_current_status porte son heure, avec l'heure de ton message précédent (monMessagePrecedent). Une mission dont aChangeDepuisMonMessagePrecedent vaut true a changé APRÈS ton message : annonce-le comme une nouvelle (« depuis mon dernier message, … »), ce n'est pas une erreur de ta part. Ne dis « je me suis trompé » que si l'état au moment de ton message contredisait ce que tu as écrit.
 - Chaque conversation porte sur un contexte (stratégie, une mission, les résultats, l'ambition, le positionnement, la concurrence, les sources ou une idée), indiqué avec le dernier message : réponds dans ce contexte. Dans la conversation d'une mission, « cette mission » est celle-là.
 - Tu ne changes rien toi-même. Tes outils propose_* créent une proposition à confirmer sous ta réponse ; rien ne change avant que le dirigeant clique sur le bouton d'acceptation, et « Garder le cap actuel » la retire. Ne dis jamais « c'est fait », « c'est lancé », « c'est en pause » ou « c'est écarté » après une proposition : dis qu'il peut l'accepter d'un clic.
 - Choisir l'outil : priorité → propose_priority (ne lance ni ne suspend rien) ; périmètre → propose_scope ; pause d'une mission En cours → propose_pause ; écarter une mission À décider ou En pause → propose_dismiss (une mission En cours se met d'abord en pause) ; remettre au plan une mission écartée → propose_restore ; nouvelle mission → propose_mission (elle sera À décider, jamais lancée) ; lancer ou reprendre → propose_mission_launch : sa carte ouvre le dialogue « Confirmer le cadre de la mission », où le dirigeant confirme lui-même. Tu ne lances jamais une mission. Une envie encore floue (pas de constat, de modèle ni de résultat clairs) → propose_idea, qui la note pour la cadrer plus tard ; pour cadrer une idée notée (idees dans get_current_status) → propose_mission avec son ideaId, et pour constat le texte de l'idée, complété seulement s'il fait moins de 10 caractères. Si les ${IDEA_MAX} idées sont atteintes, n'insiste pas : invite le dirigeant à en retirer une dans Stratégie.
 - Provenance d'une mission : quand elle découle d'un constat du diagnostic (constats dans get_current_status), donne son findingId à propose_mission, avec ta déduction (deduction : en une phrase, pourquoi ce constat justifie ce test). Ne relie jamais une mission à un constat qui ne la fonde pas ; sans constat, omets findingId et donne quand même ta déduction. Un constat « À vérifier » ou « Piste à qualifier » n'est pas une preuve : dis-le au dirigeant.
+- Raison comparative : decisionPlan.selectionReason doit dire pourquoi ce test précède les meilleures alternatives disponibles, pourquoi celles-ci sont écartées et ce qui reste à confirmer ; aucun score opaque ni affirmation de supériorité sans preuve.
 - Coûts : le premier lancement d'une mission coûte ${LAUNCH_COST_CREDITS} crédits, débités quand le dirigeant confirme le cadre ; une reprise après pause est gratuite ; une version préparée avec toi coûtera ${PAUL_VERSION_CREDITS} crédit, créée et débitée seulement à l'acceptation. Dis-le une seule fois, au moment où c'est utile, pas à chaque message.
 - Si un outil refuse une proposition avec un message de règle, redis ce message simplement au dirigeant, sans le contourner par une autre proposition.
 - Avant de proposer, regarde cartesRecentes : si une proposition identique attend encore (status pending), ne la refais pas ; dis-lui de l'accepter dans la carte déjà affichée. Une carte cancelled a été refusée : ne la repropose pas sans nouvel élément.
@@ -592,6 +620,7 @@ async function runCoCeoPlanningImpl(companyId: string, agentRunId?: string) {
 ${companyContextLine(company)} Site web : ${company.website ?? (company.siteSlug ? `publié par BienDecider (/site/${company.siteSlug})` : "aucun")}.
 ${companyProfileLines(company)}
 ${objectiveLine(company)}
+${missionConstraintLines(company)}
 ${directionLine(company.direction)}
 
 Ta tâche : propose un plan priorisé de 3 à 5 actions concrètes via propose_plan_item, chacune rattachée à un agent (${PERSONAS.marketing.name}/marketing pour audit-positionnement-fiche Google, ${PERSONAS.contenu.name}/contenu pour posts et site web, ${PERSONAS.demarchage.name}/demarchage pour la prospection), avec une justification liée à l'objectif et un délai réaliste.
@@ -702,6 +731,7 @@ async function runCoCeoMissionsImpl(companyId: string, agentRunId?: string): Pro
       findingId: z.string().describe("Identifiant du constat du diagnostic dont découle la mission (constats[].id ci-dessous)"),
       deduction: z.string().describe("Ta raison, 10 à 500 caractères sans balise : pourquoi ce constat justifie ce test, en croisant d'autres constats de la liste quand ils renforcent la raison (ex. le même signal vu côté site et côté concurrence)"),
       scope: z.record(z.string(), z.unknown()).optional().describe("Périmètre dans la forme du modèle : Publication {\"topic\": 5 à 120 caractères} ; Page du site vitrine {\"page\": nom de la page} ; Sur mesure {\"description\": 10 à 300 caractères} (obligatoire) ; Fiche Google à jour {} ; sinon omis, à compléter avant le lancement"),
+      decisionPlan: missionDecisionPlanSchema.describe("Plan obligatoire : raison comparative (priorité, alternatives écartées, inconnues), indicateur observé, saisie manuelle, effort, prérequis et action du dirigeant. Chaque texte entre 5 et 240 caractères, sans balise."),
       stopRuleDays: z.number().int().optional().describe("Règle d'arrêt en jours (7 à 90), seulement pour « Sur mesure »"),
       responsibleAgent: z.enum(RESPONSIBLE_AGENTS).describe("Rôle qui prépare la mission : marketing (présence en ligne, fiche Google), contenu (publications, site), demarchage (prospection), co_ceo (coordination, Sur mesure)"),
       risk: z.string().describe("Risque ou limite du test, 10 à 200 caractères sans balise : ce qu'il ne garantit pas ou ce qui peut le faire échouer"),
@@ -710,6 +740,13 @@ async function runCoCeoMissionsImpl(companyId: string, agentRunId?: string): Pro
       if (reserved >= MAX_GENERATED_MISSIONS) return `Refusée : ${MAX_GENERATED_MISSIONS} missions sont déjà créées dans ce passage, c'est le maximum. Arrête-toi là.`;
       reserved++;
       const release = (message: string) => { reserved--; return message; };
+      const objectiveDecision = evaluateMissionObjective({
+        template: input.template,
+        objective: company.objective ?? "",
+        availableCapacity: company.availableCapacity,
+        capacityConfirmedAt: company.capacityConfirmedAt,
+      });
+      if (!objectiveDecision.allowed) return release(`Refusée : ${objectiveDecision.reason}`);
       const title = normalizeForComparison(input.title);
       if (title && blocked.has(title)) return release("Refusée : une mission de ce titre est déjà au plan, ou le dirigeant l'a écartée ou refusée. Ne la repropose pas ; choisis une autre mission.");
       if (!isTargetWithDeadline(input.outcome)) return release("Refusée : formule le résultat recherché comme une cible avec une échéance (ex. « 3 demandes de devis d'ici 30 jours »), jamais comme une promesse.");
@@ -721,6 +758,7 @@ async function runCoCeoMissionsImpl(companyId: string, agentRunId?: string): Pro
       const body = {
         template: input.template, channel: input.channel ?? null, title: input.title, outcome: input.outcome,
         finding: missionFindingText(finding.title, finding.content), scope: input.scope ?? {}, stopRuleDays: input.stopRuleDays,
+        decisionPlan: input.decisionPlan,
       };
       try {
         const mission = await withAgentRunWrite(companyId, agentRunId, (tx) => createMissionIn(tx, companyId, body, "paul", undefined, {
@@ -741,18 +779,23 @@ async function runCoCeoMissionsImpl(companyId: string, agentRunId?: string): Pro
 ${companyContextLine(company)}
 ${companyProfileLines(company)}
 ${objectiveLine(company)}
+${missionConstraintLines(company)}
 ${directionLine(company.direction)}
 
-Ta tâche : crée au plus ${MAX_GENERATED_MISSIONS} missions avec propose_first_mission. Une mission est un test limité issu d'un constat : modèle d'action, canal, résultat recherché, périmètre, règle d'arrêt.
+Ta tâche : crée au plus ${MAX_GENERATED_MISSIONS} missions avec propose_first_mission. Une mission est un test limité issu d'un constat : modèle d'action, canal, résultat recherché, périmètre, indicateur, méthode de saisie, effort, prérequis, action du dirigeant et règle d'arrêt.
 Règles :
 - Chaque mission découle d'un constat du diagnostic courant (findingId de la liste) et dit pourquoi (deduction). Un constat « À vérifier » ou « Piste à qualifier » n'est pas une preuve : dis-le dans ta raison.
 - Regarde l'ensemble des constats avant de choisir : si plusieurs pointent dans le même sens (site, réseaux, concurrence), croise-les dans ta déduction plutôt que de t'en tenir au premier venu. Une raison générique qui irait pour n'importe quelle entreprise n'est pas acceptable : appuie-toi sur ce que ce constat précis dit de cette entreprise.
 - Le résultat recherché est une cible avec une échéance, jamais une promesse. N'invente aucun chiffre sur l'entreprise.
+- Prends en compte l'objectif, la capacité et les limites confirmées dans le contexte. Écarte un test incompatible ou nomme clairement ce qui doit être confirmé avant lancement.
+- Si la capacité d'accueil est pleine ou si le dirigeant indique qu'il ne peut plus prendre de nouveaux clients, ne propose pas de mission d'acquisition supplémentaire.
+- Le plan de mesure est obligatoire : indique un signal observable, comment le dirigeant le saisira, l'effort, les prérequis et ce qu'il doit valider. N'invente ni attribution automatique ni garantie de résultat.
+- decisionPlan.selectionReason explique la priorité, les alternatives écartées et les inconnues décisives sans score opaque.
 - Choisis seulement parmi les modèles et canaux proposés aujourd'hui : ${catalogueLines()}. Aucune autre plateforme n'est disponible.
 - Ne repropose jamais une mission déjà au plan, écartée ou refusée par le dirigeant (liste ci-dessous) : l'outil refuse un titre identique, choisis-en une autre.
 - Si un outil refuse une mission, corrige-la ou passe à une autre ; n'insiste pas.
 - Un besoin du dirigeant qu'aucun modèle ne couvre : appelle record_uncovered_request une fois, et propose si utile une mission « Sur mesure ».
-- Tu ne lances rien, tu ne modifies ni ne supprimes aucune mission existante.
+- Tu ne lances rien, tu ne modifies ni ne supprimes aucune mission existante. Si les informations ne suffisent pas à justifier une mission, proposes-en moins plutôt que de compléter avec une action générique.
 - Vouvoie le dirigeant dans les textes ; aucun terme technique, aucun autre personnage que Paul.`;
 
   const dynamicSystem = `${runtimeContextLines(company, new Date())}

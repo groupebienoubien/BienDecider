@@ -6,9 +6,11 @@ import { FIRST_BADGE, matchingIntelligence, starterFacts, starterPlan } from "@/
 import { intelligenceRunning, intelligenceView } from "@/lib/onboarding/intelligence-rules";
 import { safeSourceUrl } from "@/lib/findings/certainty";
 import { RESPONSIBLE_LABELS } from "@/lib/missions/rules";
+import { MISSION_TEMPLATES } from "@/lib/missions/templates";
+import { MissionEvidenceList } from "@/components/mission-evidence";
 
 /**
- * Étape 4 (#284, FR-8, #361-#364) : le rappel de l'entreprise et du cap, « Ce que nous retenons », puis trois missions
+ * Étape 4 (#284, FR-8, #361-#364, #371) : le rappel de l'entreprise et du cap, « Ce que nous retenons », puis jusqu'à trois missions
  * fondées sur le profil confirmé, l'analyse, l'ambition et, quand elle a abouti, une recherche réelle de marché lancée
  * à la confirmation de l'ambition (étape 3). Aucun appel de modèle ici au chargement : la recherche tourne en tâche de
  * fond, cette page affiche l'attente puis se rafraîchit. Rien n'est créé ni lancé avant le compte.
@@ -17,7 +19,7 @@ export default async function WelcomeMissionsPage() {
   const state = await requireDraftPage("/bienvenue/missions");
   if (intelligenceRunning(state.intelligence)) {
     return (
-      <WelcomeFrame step={4} intro={<p>Nous terminons la recherche pour {state.profile.companyName} avant de vous présenter les pistes.</p>}>
+      <WelcomeFrame step={4} intro={<p>Nous terminons la recherche et la préparation des missions pour {state.profile.companyName} avant de vous présenter les pistes.</p>}>
         <MissionsIntelligenceWatcher initial={intelligenceView(state.intelligence)} />
       </WelcomeFrame>
     );
@@ -26,9 +28,14 @@ export default async function WelcomeMissionsPage() {
   const intelligence = matchingIntelligence(state);
   const competitors = starterFacts(intelligence).competitors.filter((competitor) => safeSourceUrl(competitor.source));
   return (
-    <WelcomeFrame step={4} intro={<p>Voici trois premières pistes pour {recap.companyName}. Elles arriveront « À décider » dans votre stratégie : aucune n&apos;est lancée sans vous.</p>}>
+    <WelcomeFrame step={4} intro={<p>{missions.length > 0 ? `Voici ${missions.length === 1 ? "une piste" : `${missions.length} pistes`} étayée${missions.length > 1 ? "s" : ""} pour ${recap.companyName}. Elles arriveront « À décider » dans votre stratégie : aucune n&apos;est lancée sans vous.` : `Nous ne proposons pas de mission générique pour ${recap.companyName} sans éléments suffisants. Vous pourrez préciser vos priorités et contraintes avec Paul.`}</p>}>
       <div className="flex flex-col gap-6">
         <MissionsIntelligenceWatcher initial={intelligenceView(intelligence)} />
+        {!intelligence?.planning && state.ambition?.planningVersion !== 1 && (
+          <p role="status" className="rounded-md border border-[var(--bd-line)] p-3 text-sm text-[var(--bd-ink)]">
+            Ces pistes proviennent de l&apos;ancienne préparation. Revenez à l&apos;étape Ambition et confirmez votre objectif pour obtenir les missions issues de la nouvelle analyse.
+          </p>
+        )}
         <section aria-labelledby="recap-title" className="rounded-lg bg-[var(--bd-cream)] p-4">
           <h2 id="recap-title" className="text-sm font-semibold text-[var(--bd-ink)]">Votre entreprise</h2>
           <p className="mt-1 break-words text-base text-[var(--bd-ink)]">
@@ -52,7 +59,7 @@ export default async function WelcomeMissionsPage() {
           </div>
         </section>
 
-        <ol className="flex flex-col gap-3" aria-label="Trois premières pistes">
+        {missions.length > 0 && <ol className="flex flex-col gap-3" aria-label="Missions proposées">
           {missions.map((mission) => (
             <li key={mission.template} className="min-w-0 rounded-lg border border-[var(--bd-line)] bg-white p-4">
               {mission.first && (
@@ -65,16 +72,23 @@ export default async function WelcomeMissionsPage() {
               <dl className="mt-2 grid gap-1 text-sm text-[var(--bd-ink)] sm:grid-cols-[auto_minmax(0,1fr)] sm:gap-x-3">
                 <dt className="font-semibold">Résultat recherché</dt><dd className="break-words">{mission.outcome}</dd>
                 <dt className="font-semibold">Périmètre proposé</dt><dd className="break-words">{mission.scopeLabel}</dd>
+                <dt className="font-semibold">Indicateur</dt><dd className="break-words">{mission.decisionPlan.indicator}</dd>
+                <dt className="font-semibold">Saisie du résultat</dt><dd className="break-words">{mission.decisionPlan.collectionMethod}</dd>
+                <dt className="font-semibold">Effort et prérequis</dt><dd className="break-words">{mission.decisionPlan.effort} {mission.decisionPlan.prerequisites}</dd>
+                <dt className="font-semibold">Votre action</dt><dd className="break-words">{mission.decisionPlan.ownerAction}</dd>
+                <dt className="font-semibold">Horizon et arrêt</dt><dd className="break-words">Bilan à {mission.stopRuleDays ?? MISSION_TEMPLATES[mission.template].stopRuleDays} jours, selon la règle du modèle.</dd>
               </dl>
               <details className="mt-2 text-sm text-[var(--bd-ink)]">
                 <summary className="cursor-pointer font-semibold">Pourquoi cette piste</summary>
+                <p className="mt-1 break-words"><span className="font-semibold">Pourquoi cette priorité :</span> {mission.decisionPlan.selectionReason}</p>
                 <p className="mt-1 break-words">{mission.deduction}</p>
+                {mission.decisionPlan.evidence && <MissionEvidenceList evidence={mission.decisionPlan.evidence} />}
                 <p className="mt-1 break-words"><span className="font-semibold">Préparée par :</span> {RESPONSIBLE_LABELS[mission.responsibleAgent]}</p>
                 <p className="mt-1 break-words"><span className="font-semibold">Risque ou limite :</span> {mission.risk}</p>
               </details>
             </li>
           ))}
-        </ol>
+        </ol>}
         <InterestButton />
       </div>
     </WelcomeFrame>

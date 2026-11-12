@@ -4,7 +4,7 @@ import { debitCredits } from "@/lib/credits";
 import { MissionError } from "@/lib/missions/messages";
 import { checkTransition, validateDeduction, validateNewMission, validateResponsibleAgent, validateRisk, type MissionAction, type MissionSnapshot } from "@/lib/missions/rules";
 import { isMissionChannel, channelLabel } from "@/lib/missions/channels";
-import type { TemplateKey } from "@/lib/missions/templates";
+import { isTemplateKey, type TemplateKey } from "@/lib/missions/templates";
 import { scopeSummary } from "@/lib/missions/scope";
 import { writeJournal, type JournalCode } from "@/lib/journal";
 import { adaptContentToChannel, checkScopeLock, markRecipientsChanged } from "@/lib/contents/service";
@@ -12,6 +12,7 @@ import { cancelScheduledPublications } from "@/lib/contents/publish";
 import { agencyNames, checkAgencyScope } from "@/lib/agencies/service";
 import { convertIdeaIn, lockOpenIdeaIn } from "@/lib/ideas";
 import { findCurrentFinding } from "@/lib/audit-findings";
+import { createMissionDecisionPlan, readMissionDecisionPlan } from "@/lib/missions/decision-plan";
 
 export class MissionNotFoundError extends Error {
   constructor() {
@@ -34,12 +35,15 @@ export function parseTransitionBody(body: unknown): { request: MissionAction; ex
 
 /** Ce que les règles lisent d'une mission (aussi utilisé par Paul pour vérifier une proposition avant de la faire). */
 export function missionSnapshot(mission: Mission): MissionSnapshot {
+  const rawScope = mission.scope !== null && typeof mission.scope === "object" && !Array.isArray(mission.scope) ? (mission.scope as Record<string, unknown>) : {};
+  const scope = { ...rawScope };
+  delete scope.decisionPlan;
   return {
     template: mission.template as TemplateKey,
     channel: isMissionChannel(mission.channel) ? mission.channel : null,
     status: mission.status as MissionSnapshot["status"],
     previousStatus: mission.previousStatus as MissionSnapshot["previousStatus"],
-    scope: mission.scope !== null && typeof mission.scope === "object" && !Array.isArray(mission.scope) ? (mission.scope as Record<string, unknown>) : {},
+    scope,
     contactsConfirmedAt: mission.contactsConfirmedAt,
     firstLaunchedAt: mission.firstLaunchedAt,
     hasValidatedVersion: mission.hasValidatedVersion,
@@ -83,7 +87,26 @@ export async function createMissionIn(tx: Prisma.TransactionClient, companyId: s
   const sourceFinding = provenance.sourceFindingId ? await findCurrentFinding(companyId, provenance.sourceFindingId, tx) : null;
   // Plafond des missions créées par le dirigeant, directement ou en acceptant une proposition de Paul (§12).
   const openMissions = await tx.mission.count({ where: { companyId, createdBy: { in: ["owner", "paul"] }, status: { not: "stopped" } } });
-  const validated = validateNewMission(body, openMissions);
+  let missionBody = body;
+  if (body !== null && typeof body === "object" && !Array.isArray(body)) {
+    const input = body as Record<string, unknown>;
+    if (input.decisionPlan === undefined && isTemplateKey(input.template)) {
+      const scope = input.scope !== null && typeof input.scope === "object" && !Array.isArray(input.scope)
+        ? input.scope as Record<string, unknown>
+        : {};
+      missionBody = {
+        ...input,
+        decisionPlan: createMissionDecisionPlan(
+          input.template,
+          scope,
+          createdBy === "owner"
+            ? "Vous avez choisi ce test à partir du constat saisi ; ce formulaire ne compare pas les autres pistes."
+            : "Cette ancienne proposition ne conservait pas sa raison comparative ; reprenez sa priorité avec Paul.",
+        ),
+      };
+    }
+  }
+  const validated = validateNewMission(missionBody, openMissions);
   if (!validated.ok) throw new MissionError(validated.code, validated.params);
   const { value } = validated;
   if (value.template === "agencies") await checkAgencyScope(companyId, value.scope, tx);
@@ -102,7 +125,7 @@ export async function createMissionIn(tx: Prisma.TransactionClient, companyId: s
       deduction: deduction.deduction,
       responsibleAgent: agent.agent,
       risk: risk.risk,
-      scope: value.scope as object,
+      scope: { ...value.scope, ...(value.decisionPlan ? { decisionPlan: value.decisionPlan } : {}) },
       createdBy,
       position: (last._max.position ?? 0) + 1,
     },
@@ -149,9 +172,18 @@ export async function applyMissionTransitionIn(tx: Prisma.TransactionClient, com
     await checkScopeLock(tx, mission.id);
     if (mission.template === "agencies") await checkAgencyScope(companyId, result.patch.scope, tx);
   }
+  const currentScope = mission.scope !== null && typeof mission.scope === "object" && !Array.isArray(mission.scope) ? (mission.scope as Record<string, unknown>) : {};
+  const decisionPlan = readMissionDecisionPlan(currentScope.decisionPlan);
+  const nextScope = result.patch.scope
+    ? { ...(result.patch.scope as Record<string, unknown>), ...(decisionPlan ? { decisionPlan } : {}) }
+    : undefined;
   const written = await tx.mission.updateMany({
     where: { id: mission.id, companyId, version },
-    data: { ...result.patch, scope: result.patch.scope as object | undefined, version: { increment: 1 } },
+    data: {
+      ...result.patch,
+      scope: nextScope,
+      version: { increment: 1 },
+    },
   });
   if (written.count === 0) throw new MissionError("M-02");
   const balance = result.debit > 0

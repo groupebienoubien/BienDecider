@@ -121,7 +121,7 @@ export default async function MeasuresPage({ searchParams }: { searchParams: Pro
           </p>
           <section className="metrics metrics-4" aria-label="Visites">
             <Metric label="Visites" value={String(visits.total)} />
-            <Metric label="Arrivées à « Un cap. Trois premières pistes. »" value={String(visits.reachedPlan)} detail={percent(visits.reachedPlan, visits.total)} />
+            <Metric label="Arrivées à « Un cap. Vos premières missions. »" value={String(visits.reachedPlan)} detail={percent(visits.reachedPlan, visits.total)} />
             <Metric label="Comptes créés après l'étape 4" value={String(visits.reachedPlanAccounts)} detail={percent(visits.reachedPlanAccounts, visits.reachedPlan)} />
             <Metric label="Coût moyen d'une analyse sans compte" value={visits.averageCostWithoutAccount === null ? notMeasured : formatUsd(visits.averageCostWithoutAccount)} />
           </section>

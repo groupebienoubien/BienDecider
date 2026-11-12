@@ -2769,6 +2769,41 @@ async function draftToAccountStep(page: Page) {
   expect((await post({ action: "interested" })).status(), "interested").toBe(200);
 }
 
+async function seedStarterMissionPlan(page: Page, prisma: PrismaClient) {
+  await waitForIntelligence(page.request, baseURL);
+  const cookie = (await page.context().cookies()).find((item) => item.name === "pepito_draft");
+  if (!cookie) throw new Error("Missing onboarding draft cookie");
+  const row = await prisma.onboardingDraft.findUniqueOrThrow({ where: { tokenHash: createHash("sha256").update(cookie.value).digest("hex") } });
+  expect(readDraftState(row).ambition?.planningVersion).toBe(1);
+  const intelligence = newIntelligence(intelligenceInputFor(readDraftState(row)), randomUUID());
+  await prisma.onboardingDraft.update({
+    where: { id: row.id },
+    data: { intelligence: {
+      ...intelligence, status: "done", finishedAt: new Date().toISOString(),
+      planning: { status: "done", cost: { usd: 0, inputTokens: 0, outputTokens: 0 }, proposal: {
+        retained: ["La rénovation électrique s'adresse aux propriétaires lyonnais.", "Tester les recommandations clients avant d'investir dans davantage de visibilité."],
+        notice: null,
+        missions: [{
+          template: "custom", channel: null, title: "Tester les recommandations après une rénovation",
+          outcome: "Mesurer les contacts recommandés en 30 jours", evidenceIds: ["profile:offers", "profile:targetClients"],
+          scope: { description: "Après une rénovation, demander au client s'il souhaite recommander l'atelier à un propriétaire de son entourage." },
+          stopRuleDays: 30, deduction: "Le test porte sur une clientèle et une offre déclarées, sans supposer un défaut du site.",
+          risk: "Une recommandation peut ne pas produire de contact ; le bilan repose sur les résultats déclarés.",
+          decisionPlan: {
+            selectionReason: "Tester les recommandations auprès des clients avant de financer une acquisition plus large.",
+            indicator: "Nombre de demandes issues d'une recommandation pendant 30 jours.",
+            collectionMethod: "Demander à chaque nouveau contact comment il a connu l'atelier, puis saisir le total au bilan.",
+            effort: "Une courte question après les rénovations et un relevé des demandes.",
+            prerequisites: "Confirmer les rénovations et le temps disponible avant le lancement.",
+            ownerAction: "Valider le test et relever les demandes recommandées.",
+          },
+        }],
+      } },
+    } },
+  });
+  await page.reload();
+}
+
 test("onboarding quality: no missions or account shortcut while research is running; failure is explicit", async ({ page }) => {
   const prisma = journeyDatabase();
   const draft = await createTestDraft(prisma, { step: 4 });
@@ -2779,13 +2814,14 @@ test("onboarding quality: no missions or account shortcut while research is runn
     await page.context().addCookies([{ name: "pepito_draft", value: draft.token, url: baseURL, httpOnly: true, sameSite: "Lax" }]);
     await page.goto(`${baseURL}/bienvenue/missions`);
     await expect(page.getByRole("status")).toContainText("Vos pistes seront affichées à la fin");
-    await expect(page.getByRole("list", { name: "Trois premières pistes" })).toHaveCount(0);
+    await expect(page.getByRole("list", { name: "Missions proposées" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Ça m'intéresse" })).toHaveCount(0);
     for (const data of [{ action: "interested" }, { action: "goto", step: 5 }]) {
       expect((await page.request.post(`${baseURL}/api/bienvenue`, { headers: { Origin: baseURL }, data })).status()).toBe(409);
     }
     await prisma.onboardingDraft.update({ where: { id: draft.id }, data: { intelligence: { ...intelligence, status: "failed", finishedAt: new Date().toISOString() } } });
-    await expect(page.getByRole("status")).toContainText(INTELLIGENCE_MESSAGES.failed, { timeout: 10_000 });
+    await expect(page.getByRole("status")).toContainText(INTELLIGENCE_MESSAGES.planningFailed, { timeout: 10_000 });
+    await expect(page.getByRole("list", { name: "Missions proposées" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Ça m'intéresse" })).toBeVisible();
     expect(await noHorizontalScroll(page)).toBe(true);
   } finally {
@@ -2872,21 +2908,23 @@ test("GH-279: five anonymous steps, back and reload keep the answers, and the ac
     await expect(understood).toBeVisible();
     await page.getByRole("button", { name: "C'est bien ça" }).click();
     await expect(page).toHaveURL(`${baseURL}/bienvenue/missions`);
-    await expect(stepHeading(page, "Un cap. Trois premières pistes.")).toBeFocused();
-    const pistes = page.getByRole("list", { name: "Trois premières pistes" }).getByRole("listitem");
-    await expect(pistes).toHaveCount(3, { timeout: 95_000 });
+    await expect(stepHeading(page, "Un cap. Vos premières missions.")).toBeFocused();
+    await seedStarterMissionPlan(page, prisma);
+    const pistes = page.getByRole("list", { name: "Missions proposées" }).getByRole("listitem");
+    await expect.poll(() => pistes.count(), { timeout: 95_000 }).toBeGreaterThan(0);
+    const missionCount = await pistes.count();
+    expect(missionCount).toBeLessThanOrEqual(3);
     await expect(pistes.first()).toContainText("Résultat recherché");
+    await expect(pistes.first()).toContainText("Indicateur");
+    await expect(pistes.first()).toContainText("Effort et prérequis");
     // #284 : rappel, « Ce que nous retenons », la première piste repérée, l'origine et le périmètre de chaque piste.
     await expect(page.getByRole("heading", { name: "Ce que nous retenons" })).toBeVisible();
     await expect(page.getByText("Paul n'a pas pu lire votre site : ce qui suit repose sur ce que vous nous avez dit.")).toBeVisible();
     await expect(pistes.first()).toContainText("À examiner en premier");
-    await expect(pistes.nth(1)).not.toContainText("À examiner en premier");
-    for (let index = 0; index < 3; index += 1) {
-      await expect(pistes.nth(index)).toContainText("Vous nous avez dit");
-      await expect(pistes.nth(index)).toContainText("Périmètre proposé");
-    }
+    await expect(pistes).toContainText("Vous nous avez dit");
+    await expect(pistes).toContainText("Périmètre proposé");
     const stepTitles = await pistes.locator("h3").allTextContents();
-    expect(new Set(stepTitles).size).toBe(3);
+    expect(new Set(stepTitles).size).toBe(stepTitles.length);
     await expect(page.getByRole("button", { name: "Ça m'intéresse" })).toHaveCount(1);
     expect(await noHorizontalScroll(page)).toBe(true);
 
@@ -2902,6 +2940,7 @@ test("GH-279: five anonymous steps, back and reload keep the answers, and the ac
     await expect(page.getByLabel("Votre ambition")).toHaveValue("+20 % de chiffre d'affaires en 12 mois, sans embaucher");
     await page.getByRole("button", { name: "Interpréter" }).click();
     await page.getByRole("button", { name: "C'est bien ça" }).click();
+    await seedStarterMissionPlan(page, prisma);
     await page.getByRole("button", { name: "Ça m'intéresse" }).click({ timeout: 95_000 });
     await expect(page).toHaveURL(`${baseURL}/bienvenue/compte`);
     await expect(stepHeading(page, "Retrouvez votre stratégie.")).toBeFocused();
@@ -2937,11 +2976,12 @@ test("GH-279: five anonymous steps, back and reload keep the answers, and the ac
     // Le premier audit est mis au plan après la création du compte, une seule fois.
     expect(await prisma.actionPlanItem.count({ where: { companyId: company.id, agent: "marketing", timing: "Dès l'inscription" } })).toBe(1);
     expect(company.profileConfirmedAt).not.toBeNull();
-    expect(company.missions).toHaveLength(3);
+    expect(company.missions).toHaveLength(stepTitles.length);
     expect(company.missions.every((mission) => mission.status === "proposed" && mission.firstLaunchedAt === null)).toBe(true);
     // #284 : les pistes de l'étape 4, dans l'ordre, avec leur déduction, leur agent et leur risque ; la première est prioritaire.
     expect(company.missions.map((mission) => mission.title)).toEqual(stepTitles);
     expect(company.missions.every((mission) => mission.deduction && mission.responsibleAgent && mission.risk)).toBe(true);
+    expect(company.missions.every((mission) => typeof mission.scope === "object" && mission.scope !== null && "decisionPlan" in mission.scope)).toBe(true);
     expect(company.priorityMissionId).toBe(company.missions[0].id);
     await expect(page.getByRole("article", { name: stepTitles[0] })).toContainText("À décider");
     expect(company.journalEntries.filter((entry) => entry.code === "J-04")).toHaveLength(1);
@@ -3388,10 +3428,9 @@ test("GH-292: at signup the first findings become the starting diagnostic, read 
       ["Votre site ne montre aucune réalisation.", "observe", "consultée", `${website}/`, null],
       ["Vous semblez viser surtout les particuliers.", "piste", null, null, null],
     ]);
-    // Missions de départ reliées au premier constat de leur sujet : ici, seule une page du site a un constat « site_web ».
-    const observedId = findings.find((finding) => finding.certainty === "observe")!.id;
+    // Une mission de départ ne reprend pas un constat uniquement parce que sa catégorie correspond.
     for (const mission of await prisma.mission.findMany({ where: { companyId: company.id }, select: { template: true, sourceFindingId: true } })) {
-      expect(mission.sourceFindingId, mission.template).toBe(mission.template === "site_page" ? observedId : null);
+      expect(mission.sourceFindingId, mission.template).toBeNull();
     }
 
     await page.setViewportSize({ width: 360, height: 800 });

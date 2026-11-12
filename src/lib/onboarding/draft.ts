@@ -32,7 +32,7 @@ export function draftCookieOptions(expiresAt: Date, nodeEnv: string | undefined 
   };
 }
 
-function toJson(state: DraftState): { step: number; profile: Prisma.InputJsonObject; ambition: Prisma.InputJsonObject | undefined; profileConfirmed: boolean; diagnosticReady: boolean } {
+export function toJson(state: DraftState): { step: number; profile: Prisma.InputJsonObject; ambition: Prisma.InputJsonObject | undefined; profileConfirmed: boolean; diagnosticReady: boolean } {
   return {
     step: state.step,
     profile: {
@@ -45,6 +45,7 @@ function toJson(state: DraftState): { step: number; profile: Prisma.InputJsonObj
     ambition: state.ambition === null ? undefined : {
       text: state.ambition.text,
       terms: { ...state.ambition.terms },
+      ...(state.ambition.planningVersion === 1 ? { planningVersion: 1 } : {}),
       // « Ce que nous retenons » et son coût (#284) ; absents, ils disparaissent de la colonne (retour avant l'étape 4).
       ...(state.ambition.retained ? { retained: [...state.ambition.retained] } : {}),
       ...(state.ambition.retainedCost ? { retainedCost: { ...state.ambition.retainedCost } } : {}),

@@ -49,6 +49,8 @@ import { CERTAINTY_LABELS, DECLARED_LABEL, findingOrigin, formatReadDate, missio
 import { availableTemplates, enabledChannels, MISSION_TEMPLATES } from "../src/lib/missions/templates";
 import { missionStage, missionTracker, nextStep, orderMissions, priorityMissionId, type ContentState, type StageMission } from "../src/lib/missions/stage";
 import { scopeSummary } from "../src/lib/missions/scope";
+import { readMissionDecisionPlan } from "../src/lib/missions/decision-plan";
+import { ambitionTargetsRequests, evaluateMissionObjective } from "../src/lib/missions/decision-rules";
 import { AGENCY_SEARCH_MAX, newAgencies, readFoundAgency } from "../src/lib/agencies/rules";
 import { REPORT_NOTE_MAX, checkDecision, isUpToDate, readOutcomeTarget, readReport, stopRuleDue, validateReport } from "../src/lib/missions/report";
 import { JOURNAL_ACTOR_LABELS, channelJournalParams, csvCell, journalActorLabel, journalCsv, journalRows, renderJournal } from "../src/lib/journal";
@@ -61,7 +63,7 @@ import { firstNameOf } from "../src/lib/workspace";
 import { workspacePageLabel } from "../src/components/workspace-nav";
 import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH, passwordPolicyError } from "../src/lib/password-policy";
 import { startSmtpSink } from "./support/smtp-sink";
-import { ADDRESS_UNAVAILABLE_MESSAGE, FIRST_BADGE, ORIGIN_DECLARED, ORIGIN_SITE, SITE_NOT_GIVEN_NOTICE, SITE_NOT_READ_NOTICE, SYNTHESIS_USAGE_AGENT, TARGET_NOTICE, ambitionTargetsRequests, applyDraftAction, checkAmbition, checkDiscovery, checkDraftForAccount, clip, emptyDraft, firstOffer, isValidEmail, isValidWebsite, parseDraftAction, prefillFromPaul, prefillProfile, profileFieldIssue, profileOriginLabel, rankStarterTemplates, readDraftState, readRetained, retainedFromRules, starterFacts, starterPlan, stepHref, synthesisUsage, withRetained, type DraftState } from "../src/lib/onboarding/draft-rules";
+import { ADDRESS_UNAVAILABLE_MESSAGE, FIRST_BADGE, ORIGIN_DECLARED, ORIGIN_SITE, SITE_NOT_GIVEN_NOTICE, SITE_NOT_READ_NOTICE, SYNTHESIS_USAGE_AGENT, TARGET_NOTICE, applyDraftAction, checkAmbition, checkDiscovery, checkDraftForAccount, clip, emptyDraft, firstOffer, intelligenceInputFor, isValidEmail, isValidWebsite, parseDraftAction, prefillFromPaul, prefillProfile, profileFieldIssue, profileOriginLabel, rankStarterTemplates, readDraftState, readRetained, retainedFromRules, starterFacts, starterPlan, stepHref, synthesisUsage, withRetained, type DraftState } from "../src/lib/onboarding/draft-rules";
 import { anonymousSynthesisModel, writeRetained, type SynthesisModel } from "../src/lib/onboarding/synthesis";
 import { intelligenceUsage, newIntelligence, type DraftIntelligence } from "../src/lib/onboarding/intelligence-rules";
 import { PERSONAS } from "../src/lib/agents/personas";
@@ -620,6 +622,24 @@ test("GH-168: a finding is « Observé » only when its source was read; origin,
   expect(linkedCard?.lines).toEqual(expect.arrayContaining(["Fondée sur un constat du diagnostic", "Déduction de Paul : Montrer un chantier relance les demandes"]));
   const plainCard = describePendingAction({ type: "mission_create", payload: { ...payload, channel: null } });
   expect(plainCard?.lines.some((line) => line.startsWith("Déduction de Paul") || line.startsWith("Fondée sur"))).toBe(false);
+  const measuredCard = describePendingAction({ type: "mission_create", payload: {
+    ...payload, channel: null,
+    decisionPlan: {
+      selectionReason: "Le contenu est retenu pour le cap ; la page est exclue car non lue.",
+      indicator: "Demandes attribuées au contenu, déclarées par vous.",
+      collectionMethod: "Saisir les demandes au bilan, sans attribution automatique.",
+      effort: "Préparer une publication.",
+      prerequisites: "Un canal actif et du temps disponible.",
+      ownerAction: "Relire et valider avant publication.",
+    },
+  } });
+  expect(measuredCard?.lines).toEqual(expect.arrayContaining([
+    expect.stringContaining("Pourquoi cette priorité :"),
+    expect.stringContaining("Indicateur :"),
+    expect.stringContaining("Saisie :"),
+    expect.stringContaining("Effort et prérequis :"),
+    expect.stringContaining("Votre action :"),
+  ]));
 
   const source: MissionSourceFinding = { id: "f-1", title: "Le site ne montre aucun contact", category: "site_web", content: "Aucun numéro visible.", sourceUrl: url, sourceStatus: "consultée", certainty: "observe", createdAt: "2026-11-05T10:00:00Z" };
   expect(missionProvenance({ createdBy: "paul", finding: "Pas de contact visible sur le site", deduction: "Un contact visible donnera des demandes", source })).toMatchObject({
@@ -629,6 +649,9 @@ test("GH-168: a finding is « Observé » only when its source was read; origin,
   expect(missionProvenance({ createdBy: "paul", finding: "Pas de contact", deduction: null, source: { ...source, sourceStatus: "accès limité" } })).toMatchObject({ certainty: "À vérifier", deduction: "—" });
   expect(missionProvenance({ createdBy: "paul", finding: "Pas de contact visible", deduction: null, source: null })).toEqual({
     title: "Constat relevé par Paul", origin: "Conversation avec Paul", certainty: "À vérifier", tone: "orange", note: "Pas de contact visible", deduction: "—", source: null,
+  });
+  expect(missionProvenance({ createdBy: "paul", finding: "Profil confirmé : Offre et clientèle déclarées.", deduction: "Ce test vise les demandes souhaitées.", source: null })).toEqual({
+    title: "Votre profil confirmé", origin: "Profil confirmé à l'inscription", certainty: "Déclaré par vous", tone: "gray", note: "Offre et clientèle déclarées.", deduction: "Ce test vise les demandes souhaitées.", source: null,
   });
   expect(missionProvenance({ createdBy: "owner", finding: "Un salon a lieu près de chez moi", deduction: null, source: null })).toEqual({
     title: "Votre constat", origin: "Déclaré à la création de la mission", certainty: "Déclaré par vous", tone: "gray", note: "Un salon a lieu près de chez moi", deduction: "Vous avez choisi de le tester.", source: null,
@@ -1627,6 +1650,14 @@ test("llm credit rules: the remaining credit follows the measured spend, days le
 
 const mission = (over: Partial<MissionSnapshot> = {}): MissionSnapshot => ({ template: "social_post", channel: "facebook", status: "proposed", previousStatus: null, scope: { topic: "Nos chantiers de novembre" }, contactsConfirmedAt: null, firstLaunchedAt: null, hasValidatedVersion: false, ...over });
 const codeOf = (result: { ok: boolean; code?: string }) => (result.ok ? "ok" : result.code);
+const TEST_DECISION_PLAN = {
+  selectionReason: "Le test répond au constat saisi ; les alternatives restent à comparer.",
+  indicator: "Demandes attribuées au contenu, déclarées par vous.",
+  collectionMethod: "Saisir les demandes au bilan, sans attribution automatique.",
+  effort: "Préparer une publication.",
+  prerequisites: "Un canal actif et du temps disponible.",
+  ownerAction: "Relire et valider avant publication.",
+};
 
 test("mission catalogue: only open models with an active channel are offered, plus Sur mesure", () => {
   expect(availableTemplates().map((template) => template.key)).toEqual(["agencies", "social_post", "site_page", "custom"]);
@@ -1637,8 +1668,9 @@ test("mission catalogue: only open models with an active channel are offered, pl
 });
 
 test("mission creation: bounded fields, one permitted and active channel, scope rules per model, ceiling of ten", () => {
-  const base = { template: "social_post", title: "Une publication", outcome: "Des demandes de devis", finding: "Aucune publication depuis trois mois", scope: { topic: "Nos chantiers de novembre" } };
-  expect(validateNewMission(base, 0)).toEqual({ ok: true, value: { template: "social_post", channel: "facebook", title: "Une publication", outcome: "Des demandes de devis", finding: "Aucune publication depuis trois mois", scope: { topic: "Nos chantiers de novembre" }, stopRuleDays: 7 } });
+  const base = { template: "social_post", title: "Une publication", outcome: "Des demandes de devis", finding: "Aucune publication depuis trois mois", scope: { topic: "Nos chantiers de novembre" }, decisionPlan: TEST_DECISION_PLAN };
+  expect(validateNewMission(base, 0)).toEqual({ ok: true, value: { template: "social_post", channel: "facebook", title: "Une publication", outcome: "Des demandes de devis", finding: "Aucune publication depuis trois mois", scope: { topic: "Nos chantiers de novembre" }, stopRuleDays: 7, decisionPlan: TEST_DECISION_PLAN } });
+  expect(codeOf(validateNewMission({ ...base, decisionPlan: undefined }, 0))).toBe("M-20");
   expect(codeOf(validateNewMission({ ...base, title: "abc" }, 0))).toBe("M-20");
   expect(codeOf(validateNewMission({ ...base, finding: "<b>court</b>" }, 0))).toBe("M-20");
   expect(codeOf(validateNewMission({ ...base, outcome: "x".repeat(121) }, 0))).toBe("M-20");
@@ -1650,11 +1682,11 @@ test("mission creation: bounded fields, one permitted and active channel, scope 
   expect(codeOf(validateNewMission({ ...base, channel: "gmail" }, 0))).toBe("M-69");
   expect(codeOf(validateNewMission({ ...base, scope: { topic: "x" } }, 0))).toBe("M-17");
   expect(validateNewMission({ ...base, scope: undefined }, 0)).toMatchObject({ ok: true, value: { scope: {} } });
-  expect(validateNewMission({ template: "agencies", title: "Deux agences", outcome: "Une r\u00e9ponse", finding: "Aucune agence partenaire connue" }, 0)).toMatchObject({ ok: true, value: { channel: "gmail", scope: {}, stopRuleDays: 30 } });
+  expect(validateNewMission({ template: "agencies", title: "Deux agences", outcome: "Une r\u00e9ponse", finding: "Aucune agence partenaire connue", decisionPlan: TEST_DECISION_PLAN }, 0)).toMatchObject({ ok: true, value: { channel: "gmail", scope: {}, stopRuleDays: 30, decisionPlan: TEST_DECISION_PLAN } });
   expect(MISSION_TEMPLATES.agencies.validateScope({ agencyIds: ["a", "b", "c"] })).toEqual({ ok: false, code: "M-30" });
   expect(MISSION_TEMPLATES.agencies.validateScope({ agencyIds: ["a", "a"] })).toEqual({ ok: false, code: "M-30" });
   expect(codeOf(validateNewMission({ template: "proof", title: "Une r\u00e9alisation", outcome: "Des demandes", finding: "Une belle r\u00e9alisation r\u00e9cente", channel: "facebook" }, 0))).toBe("M-76");
-  const custom = { template: "custom", title: "Salon local", outcome: "Dix contacts", finding: "Un salon a lieu dans ma ville", scope: { description: "Tenir un stand au salon de mon quartier" } };
+  const custom = { template: "custom", title: "Salon local", outcome: "Dix contacts", finding: "Un salon a lieu dans ma ville", scope: { description: "Tenir un stand au salon de mon quartier" }, decisionPlan: TEST_DECISION_PLAN };
   expect(validateNewMission({ ...custom, stopRuleDays: 21 }, 0)).toMatchObject({ ok: true, value: { channel: null, stopRuleDays: 21 } });
   expect(codeOf(validateNewMission(custom, 0))).toBe("M-18");
   expect(codeOf(validateNewMission({ ...custom, stopRuleDays: 6 }, 0))).toBe("M-18");
@@ -2172,8 +2204,13 @@ const READ_AT = "2026-11-08T09:00:00.000Z";
 const observed = (value: string) => ({ value, provenance: { kind: "observed" as const, source: "atelier-lumen.fr", readAt: READ_AT } });
 
 /** Brouillon à l'étape 4 : profil confirmé, ambition confirmée, analyse lue (`done`) ou absente. */
-function step4Draft(options: { read?: boolean; ambition?: string; terms?: Partial<AmbitionTerms>; observedOffers?: boolean; intelligence?: DraftState["intelligence"] } = {}): DraftState {
-  const profile = { ...filledProfile, website: options.read === false ? "" : SITE, offers: "Rénovation électrique, dépannage" };
+function step4Draft(options: { read?: boolean; website?: string; ambition?: string; terms?: Partial<AmbitionTerms>; observedOffers?: boolean; intelligence?: DraftState["intelligence"]; profile?: Partial<DraftState["profile"]> } = {}): DraftState {
+  const profile = {
+    ...filledProfile,
+    website: options.website ?? (options.read === false ? "" : SITE),
+    offers: "Rénovation électrique, dépannage",
+    ...options.profile,
+  };
   const input = { companyName: profile.companyName, location: profile.location, website: profile.website };
   const analysis = options.read === false ? null : {
     ...newAnalysis(input, "run-284"), status: "done" as const, finishedAt: READ_AT,
@@ -2182,29 +2219,156 @@ function step4Draft(options: { read?: boolean; ambition?: string; terms?: Partia
   };
   return {
     step: 4, profile, socialSourceDecisions: [], competitorDecisions: [], googlePlaceChoice: null, websiteRejected: false, profileConfirmed: true, diagnosticReady: true, analysis,
-    ambition: { text: options.ambition ?? "+20 % de chiffre d'affaires en 12 mois", terms: { ...EMPTY_TERMS, gainPercent: 20, horizonMonths: 12, ...options.terms } },
+    ambition: { text: options.ambition ?? "Recevoir plus de demandes de devis", terms: { ...EMPTY_TERMS, gainPercent: 20, horizonMonths: 12, ...options.terms } },
     intelligence: options.intelligence ?? null,
   };
 }
 
 test("GH-284: step 4 ranks the templates from the draft — site page first without a read site or when the ambition aims at requests", () => {
   const catalogue = ["agencies", "social_post", "google_profile", "review_reply", "site_page", "custom"] as const;
-  // Site lu, ambition sans demandes : la publication d'abord ; fiche Google et avis si leur canal s'ouvre ; jamais les agences.
-  expect(rankStarterTemplates(step4Draft(), catalogue)).toEqual(["social_post", "google_profile", "review_reply"]);
-  expect(rankStarterTemplates(step4Draft(), ["agencies", "social_post", "site_page", "custom"])).toEqual(["social_post", "site_page", "custom"]);
-  // Pas de site lu, ou une ambition qui vise des demandes : la page du site d'abord.
-  expect(rankStarterTemplates(step4Draft({ read: false }), ["agencies", "social_post", "site_page", "custom"])).toEqual(["site_page", "social_post", "custom"]);
-  expect(rankStarterTemplates(step4Draft({ ambition: "Recevoir plus de demandes de devis en 6 mois" }), catalogue)).toEqual(["site_page", "social_post", "google_profile"]);
-  expect(rankStarterTemplates({ ...step4Draft(), analysis: { ...step4Draft().analysis!, status: "limited" } }, catalogue)[0]).toBe("site_page");
-  // « Sur mesure » en dernier recours, et seulement des modèles disponibles.
-  expect(rankStarterTemplates(step4Draft(), ["custom"])).toEqual(["custom"]);
+  expect(rankStarterTemplates(step4Draft(), catalogue)).toEqual(["site_page", "social_post"]);
+  const priorityReason = starterPlan(step4Draft()).missions[0].decisionPlan.selectionReason;
+  expect(priorityReason).toContain("passe avant une publication");
+  expect(priorityReason).toContain("aucun constat");
+  expect(rankStarterTemplates(step4Draft(), ["agencies", "social_post", "site_page", "custom"])).toEqual(["site_page", "social_post"]);
+  // Une cible de demandes change l'ordre, mais une page n'est proposée qu'après lecture du site.
+  expect(rankStarterTemplates(step4Draft({ read: false, ambition: "Recevoir plus de demandes de devis en 6 mois" }), ["agencies", "social_post", "site_page", "custom"])).toEqual(["social_post"]);
+  expect(rankStarterTemplates(step4Draft({ ambition: "Recevoir plus de demandes de devis en 6 mois" }), catalogue)).toEqual(["site_page", "social_post"]);
+  const weekdays = step4Draft({ ambition: "Plus de clients en semaine" });
+  expect(rankStarterTemplates(weekdays, catalogue)).toEqual([]);
+  expect(starterPlan(weekdays).recap.notes).toContain("Pour choisir un test adapté à votre objectif en semaine : quels jours ou créneaux voulez-vous remplir, et quelle capacité avez-vous alors ?");
+  expect(rankStarterTemplates(step4Draft({ ambition: "Plus de demandes sans temps supplémentaire" }), catalogue)).toEqual([]);
+  expect(rankStarterTemplates(step4Draft({ ambition: "Je suis complet et ne peux pas accueillir de nouveau client" }), catalogue)).toEqual([]);
+  expect(rankStarterTemplates(step4Draft({ ambition: "+20 % de chiffre d'affaires en 12 mois" }), catalogue)).toEqual([]);
+  const satisfiedBooking = step4Draft({ ambition: "Recevoir plus de demandes, ma page de réservation est déjà satisfaisante" });
+  expect(rankStarterTemplates(satisfiedBooking, catalogue)).toEqual(["social_post"]);
+  expect(starterPlan(satisfiedBooking).recap.notes).toContain("Vous indiquez que votre page ou réservation est déjà satisfaisante : elle n'est pas proposée à refaire.");
+  expect(starterPlan(satisfiedBooking).missions[0].decisionPlan.selectionReason).toContain("réservation déjà satisfaisante");
+  expect(rankStarterTemplates(step4Draft({ ambition: "Recevoir plus de demandes, ma page de réservation n'est pas satisfaisante" }), catalogue)).toEqual(["site_page", "social_post"]);
+  expect(rankStarterTemplates(step4Draft({ ambition: "Recevoir plus de demandes, ma page de réservation n'est pas encore satisfaisante" }), catalogue)).toEqual(["site_page", "social_post"]);
+  expect(rankStarterTemplates(step4Draft({ ambition: "Recevoir plus de demandes, je ne suis pas complète et j'ai encore de la place" }), catalogue)).toEqual(["site_page", "social_post"]);
+  expect(rankStarterTemplates(step4Draft({ ambition: "Recevoir plus de demandes, je suis complète et ne peux pas accueillir de nouveau client" }), catalogue)).toEqual([]);
+  const named = step4Draft();
+  expect(rankStarterTemplates({ ...named, profile: { ...named.profile, firstName: "Un autre prénom" } }, catalogue)).toEqual(rankStarterTemplates(named, catalogue));
+  expect(rankStarterTemplates({ ...step4Draft({ ambition: "Recevoir plus de demandes de devis" }), analysis: { ...step4Draft().analysis!, status: "limited" } }, catalogue)).toEqual(["social_post"]);
+  // « Sur mesure » n'est proposé qu'à partir d'une occasion réellement trouvée.
+  expect(rankStarterTemplates(step4Draft(), ["custom"])).toEqual([]);
+  expect(starterPlan({ ...step4Draft(), profile: { ...step4Draft().profile, offers: "", targetClients: "" } }).missions).toEqual([]);
+  expect(starterPlan(step4Draft({ terms: { mediaBudgetPerMonth: 0 } })).recap.notes).toContain("Budget média nul : seules des pistes sans dépense publicitaire sont proposées.");
   expect(rankStarterTemplates(step4Draft(), ["agencies"])).toEqual([]);
   expect(ambitionTargetsRequests("Plus d'appels et de rendez-vous")).toBe(true);
+  expect(ambitionTargetsRequests("Plus de clients en semaine")).toBe(true);
   expect(ambitionTargetsRequests("+20 % de chiffre d'affaires en 12 mois")).toBe(false);
   expect(firstOffer("Rénovation électrique, dépannage")).toBe("Rénovation électrique");
   expect(firstOffer("Plomberie et chauffage")).toBe("Plomberie");
   expect(clip("un deux trois quatre", 10)).toBe("un deux…");
   expect(clip("court", 10)).toBe("court");
+});
+
+test("US #371 decision corpus v1: fictitious profiles produce only supported, explainable missions", () => {
+  const legacyPlan = readMissionDecisionPlan({
+    indicator: "Demandes attribuées au contenu, déclarées par vous.",
+    collectionMethod: "Saisir les demandes au bilan, sans attribution automatique.",
+    effort: "Préparer une publication.",
+    prerequisites: "Un canal actif et du temps disponible.",
+    ownerAction: "Relire et valider avant publication.",
+  });
+  expect(legacyPlan?.selectionReason).toContain("ancienne mission");
+
+  const corpus = [
+    {
+      name: "restaurant with an unspecified weekday slot",
+      options: { ambition: "Plus de clients en semaine", profile: { trade: "Restaurant", offers: "Déjeuner et dîner", targetClients: "Habitants du quartier" } },
+      templates: [],
+      note: "Pour choisir un test adapté à votre objectif en semaine",
+    },
+    {
+      name: "artisan seeking qualified quotes",
+      options: { ambition: "Plus de demandes de devis qualifiées", profile: { trade: "Artisan électricien", offers: "Rénovation électrique", targetClients: "Particuliers et syndics" } },
+      templates: ["site_page", "social_post"],
+    },
+    {
+      name: "B2B partnership goal without a found opportunity",
+      options: { ambition: "Développer des partenariats B2B", profile: { trade: "Conseil B2B", offers: "Conseil opérationnel", targetClients: "PME" } },
+      templates: [],
+      note: "Je n'ai pas assez d'éléments",
+    },
+    {
+      name: "existing but unread website",
+      options: { read: false, website: SITE, ambition: "Plus de demandes de devis" },
+      templates: ["social_post"],
+    },
+    {
+      name: "website not provided and no public social source confirmed",
+      options: { read: false, website: "", ambition: "Plus de demandes de devis" },
+      templates: ["social_post"],
+      note: SITE_NOT_GIVEN_NOTICE,
+    },
+    {
+      name: "zero media budget",
+      options: { ambition: "Plus de demandes de devis", terms: { mediaBudgetPerMonth: 0 } },
+      templates: ["site_page", "social_post"],
+      note: "Budget média nul",
+    },
+    {
+      name: "satisfactory booking page",
+      options: { ambition: "Plus de réservations, page de réservation déjà satisfaisante" },
+      templates: ["social_post"],
+      note: "page ou réservation est déjà satisfaisante",
+    },
+    {
+      name: "no capacity for more customers",
+      options: { ambition: "Plus de clients, mais je suis complet et ne peux pas accueillir de nouveau client" },
+      templates: [],
+      note: "Votre capacité d'accueil semble atteinte",
+    },
+    {
+      name: "revenue target without a testable lever",
+      options: { ambition: "+20 % de chiffre d'affaires en 12 mois" },
+      templates: [],
+      note: "Je n'ai pas assez d'éléments",
+    },
+  ] as const;
+
+  for (const scenario of corpus) {
+    const draft = step4Draft(scenario.options);
+    const plan = starterPlan(draft);
+    expect(rankStarterTemplates(draft), scenario.name).toEqual(scenario.templates);
+    if ("note" in scenario) {
+      expect(plan.recap.notes.some((note) => note.includes(scenario.note)), scenario.name).toBe(true);
+    }
+    expect(plan.missions.every((mission) => mission.decisionPlan.selectionReason.length >= 20), scenario.name).toBe(true);
+    expect(plan.missions.every((mission) => readMissionDecisionPlan(mission.decisionPlan) !== null), scenario.name).toBe(true);
+    if (scenario.name === "existing but unread website" || scenario.name === "website not provided and no public social source confirmed") {
+      expect(plan.missions.every((mission) => mission.origin === ORIGIN_DECLARED), scenario.name).toBe(true);
+      expect(plan.missions.every((mission) => mission.decisionPlan.prerequisites.includes("canal social actif")), scenario.name).toBe(true);
+    }
+  }
+
+  const requestsGoal = step4Draft({ ambition: "Plus de demandes de devis" });
+  const revenueGoal = step4Draft({ ambition: "+20 % de chiffre d'affaires en 12 mois" });
+  expect(rankStarterTemplates(requestsGoal)).not.toEqual(rankStarterTemplates(revenueGoal));
+  expect(rankStarterTemplates({ ...requestsGoal, profile: { ...requestsGoal.profile, firstName: "Prénom différent" } })).toEqual(rankStarterTemplates(requestsGoal));
+
+  const capacityNow = new Date("2026-11-12T12:00:00.000Z");
+  expect(evaluateMissionObjective({
+    template: "social_post", objective: "Plus de demandes",
+    availableCapacity: 0, capacityConfirmedAt: "2026-11-01T12:00:00.000Z", now: capacityNow,
+  })).toMatchObject({ allowed: false });
+  expect(evaluateMissionObjective({
+    template: "social_post", objective: "Plus de demandes",
+    availableCapacity: 0, capacityConfirmedAt: "2026-10-01T12:00:00.000Z", now: capacityNow,
+  })).toEqual({ allowed: true });
+  expect(evaluateMissionObjective({ template: "review_reply", objective: "Plus de demandes" })).toEqual({ allowed: true });
+
+  const b2bDraft = step4Draft({ ambition: "Développer des partenariats B2B" });
+  const b2bInput = intelligenceInputFor(b2bDraft);
+  delete b2bInput.planningContext;
+  const b2bIntelligence = doneIntelligence({ opportunity: PARTNERSHIP_FACT }, b2bInput);
+  const b2bPlan = starterPlan({ ...b2bDraft, intelligence: b2bIntelligence });
+  expect(b2bPlan.missions.map((mission) => mission.template)).toEqual(["custom"]);
+  expect(b2bPlan.missions[0].decisionPlan.selectionReason).toContain("occasion de marché");
+  expect(starterPlan({ ...b2bDraft, intelligence: { ...b2bIntelligence, status: "failed" } }).missions).toEqual([]);
 });
 
 test("GH-284: step 4 missions are distinct, valid, sourced and the first one is « À examiner en premier »", () => {
@@ -2219,7 +2383,6 @@ test("GH-284: step 4 missions are distinct, valid, sourced and the first one is 
     // Seuls des modèles du catalogue réel : `validateNewMission` refuse un modèle sans canal actif (M-76).
     for (const available of [undefined, ["agencies", "social_post", "site_page", "custom"] as const, ["custom"] as const]) {
       const { missions } = starterPlan(draft, available);
-      expect(missions.length).toBeGreaterThan(0);
       expect(missions.length).toBeLessThanOrEqual(3);
       expect(new Set(missions.map((mission) => mission.template)).size).toBe(missions.length);
       expect(missions.map((mission) => mission.first)).toEqual(missions.map((_, index) => index === 0));
@@ -2230,6 +2393,8 @@ test("GH-284: step 4 missions are distinct, valid, sourced and the first one is 
         expect(validateDeduction(mission.deduction), mission.template).toMatchObject({ ok: true, deduction: mission.deduction });
         expect(validateRisk(mission.risk)).toMatchObject({ ok: true });
         expect(validateResponsibleAgent(mission.responsibleAgent)).toMatchObject({ ok: true });
+        expect(readMissionDecisionPlan(mission.decisionPlan)).not.toBeNull();
+        expect(validateNewMission(mission, 0)).toMatchObject({ ok: true, value: { decisionPlan: mission.decisionPlan } });
         expect([ORIGIN_SITE, ORIGIN_DECLARED]).toContain(mission.origin);
         expect(mission.scopeLabel.length).toBeGreaterThan(0);
       }
@@ -2243,14 +2408,11 @@ test("GH-284: step 4 missions are distinct, valid, sourced and the first one is 
   }
   expect(FIRST_BADGE).toBe("À examiner en premier");
 
-  // Périmètres (§6.3) et déduction de la page du site sans site.
+  // Sans lecture du site, ne pas proposer une page comme si son contenu avait été vérifié.
   const noSite = starterPlan(step4Draft({ read: false }), ["social_post", "site_page", "custom"]).missions;
-  expect(noSite.map((mission) => [mission.template, mission.scopeLabel])).toEqual([
-    ["site_page", "Rénovation électrique"], ["social_post", "dépannage"], ["custom", expect.stringContaining("Une action que vous menez vous-même")],
-  ]);
-  expect(noSite[0].deduction).toBe("Vous visez +20 % de chiffre d'affaires en 12 mois : vérifiez d'abord si une page présente déjà Rénovation électrique et permet de vous contacter, avant d'en créer une.");
-  const google = starterPlan(step4Draft(), ["google_profile", "review_reply"]).missions;
-  expect(google.map((mission) => mission.scopeLabel)).toEqual(["Votre fiche Google", "Aucun avis choisi"]);
+  expect(noSite.map((mission) => mission.template)).toEqual(["social_post"]);
+  expect(noSite[0].origin).toBe(ORIGIN_DECLARED);
+  expect(starterPlan(step4Draft(), ["google_profile", "review_reply"]).missions).toEqual([]);
   // Valeurs par défaut du modèle d'action : agent et risque.
   for (const mission of noSite) {
     expect(mission.responsibleAgent).toBe(MISSION_TEMPLATES[mission.template].defaultAgent);
@@ -2269,17 +2431,17 @@ test("GH-284: the finding cites its origin — « Lu sur le site » only for val
   expect(starterPlan({ ...corrected, profile: { ...corrected.profile, offers: "Bornes de recharge" } }, ["social_post"]).missions[0].origin).toBe(ORIGIN_DECLARED);
   // Une analyse d'une autre entreprise ne compte pas.
   expect(starterPlan({ ...corrected, profile: { ...corrected.profile, companyName: "Autre" } }, ["social_post"]).missions[0].origin).toBe(ORIGIN_DECLARED);
-  // « Sur mesure » cite l'ambition : toujours « Vous nous avez dit ».
-  expect(starterPlan(step4Draft({ observedOffers: true }), ["custom"]).missions[0]).toMatchObject({ origin: ORIGIN_DECLARED, finding: "Votre ambition : +20 % de chiffre d'affaires en 12 mois. Vos clients : Particuliers propriétaires." });
+  // « Sur mesure » ne sert plus de remplissage sans occasion concrète trouvée.
+  expect(starterPlan(step4Draft({ observedOffers: true }), ["custom"]).missions).toEqual([]);
 });
 
-const INTELLIGENCE_INPUT = { companyName: "Atelier Lumen", location: "Lyon", website: SITE, trade: "Électricien", servingArea: "Lyon et alentours", offers: "Rénovation électrique, dépannage", targetClients: "Particuliers propriétaires", ambitionText: "+20 % de chiffre d'affaires en 12 mois" };
+const INTELLIGENCE_INPUT = { companyName: "Atelier Lumen", location: "Lyon", website: SITE, trade: "Électricien", servingArea: "Lyon et alentours", offers: "Rénovation électrique, dépannage", targetClients: "Particuliers propriétaires", ambitionText: "Recevoir plus de demandes de devis" };
 const COMPETITOR_FACT = { name: "Électricité Dupont", fact: "a une note de 4,8/5 sur 120 avis Google", source: "https://maps.example/dupont" };
 const EVENT_FACT = { title: "Salon de l'habitat de Lyon", description: "Un salon local où rencontrer des clients intéressés par vos services.", source: "https://salon.example", isEvent: true, eventEndDate: "2026-12-01" };
 const PARTNERSHIP_FACT = { title: "Syndic du Parc", description: "Un syndic local qui recommande des électriciens à sa copropriété.", source: "https://syndic.example", isEvent: false, eventEndDate: null };
 
-function doneIntelligence(facts: Partial<Pick<DraftIntelligence, "competitor" | "opportunity">>): DraftIntelligence {
-  const running = newIntelligence(INTELLIGENCE_INPUT, "run-362", new Date("2026-11-12T10:00:00Z"));
+function doneIntelligence(facts: Partial<Pick<DraftIntelligence, "competitor" | "opportunity">>, input: Parameters<typeof newIntelligence>[0] = INTELLIGENCE_INPUT): DraftIntelligence {
+  const running = newIntelligence(input, "run-362", new Date("2026-11-12T10:00:00Z"));
   return { ...running, status: "done", finishedAt: running.startedAt, competitor: facts.competitor ?? null, opportunity: facts.opportunity ?? null };
 }
 
@@ -2328,10 +2490,9 @@ test("US #363 : une opportunité de partenariat (pas un événement) invite à c
   expect(mission.finding).toContain("Source : https://syndic.example");
 });
 
-test("US #363 : sans opportunité trouvée, la mission « Sur mesure » reste celle des règles existantes (#359, #360)", () => {
-  const withEmptyIntelligence = starterPlan(step4Draft({ intelligence: doneIntelligence({}) }), ["custom"]).missions[0];
-  const withoutIntelligence = starterPlan(step4Draft(), ["custom"]).missions[0];
-  expect(withEmptyIntelligence).toEqual(withoutIntelligence);
+test("US #363 : sans opportunité trouvée, « Sur mesure » n'est pas proposé comme remplissage", () => {
+  expect(starterPlan(step4Draft({ intelligence: doneIntelligence({}) }), ["custom"]).missions).toEqual([]);
+  expect(starterPlan(step4Draft(), ["custom"]).missions).toEqual([]);
 });
 
 test("US #363 : un concurrent ne justifie pas artificiellement une publication", () => {
@@ -2352,10 +2513,10 @@ test("US #361 : le coût de la recherche anonyme ne revient au compte que s'il e
 
 test("GH-284: the recap, the cap and the reserves — site not read, target to refine", () => {
   const plan = starterPlan(step4Draft());
-  expect(plan.recap).toEqual({ companyName: "Atelier Lumen", location: "Lyon", trade: "Électricien", servingArea: "Lyon et alentours", details: ["Lyon", "Électricien", "Lyon et alentours"], cap: "+20 % de chiffre d'affaires en 12 mois", notes: [] });
+  expect(plan.recap).toEqual({ companyName: "Atelier Lumen", location: "Lyon", trade: "Électricien", servingArea: "Lyon et alentours", details: ["Lyon", "Électricien", "Lyon et alentours"], cap: "Recevoir plus de demandes de devis", notes: [] });
   // Sans site indiqué : une mention propre, jamais « Paul n'a pas pu lire votre site ».
   const unread = starterPlan(step4Draft({ read: false, terms: { gainPercent: null } }));
-  expect(unread.recap.notes).toEqual([SITE_NOT_GIVEN_NOTICE, "La cible reste à préciser : le gain visé n'est pas indiqué."]);
+  expect(unread.recap.notes).toEqual([SITE_NOT_GIVEN_NOTICE]);
   // Site indiqué mais pas lu : « Paul n'a pas pu lire votre site ».
   const notRead = { ...step4Draft({ read: false }), profile: { ...step4Draft({ read: false }).profile, website: SITE } };
   expect(starterPlan(notRead).recap.notes).toEqual([SITE_NOT_READ_NOTICE]);
@@ -2363,19 +2524,19 @@ test("GH-284: the recap, the cap and the reserves — site not read, target to r
   const sameZone = step4Draft();
   expect(starterPlan({ ...sameZone, profile: { ...sameZone.profile, servingArea: "Lyon", trade: "" } }).recap.details).toEqual(["Lyon"]);
   const vague = starterPlan(step4Draft({ ambition: "Avoir plus de clients", terms: { gainPercent: null, horizonMonths: null } }));
-  expect(vague.recap.notes).toEqual(["La cible reste à préciser : le gain visé et l'horizon ne sont pas indiqués."]);
+  expect(vague.recap.notes).toEqual([]);
 });
 
 test("GH-284: « Ce que nous retenons » — the draft's sentences, otherwise the rules, always 2 or 3 bounded sentences", () => {
   const rules = retainedFromRules(step4Draft());
   expect(rules).toEqual([
     "Atelier Lumen : Électricien, sur la zone Lyon et alentours.",
-    "Votre cap : +20 % de chiffre d'affaires en 12 mois.",
+    "Votre cap : Recevoir plus de demandes de devis.",
     `À vérifier : rubriques non lues (Informations publiques). ${TARGET_NOTICE}`,
   ]);
   expect(readRetained(rules)).toEqual(rules);
   const noSite = retainedFromRules(step4Draft({ read: false, terms: { gainPercent: null, horizonMonths: null } }));
-  expect(noSite[2]).toBe(`À vérifier : aucun site indiqué ; le gain visé et l'horizon à préciser. ${TARGET_NOTICE}`);
+  expect(noSite[2]).toBe(`À vérifier : aucun site indiqué. ${TARGET_NOTICE}`);
   const unreadSite = { ...step4Draft({ read: false }), profile: { ...step4Draft({ read: false }).profile, website: SITE } };
   expect(retainedFromRules(unreadSite)[2]).toContain("votre site n'a pas été lu");
   // Deux fois la même phrase : refusé.

@@ -125,9 +125,7 @@ test("onboarding quality: a Google listing is read only after explicit selection
 
 test("onboarding quality: no input or failed reading never proves an absent website", () => {
   const state = draft();
-  const page = starterPlan(state, ["site_page"]).missions[0];
-  expect(page.deduction).toContain("vérifiez d'abord");
-  expect(page.deduction).not.toContain("vous n'avez pas encore de page");
+  expect(starterPlan(state, ["site_page"]).missions).toEqual([]);
   expect(starterPlan(state).recap.notes[0]).toContain("ne signifie pas");
   const finding = ruleFirstFindings({ site: null, google: null })[0];
   expect(finding.certainty).toBe("piste");
@@ -142,7 +140,7 @@ test("onboarding quality: research blocks every account transition while running
   expect(applyDraftAction(state, { action: "goto", step: 5 }, NOW)).toMatchObject({ ok: false });
   expect(checkDraftForAccount({ ...state, step: 5 }, NOW)).toMatchObject({ ok: false, code: "intelligence", step: 4 });
   const later = new Date(NOW.getTime() + INTELLIGENCE_STALE_MS + 1);
-  expect(intelligenceNotice(state.intelligence, later)).toBe(INTELLIGENCE_MESSAGES.failed);
+  expect(intelligenceNotice(state.intelligence, later)).toBe(INTELLIGENCE_MESSAGES.planningFailed);
   expect(applyDraftAction(state, { action: "interested" }, later)).toMatchObject({ ok: true, state: { step: 5 } });
   for (const status of ["done", "failed", "limited"] as const) {
     const finished = { ...state, intelligence: { ...state.intelligence, status } };
@@ -210,7 +208,9 @@ test("#370: le dirigeant écarte un concurrent, l'exclusion persiste et la reche
 });
 
 test("onboarding quality: unavailable or failed search is not a successful empty analysis; cost is retained", async () => {
-  const initial = newIntelligence(intelligenceInputFor(draft()), "market", NOW);
+  const input = intelligenceInputFor(draft());
+  delete input.planningContext;
+  const initial = newIntelligence(input, "market", NOW);
   const saved: unknown[] = [];
   const deps = { intelligence: initial, now: () => NOW, save: async (value: unknown) => { saved.push(value); return true; } };
   const unavailable = await runDraftIntelligence("test", { ...deps, search: async () => null });
@@ -234,6 +234,6 @@ test("onboarding quality: a market reference survives signup as unverified, neve
     category: "concurrence", title: competitor.name, content: competitor.fact,
     sourceUrl: competitor.source, sourceStatus: null, certainty: "a_verifier",
   });
-  expect(starterPlan(state, ["social_post"]).missions[0].finding).not.toContain(competitor.source);
+  expect(starterPlan(state, ["social_post"]).missions).toEqual([]);
   expect(starterMarketFinding({ ...state, profile: { ...state.profile, companyName: "Autre entreprise" } })).toBeNull();
 });

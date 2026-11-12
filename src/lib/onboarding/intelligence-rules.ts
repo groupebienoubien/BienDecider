@@ -7,7 +7,31 @@ import { z } from "zod";
  */
 
 export type ExcludedCompetitor = { name: string; source: string };
-export type IntelligenceInput = { companyName?: string; location?: string; website?: string; trade: string; servingArea: string; offers: string; targetClients: string; ambitionText: string; excludedCompetitors?: ExcludedCompetitor[] };
+export const planningEvidenceSchema = z.object({
+  id: z.string().min(1).max(100), fact: z.string().min(1).max(300),
+  kind: z.enum(["observed", "declared"]),
+  topic: z.enum(["profile", "site_web", "fiche_google", "opportunite"]),
+  source: z.string().max(600).nullable(), readAt: z.string().max(40).nullable(),
+}).strict();
+const planningContextSchema = z.object({
+  analysisRunId: z.string().max(100).nullable(),
+  evidence: z.array(planningEvidenceSchema).max(30),
+  limitations: z.array(z.string().max(600)).max(30),
+  hypotheses: z.array(z.string().max(300)).max(10).optional(),
+  mediaBudgetPerMonth: z.number().nullable(),
+  recruitment: z.enum(["possible", "no", "unspecified"]),
+  socialProfiles: z.array(z.object({ platform: z.enum(["facebook", "instagram", "linkedin"]), url: z.string().max(600) })).max(3),
+});
+export type PlanningContext = z.infer<typeof planningContextSchema>;
+export type IntelligenceInput = { companyName?: string; location?: string; website?: string; trade: string; servingArea: string; offers: string; targetClients: string; ambitionText: string; excludedCompetitors?: ExcludedCompetitor[]; planningContext?: PlanningContext };
+
+const planningSchema = z.object({
+  status: z.enum(["running", "done", "failed"]),
+  proposal: z.json().optional(),
+  notice: z.string().max(600).optional(),
+  cost: z.object({ usd: z.number(), inputTokens: z.number(), outputTokens: z.number(), model: z.string().max(100).optional() }),
+});
+export type DraftMissionPlanning = z.infer<typeof planningSchema>;
 
 export type CompetitorDimension = "trade" | "servingArea" | "offers" | "targetClients";
 export type CompetitorComparison = { dimension: CompetitorDimension; businessValue: string; competitorValue: string };
@@ -115,16 +139,18 @@ export type DraftIntelligence = {
   /** `model` : modèle réellement appelé, repris dans le `UsageEvent` du compte à l'inscription ; absent si rien n'a été appelé. */
   cost: { usd: number; inputTokens: number; outputTokens: number; model?: string };
   limit?: IntelligenceLimit;
+  planning?: DraftMissionPlanning;
 };
 
 /** Une recherche « en cours » plus vieille que ce délai a été interrompue (durée maximale de la route). */
-export const INTELLIGENCE_STALE_MS = 90_000;
+export const INTELLIGENCE_STALE_MS = 180_000;
 
 export const INTELLIGENCE_MESSAGES = {
   limited: "Paul a atteint sa limite de recherches pour aujourd'hui : ce n'est pas une panne. Vos pistes restent fondées sur ce que vous avez déjà confirmé.",
   busy: "Paul recherche déjà votre secteur. Patientez quelques secondes.",
   failed: "La recherche de marché n'a pas abouti. Les pistes ci-dessous restent exploratoires, fondées sur votre profil : elles ne constituent pas une analyse approfondie.",
   missing: "Aucune recherche de marché à jour n'est disponible pour ce profil. Les pistes ci-dessous restent exploratoires ; revenez à votre ambition pour relancer la recherche.",
+  planningFailed: "La préparation des missions n'a pas abouti. Aucune proposition générique ne la remplace ; revenez à votre ambition pour réessayer.",
 } as const;
 
 export function newIntelligence(input: IntelligenceInput, runId: string, now = new Date(), status: DraftIntelligence["status"] = "running", limit?: IntelligenceLimit): DraftIntelligence {
@@ -133,6 +159,13 @@ export function newIntelligence(input: IntelligenceInput, runId: string, now = n
     input: { ...input, ...(input.excludedCompetitors ? { excludedCompetitors: input.excludedCompetitors.map((item) => ({ ...item })) } : {}) },
     competitor: null, competitors: [], opportunity: null, cost: { usd: 0, inputTokens: 0, outputTokens: 0 },
     ...(status === "limited" && limit ? { limit } : {}),
+    ...(input.planningContext ? {
+      planning: {
+        status: status === "running" ? "running" as const : "failed" as const,
+        cost: { usd: 0, inputTokens: 0, outputTokens: 0 },
+        ...(status !== "running" ? { notice: INTELLIGENCE_MESSAGES.planningFailed } : {}),
+      },
+    } : {}),
   };
 }
 
@@ -156,12 +189,14 @@ export function needsNewIntelligence(current: DraftIntelligence | null, input: I
   if (!current) return true;
   if (intelligenceRunning(current, now)) return false;
   if (current.status === "limited" || current.status === "running" || current.status === "failed") return true;
+  if (current.planning?.status === "failed") return true;
   return !sameIntelligenceInput(current.input, input);
 }
 
 export function sameIntelligenceInput(left: IntelligenceInput, right: IntelligenceInput): boolean {
   const fields = ["companyName", "location", "website", "trade", "servingArea", "offers", "targetClients", "ambitionText"] as const;
   if (!fields.every((field) => (left[field] ?? "") === (right[field] ?? ""))) return false;
+  if (JSON.stringify(left.planningContext ?? null) !== JSON.stringify(right.planningContext ?? null)) return false;
   const exclusions = (input: IntelligenceInput) => (input.excludedCompetitors ?? [])
     .map(({ name, source }) => `${name.trim().toLocaleLowerCase("fr")}\u0000${source.trim()}`)
     .sort()
@@ -176,6 +211,7 @@ function limitScope(limit: IntelligenceLimit): string {
 export function intelligenceNotice(intelligence: DraftIntelligence | null, now = new Date()): string | null {
   const shown = effectiveIntelligence(intelligence, now);
   if (!shown || shown.status === "running") return null;
+  if (shown.planning && shown.planning.status !== "done") return INTELLIGENCE_MESSAGES.planningFailed;
   if (shown.status === "limited") return `Limite de recherches du jour atteinte ${shown.limit ? limitScope(shown.limit) : "pour l'ensemble des visiteurs"} : ${INTELLIGENCE_MESSAGES.limited}`;
   if (shown.status === "failed") return INTELLIGENCE_MESSAGES.failed;
   if (!(shown.competitors?.length || shown.competitor) && !shown.opportunity) return "La recherche n'a retenu aucun repère de marché suffisamment solide. Les pistes restent fondées sur votre profil, pas sur une comparaison concurrentielle.";
@@ -221,12 +257,14 @@ const intelligenceSchema = z.object({
     companyName: z.string().optional(), location: z.string().optional(), website: z.string().optional(),
     trade: z.string(), servingArea: z.string(), offers: z.string(), targetClients: z.string(), ambitionText: z.string(),
     excludedCompetitors: z.array(z.object({ name: z.string(), source: z.string() })).optional(),
+    planningContext: planningContextSchema.optional(),
   }),
   competitor: competitorSchema.nullable(),
   competitors: z.array(competitorSchema).optional(),
   opportunity: opportunitySchema.nullable(),
   cost: z.object({ usd: z.number(), inputTokens: z.number(), outputTokens: z.number(), model: z.string().max(100).optional() }),
   limit: z.object({ scope: z.enum(["ip", "global"]), retryAt: z.string().max(40) }).optional(),
+  planning: planningSchema.optional(),
 });
 
 /** Lecture défensive de la colonne `intelligence` : toute valeur illisible vaut « pas de recherche ». */
@@ -243,4 +281,10 @@ export function intelligenceUsage(intelligence: DraftIntelligence | null): { age
   if (!cost || !cost.model || !Number.isFinite(cost.usd) || cost.usd <= 0) return null;
   const tokens = (value: number) => (Number.isFinite(value) && value > 0 ? Math.round(value) : 0);
   return { agent: INTELLIGENCE_USAGE_AGENT, model: cost.model, inputTokens: tokens(cost.inputTokens), outputTokens: tokens(cost.outputTokens), costUsd: cost.usd };
+}
+
+export function missionPlanningUsage(intelligence: DraftIntelligence | null): ReturnType<typeof intelligenceUsage> {
+  const cost = intelligence?.planning?.cost;
+  if (!cost || !cost.model || !Number.isFinite(cost.usd) || cost.usd <= 0) return null;
+  return { agent: "onboarding_mission_planning", model: cost.model, inputTokens: Math.round(cost.inputTokens), outputTokens: Math.round(cost.outputTokens), costUsd: cost.usd };
 }
