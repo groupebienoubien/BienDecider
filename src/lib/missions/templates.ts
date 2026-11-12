@@ -58,8 +58,8 @@ const SOCIAL: readonly MissionChannel[] = ["facebook", "instagram", "linkedin"];
 
 export const MISSION_TEMPLATES: Record<TemplateKey, MissionTemplate> = {
   agencies: {
-    key: "agencies", defaultAgent: "demarchage", defaultRisk: "Une agence peut ne pas répondre : le test s'arrête après un refus clair ou 30 jours sans réponse.", label: "Partenariats", channels: ["gmail"], contentFormat: "E-mail individuel, sans relance automatique",
-    defaultOutcome: "Une réponse d'une agence de votre zone", stopRuleDays: 30, open: true, validateScope: idsScope("agencyIds", 1, 2, "M-30"),
+    key: "agencies", defaultAgent: "demarchage", defaultRisk: "Un partenaire peut ne pas répondre : le test s'arrête après un refus clair ou 30 jours sans réponse.", label: "Partenariats", channels: ["gmail"], contentFormat: "E-mail individuel, sans relance automatique",
+    defaultOutcome: "Une réponse d'un partenaire de votre zone", stopRuleDays: 30, open: true, validateScope: idsScope("agencyIds", 1, 2, "M-30"),
   },
   leads: {
     key: "leads", defaultAgent: "demarchage", defaultRisk: "Un ancien contact peut ne pas souhaiter être recontacté : chaque e-mail lui propose de ne plus l'être.", label: "Réactivation", channels: ["gmail"], contentFormat: "E-mail individuel qui propose de ne plus être recontacté",

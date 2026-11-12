@@ -82,6 +82,11 @@ function reviewData(details: PlaceDetails) {
 /** Texte donné au modèle sur la fiche de l'entreprise : données lues (avis tiers non fiables) ou statut de non-lecture. */
 export function describeOwnReading(reading: OwnGoogleReading, now: Date = new Date()): string {
   if (reading.status === "non_lue") {
+    // « À confirmer » : une fiche a été trouvée, elle attend la confirmation du dirigeant ; ce n'est pas une absence
+    // de fiche, et ne doit jamais se lire comme telle à côté des fiches concurrentes, elles bien lues.
+    if (reading.reason === "to_confirm") {
+      return "Fiche Google de l'entreprise : une fiche candidate a été trouvée, mais le dirigeant ne l'a pas encore confirmée, donc ses avis et sa note ne sont pas lus. N'écris rien sur ses avis ni sa note. Ne dis jamais qu'elle est absente ou introuvable : dis qu'elle attend sa confirmation et invite le dirigeant à la confirmer.";
+    }
     return `Fiche Google de l'entreprise : NON LUE (${sourceReasonLabel(reading.reason)}). N'écris rien sur ses avis ni sa note et signale-le comme source non lue.`;
   }
   const { details } = reading;

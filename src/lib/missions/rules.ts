@@ -51,13 +51,13 @@ export function validateNewMission(body: unknown, openOwnerMissions: number): { 
 }
 
 /**
- * Déduction de Paul (#168) : facultative ; donnée, elle suit les règles du constat (10 à 300 caractères après
- * nettoyage des espaces, sans balise), sinon M-20.
+ * Déduction de Paul (#168) : facultative ; donnée, 10 à 500 caractères après nettoyage des espaces, sans balise,
+ * sinon M-20. Plus large que le constat (10 à 300) pour permettre de croiser plusieurs constats dans la raison.
  */
 export function validateDeduction(value: unknown): { ok: true; deduction: string | null } | MissionFailure {
   if (value === undefined || value === null) return { ok: true, deduction: null };
   const deduction = trimmed(value);
-  return typeof value === "string" && inRange(deduction, 10, 300) ? { ok: true, deduction } : failure("M-20");
+  return typeof value === "string" && inRange(deduction, 10, 500) ? { ok: true, deduction } : failure("M-20");
 }
 
 /** Agents qu'une mission peut nommer comme responsables (#284) : les clés de `PERSONAS` (vérifié par les tests). */

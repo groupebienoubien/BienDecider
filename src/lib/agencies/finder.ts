@@ -19,7 +19,7 @@ export function buildAgencySearchPrompt(request: AgencySearchRequest): string {
   const focus = companyFocusText(request.company);
   const lines = [
     `Entreprise : ${request.company.name} — ${request.company.trade}, zone : ${request.company.servingArea}.${request.company.description ? ` Activité : ${request.company.description.slice(0, 500)}.` : ""}${focus ? ` ${focus}` : ""}`,
-    `Cherche sur le web jusqu'à ${AGENCY_SEARCH_MAX} agences de cette zone qui peuvent recommander cette entreprise à leurs clients (agences immobilières, syndics, architectes, maîtres d'œuvre, gestionnaires de biens… selon le métier).`,
+    `Cherche sur le web jusqu'à ${AGENCY_SEARCH_MAX} organisations locales qui pourraient devenir des partenaires de recommandation pour cette entreprise : des professionnels dont la clientèle a besoin de ce que fait cette entreprise, sans lui faire concurrence. Choisis des types d'organisations pertinents pour SON métier précis, pas une liste générique : par exemple un restaurant peut chercher des hôtels, un bowling, un office de tourisme ou un traiteur événementiel ; une entreprise du bâtiment peut chercher des agences immobilières, des architectes ou des syndics. Réfléchis au métier donné ci-dessus avant de choisir.`,
     "Pour chacune : son nom, son secteur, son e-mail professionnel tel qu'il est publié par l'agence elle-même (par exemple contact@ ou agence@), la page web où tu l'as lu, et en une phrase pourquoi elle peut recommander l'entreprise.",
     "Règles : uniquement des organisations réelles et des informations publiques et professionnelles, jamais l'adresse personnelle d'une personne. N'invente aucune agence ni aucune adresse : une agence sans e-mail publié est laissée de côté.",
   ];
