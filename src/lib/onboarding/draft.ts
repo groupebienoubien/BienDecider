@@ -38,6 +38,7 @@ function toJson(state: DraftState): { step: number; profile: Prisma.InputJsonObj
     profile: {
       ...state.profile,
       socialSourceDecisions: state.socialSourceDecisions,
+      competitorDecisions: state.competitorDecisions,
       googlePlaceChoice: state.googlePlaceChoice,
       websiteRejected: state.websiteRejected,
     },

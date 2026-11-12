@@ -16,6 +16,7 @@ import { describeRunProgress, finishedRunMessage, formatDuration, recentSucceede
 import { splitAudits } from "../src/lib/audit-split";
 import { isAuditPlanItemTitle, isPlanTitleAlreadyTaken } from "../src/lib/agents/plan-item-shared";
 import { latestAuditLines } from "../src/lib/agents/audit-plan-context";
+import { competitionContextForProspecting } from "../src/lib/agents/findings-context";
 import { groupPlanItems, planItemStatusView, planTabFromParam, splitPlanItems } from "../src/lib/action-plan-view";
 import { facebookAuditSource } from "../src/lib/facebook-audit-source";
 import { businessTargetLines, clientGapLabel, clientsToMonthly, computeBusinessTarget, toMonthly } from "../src/lib/business-target";
@@ -2180,7 +2181,7 @@ function step4Draft(options: { read?: boolean; ambition?: string; terms?: Partia
     findings: { ...newAnalysis(input, "run-284").findings, offers: options.observedOffers ? observed(profile.offers) : null, targetClients: options.observedOffers ? observed(profile.targetClients) : null, trade: observed(profile.trade) },
   };
   return {
-    step: 4, profile, socialSourceDecisions: [], googlePlaceChoice: null, websiteRejected: false, profileConfirmed: true, diagnosticReady: true, analysis,
+    step: 4, profile, socialSourceDecisions: [], competitorDecisions: [], googlePlaceChoice: null, websiteRejected: false, profileConfirmed: true, diagnosticReady: true, analysis,
     ambition: { text: options.ambition ?? "+20 % de chiffre d'affaires en 12 mois", terms: { ...EMPTY_TERMS, gainPercent: 20, horizonMonths: 12, ...options.terms } },
     intelligence: options.intelligence ?? null,
   };
@@ -2283,12 +2284,30 @@ function doneIntelligence(facts: Partial<Pick<DraftIntelligence, "competitor" | 
 }
 
 test("US #362/#363 : starterFacts ne reprend les faits que d'une recherche terminée", () => {
-  expect(starterFacts(null)).toEqual({ competitor: null, opportunity: null });
+  expect(starterFacts(null)).toEqual({ competitor: null, competitors: [], opportunity: null });
   const running = newIntelligence(INTELLIGENCE_INPUT, "run-362", new Date("2026-11-12T10:00:00Z"));
-  expect(starterFacts(running)).toEqual({ competitor: null, opportunity: null });
-  expect(starterFacts({ ...running, status: "failed" })).toEqual({ competitor: null, opportunity: null });
+  expect(starterFacts(running)).toEqual({ competitor: null, competitors: [], opportunity: null });
+  expect(starterFacts({ ...running, status: "failed" })).toEqual({ competitor: null, competitors: [], opportunity: null });
   const done = doneIntelligence({ competitor: COMPETITOR_FACT, opportunity: EVENT_FACT });
-  expect(starterFacts(done)).toEqual({ competitor: COMPETITOR_FACT, opportunity: EVENT_FACT });
+  expect(starterFacts(done)).toEqual({ competitor: COMPETITOR_FACT, competitors: [COMPETITOR_FACT], opportunity: EVENT_FACT });
+});
+
+test("#370 : Jean-Claude ne reçoit que les constats de concurrence non écartés pour une prospection professionnelle", () => {
+  const finding = (title: string, competitorDismissedAt: Date | null = null) => ({
+    title, content: "Fait comparé et sourcé.", certainty: "a_verifier",
+    sourceUrl: "https://source.example", sourceStatus: null,
+    whatWorks: null, toImprove: null, competitorDismissedAt,
+  });
+  const context = competitionContextForProspecting([
+    finding("Écarté", new Date("2026-11-12T10:00:00Z")),
+    finding("Comparables 1"), finding("Comparables 2"), finding("Comparables 3"), finding("Au-delà du plafond"),
+  ]);
+  expect(context).toContain("Comparables 1");
+  expect(context).toContain("Comparables 2");
+  expect(context).toContain("Comparables 3");
+  expect(context).not.toContain("Écarté");
+  expect(context).not.toContain("Au-delà du plafond");
+  expect(context).toContain("uniquement pour choisir des cibles d'organisations");
 });
 
 test("US #363 : une opportunité réelle (événement) remplace l'action générique par une mission datée et sourcée, valide telle quelle", () => {

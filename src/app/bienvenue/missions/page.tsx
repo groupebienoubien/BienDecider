@@ -1,6 +1,6 @@
 import { requireDraftPage } from "../guard";
 import { WelcomeFrame } from "../welcome-frame";
-import { InterestButton } from "../step-forms";
+import { InterestButton, MarketCompetitors } from "../step-forms";
 import { MissionsIntelligenceWatcher } from "./missions-waiting";
 import { FIRST_BADGE, matchingIntelligence, starterFacts, starterPlan } from "@/lib/onboarding/draft-rules";
 import { intelligenceRunning, intelligenceView } from "@/lib/onboarding/intelligence-rules";
@@ -24,8 +24,7 @@ export default async function WelcomeMissionsPage() {
   }
   const { recap, retained, missions } = starterPlan(state);
   const intelligence = matchingIntelligence(state);
-  const { competitor } = starterFacts(intelligence);
-  const competitorSource = safeSourceUrl(competitor?.source);
+  const competitors = starterFacts(intelligence).competitors.filter((competitor) => safeSourceUrl(competitor.source));
   return (
     <WelcomeFrame step={4} intro={<p>Voici trois premières pistes pour {recap.companyName}. Elles arriveront « À décider » dans votre stratégie : aucune n&apos;est lancée sans vous.</p>}>
       <div className="flex flex-col gap-6">
@@ -44,14 +43,7 @@ export default async function WelcomeMissionsPage() {
           )}
         </section>
 
-        {competitor && (
-          <section aria-labelledby="market-title" className="rounded-lg border border-[var(--bd-line)] p-4 text-sm text-[var(--bd-ink)]">
-            <h2 id="market-title" className="font-semibold">Un repère de marché à vérifier</h2>
-            <p className="mt-2 break-words"><strong>{competitor.name}</strong> : {competitor.fact}</p>
-            {competitorSource && <a href={competitorSource} target="_blank" rel="noopener noreferrer" className="mt-1 inline-block underline">Consulter la source de ce repère</a>}
-            <p className="mt-2 text-[var(--bd-muted)]">Ce repère ne suffit pas à justifier une publication ni à conclure que cette entreprise est votre concurrent direct.</p>
-          </section>
-        )}
+        {competitors.length > 0 && <MarketCompetitors competitors={competitors} decisions={state.competitorDecisions} />}
 
         <section aria-labelledby="retained-title">
           <h2 id="retained-title" className="font-[family-name:var(--font-sora)] text-lg font-semibold text-[var(--bd-ink)]">Ce que nous retenons</h2>

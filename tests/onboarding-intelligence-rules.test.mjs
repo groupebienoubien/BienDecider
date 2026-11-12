@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   INTELLIGENCE_STALE_MS, effectiveIntelligence, intelligenceFinished, intelligenceRunning, intelligenceUsage, intelligenceView,
-  needsNewIntelligence, newIntelligence, readIntelligence,
+  needsNewIntelligence, newIntelligence, readCompetitorFacts, readIntelligence,
 } from "../src/lib/onboarding/intelligence-rules.ts";
 
 const INPUT = { trade: "Électricien", servingArea: "Lyon et alentours", offers: "Rénovation électrique, dépannage", targetClients: "Particuliers propriétaires", ambitionText: "+20 % de chiffre d'affaires en 12 mois" };
@@ -72,6 +72,49 @@ test("readIntelligence : lecture défensive, toute valeur illisible vaut « pas 
   assert.equal(readIntelligence(null), null);
   assert.equal(readIntelligence("texte"), null);
   assert.equal(readIntelligence({ runId: "x" }), null);
+});
+
+test("#370 : comparables sourcés et datés seulement, jamais l'entreprise, un homonyme ou une note isolée", () => {
+  const direct = {
+    name: "Électricité Dupont", relationship: "direct", comparabilityReason: "Même activité, clientèle et zone.",
+    fact: "Propose le dépannage électrique aux particuliers.", source: "https://dupont.example/services",
+    comparisons: [{ dimension: "offers", competitorValue: "Dépannage électrique" }],
+  };
+  const indirect = {
+    name: "Maison Énergie Lyon", relationship: "indirect", comparabilityReason: "Alternative d'équipement pour le même besoin.",
+    fact: "Propose la vente de kits de rénovation électrique.", source: "https://energie.example/offres",
+    comparisons: [{ dimension: "trade", competitorValue: "Vente de matériel électrique" }],
+  };
+  const invalid = [
+    { ...direct, name: "Atelier Lumen (Lyon)" },
+    { ...direct, name: "Atelier-Lumën, autre ville" },
+    { ...direct, name: "Avis Google Lyon", comparisons: [] },
+    { ...direct, name: "Source non publique", source: "javascript:alert(1)" },
+  ];
+  const facts = readCompetitorFacts([direct, indirect, ...invalid], {
+    ...INPUT, companyName: "Atelier Lumen", website: "https://atelier-lumen.example/",
+  }, NOW);
+  assert.deepEqual(facts.map(({ name, relationship }) => ({ name, relationship })), [
+    { name: "Électricité Dupont", relationship: "direct" },
+    { name: "Maison Énergie Lyon", relationship: "indirect" },
+  ]);
+  assert.deepEqual(facts[0].comparisons, [{ dimension: "offers", businessValue: INPUT.offers, competitorValue: "Dépannage électrique" }]);
+  assert.equal(facts[0].readAt, NOW.toISOString());
+});
+
+test("#370 : les exclusions sont respectées, les doublons contradictoires ne sont pas multipliés", () => {
+  const candidate = {
+    name: "Électricité Dupont", relationship: "direct", comparabilityReason: "Même zone et métier.",
+    fact: "Propose le dépannage.", source: "https://dupont.example/services",
+    comparisons: [{ dimension: "offers", competitorValue: "Dépannage" }],
+  };
+  const excluded = readCompetitorFacts([candidate], {
+    ...INPUT, excludedCompetitors: [{ name: candidate.name, source: candidate.source }],
+  }, NOW);
+  assert.deepEqual(excluded, []);
+  const duplicate = readCompetitorFacts([candidate, { ...candidate, source: "https://another.example", fact: "Fact contradictoire." }], INPUT, NOW);
+  assert.equal(duplicate.length, 1);
+  assert.equal(duplicate[0].fact, candidate.fact);
 });
 
 test("intelligenceUsage : seulement si un coût positif et un modèle connu, comme analysisUsage", () => {

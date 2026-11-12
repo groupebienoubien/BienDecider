@@ -236,7 +236,7 @@ Règles strictes, non négociables :
       // Date du jour et nom du dirigeant : hors du bloc mis en cache.
       { type: "text", text: runtimeContextLines(company, now) },
       { type: "text", text: await getRejectionContext(companyId) },
-      { type: "text", text: await getCompetitionContextForProspecting(companyId) },
+      ...(prospectDescription ? [{ type: "text" as const, text: await getCompetitionContextForProspecting(companyId) }] : []),
       ...(options.brief ? [{ type: "text" as const, text: briefLine(options.brief) }] : []),
     ],
     messages: [

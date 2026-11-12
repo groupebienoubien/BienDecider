@@ -7,8 +7,10 @@ import { TradeCombobox } from "@/components/trade-combobox";
 import { AmbitionEditor } from "@/components/ambition-editor";
 import { LIMITS, profileOriginLabel, type DraftProfile, type GooglePlaceChoice, type ProfilePrefill } from "@/lib/onboarding/draft-rules";
 import type { AnalysisView, RubricStatus } from "@/lib/onboarding/analysis-rules";
+import type { CompetitorDecision, CompetitorDimension, CompetitorFact } from "@/lib/onboarding/intelligence-rules";
 import { socialPublicationStatuses, type PublicSourceCandidate, type SocialSourceDecision } from "@/lib/onboarding/public-sources";
 import type { PlaceCandidate } from "@/lib/google-places";
+import { safeSourceUrl } from "@/lib/findings/certainty";
 import { FieldError, FormError, INPUT_CLASS, PRIMARY_BUTTON, SECONDARY_BUTTON, useDraftAction, type FieldErrors } from "./journey-client";
 
 /** Bouton secondaire bordé : « Découvrir » une fois les constats prêts (un seul bouton principal par écran). */
@@ -43,6 +45,57 @@ const DISCOVERY_ERROR = "La découverte n'a pas pu être lancée. Réessayez dan
 const POLL_MS = 1_200;
 
 const CLIENT_SUGGESTIONS = ["Particuliers", "Familles", "Professionnels", "Entreprises", "Touristes"];
+const COMPETITOR_DIMENSION_LABELS: Record<CompetitorDimension, string> = {
+  trade: "Activité",
+  servingArea: "Zone desservie",
+  offers: "Offres",
+  targetClients: "Clientèle",
+};
+
+/** Comparables sourcés, à confirmer ou écarter par le dirigeant avant leur reprise dans les analyses du compte. */
+export function MarketCompetitors({ competitors, decisions }: { competitors: CompetitorFact[]; decisions: CompetitorDecision[] }) {
+  const { busy, error, errors, send } = useDraftAction();
+  return (
+    <section aria-labelledby="market-title" className="rounded-lg border border-[var(--bd-line)] p-4 text-sm text-[var(--bd-ink)]">
+      <h2 id="market-title" className="font-semibold">Entreprises comparables à vérifier</h2>
+      <p className="mt-1 text-[var(--bd-muted)]">Chaque constat est daté et sourcé. Une information absente n&apos;est ni un zéro ni un désavantage.</p>
+      <ul className="mt-3 flex flex-col gap-4">
+        {competitors.map((competitor) => {
+          const decision = decisions.find((item) => item.name === competitor.name && item.source === competitor.source)?.decision;
+          const source = safeSourceUrl(competitor.source);
+          const relationshipLabel = competitor.relationship === "indirect"
+            ? "alternative indirecte"
+            : competitor.relationship === "direct" ? "concurrent direct" : "comparabilité à vérifier";
+          return (
+            <li key={`${competitor.name}:${competitor.source}`} className="rounded-md bg-[var(--bd-cream)] p-3">
+              <h3 className="font-semibold">{competitor.name} <span className="font-normal">· {relationshipLabel}</span></h3>
+              {competitor.comparabilityReason && <p className="mt-1">{competitor.comparabilityReason}</p>}
+              <p className="mt-1">{competitor.fact}</p>
+              {competitor.comparisons && competitor.comparisons.length > 0 && (
+                <dl className="mt-2 grid gap-1 sm:grid-cols-[auto_minmax(0,1fr)] sm:gap-x-3">
+                  {competitor.comparisons.map((comparison) => (
+                    <div key={comparison.dimension} className="contents">
+                      <dt className="font-semibold">{COMPETITOR_DIMENSION_LABELS[comparison.dimension]}</dt>
+                      <dd className="break-words">Vous : {comparison.businessValue} · {competitor.name} : {comparison.competitorValue}</dd>
+                    </div>
+                  ))}
+                </dl>
+              )}
+              {competitor.readAt && <p className="mt-2 text-[var(--bd-muted)]">Consulté le {competitor.readAt.slice(0, 10)}</p>}
+              {source && <a href={source} target="_blank" rel="noopener noreferrer" className="mt-1 inline-block underline">Consulter la source</a>}
+              <p className="mt-2 font-semibold" role="status">{decision === "confirmed" ? "Concurrent confirmé" : decision === "dismissed" ? "Concurrent écarté ; il ne sera pas reproposé" : "À vérifier par vous"}</p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <button type="button" className={SECONDARY_OUTLINE} disabled={busy || decision === "confirmed"} onClick={() => void send({ action: "competitor_decision", name: competitor.name, source: competitor.source, decision: "confirmed" })}>Confirmer</button>
+                <button type="button" className={SECONDARY_OUTLINE} disabled={busy || decision === "dismissed"} onClick={() => void send({ action: "competitor_decision", name: competitor.name, source: competitor.source, decision: "dismissed" })}>Écarter</button>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+      <FormError error={error} errors={errors} />
+    </section>
+  );
+}
 
 /** Choix rapides ajoutés au champ, séparés par des virgules ; un second clic les retire. */
 function Suggestions({ label, options, value, onChange, max }: { label: string; options: string[]; value: string; onChange: (value: string) => void; max: number }) {

@@ -1,7 +1,7 @@
 import { MISSION_TEMPLATES, availableTemplates, enabledChannels, type TemplateKey } from "@/lib/missions/templates";
 import { ANALYSIS_MESSAGES, RUBRIC_KEYS, RUBRIC_NAMES, analysisFinished, analysisRunning, readAnalysis, type DraftAnalysis, type Provenance } from "@/lib/onboarding/analysis-rules";
 import { EMPTY_TERMS, REINTERPRET_MESSAGE, capLabel, readAmbitionTerms, type AmbitionTerms } from "@/lib/ambition-rules";
-import { INTELLIGENCE_MESSAGES, intelligenceRunning, readIntelligence, sameIntelligenceInput, type CompetitorFact, type DraftIntelligence, type IntelligenceInput, type OpportunityFact } from "@/lib/onboarding/intelligence-rules";
+import { INTELLIGENCE_MESSAGES, intelligenceRunning, readIntelligence, sameIntelligenceInput, type CompetitorDecision, type CompetitorFact, type DraftIntelligence, type IntelligenceInput, type OpportunityFact } from "@/lib/onboarding/intelligence-rules";
 import type { ResponsibleAgent } from "@/lib/missions/rules";
 import { safeSourceUrl } from "@/lib/findings/certainty";
 import { decideSocialSources, readSocialSourceDecisions, type SocialSourceDecision } from "@/lib/onboarding/public-sources";
@@ -45,6 +45,7 @@ export type DraftState = {
   step: DraftStep;
   profile: DraftProfile;
   socialSourceDecisions: SocialSourceDecision[];
+  competitorDecisions: CompetitorDecision[];
   googlePlaceChoice: GooglePlaceChoice | null;
   websiteRejected: boolean;
   ambition: DraftAmbition | null;
@@ -127,7 +128,7 @@ export function emptyProfile(): DraftProfile {
 }
 
 export function emptyDraft(): DraftState {
-  return { step: 1, profile: emptyProfile(), socialSourceDecisions: [], googlePlaceChoice: null, websiteRejected: false, ambition: null, profileConfirmed: false, diagnosticReady: false, analysis: null, intelligence: null };
+  return { step: 1, profile: emptyProfile(), socialSourceDecisions: [], competitorDecisions: [], googlePlaceChoice: null, websiteRejected: false, ambition: null, profileConfirmed: false, diagnosticReady: false, analysis: null, intelligence: null };
 }
 
 /** Page de l'étape courante (spécification §1.4, addendum §9). */
@@ -253,11 +254,12 @@ export type DraftAction =
   | { action: "confirm_profile"; trade?: unknown; servingArea?: unknown; targetClients?: unknown; offers?: unknown; website?: unknown; websiteRejected?: unknown; googlePlaceChoice?: unknown; socialSourceDecisions?: unknown }
   | { action: "interpret_ambition"; ambition?: unknown }
   | { action: "confirm_ambition"; ambition?: unknown; terms?: unknown; token?: unknown }
+  | { action: "competitor_decision"; name?: unknown; source?: unknown; decision?: unknown }
   | { action: "interested" }
   | { action: "back"; step: unknown; website?: unknown; websiteRejected?: unknown }
   | { action: "goto"; step: unknown };
 
-export const DRAFT_ACTIONS = ["discover", "see_findings", "confirm_profile", "interpret_ambition", "confirm_ambition", "interested", "back", "goto"] as const;
+export const DRAFT_ACTIONS = ["discover", "see_findings", "confirm_profile", "interpret_ambition", "confirm_ambition", "competitor_decision", "interested", "back", "goto"] as const;
 
 /** Demande lisible, ou null (400). */
 export function parseDraftAction(body: Record<string, unknown>): DraftAction | null {
@@ -323,15 +325,20 @@ export function prefillWebsite(state: DraftState): string {
 
 export function intelligenceInputFor(state: DraftState): IntelligenceInput {
   const { profile } = state;
+  const excludedCompetitors = state.competitorDecisions.filter((item) => item.decision === "dismissed").map(({ name, source }) => ({ name, source }));
   return {
     companyName: profile.companyName, location: profile.location, website: prefillWebsite(state),
     trade: profile.trade, servingArea: profile.servingArea, offers: profile.offers,
     targetClients: profile.targetClients, ambitionText: state.ambition?.text ?? "",
+    ...(excludedCompetitors.length ? { excludedCompetitors } : {}),
   };
 }
 
 export function matchingIntelligence(state: DraftState): DraftIntelligence | null {
-  return state.intelligence && sameIntelligenceInput(state.intelligence.input, intelligenceInputFor(state)) ? state.intelligence : null;
+  if (!state.intelligence) return null;
+  const stored = { ...state.intelligence.input, excludedCompetitors: undefined };
+  const current = { ...intelligenceInputFor(state), excludedCompetitors: undefined };
+  return sameIntelligenceInput(stored, current) ? state.intelligence : null;
 }
 
 /** L'étape n est-elle ouverte depuis l'étape n - 1 (étape précédente confirmée) ? */
@@ -364,7 +371,7 @@ export function applyDraftAction(state: DraftState, request: DraftAction, now = 
           step: 1,
           profile: { ...state.profile, ...checked.values },
           profileConfirmed: changed ? false : state.profileConfirmed,
-          ...(identityChanged ? { googlePlaceChoice: null, socialSourceDecisions: [] } : {}),
+          ...(identityChanged ? { googlePlaceChoice: null, socialSourceDecisions: [], competitorDecisions: [] } : {}),
           ...(identityChanged || state.profile.website !== checked.values.website
             ? { websiteRejected: false, socialSourceDecisions: [] }
             : {}),
@@ -465,6 +472,26 @@ export function applyDraftAction(state: DraftState, request: DraftAction, now = 
       // « Ce que nous retenons » est écrit ensuite par la route (#284) ; le coût des rédactions précédentes reste.
       const previousCost = state.ambition?.retainedCost;
       return { ok: true, state: { ...state, step: 4, ambition: { text: checked.ambition, terms: confirmed.terms, ...(previousCost ? { retainedCost: previousCost } : {}) }, diagnosticReady: true } };
+    }
+    case "competitor_decision": {
+      if (state.step !== 4 || !state.diagnosticReady) return { ok: false, kind: "wrong_step", step: state.step };
+      const intelligence = matchingIntelligence(state);
+      if (intelligence?.status !== "done") {
+        return invalid({ code: "intelligence", error: "Cette recherche de marché n'est plus à jour. Revenez à votre ambition pour la relancer.", errors: {} });
+      }
+      const name = text(request.name);
+      const source = text(request.source);
+      const decision = request.decision;
+      if (!name || !source || (decision !== "confirmed" && decision !== "dismissed")) {
+        return invalid({ code: "M-05", error: "Choisissez si ce concurrent est comparable ou à écarter.", errors: {} });
+      }
+      const candidates = intelligence.competitors?.length ? intelligence.competitors : intelligence.competitor ? [intelligence.competitor] : [];
+      if (!candidates.some((candidate) => candidate.name === name && candidate.source === source)) {
+        return invalid({ code: "M-05", error: "Ce repère de marché n'est plus disponible.", errors: {} });
+      }
+      const competitorDecisions = state.competitorDecisions.filter((item) => item.name !== name || item.source !== source);
+      competitorDecisions.push({ name, source, decision });
+      return { ok: true, state: { ...state, competitorDecisions } };
     }
     case "interested": {
       if (state.step !== 4 || !state.diagnosticReady) return state.step === 4 ? invalidCode("M-08") : { ok: false, kind: "wrong_step", step: state.step };
@@ -750,22 +777,36 @@ export function starterScopeLabel(template: TemplateKey, scope: Record<string, u
   }
 }
 
-/** Faits trouvés par la recherche réelle avant compte (#362), quand la recherche a abouti. */
-export type StarterFacts = { competitor: CompetitorFact | null; opportunity: OpportunityFact | null };
-const NO_FACTS: StarterFacts = { competitor: null, opportunity: null };
+/** Faits trouvés par la recherche réelle avant compte (#362, #370), quand la recherche a abouti. */
+export type StarterFacts = { competitor: CompetitorFact | null; competitors: CompetitorFact[]; opportunity: OpportunityFact | null };
+const NO_FACTS: StarterFacts = { competitor: null, competitors: [], opportunity: null };
 
 /** Faits à utiliser dans les pistes : seulement ceux d'une recherche terminée, jamais une recherche en cours ou interrompue. */
 export function starterFacts(intelligence: DraftIntelligence | null): StarterFacts {
-  return intelligence?.status === "done" ? { competitor: intelligence.competitor, opportunity: intelligence.opportunity } : NO_FACTS;
+  if (intelligence?.status !== "done") return NO_FACTS;
+  const competitors = intelligence.competitors?.length ? intelligence.competitors : intelligence.competitor ? [intelligence.competitor] : [];
+  return { competitor: competitors[0] ?? null, competitors, opportunity: intelligence.opportunity };
 }
 
-export function starterMarketFinding(state: DraftState) {
-  const { competitor } = starterFacts(matchingIntelligence(state));
-  if (!competitor) return null;
-  return {
-    category: "concurrence", title: clip(competitor.name, 80), content: competitor.fact,
-    sourceUrl: safeSourceUrl(competitor.source), sourceStatus: null, certainty: "a_verifier" as const,
-  };
+export function starterMarketFindings(state: DraftState, now = new Date()) {
+  const { competitors } = starterFacts(matchingIntelligence(state));
+  const dimensionLabels = { trade: "Activité", servingArea: "Zone", offers: "Offres", targetClients: "Clientèle" };
+  return competitors.map((competitor) => {
+    const decision = state.competitorDecisions.find((item) => item.name === competitor.name && item.source === competitor.source)?.decision;
+    const comparisons = competitor.comparisons?.map((item) => `${dimensionLabels[item.dimension]} : vous, ${item.businessValue} ; ${competitor.name}, ${item.competitorValue}`).join(" · ") ?? "";
+    const relationship = competitor.relationship === "indirect" ? "Alternative indirecte." : competitor.relationship === "direct" ? "Concurrent direct." : "";
+    const observed = [relationship, competitor.comparabilityReason, competitor.fact, comparisons, competitor.readAt ? `Recherche effectuée le ${competitor.readAt.slice(0, 10)}.` : ""].filter(Boolean).join(" ");
+    return {
+      category: "concurrence", title: clip(competitor.name, 80), content: observed,
+      sourceUrl: safeSourceUrl(competitor.source), sourceStatus: null, certainty: "a_verifier" as const,
+      ...(decision === "confirmed" ? { competitorConfirmedAt: now } : {}),
+      ...(decision === "dismissed" ? { competitorDismissedAt: now } : {}),
+    };
+  });
+}
+
+export function starterMarketFinding(state: DraftState, now = new Date()) {
+  return starterMarketFindings(state, now)[0] ?? null;
 }
 
 /** Corps d'une mission de l'étape 4 : constat, déduction, titre, résultat et périmètre propres au modèle. */
@@ -911,6 +952,20 @@ export function starterPlan(state: DraftState, available?: readonly TemplateKey[
 }
 
 /** Lecture défensive du brouillon stocké : toute valeur illisible redevient vide. */
+function readCompetitorDecisions(value: unknown): CompetitorDecision[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item): CompetitorDecision[] => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+    const raw = item as Record<string, unknown>;
+    if (
+      typeof raw.name !== "string" || !raw.name.trim() || raw.name.length > 100 ||
+      typeof raw.source !== "string" || !safeSourceUrl(raw.source) ||
+      (raw.decision !== "confirmed" && raw.decision !== "dismissed")
+    ) return [];
+    return [{ name: raw.name, source: raw.source, decision: raw.decision }];
+  });
+}
+
 export function readDraftState(row: { step: number; profile: unknown; ambition: unknown; profileConfirmed: boolean; diagnosticReady: boolean; analysis?: unknown; intelligence?: unknown }): DraftState {
   const raw = row.profile !== null && typeof row.profile === "object" && !Array.isArray(row.profile) ? (row.profile as Record<string, unknown>) : {};
   const profile = emptyProfile();
@@ -918,6 +973,7 @@ export function readDraftState(row: { step: number; profile: unknown; ambition: 
     profile[key] = typeof raw[key] === "string" ? (raw[key] as string) : "";
   }
   const socialSourceDecisions = readSocialSourceDecisions(raw.socialSourceDecisions);
+  const competitorDecisions = readCompetitorDecisions(raw.competitorDecisions);
   const googlePlaceChoice = readGooglePlaceChoice(raw.googlePlaceChoice);
   const ambitionRaw = row.ambition !== null && typeof row.ambition === "object" && !Array.isArray(row.ambition) ? (row.ambition as Record<string, unknown>) : {};
   // « Ce que nous retenons » et son coût (#284) : illisibles, ils sont ignorés (les règles prennent le relais à l'étape 4).
@@ -927,6 +983,7 @@ export function readDraftState(row: { step: number; profile: unknown; ambition: 
     step: isDraftStep(row.step) ? row.step : 1,
     profile,
     socialSourceDecisions,
+    competitorDecisions,
     googlePlaceChoice,
     websiteRejected: raw.websiteRejected === true,
     // Une ambition d'avant #282 (texte seul) garde des éléments vides.

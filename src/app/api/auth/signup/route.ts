@@ -8,7 +8,7 @@ import { readSignupControl, releaseSignupSlot, reserveSignupSlot, todaySignupCou
 import { sendVerificationEmail } from "@/lib/email-verification";
 import { passwordPolicyError } from "@/lib/password-policy";
 import { SIGNUP_CLOSED_MESSAGE, SIGNUP_FULL_MESSAGE, secondsUntilNextSignupDay, signupAvailability } from "@/lib/signup-rules";
-import { ADDRESS_UNAVAILABLE_MESSAGE, ONBOARDING_MESSAGES, RECOVER_ACCOUNT_HREF, analysisMatchesProfile, checkDraftForAccount, confirmedOrigin, isValidEmail, starterMarketFinding, starterPlan, stepHref, synthesisUsage } from "@/lib/onboarding/draft-rules";
+import { ADDRESS_UNAVAILABLE_MESSAGE, ONBOARDING_MESSAGES, RECOVER_ACCOUNT_HREF, analysisMatchesProfile, checkDraftForAccount, confirmedOrigin, isValidEmail, starterMarketFindings, starterPlan, stepHref, synthesisUsage } from "@/lib/onboarding/draft-rules";
 import { cleanOwnerName, type ProfileOrigins } from "@/lib/company-profile";
 import { clearDraftCookie, loadDraft } from "@/lib/onboarding/draft";
 import { recordSignupTrace } from "@/lib/onboarding/visit-trace";
@@ -151,8 +151,9 @@ export async function POST(request: NextRequest) {
       const constats = firstFindingRecords(analysis);
       const constatIds: string[] = [];
       for (const constat of constats) constatIds.push((await tx.auditFinding.create({ data: { companyId: created.id, ...constat }, select: { id: true } })).id);
-      const marketFinding = starterMarketFinding(draft.state);
-      if (marketFinding) await tx.auditFinding.create({ data: { companyId: created.id, ...marketFinding } });
+      for (const marketFinding of starterMarketFindings(draft.state, now)) {
+        await tx.auditFinding.create({ data: { companyId: created.id, ...marketFinding } });
+      }
       // Le coût de l'analyse anonyme revient au compte, une seule fois : le brouillon vient d'être effacé dans cette transaction.
       const usage = analysisUsage(draft.state.analysis);
       if (usage) await tx.usageEvent.create({ data: { companyId: created.id, ...usage } });

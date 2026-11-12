@@ -3,7 +3,7 @@ import { EMPTY_TERMS } from "../src/lib/ambition-rules";
 import { newAnalysis, ruleFirstFindings } from "../src/lib/onboarding/analysis-rules";
 import {
   analysisMatchesProfile, applyDraftAction, checkDraftForAccount, emptyDraft, intelligenceInputFor,
-  matchingIntelligence, prefillWebsite, readDraftState, starterMarketFinding, starterPlan, type DraftState,
+  matchingIntelligence, prefillWebsite, readDraftState, starterMarketFinding, starterMarketFindings, starterPlan, type DraftState,
 } from "../src/lib/onboarding/draft-rules";
 import { buildMarketPrompt, runDraftIntelligence } from "../src/lib/onboarding/intelligence";
 import { INTELLIGENCE_MESSAGES, INTELLIGENCE_STALE_MS, intelligenceNotice, needsNewIntelligence, newIntelligence, readIntelligence } from "../src/lib/onboarding/intelligence-rules";
@@ -167,7 +167,46 @@ test("onboarding quality: market research follows identity and objective, never 
   expect(prompt).toContain(state.profile.companyName);
   expect(prompt).toContain(state.ambition!.text);
   expect(prompt).toContain("2026-11-12");
-  expect(prompt).toContain("jamais l'entreprise elle-même");
+  expect(prompt).toContain("exclue l'entreprise elle-même");
+});
+
+test("#370: le dirigeant écarte un concurrent, l'exclusion persiste et la recherche suivante en tient compte", () => {
+  const state = draft();
+  const competitor = {
+    name: "Burger Local", fact: "Propose des burgers à emporter.", source: "https://burger.example/menu",
+    relationship: "direct" as const, comparabilityReason: "Même clientèle, offre et zone.",
+    readAt: NOW.toISOString(),
+    comparisons: [{ dimension: "offers" as const, businessValue: state.profile.offers, competitorValue: "Burgers à emporter" }],
+  };
+  const running = newIntelligence(intelligenceInputFor(state), "market", NOW);
+  state.intelligence = { ...running, status: "done", finishedAt: NOW.toISOString(), competitor, competitors: [competitor] };
+  const confirmed = applyDraftAction(state, { action: "competitor_decision", name: competitor.name, source: competitor.source, decision: "confirmed" }, NOW);
+  expect(confirmed).toMatchObject({ ok: true, state: { competitorDecisions: [{ decision: "confirmed" }] } });
+  if (!confirmed.ok) throw new Error("Competitor confirmation failed");
+  expect(intelligenceInputFor(confirmed.state).excludedCompetitors).toBeUndefined();
+  expect(starterMarketFindings(confirmed.state, NOW)[0].competitorConfirmedAt).toEqual(NOW);
+
+  const dismissed = applyDraftAction(state, { action: "competitor_decision", name: competitor.name, source: competitor.source, decision: "dismissed" }, NOW);
+  expect(dismissed).toMatchObject({ ok: true, state: { competitorDecisions: [{ name: competitor.name, source: competitor.source, decision: "dismissed" }] } });
+  if (!dismissed.ok) throw new Error("Competitor decision failed");
+
+  expect(matchingIntelligence(dismissed.state)).toEqual(state.intelligence);
+  expect(intelligenceInputFor(dismissed.state).excludedCompetitors).toEqual([{ name: competitor.name, source: competitor.source }]);
+  expect(needsNewIntelligence(state.intelligence, intelligenceInputFor(dismissed.state), NOW)).toBe(true);
+  expect(buildMarketPrompt(intelligenceInputFor(dismissed.state), NOW)).toContain("ne jamais les reproposer");
+
+  const finding = starterMarketFindings(dismissed.state, NOW)[0];
+  expect(finding.content).toContain("Recherche effectuée le 2026-11-12");
+  expect(finding.content).toContain("Concurrent direct");
+  expect(finding.competitorDismissedAt).toEqual(NOW);
+
+  const persisted = readDraftState({
+    step: 4, profile: { ...dismissed.state.profile, competitorDecisions: dismissed.state.competitorDecisions },
+    ambition: dismissed.state.ambition, profileConfirmed: true, diagnosticReady: true,
+    intelligence: state.intelligence,
+  });
+  expect(persisted.competitorDecisions).toEqual(dismissed.state.competitorDecisions);
+  expect(applyDraftAction(persisted, { action: "competitor_decision", name: "Inventé", source: competitor.source, decision: "confirmed" }, NOW)).toMatchObject({ ok: false, kind: "invalid" });
 });
 
 test("onboarding quality: unavailable or failed search is not a successful empty analysis; cost is retained", async () => {
