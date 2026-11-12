@@ -262,10 +262,9 @@ test("mission brief links server validation to the field and keeps the entered v
   await outcome.fill("Deux demandes de devis");
   await page.getByRole("button", { name: "Créer la mission" }).click();
 
-  await expect(page.getByRole("alert")).toContainText("sans balise HTML");
   await expect(title).toHaveAttribute("aria-invalid", "true");
   await expect(title).toHaveAttribute("aria-describedby", "title-hint title-error");
-  await expect(page.locator("#title-error")).toContainText("5 à 80 caractères");
+  await expect(page.locator("#title-error")).toContainText("5 à 80 caractères, sans balise HTML");
   await expect(title).toBeFocused();
   await expect(finding).toHaveValue("Aucune publication depuis trois mois.");
   await expect(scope).toHaveValue("Une publication de présentation");
