@@ -23,6 +23,7 @@
     "test:mesures": "node --experimental-strip-types --test tests/visit-trace.test.mjs tests/activation.test.mjs",
     "test:findings": "node --experimental-strip-types --test tests/findings-rules.test.mjs",
     "test:intelligence": "node --experimental-strip-types --test tests/onboarding-intelligence-rules.test.mjs",
+    "test:public-sources": "node --experimental-strip-types --test tests/public-sources.test.mjs",
     "test:voice": "node --experimental-strip-types --test tests/voice.test.mjs tests/chat-stream.test.mjs tests/chat-format.test.mjs",
     "test:database-url": "node --experimental-strip-types --test tests/database-url.test.mjs",
     "postinstall": "prisma generate"

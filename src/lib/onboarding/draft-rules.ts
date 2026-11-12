@@ -4,6 +4,7 @@ import { EMPTY_TERMS, REINTERPRET_MESSAGE, capLabel, readAmbitionTerms, type Amb
 import { INTELLIGENCE_MESSAGES, intelligenceRunning, readIntelligence, sameIntelligenceInput, type CompetitorFact, type DraftIntelligence, type IntelligenceInput, type OpportunityFact } from "@/lib/onboarding/intelligence-rules";
 import type { ResponsibleAgent } from "@/lib/missions/rules";
 import { safeSourceUrl } from "@/lib/findings/certainty";
+import { decideSocialSources, readSocialSourceDecisions, type SocialSourceDecision } from "@/lib/onboarding/public-sources";
 
 /** Vérifie le jeton d'une interprétation (`verifyInterpretation` côté serveur) ; injecté, car ce module est aussi lu par le client. */
 export type InterpretationVerifier = (text: string, terms: AmbitionTerms, token: unknown) => boolean;
@@ -42,6 +43,7 @@ export type DraftAmbition = { text: string; terms: AmbitionTerms; retained?: str
 export type DraftState = {
   step: DraftStep;
   profile: DraftProfile;
+  socialSourceDecisions: SocialSourceDecision[];
   ambition: DraftAmbition | null;
   profileConfirmed: boolean;
   diagnosticReady: boolean;
@@ -120,7 +122,7 @@ export function emptyProfile(): DraftProfile {
 }
 
 export function emptyDraft(): DraftState {
-  return { step: 1, profile: emptyProfile(), ambition: null, profileConfirmed: false, diagnosticReady: false, analysis: null, intelligence: null };
+  return { step: 1, profile: emptyProfile(), socialSourceDecisions: [], ambition: null, profileConfirmed: false, diagnosticReady: false, analysis: null, intelligence: null };
 }
 
 /** Page de l'étape courante (spécification §1.4, addendum §9). */
@@ -243,11 +245,11 @@ export function checkAmbition(value: unknown): { ok: true; ambition: string } | 
 export type DraftAction =
   | { action: "discover"; firstName?: unknown; companyName?: unknown; location?: unknown; website?: unknown }
   | { action: "see_findings" }
-  | { action: "confirm_profile"; trade?: unknown; servingArea?: unknown; targetClients?: unknown; offers?: unknown; website?: unknown }
+  | { action: "confirm_profile"; trade?: unknown; servingArea?: unknown; targetClients?: unknown; offers?: unknown; website?: unknown; socialSourceDecisions?: unknown }
   | { action: "interpret_ambition"; ambition?: unknown }
   | { action: "confirm_ambition"; ambition?: unknown; terms?: unknown; token?: unknown }
   | { action: "interested" }
-  | { action: "back"; step: unknown }
+  | { action: "back"; step: unknown; website?: unknown }
   | { action: "goto"; step: unknown };
 
 export const DRAFT_ACTIONS = ["discover", "see_findings", "confirm_profile", "interpret_ambition", "confirm_ambition", "interested", "back", "goto"] as const;
@@ -344,7 +346,27 @@ export function applyDraftAction(state: DraftState, request: DraftAction, now = 
       const website = request.website === undefined ? state.profile.website : text(request.website);
       const failure = checkFields([{ field: "website", value: website, max: LIMITS.website, missing: "M-04", optional: true }]);
       if (failure) return invalid(failure);
-      return { ok: true, state: { ...state, step: 3, profile: { ...state.profile, ...checked.values, website }, profileConfirmed: true } };
+      const socialSourceDecisions = decideSocialSources(
+        state.analysis?.findings.publicSources ?? [],
+        request.socialSourceDecisions ?? []
+      );
+      if (!socialSourceDecisions) {
+        return invalid({
+          code: "M-05",
+          error: "Vérifiez ou écartez chaque lien social repéré.",
+          errors: {}
+        });
+      }
+      return {
+        ok: true,
+        state: {
+          ...state,
+          step: 3,
+          profile: { ...state.profile, ...checked.values, website },
+          socialSourceDecisions,
+          profileConfirmed: true
+        }
+      };
     }
     case "interpret_ambition": {
       // L'interprétation n'est jamais enregistrée : la route renvoie la reformulation et son jeton, le brouillon reste tel quel.
@@ -369,7 +391,23 @@ export function applyDraftAction(state: DraftState, request: DraftAction, now = 
     }
     case "back": {
       if (!isDraftStep(request.step) || request.step >= state.step) return { ok: false, kind: "wrong_step", step: state.step };
-      return { ok: true, state: back(state, request.step) };
+      const next = back(state, request.step);
+      if (request.step === 1 && request.website !== undefined) {
+        const website = text(request.website);
+        const failure = checkFields([{ field: "website", value: website, max: LIMITS.website, missing: "M-04", optional: true }]);
+        if (failure) return invalid(failure);
+        const changed = website !== state.profile.website;
+        return {
+          ok: true,
+          state: {
+            ...next,
+            profile: { ...next.profile, website },
+            profileConfirmed: changed ? false : next.profileConfirmed,
+            socialSourceDecisions: changed ? [] : next.socialSourceDecisions
+          }
+        };
+      }
+      return { ok: true, state: next };
     }
     case "goto": {
       if (!isDraftStep(request.step)) return { ok: false, kind: "wrong_step", step: state.step };
@@ -790,7 +828,10 @@ export function starterPlan(state: DraftState, available?: readonly TemplateKey[
 export function readDraftState(row: { step: number; profile: unknown; ambition: unknown; profileConfirmed: boolean; diagnosticReady: boolean; analysis?: unknown; intelligence?: unknown }): DraftState {
   const raw = row.profile !== null && typeof row.profile === "object" && !Array.isArray(row.profile) ? (row.profile as Record<string, unknown>) : {};
   const profile = emptyProfile();
-  for (const key of Object.keys(profile) as (keyof DraftProfile)[]) profile[key] = typeof raw[key] === "string" ? (raw[key] as string) : "";
+  for (const key of ["firstName", "companyName", "location", "website", "trade", "servingArea", "targetClients", "offers"] as const) {
+    profile[key] = typeof raw[key] === "string" ? (raw[key] as string) : "";
+  }
+  const socialSourceDecisions = readSocialSourceDecisions(raw.socialSourceDecisions);
   const ambitionRaw = row.ambition !== null && typeof row.ambition === "object" && !Array.isArray(row.ambition) ? (row.ambition as Record<string, unknown>) : {};
   // « Ce que nous retenons » et son coût (#284) : illisibles, ils sont ignorés (les règles prennent le relais à l'étape 4).
   const retained = readRetained(ambitionRaw.retained);
@@ -798,6 +839,7 @@ export function readDraftState(row: { step: number; profile: unknown; ambition: 
   return {
     step: isDraftStep(row.step) ? row.step : 1,
     profile,
+    socialSourceDecisions,
     // Une ambition d'avant #282 (texte seul) garde des éléments vides.
     ambition: typeof ambitionRaw.text === "string"
       ? { text: ambitionRaw.text, terms: readAmbitionTerms(ambitionRaw.terms) ?? { ...EMPTY_TERMS }, ...(retained ? { retained } : {}), ...(retainedCost ? { retainedCost } : {}) }

@@ -2180,7 +2180,7 @@ function step4Draft(options: { read?: boolean; ambition?: string; terms?: Partia
     findings: { ...newAnalysis(input, "run-284").findings, offers: options.observedOffers ? observed(profile.offers) : null, targetClients: options.observedOffers ? observed(profile.targetClients) : null, trade: observed(profile.trade) },
   };
   return {
-    step: 4, profile, profileConfirmed: true, diagnosticReady: true, analysis,
+    step: 4, profile, socialSourceDecisions: [], profileConfirmed: true, diagnosticReady: true, analysis,
     ambition: { text: options.ambition ?? "+20 % de chiffre d'affaires en 12 mois", terms: { ...EMPTY_TERMS, gainPercent: 20, horizonMonths: 12, ...options.terms } },
     intelligence: options.intelligence ?? null,
   };
@@ -2589,15 +2589,14 @@ async function startFakeSite() {
   return { hits, deps: { resolve, fetchImpl, now: () => new Date("2026-11-07T10:00:00.000Z") }, close: () => new Promise<void>((done) => { server.closeAllConnections(); server.close(() => done()); }) };
 }
 
-test("GH-280: the home page and at most two internal pages of the same host are read, with text, palette and logo", async () => {
+test("GH-280/GH-368: the home page and up to four internal pages of the same host are read, with text, palette and logo", async () => {
   const site = await startFakeSite();
   try {
     const result = await readPublicSite("https://atelier-lumen.test/", site.deps);
     expect(result).toMatchObject({ ok: true, url: "https://atelier-lumen.test/", readAt: "2026-11-07T10:00:00.000Z" });
     if (!result.ok) throw new Error("site");
-    // Trois requêtes au plus : l'accueil, contact et prestations ; ni les tarifs (troisième page), ni l'autre site.
-    expect(site.hits.sort()).toEqual(["/", "/contact", "/nos-prestations"]);
-    expect(result.pages.map((page) => page.url)).toEqual(["https://atelier-lumen.test/", "https://atelier-lumen.test/contact", "https://atelier-lumen.test/nos-prestations"]);
+    expect(site.hits.sort()).toEqual(["/", "/contact", "/nos-prestations", "/tarifs"]);
+    expect(result.pages.map((page) => page.url)).toEqual(["https://atelier-lumen.test/", "https://atelier-lumen.test/contact", "https://atelier-lumen.test/nos-prestations", "https://atelier-lumen.test/tarifs"]);
     expect(result.pages[0].title).toBe("Atelier Lumen · Électricien à Lyon");
     expect(result.pages[0].text).toContain("Électricien à Lyon et Villeurbanne depuis 2009.");
     expect(result.pages[0].text).toContain("Rénovation électrique & dépannage pour les particuliers.");
@@ -2609,7 +2608,7 @@ test("GH-280: the home page and at most two internal pages of the same host are 
   }
   const base = new URL("https://atelier-lumen.test/");
   expect(pickInternalPages(extractLinks('<a href="/tarifs">Tarifs</a><a href="/services">Services</a><a href="/contact#form">Contact</a><a href="/contact">Contact</a>', base), base).map(String))
-    .toEqual(["https://atelier-lumen.test/contact", "https://atelier-lumen.test/services"]);
+    .toEqual(["https://atelier-lumen.test/contact", "https://atelier-lumen.test/services", "https://atelier-lumen.test/tarifs"]);
   expect(extractPalette('<div style="color:#fff;background:#000;border-color:#ccc"></div>')).toEqual([]);
   expect(extractLogo('<meta property="og:image" content="https://atelier-lumen.test/og.jpg"><link rel="apple-touch-icon" href="/apple.png">', base)).toBe("https://atelier-lumen.test/apple.png");
   expect(extractLogo('<link rel="icon" href="javascript:alert(1)">', base)).toBeNull();

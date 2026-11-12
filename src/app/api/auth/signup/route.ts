@@ -97,6 +97,14 @@ export async function POST(request: NextRequest) {
           trade: profile.trade,
           servingArea: profile.servingArea,
           website: profile.website || null,
+          publicSources: {
+            website: {
+              url: profile.website || null,
+              status: profile.website ? "confirmed" : "rejected",
+              candidate: draft.state.analysis?.findings.publicSources?.find((source) => source.platform === "website") ?? null
+            },
+            social: draft.state.socialSourceDecisions
+          },
           // Normalisé comme sur Entreprise (#169) : renvoyer le formulaire tel quel n'est pas une correction.
           firstName: cleanOwnerName(profile.firstName),
           ownerName: cleanOwnerName(profile.firstName),

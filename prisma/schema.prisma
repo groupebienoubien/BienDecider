@@ -28,6 +28,7 @@ model Company {
   servingArea     String // zone de chalandise
   website         String? // optionnel : beaucoup de TPE n'ont pas de site
   socialHandles   String? // ex: @cabinet_kine_demo (Instagram)
+  publicSources   Json?
   googlePlaceId          String? // fiche Google confirmée par le dirigeant : le Place ID est le seul contenu Google conservé (conditions Places API)
   googlePlaceCandidateId String? // fiche proposée, en attente de la confirmation du dirigeant
   googlePlaceDeclinedIds String[] @default([]) // fiches refusées ou retirées (les plus récentes) : jamais reproposées

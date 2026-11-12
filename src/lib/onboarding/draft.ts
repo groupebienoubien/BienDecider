@@ -35,7 +35,7 @@ export function draftCookieOptions(expiresAt: Date, nodeEnv: string | undefined 
 function toJson(state: DraftState): { step: number; profile: Prisma.InputJsonObject; ambition: Prisma.InputJsonObject | undefined; profileConfirmed: boolean; diagnosticReady: boolean } {
   return {
     step: state.step,
-    profile: { ...state.profile },
+    profile: { ...state.profile, socialSourceDecisions: state.socialSourceDecisions },
     ambition: state.ambition === null ? undefined : {
       text: state.ambition.text,
       terms: { ...state.ambition.terms },

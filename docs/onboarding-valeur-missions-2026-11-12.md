@@ -390,6 +390,12 @@ Les cas d'usage ci-dessus sont suivis par les US #367 à #375 :
 - [#374 — Vérifier la faisabilité d'un canal](https://github.com/groupebienoubien/BienDecider/issues/374)
 - [#375 — Évaluer la pertinence métier et la fiabilité des sources](https://github.com/groupebienoubien/BienDecider/issues/375)
 
+### Première tranche d'implémentation — #367 et #368
+
+La découverte propose jusqu'à trois sites issus de fiches Google, en gardant le lien de provenance ; le dirigeant choisit, corrige ou écarte le site avant qu'une nouvelle lecture soit transférée. Les profils Facebook, Instagram et LinkedIn ne sont proposés que lorsqu'un lien de profil public est trouvé sur une page effectivement lue ; partage, post et connexion ne deviennent pas des profils. Chaque profil reste à confirmer séparément, et la décision est conservée à l'inscription.
+
+La lecture du site couvre l'accueil et jusqu'à quatre pages internes retenues par type de contenu (contact, offre, tarifs, réservation, réalisations), avec les pages lues, leur date et les limites repérées (PDF, hôte distinct, page illisible ou probablement dynamique) affichés. Les lectures restent publiques, bornées et protégées contre les accès privés. La recherche générale de profils sociaux hors des liens du site, la lecture de publications et l'analyse approfondie restent hors de cette tranche (#369).
+
 Les tickets complètent l'objectif libre déjà suivi dans #20, l'analyse du diagnostic dans #292, la lecture Facebook cadrée dans #253 et l'observation/activation dans #100 et #296. Ils restent au backlog ; le commentaire sur le suivi V5.2 (#272) indique l'ordre proposé et les dépendances.
 
 ## 10. Mesurer la valeur, pas seulement le nombre de comptes

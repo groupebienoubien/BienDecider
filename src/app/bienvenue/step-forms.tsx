@@ -7,6 +7,7 @@ import { TradeCombobox } from "@/components/trade-combobox";
 import { AmbitionEditor } from "@/components/ambition-editor";
 import { LIMITS, profileOriginLabel, type DraftProfile, type ProfilePrefill } from "@/lib/onboarding/draft-rules";
 import type { AnalysisView } from "@/lib/onboarding/analysis-rules";
+import type { PublicSourceCandidate, SocialSourceDecision } from "@/lib/onboarding/public-sources";
 import { FieldError, FormError, INPUT_CLASS, PRIMARY_BUTTON, SECONDARY_BUTTON, useDraftAction, type FieldErrors } from "./journey-client";
 
 /** Bouton secondaire bordé : « Découvrir » une fois les constats prêts (un seul bouton principal par écran). */
@@ -210,19 +211,120 @@ export function DiscoveryStep({ profile, analysis: initial }: { profile: DraftPr
  * Étape 2 : activité, zone, clients prioritaires et offres principales, préremplis par l'analyse, chacun avec son origine
  * (FR-5), à vérifier puis confirmer. « Non, corriger mes informations » revient à la découverte sans rien effacer (#281).
  */
-export function ProfileForm({ prefill, website: initialWebsite }: { prefill: ProfilePrefill; website: string }) {
+export function ProfileForm({
+  prefill,
+  website: initialWebsite,
+  publicSources,
+  socialSourceDecisions
+}: {
+  prefill: ProfilePrefill;
+  website: string;
+  publicSources: PublicSourceCandidate[];
+  socialSourceDecisions: SocialSourceDecision[];
+}) {
   const { busy, error, errors, send } = useDraftAction();
   const correct = useDraftAction();
   const [values, setValues] = useState(prefill.values);
   const [website, setWebsite] = useState(initialWebsite);
+  const websiteCandidates = publicSources.filter((candidate) => candidate.platform === "website");
+  const socialCandidates = publicSources.filter((candidate) => candidate.platform !== "website");
+  const [socialChoices, setSocialChoices] = useState(() => socialCandidates.map((candidate) => {
+    const saved = socialSourceDecisions.find((decision) => decision.candidateUrl === candidate.url);
+    return {
+      candidateUrl: candidate.url,
+      confirmedUrl: saved?.confirmedUrl ?? candidate.url,
+      confirmed: saved?.status === "confirmed"
+    };
+  }));
   const set = (key: keyof typeof values) => (value: string) => setValues((current) => ({ ...current, [key]: value }));
   // Une valeur modifiée par le dirigeant est la sienne : l'étiquette d'origine disparaît.
   const origin = (key: keyof typeof values) => (values[key] === prefill.values[key] ? profileOriginLabel(prefill.origins[key]) ?? undefined : undefined);
   const tradeOrigin = origin("trade");
   const pending = busy || correct.busy;
   return (
-    <form noValidate className="flex flex-col gap-5" onSubmit={(event) => { event.preventDefault(); void send({ action: "confirm_profile", ...values, website }); }}>
+    <form noValidate className="flex flex-col gap-5" onSubmit={(event) => {
+      event.preventDefault();
+      if (website.trim() && website.trim() !== initialWebsite.trim()) {
+        void correct.send({ action: "back", step: 1, website });
+        return;
+      }
+      void send({
+        action: "confirm_profile",
+        ...values,
+        website,
+        socialSourceDecisions: socialChoices.map((choice) => ({
+          candidateUrl: choice.candidateUrl,
+          confirmedUrl: choice.confirmed ? choice.confirmedUrl : null,
+          status: choice.confirmed ? "confirmed" : "rejected"
+        }))
+      });
+    }}>
       <TextField id="website" label="Votre site (facultatif)" hint="Adresse renseignée ou repérée pendant la lecture. Vérifiez-la : elle sera conservée dans votre profil après confirmation." value={website} onChange={setWebsite} errors={errors} max={LIMITS.website} required={false} type="url" />
+      {websiteCandidates.length > 0 && (
+        <fieldset className="flex flex-col gap-2 rounded-lg border border-[var(--bd-line)] p-4">
+          <legend className="px-1 text-sm font-semibold">Sites candidats — aucun n&apos;est confirmé</legend>
+          {websiteCandidates.map((candidate) => (
+            <div key={`${candidate.url}:${candidate.source}`} className="flex flex-col gap-1">
+              <a href={candidate.url} target="_blank" rel="noopener noreferrer" className="break-all text-sm font-semibold text-[var(--bd-brand)] underline">{candidate.url}</a>
+              <p className={HINT}>
+                Repéré via <a href={candidate.source} target="_blank" rel="noopener noreferrer" className="break-all underline">cette fiche Google</a>, le {new Date(candidate.readAt).toLocaleDateString("fr-FR")}.
+              </p>
+              <button type="button" className={SECONDARY_BUTTON} disabled={pending} onClick={() => setWebsite(candidate.url)}>
+                Utiliser cette adresse
+              </button>
+            </div>
+          ))}
+        </fieldset>
+      )}
+      {socialCandidates.length ? (
+        <fieldset className="flex flex-col gap-3 rounded-lg border border-[var(--bd-line)] p-4">
+          <legend className="px-1 text-sm font-semibold">Profils sociaux repérés — à confirmer séparément</legend>
+          <p className={HINT}>Une ressemblance de nom ne suffit pas. Cochez uniquement les profils officiels. Les liens de partage et publications isolées ne sont pas proposés.</p>
+          {socialCandidates.map((candidate, index) => {
+            const choice = socialChoices.find((item) => item.candidateUrl === candidate.url);
+            if (!choice) return null;
+            const checkboxId = `social-confirm-${index}`;
+            const urlId = `social-url-${index}`;
+            return (
+              <div key={candidate.url} className="flex flex-col gap-2 border-t border-[var(--bd-line)] pt-3">
+                <a href={candidate.url} target="_blank" rel="noopener noreferrer" className="break-all text-sm font-semibold text-[var(--bd-brand)] underline">
+                  {candidate.platform} : {candidate.url}
+                </a>
+                <p className={HINT}>
+                  Repéré sur <a href={candidate.source} target="_blank" rel="noopener noreferrer" className="break-all underline">{candidate.source}</a>, le {new Date(candidate.readAt).toLocaleDateString("fr-FR")}.
+                </p>
+                <label htmlFor={checkboxId} className="flex items-center gap-2 text-sm">
+                  <input
+                    id={checkboxId}
+                    type="checkbox"
+                    checked={choice.confirmed}
+                    onChange={(event) => setSocialChoices((current) => current.map((item) =>
+                      item.candidateUrl === choice.candidateUrl
+                        ? { ...item, confirmed: event.target.checked }
+                        : item
+                    ))}
+                  />
+                  Ce profil est officiel
+                </label>
+                <label htmlFor={urlId} className={LABEL}>Corriger le lien si nécessaire</label>
+                <input
+                  id={urlId}
+                  type="url"
+                  className={INPUT_CLASS}
+                  value={choice.confirmedUrl}
+                  onChange={(event) => setSocialChoices((current) => current.map((item) =>
+                    item.candidateUrl === choice.candidateUrl
+                      ? { ...item, confirmedUrl: event.target.value }
+                      : item
+                  ))}
+                />
+              </div>
+            );
+          })}
+        </fieldset>
+      ) : (
+        <p className={HINT}>Aucun profil social public fiable n&apos;a été identifié dans les pages lues. Cela ne signifie pas que vous n&apos;avez pas de présence en ligne.</p>
+      )}
       <div className="flex flex-col gap-1.5">
         <TradeCombobox id="trade" label="Votre activité" value={values.trade} onChange={set("trade")} invalid={Boolean(errors.trade)} describedBy={[tradeOrigin ? "trade-origin" : null, errors.trade ? "trade-error" : null].filter(Boolean).join(" ") || undefined} />
         {tradeOrigin && <p id="trade-origin" className={HINT}>{tradeOrigin}</p>}
@@ -234,7 +336,9 @@ export function ProfileForm({ prefill, website: initialWebsite }: { prefill: Pro
       <TextField id="offers" label="Ce que vous proposez" hint={origin("offers")} example="Vos principaux produits ou services, séparés par des virgules. Par exemple : menu du jour, plats à emporter ; ou : dépannage, rénovation de salle de bain." value={values.offers} onChange={set("offers")} errors={errors} max={LIMITS.offers} />
       <FormError error={error ?? correct.error} errors={errors} />
       <div className="flex flex-wrap items-center gap-3">
-        <button type="submit" className={PRIMARY_BUTTON} disabled={pending}>Oui, c&apos;est bien moi</button>
+        <button type="submit" className={PRIMARY_BUTTON} disabled={pending}>
+          {website.trim() && website.trim() !== initialWebsite.trim() ? "Retourner relire ce site" : "Oui, c'est bien moi"}
+        </button>
         <button type="button" className={SECONDARY_BUTTON} disabled={pending} onClick={() => correct.send({ action: "back", step: 1 })}>Non, corriger mes informations</button>
       </div>
     </form>

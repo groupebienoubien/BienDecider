@@ -221,14 +221,37 @@ export async function runDraftAnalysis(draftId: string, profile: AnalysisInput, 
   try {
     const placeRead = (async (): Promise<PlaceDetails | null> => {
       const query = `${profile.companyName} ${profile.location}`;
-      const ids = await searchPlaceIds(query, 1, deps.places);
-      const details = ids.ok ? await readPlaceDetails(ids.value[0], deps.places) : ids;
-      google = details.ok ? "read" : details.reason === "not_found" ? "not_found" : "unavailable";
+      const ids = await searchPlaceIds(query, 3, deps.places);
+      const results = ids.ok
+        ? await Promise.all(ids.value.map((id) => readPlaceDetails(id, deps.places)))
+        : [];
+      const places = results.flatMap((result) => result.ok ? [result.value] : []);
+      const place = places[0] ?? null;
+      google = place ? "read" : !ids.ok && ids.reason === "not_found" ? "not_found" : "unavailable";
       const readAt = now().toISOString();
       // Seul le lien de la fiche est gardé : nom, adresse, note et avis sont lus en direct, jamais conservés.
-      const findings = details.ok ? { ...analysis.findings, google: { value: shortUrl(details.value.link), provenance: { kind: "observed" as const, source: shortUrl(details.value.link), readAt } } } : analysis.findings;
+      const websiteCandidates = places.flatMap((candidate) =>
+        candidate.website
+          ? [{
+            platform: "website" as const,
+            url: shortUrl(candidate.website),
+            source: shortUrl(candidate.link),
+            readAt
+          }]
+          : []
+      ).filter((candidate, index, candidates) =>
+        candidates.findIndex((item) => item.url === candidate.url) === index
+      ).slice(0, 3);
+      const findings = place ? {
+        ...analysis.findings,
+        google: { value: shortUrl(place.link), provenance: { kind: "observed" as const, source: shortUrl(place.link), readAt } },
+        publicSources: [
+          ...(analysis.findings.publicSources ?? []).filter((candidate) => candidate.platform !== "website"),
+          ...websiteCandidates
+        ]
+      } : analysis.findings;
       await publish({ findings });
-      return details.ok ? details.value : null;
+      return place;
     })();
     const siteRead = (async (): Promise<SiteReadResult | null> => {
       // Sans site déclaré, Paul lit celui de la fiche Google ; s'il est illisible, rien n'est signalé.
@@ -249,6 +272,14 @@ export async function runDraftAnalysis(draftId: string, profile: AnalysisInput, 
       const findings = result.ok ? {
         ...analysis.findings,
         pages: result.pages.filter((page) => page.url.length <= URL_MAX).map((page) => ({ url: page.url, readAt: result.readAt })),
+        publicSources: [
+          ...(analysis.findings.publicSources ?? []).filter((candidate) => candidate.platform === "website"),
+          ...(result.socialSources ?? [])
+        ],
+        readLimitations: (result.readLimitations ?? []).map((limitation) => ({
+          url: limitation.url,
+          reason: limitation.reason
+        })),
         palette: result.palette.length ? { value: result.palette, provenance: { kind: "observed" as const, source: shortUrl(result.url), readAt: result.readAt } } : null,
         logo: result.logo ? { value: shortUrl(result.logo), provenance: { kind: "observed" as const, source: shortUrl(result.url), readAt: result.readAt } } : null,
       } : analysis.findings;
