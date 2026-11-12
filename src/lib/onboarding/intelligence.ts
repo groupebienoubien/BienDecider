@@ -26,8 +26,8 @@ const RECORD_TOOL: Anthropic.Tool = {
         type: ["object", "null"],
         description: "Un concurrent réel et proche (même métier, zone proche), avec un fait précis et vérifiable à son sujet. Null si aucun concurrent avec un fait solide et sourcé n'a été trouvé.",
         properties: {
-          name: { type: "string", description: "Nom du concurrent." },
-          fact: { type: "string", description: "Un fait précis et vérifiable (note et nombre d'avis Google, spécialité, ancienneté, taille…), jamais une comparaison vague." },
+          name: { type: "string", description: "Nom du concurrent seul, sans adresse ni lieu-dit (ex. \"Burger King\", jamais \"Burger King (ZA de..., 92 rue...)\")." },
+          fact: { type: "string", description: "Un fait précis et vérifiable (note et nombre d'avis Google, spécialité, ancienneté, taille…), en une courte phrase autonome, jamais une comparaison vague." },
           source: { type: "string", description: "Adresse de la page où le fait a été lu." },
         },
         required: ["name", "fact", "source"],
@@ -68,8 +68,11 @@ function readFact(raw: unknown, now: Date): { competitor: CompetitorFact | null;
   const competitor = competitorRaw !== null && typeof competitorRaw === "object"
     ? (() => {
         const item = competitorRaw as Record<string, unknown>;
-        return typeof item.name === "string" && typeof item.fact === "string" && typeof item.source === "string" && item.name.trim() && item.fact.trim() && item.source.trim()
-          ? { name: item.name.trim().slice(0, 100), fact: item.fact.trim().slice(0, 300), source: item.source.trim().slice(0, 600) }
+        if (typeof item.name !== "string" || typeof item.fact !== "string" || typeof item.source !== "string") return null;
+        // Nom seul : une adresse glissée par le modèle entre parenthèses ou après une virgule est retirée (le fait, lui, la garde si besoin).
+        const name = item.name.trim().replace(/\s*\(.*$/, "").split(",")[0]?.trim() ?? "";
+        return name && item.fact.trim() && item.source.trim()
+          ? { name: name.slice(0, 100), fact: item.fact.trim().slice(0, 300), source: item.source.trim().slice(0, 600) }
           : null;
       })()
     : null;
