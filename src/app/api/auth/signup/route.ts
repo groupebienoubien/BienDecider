@@ -8,7 +8,7 @@ import { readSignupControl, releaseSignupSlot, reserveSignupSlot, todaySignupCou
 import { sendVerificationEmail } from "@/lib/email-verification";
 import { passwordPolicyError } from "@/lib/password-policy";
 import { SIGNUP_CLOSED_MESSAGE, SIGNUP_FULL_MESSAGE, secondsUntilNextSignupDay, signupAvailability } from "@/lib/signup-rules";
-import { ADDRESS_UNAVAILABLE_MESSAGE, ONBOARDING_MESSAGES, RECOVER_ACCOUNT_HREF, checkDraftForAccount, confirmedOrigin, isValidEmail, starterPlan, stepHref, synthesisUsage } from "@/lib/onboarding/draft-rules";
+import { ADDRESS_UNAVAILABLE_MESSAGE, ONBOARDING_MESSAGES, RECOVER_ACCOUNT_HREF, analysisMatchesProfile, checkDraftForAccount, confirmedOrigin, isValidEmail, starterMarketFinding, starterPlan, stepHref, synthesisUsage } from "@/lib/onboarding/draft-rules";
 import { cleanOwnerName, type ProfileOrigins } from "@/lib/company-profile";
 import { clearDraftCookie, loadDraft } from "@/lib/onboarding/draft";
 import { recordSignupTrace } from "@/lib/onboarding/visit-trace";
@@ -80,6 +80,7 @@ export async function POST(request: NextRequest) {
   if (!slotDay) return signupFull();
 
   const { profile, ambition } = draft.state;
+  const analysis = analysisMatchesProfile(draft.state) ? draft.state.analysis : null;
   const passwordHash = await hashPassword(password as string);
   let company;
   try {
@@ -114,7 +115,7 @@ export async function POST(request: NextRequest) {
             offers: confirmedOrigin(draft.state, "offers"),
           } satisfies ProfileOrigins,
           // Palette lue sur le site : proposée, jamais confirmée (#290) ; le dirigeant confirme sa marque dans Entreprise.
-          brandProposal: brandProposalFromAnalysis(draft.state.analysis) ?? undefined,
+          brandProposal: brandProposalFromAnalysis(analysis) ?? undefined,
           ambitionText: ambition?.text ?? null,
           ambitionTerms: ambition ? { ...ambition.terms } : undefined,
           ambitionConfirmedAt: ambition ? now : null,
@@ -129,9 +130,11 @@ export async function POST(request: NextRequest) {
       await ensureCreditGrant(tx, created.id);
       // Premiers constats de l'analyse anonyme (#292) : ils forment le diagnostic de départ, jusqu'au premier audit terminé.
       // Créés un à un (trois au plus) : chaque mission de départ cite le constat de son sujet (`starterFindingLinks`).
-      const constats = firstFindingRecords(draft.state.analysis);
+      const constats = firstFindingRecords(analysis);
       const constatIds: string[] = [];
       for (const constat of constats) constatIds.push((await tx.auditFinding.create({ data: { companyId: created.id, ...constat }, select: { id: true } })).id);
+      const marketFinding = starterMarketFinding(draft.state);
+      if (marketFinding) await tx.auditFinding.create({ data: { companyId: created.id, ...marketFinding } });
       // Le coût de l'analyse anonyme revient au compte, une seule fois : le brouillon vient d'être effacé dans cette transaction.
       const usage = analysisUsage(draft.state.analysis);
       if (usage) await tx.usageEvent.create({ data: { companyId: created.id, ...usage } });

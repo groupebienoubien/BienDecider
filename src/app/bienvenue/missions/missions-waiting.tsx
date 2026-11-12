@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import type { IntelligenceView } from "@/lib/onboarding/intelligence-rules";
+import { INTELLIGENCE_MESSAGES, type IntelligenceView } from "@/lib/onboarding/intelligence-rules";
 
 const POLL_MS = 1200;
 
@@ -14,7 +14,8 @@ const POLL_MS = 1200;
 export function MissionsIntelligenceWatcher({ initial }: { initial: IntelligenceView | null }) {
   const router = useRouter();
   const [view, setView] = useState(initial);
-  const refreshed = useRef(false);
+  const refreshed = useRef(initial?.finished ?? false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!view || view.finished) return;
@@ -25,21 +26,30 @@ export function MissionsIntelligenceWatcher({ initial }: { initial: Intelligence
         const data = await response.json().catch(() => null);
         if (stopped) return;
         if (response.ok && data && (data.intelligence === null || typeof data.intelligence === "object")) {
+          setError(null);
+          if (data.intelligence === null) {
+            stopped = true;
+            window.clearInterval(timer);
+            router.refresh();
+          }
           setView(data.intelligence as IntelligenceView | null);
           return;
         }
-        // Brouillon disparu ou session ouverte : on arrête d'interroger, l'actualisation suivante réglera l'affichage.
-        stopped = true;
-        window.clearInterval(timer);
+        setError("La progression de la recherche ne peut pas être actualisée. Une nouvelle tentative aura lieu automatiquement.");
+        if ([401, 404, 409].includes(response.status)) {
+          stopped = true;
+          window.clearInterval(timer);
+          router.refresh();
+        }
       } catch {
-        // Réseau coupé : la prochaine interrogation réessaie.
+        if (!stopped) setError("Connexion interrompue. La progression sera actualisée dès que le réseau sera rétabli.");
       }
     }, POLL_MS);
     return () => {
       stopped = true;
       window.clearInterval(timer);
     };
-  }, [view]);
+  }, [view, router]);
 
   useEffect(() => {
     if (view?.finished && !refreshed.current) {
@@ -48,10 +58,15 @@ export function MissionsIntelligenceWatcher({ initial }: { initial: Intelligence
     }
   }, [view, router]);
 
-  if (!view || view.finished) return null;
+  const notice = !view ? INTELLIGENCE_MESSAGES.missing : view.finished ? view.notice : null;
+  if (notice) return <p role="status" className="rounded-md border border-[var(--bd-line-strong)] bg-[var(--bd-attention-light)] p-3 text-sm text-[var(--bd-ink)]">{notice}</p>;
+  if (view?.finished) return null;
   return (
-    <p role="status" aria-live="polite" className="rounded-md border border-[var(--bd-line-strong)] bg-[var(--bd-cream)] p-3 text-sm font-semibold text-[var(--bd-ink)]">
-      Paul recherche votre secteur, vos concurrents et les opportunités du moment…
-    </p>
+    <div className="flex flex-col gap-2">
+      <p role="status" aria-live="polite" className="rounded-md border border-[var(--bd-line-strong)] bg-[var(--bd-cream)] p-3 text-sm font-semibold text-[var(--bd-ink)]">
+        Paul recherche votre secteur, vos concurrents et les opportunités du moment. Vos pistes seront affichées à la fin de cette recherche.
+      </p>
+      {error && <p role="alert" className="text-sm text-[var(--bd-error)]">{error}</p>}
+    </div>
   );
 }

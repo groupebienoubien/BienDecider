@@ -18,6 +18,15 @@ export async function waitForAnalysis(request: APIRequestContext, baseURL: strin
   return last.view!;
 }
 
+export async function waitForIntelligence(request: APIRequestContext, baseURL: string) {
+  await expect.poll(async () => {
+    const response = await request.get(`${baseURL}/api/bienvenue/intelligence`);
+    if (!response.ok()) return false;
+    const { intelligence } = await response.json();
+    return intelligence === null || intelligence?.finished === true;
+  }, { timeout: 95_000, intervals: [300, 600, 1200] }).toBe(true);
+}
+
 /** Étape 1 par l'API du parcours : « Découvrir », fin de l'analyse, puis « Voir les constats » (étape 2). */
 export async function discoverThenSeeFindings(request: APIRequestContext, baseURL: string, data: Record<string, string>, headers: Record<string, string> = testIpHeader()) {
   const post = (body: Record<string, unknown>) => request.post(`${baseURL}/api/bienvenue`, { headers: { Origin: baseURL, ...headers }, data: body });

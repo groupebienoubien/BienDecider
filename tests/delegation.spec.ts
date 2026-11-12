@@ -2247,7 +2247,7 @@ test("GH-284: step 4 missions are distinct, valid, sourced and the first one is 
   expect(noSite.map((mission) => [mission.template, mission.scopeLabel])).toEqual([
     ["site_page", "Rénovation électrique"], ["social_post", "dépannage"], ["custom", expect.stringContaining("Une action que vous menez vous-même")],
   ]);
-  expect(noSite[0].deduction).toBe("Vous visez +20 % de chiffre d'affaires en 12 mois : vous n'avez pas encore de page qui présente Rénovation électrique, pourtant le premier point d'entrée de vos clients.");
+  expect(noSite[0].deduction).toBe("Vous visez +20 % de chiffre d'affaires en 12 mois : vérifiez d'abord si une page présente déjà Rénovation électrique et permet de vous contacter, avant d'en créer une.");
   const google = starterPlan(step4Draft(), ["google_profile", "review_reply"]).missions;
   expect(google.map((mission) => mission.scopeLabel)).toEqual(["Votre fiche Google", "Aucun avis choisi"]);
   // Valeurs par défaut du modèle d'action : agent et risque.
@@ -2272,7 +2272,7 @@ test("GH-284: the finding cites its origin — « Lu sur le site » only for val
   expect(starterPlan(step4Draft({ observedOffers: true }), ["custom"]).missions[0]).toMatchObject({ origin: ORIGIN_DECLARED, finding: "Votre ambition : +20 % de chiffre d'affaires en 12 mois. Vos clients : Particuliers propriétaires." });
 });
 
-const INTELLIGENCE_INPUT = { trade: "Électricien", servingArea: "Lyon et alentours", offers: "Rénovation électrique, dépannage", targetClients: "Particuliers propriétaires", ambitionText: "+20 % de chiffre d'affaires en 12 mois" };
+const INTELLIGENCE_INPUT = { companyName: "Atelier Lumen", location: "Lyon", website: SITE, trade: "Électricien", servingArea: "Lyon et alentours", offers: "Rénovation électrique, dépannage", targetClients: "Particuliers propriétaires", ambitionText: "+20 % de chiffre d'affaires en 12 mois" };
 const COMPETITOR_FACT = { name: "Électricité Dupont", fact: "a une note de 4,8/5 sur 120 avis Google", source: "https://maps.example/dupont" };
 const EVENT_FACT = { title: "Salon de l'habitat de Lyon", description: "Un salon local où rencontrer des clients intéressés par vos services.", source: "https://salon.example", isEvent: true, eventEndDate: "2026-12-01" };
 const PARTNERSHIP_FACT = { title: "Syndic du Parc", description: "Un syndic local qui recommande des électriciens à sa copropriété.", source: "https://syndic.example", isEvent: false, eventEndDate: null };
@@ -2297,7 +2297,7 @@ test("US #363 : une opportunité réelle (événement) remplace l'action génér
   expect(mission.title).toMatch(/^Participer à Salon de l'habitat de Lyon/);
   expect(mission.title).toContain("2026-12-01");
   expect(mission.finding).toContain("Source : https://salon.example");
-  expect(mission.origin).toBe(ORIGIN_DECLARED);
+  expect(mission.origin).toBe("Recherche publique, à vérifier");
   expect(validateNewMission(mission, 0)).toMatchObject({ ok: true });
 });
 
@@ -2315,13 +2315,12 @@ test("US #363 : sans opportunité trouvée, la mission « Sur mesure » reste ce
   expect(withEmptyIntelligence).toEqual(withoutIntelligence);
 });
 
-test("US #363 : un concurrent réel enrichit la déduction de la publication, jamais en le dévalorisant", () => {
+test("US #363 : un concurrent ne justifie pas artificiellement une publication", () => {
   const intelligence = doneIntelligence({ competitor: COMPETITOR_FACT });
   const mission = starterPlan(step4Draft({ intelligence }), ["social_post"]).missions[0];
-  expect(mission.deduction).toContain("Électricité Dupont");
-  expect(mission.deduction).toContain("s'en inspirer peut vous aider à vous démarquer");
-  expect(mission.deduction).not.toMatch(/\b(mauvais|moins bien|pire)\b/i);
-  expect(mission.finding).toContain("Source : https://maps.example/dupont");
+  expect(mission).toEqual(starterPlan(step4Draft(), ["social_post"]).missions[0]);
+  expect(mission.deduction).not.toContain("Électricité Dupont");
+  expect(mission.finding).not.toContain(COMPETITOR_FACT.source);
   expect(validateNewMission(mission, 0)).toMatchObject({ ok: true });
 });
 

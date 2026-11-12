@@ -3,12 +3,12 @@ import { after, NextRequest, NextResponse } from "next/server";
 import { getSessionEmail } from "@/lib/session";
 import { readJsonObject } from "@/lib/request-body";
 import { consumeGlobalAnalysis, consumeGlobalIntelligence, consumeIpAttempt, refundIpAttempt, type ThrottleResult } from "@/lib/auth-throttle";
-import { applyDraftAction, checkInterpretation, emptyDraft, parseDraftAction, stepHref, withRetained, type DraftState } from "@/lib/onboarding/draft-rules";
+import { applyDraftAction, checkInterpretation, emptyDraft, intelligenceInputFor, parseDraftAction, stepHref, withRetained, type DraftState } from "@/lib/onboarding/draft-rules";
 import { anonymousSynthesisModel, writeRetained } from "@/lib/onboarding/synthesis";
 import { signInterpretation, verifyInterpretation } from "@/lib/ambition-token";
 import { anonymousAmbitionModel, interpretAmbition } from "@/lib/ambition";
 import { ANALYSIS_MESSAGES, analysisView, limitedNotice, needsNewAnalysis, newAnalysis } from "@/lib/onboarding/analysis-rules";
-import { needsNewIntelligence, newIntelligence, type IntelligenceInput } from "@/lib/onboarding/intelligence-rules";
+import { needsNewIntelligence, newIntelligence } from "@/lib/onboarding/intelligence-rules";
 import { createDraft, loadDraft, saveAnalysis, saveDraft, saveIntelligence, startAnalysis, startIntelligence } from "@/lib/onboarding/draft";
 import { errorLabel, runDraftAnalysis } from "@/lib/onboarding/analysis";
 import { runDraftIntelligence } from "@/lib/onboarding/intelligence";
@@ -150,7 +150,7 @@ async function launchAnalysis(request: NextRequest, draftId: string, state: Draf
  * recherche est simplement absente, et les pistes se rabattent sur les règles existantes (#359, #360).
  */
 async function launchIntelligence(request: NextRequest, draftId: string, state: DraftState, now: Date): Promise<void> {
-  const input: IntelligenceInput = { trade: state.profile.trade, servingArea: state.profile.servingArea, offers: state.profile.offers, targetClients: state.profile.targetClients, ambitionText: state.ambition?.text ?? "" };
+  const input = intelligenceInputFor(state);
   // Le même profil déjà cherché : rien à relancer, les faits restent.
   if (!needsNewIntelligence(state.intelligence, input, now)) return;
 
@@ -168,7 +168,7 @@ async function launchIntelligence(request: NextRequest, draftId: string, state: 
   if (limited) {
     // Pas de recherche : le brouillon le garde, l'étape 4 s'ouvre avec les pistes actuelles (#359, #360).
     const limit = { scope: limited === perIp ? "ip" as const : "global" as const, retryAt: new Date(now.getTime() + limited.retryAfterSeconds * 1000).toISOString() };
-    await startIntelligence(draftId, newIntelligence(input, runId, now, "limited", limit), now).catch(() => undefined);
+    await startIntelligence(draftId, newIntelligence(input, runId, now, "limited", limit), now);
     return;
   }
 

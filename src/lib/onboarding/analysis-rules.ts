@@ -128,7 +128,7 @@ export function ruleFirstFindings(read: { site: { url: string; readAt: string } 
     findings.push({ topic: "site_web", fact: "Votre site est en ligne et lisible.", consequence: "Paul peut s'appuyer sur ce qu'il présente pour vos premiers contenus.", certainty: "observe", source: read.site.url.slice(0, 600), readAt: read.site.readAt });
   }
   if (!read.site && !read.google) {
-    findings.push({ topic: "site_web", fact: "Paul n'a trouvé ni site ni fiche Google pour votre entreprise.", consequence: "Vos clients ont peu de moyens de vous trouver en ligne : c'est une première piste à vérifier avec vous.", certainty: "piste", source: null, readAt: null });
+    findings.push({ topic: "site_web", fact: "Aucun site ni fiche Google n'a pu être identifié lors de cette lecture.", consequence: "Vérifiez les liens avec Paul : une recherche sans résultat ne prouve pas une absence de présence en ligne.", certainty: "piste", source: null, readAt: null });
   }
   return findings;
 }

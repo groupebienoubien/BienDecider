@@ -210,17 +210,19 @@ export function DiscoveryStep({ profile, analysis: initial }: { profile: DraftPr
  * Étape 2 : activité, zone, clients prioritaires et offres principales, préremplis par l'analyse, chacun avec son origine
  * (FR-5), à vérifier puis confirmer. « Non, corriger mes informations » revient à la découverte sans rien effacer (#281).
  */
-export function ProfileForm({ prefill }: { prefill: ProfilePrefill }) {
+export function ProfileForm({ prefill, website: initialWebsite }: { prefill: ProfilePrefill; website: string }) {
   const { busy, error, errors, send } = useDraftAction();
   const correct = useDraftAction();
   const [values, setValues] = useState(prefill.values);
+  const [website, setWebsite] = useState(initialWebsite);
   const set = (key: keyof typeof values) => (value: string) => setValues((current) => ({ ...current, [key]: value }));
   // Une valeur modifiée par le dirigeant est la sienne : l'étiquette d'origine disparaît.
   const origin = (key: keyof typeof values) => (values[key] === prefill.values[key] ? profileOriginLabel(prefill.origins[key]) ?? undefined : undefined);
   const tradeOrigin = origin("trade");
   const pending = busy || correct.busy;
   return (
-    <form noValidate className="flex flex-col gap-5" onSubmit={(event) => { event.preventDefault(); void send({ action: "confirm_profile", ...values }); }}>
+    <form noValidate className="flex flex-col gap-5" onSubmit={(event) => { event.preventDefault(); void send({ action: "confirm_profile", ...values, website }); }}>
+      <TextField id="website" label="Votre site (facultatif)" hint="Adresse renseignée ou repérée pendant la lecture. Vérifiez-la : elle sera conservée dans votre profil après confirmation." value={website} onChange={setWebsite} errors={errors} max={LIMITS.website} required={false} type="url" />
       <div className="flex flex-col gap-1.5">
         <TradeCombobox id="trade" label="Votre activité" value={values.trade} onChange={set("trade")} invalid={Boolean(errors.trade)} describedBy={[tradeOrigin ? "trade-origin" : null, errors.trade ? "trade-error" : null].filter(Boolean).join(" ") || undefined} />
         {tradeOrigin && <p id="trade-origin" className={HINT}>{tradeOrigin}</p>}
