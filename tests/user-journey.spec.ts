@@ -243,7 +243,12 @@ test("Mon compte shows the credit balance, the scale and the latest movements", 
   expect(company.id).toBeTruthy();
 });
 
-test("mission brief links server validation to the field and keeps the entered values at 320 px", async ({ page }) => {
+test("mission brief links server validation to the field and keeps the entered values at 320 px", async ({ page, company }) => {
+  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }) });
+  try {
+    await prisma.company.update({ where: { id: company.id }, data: { workspaceV52: true } });
+  } finally { await prisma.$disconnect(); }
+
   await page.setViewportSize({ width: 320, height: 720 });
   await page.goto(`${baseURL}/missions/nouvelle`);
   const finding = page.getByLabel("Le constat de départ", { exact: true });
