@@ -11,7 +11,8 @@ import { signupDayKey } from "../src/lib/signup-rules";
 import { startSmtpSink } from "./support/smtp-sink";
 import { DRAFT_AMBITION, DRAFT_AMBITION_TERMS, createTestDraft, waitForAnalysis } from "./support/onboarding-draft";
 import { newAnalysis } from "../src/lib/onboarding/analysis-rules";
-import { readDraftState, retainedFromRules } from "../src/lib/onboarding/draft-rules";
+import { readDraftState, retainedFromRules, starterPlan } from "../src/lib/onboarding/draft-rules";
+import { createMissionDecisionPlan } from "../src/lib/missions/decision-plan";
 import { purgeExpiredDrafts, purgeOldTraces } from "../src/lib/onboarding/visit-trace";
 import { VISIT_TRACE_NOTICE } from "../src/lib/onboarding/visit-trace-rules";
 
@@ -2165,7 +2166,10 @@ test("Partenariats: the agency list belongs to its company, the scope names one 
     const content = await prisma.missionContent.create({ data: { companyId: a.id, missionId: mission.id, channel: "gmail", format: "email", currentNumber: 1, versions: { create: { number: 1, title: "Travailler ensemble ?", body: "Bonjour,", author: "paul" } } } });
     await page.goto(`${baseURL}/atelier/${content.id}`);
     await expect(page.getByRole("article", { name: "Aperçu destinataire" })).toContainText(`Agence du Parc <parc-${marker}@example.invalid> · envois séparés`);
-    expect((await prisma.mission.findUniqueOrThrow({ where: { id: mission.id } })).scope).toEqual({ agencyIds: [parc.id] });
+    expect((await prisma.mission.findUniqueOrThrow({ where: { id: mission.id } })).scope).toEqual({
+      agencyIds: [parc.id],
+      decisionPlan: createMissionDecisionPlan("agencies", { agencyIds: [parc.id] }, "Vous avez choisi ce test à partir du constat saisi ; ce formulaire ne compare pas les autres pistes."),
+    });
   } finally {
     await page.context().clearCookies();
     await prisma.company.deleteMany({ where: { id: { in: [a.id, b.id] } } });
@@ -2396,11 +2400,14 @@ test("GH-282: the ambition is confirmed only with the token of the exact interpr
     expect(await confirmed.json()).toMatchObject({ step: 4, href: "/bienvenue/missions" });
     const stored = await prisma.onboardingDraft.findUniqueOrThrow({ where: { id: draft.id } });
     expect(stored).toMatchObject({ step: 4, diagnosticReady: true, ambition: { text, terms: interpretation.terms } });
-    // #284 : « Ce que nous retenons » est enregistré au clic ; sans clé de modèle sur le serveur de test, ce sont les règles.
-    const retained = (stored.ambition as { retained?: unknown }).retained as string[];
+    // La synthèse du modèle suit la recherche ; sans modèle, seul le résumé de règles est affiché.
+    expect(stored.ambition).toMatchObject({ planningVersion: 1 });
+    const plan = starterPlan(readDraftState(stored));
+    const retained = plan.retained;
     expect(retained.length).toBeGreaterThanOrEqual(2);
     expect(retained.length).toBeLessThanOrEqual(3);
     expect(retained).toEqual(retainedFromRules(readDraftState(stored)));
+    expect(plan.missions).toEqual([]);
     // Étape 4 : plus d'interprétation possible depuis le brouillon.
     expect((await post({ action: "interpret_ambition", ambition: text })).status()).toBe(409);
 

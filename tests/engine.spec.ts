@@ -2386,7 +2386,10 @@ test("GH-288: accepted create, scope and restore cards go through the mission se
 
   const scope = await createPendingAction(company.id, "mission_scope", { ...missionRef(created), scope: { description: "Tenir un stand au salon de printemps" }, summary: "Tenir un stand au salon de printemps" });
   expect(await decidePendingAction(company.id, scope.id, "confirm")).toMatchObject({ ok: true });
-  expect((await prisma.mission.findUniqueOrThrow({ where: { id: created.id } })).scope).toEqual({ description: "Tenir un stand au salon de printemps" });
+  expect((await prisma.mission.findUniqueOrThrow({ where: { id: created.id } })).scope).toEqual({
+    description: "Tenir un stand au salon de printemps",
+    decisionPlan: createMissionDecisionPlan("custom", {}, "Cette ancienne proposition ne conservait pas sa raison comparative ; reprenez sa priorité avec Paul."),
+  });
 
   // « Lancer » : redirection vers le cadre, rien n'est lancé ni débité.
   const launch = await createPendingAction(company.id, "mission_launch", missionRef(created));
