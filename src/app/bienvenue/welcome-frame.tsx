@@ -11,7 +11,7 @@ import { BackButton, SECONDARY_BUTTON, StepColumn, StepHeading } from "./journey
 export function WelcomeFrame({ step, intro, children }: { step: DraftStep; intro?: ReactNode; children: ReactNode }) {
   return (
     <main className="min-h-screen bg-[var(--bd-cream)] font-sans text-[var(--bd-ink)]">
-      <div className="mx-auto max-w-5xl px-4 py-5 sm:px-6">
+      <div className={`mx-auto ${step === 4 ? "max-w-6xl" : "max-w-5xl"} px-4 py-5 sm:px-6`}>
         <header className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--bd-line)] pb-4">
           <Link href="/" aria-label="BienDecider, accueil"><BrandLogo /></Link>
           <div className="flex items-center gap-3">

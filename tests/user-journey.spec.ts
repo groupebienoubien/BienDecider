@@ -7,10 +7,11 @@ import { encryptGmailToken } from "../src/lib/oauth/gmail";
 import { companyProfileLines, objectiveLine } from "../src/lib/agents/personas";
 import { getRejectionContext } from "../src/lib/agents/rejection-context";
 import { createSessionToken } from "../src/lib/session-token";
-import { createTestDraft, discoverThenSeeFindings, interpretThenConfirmAmbition, testIpHeader, waitForIntelligence } from "./support/onboarding-draft";
+import { createTestDraft, discoverThenSeeFindings, interpretThenConfirmAmbition, testIpHeader, waitForAnalysis, waitForIntelligence } from "./support/onboarding-draft";
 import { intelligenceInputFor, readDraftState } from "../src/lib/onboarding/draft-rules";
 import { INTELLIGENCE_MESSAGES, newIntelligence } from "../src/lib/onboarding/intelligence-rules";
 import { newAnalysis } from "../src/lib/onboarding/analysis-rules";
+import { placeMapsLink } from "../src/lib/google-places";
 
 config({ quiet: true });
 
@@ -2775,7 +2776,7 @@ async function seedStarterMissionPlan(page: Page, prisma: PrismaClient) {
   const cookie = (await page.context().cookies()).find((item) => item.name === "pepito_draft");
   if (!cookie) throw new Error("Missing onboarding draft cookie");
   const row = await prisma.onboardingDraft.findUniqueOrThrow({ where: { tokenHash: createHash("sha256").update(cookie.value).digest("hex") } });
-  expect(readDraftState(row).ambition?.planningVersion).toBe(1);
+  expect(readDraftState(row).ambition?.planningVersion).toBe(2);
   const intelligence = newIntelligence(intelligenceInputFor(readDraftState(row)), randomUUID());
   await prisma.onboardingDraft.update({
     where: { id: row.id },
@@ -2840,25 +2841,230 @@ test("onboarding quality: corrected sources refresh in step 2 before confirming 
     await page.goto(`${baseURL}/bienvenue`);
     await page.getByLabel("Votre site (facultatif)").fill("https://corrected.invalid/");
     await page.getByRole("button", { name: "Actualiser mes sources" }).click();
-    await expect(page.getByRole("button", { name: "Confirmer et continuer" })).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByRole("button", { name: "Oui, continuer vers mon objectif" })).toBeVisible({ timeout: 30_000 });
     const row = await prisma.onboardingDraft.findUniqueOrThrow({ where: { id: draft.id } });
     expect(row.step).toBe(2);
     expect(readDraftState(row).profile.website).toBe("https://corrected.invalid/");
     const analysis = newAnalysis({ companyName: "Atelier Lumen", location: "Lyon", website: "https://corrected.invalid/", googlePlaceId: null, googlePlaceCandidateIds: [], websiteRejected: false }, "reread-social");
     await prisma.onboardingDraft.update({ where: { id: draft.id }, data: { analysis } });
     await page.reload();
-    await expect(page.getByRole("region", { name: "Ce que Paul lit" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Confirmer et continuer" })).toHaveCount(0);
+    await expect(page.getByText("Paul complète automatiquement votre site", { exact: false })).toBeVisible();
+    await expect(page.getByLabel("Votre site (facultatif)")).toBeEditable();
+    await expect(page.getByRole("button", { name: "Lecture des sources en cours…" })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Oui, continuer vers mon objectif" })).toHaveCount(0);
     expect((await page.request.post(`${baseURL}/api/bienvenue`, { headers: { Origin: baseURL }, data: { action: "confirm_profile" } })).status()).toBe(409);
     const candidate = { platform: "instagram", url: "https://www.instagram.com/atelier.lumen/", source: "https://corrected.invalid/", readAt: new Date().toISOString() };
     await prisma.onboardingDraft.update({ where: { id: draft.id }, data: { analysis: { ...analysis, status: "done", finishedAt: new Date().toISOString(), findings: { ...analysis.findings, publicSources: [candidate] } } } });
     await expect(page.getByRole("checkbox", { name: "Ce profil est officiel" })).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByText("2 sur 5", { exact: true })).toBeVisible();
+    await expect(page.getByRole("dialog", { name: "Est-ce bien votre entreprise ?" })).toBeVisible();
     await page.getByRole("checkbox", { name: "Ce profil est officiel" }).check();
-    await page.getByRole("button", { name: "Confirmer et continuer" }).click();
+    await page.getByRole("button", { name: "Oui, continuer vers mon objectif" }).click();
     await expect(stepHeading(page, "Qu'aimeriez-vous changer ?")).toBeVisible();
     expect(readDraftState(await prisma.onboardingDraft.findUniqueOrThrow({ where: { id: draft.id } })).socialSourceDecisions).toMatchObject([{ status: "confirmed", confirmedUrl: "https://instagram.com/atelier.lumen" }]);
     expect(await noHorizontalScroll(page)).toBe(true);
+  } finally {
+    await prisma.onboardingDraft.deleteMany({ where: { id: draft.id } });
+    await prisma.$disconnect();
+  }
+});
+
+for (const selection of ["Google", "website"] as const) {
+  test(`onboarding autofill: selecting ${selection} enriches in the background without overwriting edits`, async ({ page }) => {
+    test.setTimeout(90_000);
+    const prisma = journeyDatabase();
+    const draft = await createTestDraft(prisma, { step: 2, profile: { trade: "", servingArea: "", targetClients: "", offers: "" } });
+    const candidateIds = ["ChIJatelierLumen01", "ChIJatelierLumen02"];
+    const website = "https://atelier-lumen.invalid/";
+    const initial = newAnalysis({ companyName: "Atelier Lumen", location: "Lyon", website: "" }, randomUUID(), new Date(), "done");
+    initial.findings.googlePlaceCandidates = candidateIds;
+    initial.findings.publicSources = candidateIds.map((id, index) => ({
+      platform: "website", url: index ? "https://autre-atelier.invalid/" : website, source: placeMapsLink(id), readAt: initial.startedAt,
+    }));
+    let background: ReturnType<typeof newAnalysis> | undefined;
+    let failFirstSelection = selection === "Google";
+    const sourceRequests: Record<string, unknown>[] = [];
+    try {
+      await prisma.onboardingDraft.update({ where: { id: draft.id }, data: { analysis: initial } });
+      await page.context().addCookies([{ name: "pepito_draft", value: draft.token, url: baseURL }]);
+      await page.setExtraHTTPHeaders(testIpHeader());
+      await page.route("**/api/bienvenue", async (route) => {
+        const body = route.request().postDataJSON();
+        if (body?.action !== "update_sources") return route.continue();
+        if (failFirstSelection) {
+          failFirstSelection = false;
+          return route.fulfill({ status: 503, json: { error: "Lecture temporairement indisponible pour le test." } });
+        }
+        sourceRequests.push(body);
+        const response = await route.fetch();
+        expect(response.status()).toBe(200);
+        await waitForAnalysis(page.request, baseURL);
+        const saved = readDraftState(await prisma.onboardingDraft.findUniqueOrThrow({ where: { id: draft.id } }));
+        expect(saved.step).toBe(2);
+        expect(saved.profileConfirmed).toBe(false);
+        expect(saved.analysis?.input.googlePlaceId).toBe(candidateIds[sourceRequests.length - 1]);
+        background = newAnalysis(saved.analysis!.input, saved.analysis!.runId);
+        await prisma.onboardingDraft.update({ where: { id: draft.id }, data: { analysis: background } });
+        await route.fulfill({ response });
+      });
+      await page.goto(`${baseURL}/bienvenue`);
+      await page.getByText("Votre activité — compléter si utile", { exact: true }).click();
+      await page.getByLabel("Vos clients", { exact: true }).fill("Familles du quartier");
+      await page.getByLabel("Votre zone d'intervention", { exact: true }).fill("");
+      const selectedResponse = page.waitForResponse((response) => response.status() === 200 && response.url().endsWith("/api/bienvenue") && response.request().postDataJSON()?.action === "update_sources");
+      if (selection === "Google") await page.locator(`input[name="google-place-choice"][value="${candidateIds[0]}"]`).check();
+      else await page.getByRole("button", { name: "Utiliser cette adresse", exact: true }).first().click();
+      if (selection === "Google") {
+        await expect(page.getByText("Lecture temporairement indisponible pour le test.", { exact: true })).toBeVisible();
+        await expect(page.getByLabel("Vos clients", { exact: true })).toHaveValue("Familles du quartier");
+        await page.getByRole("button", { name: "Réessayer la lecture automatique" }).click();
+      }
+      await expect(page.getByLabel("Votre site (facultatif)")).toHaveValue(website);
+      await expect(page.getByRole("button", { name: "Lecture des sources en cours…" })).toBeDisabled();
+      await expect(page.locator(`input[value="${candidateIds[1]}"]`)).toBeDisabled();
+      await expect(page.getByLabel("Vos clients", { exact: true })).toHaveValue("Familles du quartier");
+      await expect(page.getByLabel("Votre zone d'intervention", { exact: true })).toHaveValue("");
+      await page.getByLabel("Votre activité", { exact: true }).fill("Restaurant de quartier");
+      await page.getByText("Ajouter un profil non trouvé", { exact: true }).click();
+      await page.getByLabel("Facebook", { exact: true }).fill("https://facebook.com/atelier.lumen");
+      if (selection === "website") await page.getByLabel("Instagram", { exact: true }).fill("https://www.instagram.com/atelier.lumen/");
+      expect((await selectedResponse).status()).toBe(200);
+      expect(sourceRequests).toHaveLength(1);
+      expect(sourceRequests[0]).toMatchObject({ action: "update_sources", googlePlaceChoice: { status: "confirmed", placeId: candidateIds[0] }, website });
+      expect(sourceRequests[0]).not.toHaveProperty("trade");
+      if (!background) throw new Error("Missing automatic background analysis");
+      const sourceReady = {
+        ...background, sourcesReady: true,
+        rubrics: { ...background.rubrics, site: { status: "read" as const } },
+        findings: {
+          ...background.findings, googlePlaceCandidates: candidateIds,
+          pages: [{ url: website, readAt: background.startedAt }],
+          publicSources: [...initial.findings.publicSources!, { platform: "instagram" as const, url: "https://instagram.com/atelier.lumen", source: website, readAt: background.startedAt }],
+        },
+      };
+      await prisma.onboardingDraft.update({ where: { id: draft.id }, data: { analysis: sourceReady } });
+      const official = page.getByRole("checkbox", { name: "Ce profil est officiel" });
+      await expect(official).toBeVisible({ timeout: 10_000 });
+      await expect(official).not.toBeChecked();
+      await expect(page.getByRole("button", { name: "Oui, continuer vers mon objectif" })).toBeEnabled();
+      await official.check();
+      await page.keyboard.press("Escape");
+      await page.getByRole("button", { name: "Vérifier mon entreprise" }).click();
+      const provenance = { kind: "hypothesis" as const };
+      await prisma.onboardingDraft.update({ where: { id: draft.id }, data: { analysis: {
+        ...sourceReady, status: "done", finishedAt: new Date().toISOString(),
+        findings: { ...sourceReady.findings, trade: { value: "Traiteur", provenance }, servingArea: { value: "Paris", provenance }, targetClients: { value: "Professionnels", provenance }, offers: { value: "Menus du midi", provenance } },
+      } } });
+      await expect(page.getByLabel("Ce que vous proposez", { exact: true })).toHaveValue("Menus du midi", { timeout: 10_000 });
+      await expect(page.getByLabel("Votre activité", { exact: true })).toHaveValue("Restaurant de quartier");
+      await expect(page.getByLabel("Vos clients", { exact: true })).toHaveValue("Familles du quartier");
+      await expect(page.getByLabel("Votre zone d'intervention", { exact: true })).toHaveValue("");
+      await expect(page.getByLabel("Facebook", { exact: true })).toHaveValue("https://facebook.com/atelier.lumen");
+      await expect(official).toBeChecked();
+      await expect(page.getByText("La progression n'est pas disponible", { exact: false })).toHaveCount(0);
+      if (selection === "Google") {
+        await page.locator(`input[value="${candidateIds[1]}"]`).check();
+        await expect(page.getByLabel("Votre site (facultatif)")).toHaveValue("https://autre-atelier.invalid/");
+        await expect(official).toHaveCount(0);
+        await expect(page.getByLabel("Ce que vous proposez", { exact: true })).toHaveValue("");
+        const secondReady = {
+          ...background, sourcesReady: true,
+          findings: { ...background.findings, googlePlaceCandidates: candidateIds, publicSources: sourceReady.findings.publicSources!.filter((item) => item.platform === "instagram") },
+        };
+        await prisma.onboardingDraft.update({ where: { id: draft.id }, data: { analysis: secondReady } });
+        await expect(official).toBeVisible({ timeout: 10_000 });
+        await expect(official).not.toBeChecked();
+        await page.getByLabel("Votre site (facultatif)").fill("");
+        await prisma.onboardingDraft.update({ where: { id: draft.id }, data: { analysis: { ...secondReady, status: "done", finishedAt: new Date().toISOString() } } });
+        await expect(page.getByRole("button", { name: "Actualiser mes sources" })).toBeEnabled({ timeout: 10_000 });
+        await expect(official).toHaveCount(0);
+        await expect(page.getByLabel("Votre site (facultatif)")).toHaveValue("");
+        await expect(page.getByLabel("Votre activité", { exact: true })).toHaveValue("Restaurant de quartier");
+        expect(sourceRequests).toHaveLength(2);
+      } else {
+        await page.getByRole("button", { name: "Oui, continuer vers mon objectif" }).click();
+        await expect(stepHeading(page, "Qu'aimeriez-vous changer ?")).toBeVisible();
+        const saved = readDraftState(await prisma.onboardingDraft.findUniqueOrThrow({ where: { id: draft.id } }));
+        expect(saved.profile).toMatchObject({ website, trade: "Restaurant de quartier", servingArea: "", targetClients: "Familles du quartier", offers: "Menus du midi" });
+        expect(saved.socialSourceDecisions).toMatchObject([{ platform: "instagram", status: "confirmed" }, { platform: "facebook", status: "confirmed", origin: "declared" }]);
+        expect(saved.socialSourceDecisions).toHaveLength(2);
+        expect(sourceRequests).toHaveLength(1);
+      }
+    } finally {
+      await prisma.onboardingDraft.deleteMany({ where: { id: draft.id } });
+      await prisma.$disconnect();
+    }
+  });
+}
+
+test("onboarding redesign: confirm links, enter the goal during analysis, then show readable missions", async ({ page }, testInfo) => {
+  test.setTimeout(90_000);
+  const prisma = journeyDatabase();
+  const website = "https://atelier-lumen.invalid/";
+  const draft = await createTestDraft(prisma, { step: 2, profile: { website } });
+  const analysis = newAnalysis({ companyName: "Atelier Lumen", location: "Lyon", website }, "sources-before-model");
+  analysis.sourcesReady = true;
+  analysis.rubrics.site = { status: "read" };
+  analysis.findings.pages = [{ url: website, readAt: analysis.startedAt }];
+  analysis.findings.publicSources = [{ platform: "instagram", url: "https://instagram.com/atelier.lumen", source: website, readAt: analysis.startedAt }];
+  const preparationCalls: string[] = [];
+  page.on("request", (request) => {
+    if (request.method() === "POST" && request.url().endsWith("/api/bienvenue") && request.postDataJSON()?.action === "prepare_missions") preparationCalls.push(request.url());
+  });
+  try {
+    await prisma.onboardingDraft.update({ where: { id: draft.id }, data: { analysis, profileConfirmed: false } });
+    await page.context().addCookies([{ name: "pepito_draft", value: draft.token, url: baseURL }]);
+    await page.goto(`${baseURL}/bienvenue`);
+    const dialog = page.getByRole("dialog", { name: "Est-ce bien votre entreprise ?" });
+    await expect(dialog).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(dialog).not.toBeVisible();
+    await expect(page.getByRole("button", { name: "Vérifier mon entreprise" })).toBeEnabled();
+    await page.getByRole("button", { name: "Vérifier mon entreprise" }).click();
+    await expect(dialog).toBeVisible();
+    await page.getByRole("checkbox", { name: "Ce profil est officiel" }).check();
+    await page.getByText("Ajouter un profil non trouvé", { exact: true }).click();
+    await page.getByLabel("Facebook", { exact: true }).fill("https://facebook.com/atelier.lumen");
+    await page.keyboard.press("Escape");
+    await page.getByRole("button", { name: "Vérifier mon entreprise" }).click();
+    await expect(page.getByLabel("Facebook", { exact: true })).toHaveValue("https://facebook.com/atelier.lumen");
+    for (const width of [1440, 390, 320]) {
+      await page.setViewportSize({ width, height: 900 });
+      expect(await noHorizontalScroll(page)).toBe(true);
+      expect(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+      await page.screenshot({ path: testInfo.outputPath(`confirmation-${width}.png`) });
+    }
+    await page.getByRole("button", { name: "Oui, continuer vers mon objectif" }).click();
+    await expect(stepHeading(page, "Qu'aimeriez-vous changer ?")).toBeVisible();
+    await expect(page.getByText("L'analyse continue en arrière-plan", { exact: true })).toBeVisible();
+    await page.getByLabel("Votre ambition").fill("+10 % de chiffre d'affaires en 12 mois, sans embaucher");
+    await page.getByRole("button", { name: "Interpréter" }).click();
+    await page.getByRole("button", { name: "C'est bien ça" }).click();
+    await expect(page).toHaveURL(`${baseURL}/bienvenue/missions`);
+    await expect(page.getByText("Votre objectif est enregistré.", { exact: false })).toBeVisible();
+    expect(preparationCalls).toHaveLength(0);
+    const saved = readDraftState(await prisma.onboardingDraft.findUniqueOrThrow({ where: { id: draft.id } }));
+    expect(saved.socialSourceDecisions).toMatchObject([{ platform: "instagram", status: "confirmed" }, { platform: "facebook", status: "confirmed", origin: "declared" }]);
+    await prisma.onboardingDraft.update({ where: { id: draft.id }, data: { analysis: { ...analysis, status: "done", finishedAt: new Date().toISOString() } } });
+    await expect.poll(() => preparationCalls.length).toBe(1);
+    await expect.poll(async () => (await prisma.onboardingDraft.findUniqueOrThrow({ where: { id: draft.id } })).intelligence !== null).toBe(true);
+    await seedStarterMissionPlan(page, prisma);
+    const card = page.getByRole("list", { name: "Missions proposées" }).getByRole("listitem").first();
+    await expect(card.getByText("De votre côté", { exact: true })).toBeVisible();
+    await expect(card.getByText("Le signal à observer", { exact: true })).toBeVisible();
+    await expect(card.locator("details")).not.toHaveAttribute("open");
+    for (const width of [1440, 390, 320]) {
+      await page.setViewportSize({ width, height: 900 });
+      expect(await noHorizontalScroll(page)).toBe(true);
+      expect((await card.innerText()).length).toBeLessThan(1300);
+      const action = card.locator("dd").first();
+      expect(await action.evaluate((element) => parseFloat(getComputedStyle(element).fontSize))).toBeGreaterThanOrEqual(16);
+      await page.screenshot({ path: testInfo.outputPath(`missions-${width}.png`), fullPage: true });
+    }
+    await card.getByText("Pourquoi ce test et comment le mener", { exact: true }).click();
+    await expect(card.getByText("Mesurer simplement", { exact: true })).toBeVisible();
+    await page.reload();
+    await expect(card).toBeVisible();
+    expect(preparationCalls).toHaveLength(1);
   } finally {
     await prisma.onboardingDraft.deleteMany({ where: { id: draft.id } });
     await prisma.$disconnect();
@@ -2879,25 +3085,20 @@ test("GH-279: five anonymous steps, back and reload keep the answers, and the ac
     await expect(page.getByRole("navigation", { name: "Étapes du parcours" }).getByRole("listitem")).toHaveCount(5);
     expect(await noHorizontalScroll(page)).toBe(true);
 
-    // Site invalide : rien n'est enregistré, le message est sous le champ et annoncé.
-    await page.getByLabel("Votre prénom").fill("Claire");
+    await expect(page.getByRole("textbox")).toHaveCount(2);
     await page.getByLabel("Le nom de votre entreprise").fill("Atelier Lumen");
     await page.getByLabel("Sa localisation").fill("Lyon");
+    await page.getByLabel("Sa localisation").press("Enter");
+    const confirmation = page.getByRole("dialog", { name: "Est-ce bien votre entreprise ?" });
+    await expect(confirmation).toBeVisible();
+    await expect(page.getByLabel("Votre site (facultatif)")).toBeVisible({ timeout: 30_000 });
     await page.getByLabel("Votre site (facultatif)").fill("ftp://x");
-    await page.getByRole("button", { name: "Découvrir mon entreprise" }).click();
-    await expect(page.locator("main").getByRole("alert")).toHaveText("Utilisez une adresse commençant par https:// ou http://.");
+    await page.getByRole("button", { name: "Actualiser mes sources" }).click();
+    await expect(confirmation.getByRole("alert")).toHaveText("Utilisez une adresse commençant par https:// ou http://.");
     await expect(page.getByLabel("Votre site (facultatif)")).toHaveAttribute("aria-invalid", "true");
-    expect((await page.context().cookies()).some((cookie) => cookie.name === "pepito_draft")).toBe(false);
-
-    // Clavier : le site corrigé, la découverte se lance au clavier ; un site illisible ne bloque pas la suite (#280).
     await page.getByLabel("Votre site (facultatif)").fill("https://atelier-lumen.invalid");
-    await page.getByLabel("Votre site (facultatif)").press("Enter");
-    const seeFindings = page.getByRole("button", { name: "Voir mes premiers constats" });
-    await expect(seeFindings).toBeFocused({ timeout: 30000 });
-    await expect(page.getByRole("region", { name: "Ce que Paul lit" }).getByRole("listitem").first()).toContainText("Non disponible (site illisible)");
-    await page.keyboard.press("Enter");
-    await expect(stepHeading(page, "Votre présence. Votre activité.")).toBeFocused();
-    await expect(page.getByText("2 sur 5", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Actualiser mes sources" }).click();
+    await expect(page.getByRole("button", { name: "Oui, continuer vers mon objectif" })).toBeVisible({ timeout: 30_000 });
     const draftCookie = (await page.context().cookies()).find((cookie) => cookie.name === "pepito_draft");
     expect(draftCookie).toMatchObject({ httpOnly: true, sameSite: "Lax" });
     expect(draftCookie!.expires * 1000 - Date.now()).toBeGreaterThan(23 * 3_600_000);
@@ -2906,15 +3107,14 @@ test("GH-279: five anonymous steps, back and reload keep the answers, and the ac
     // Saut d'étape : l'étape 5 renvoie à l'étape courante.
     await page.goto(`${baseURL}/bienvenue/compte`);
     await expect(page).toHaveURL(`${baseURL}/bienvenue`);
-    await expect(stepHeading(page, "Votre présence. Votre activité.")).toBeVisible();
+    await expect(confirmation).toBeVisible();
 
-    await page.getByRole("button", { name: "Confirmer et continuer" }).click();
-    await expect(page.locator("main").getByRole("alert").first()).toHaveText("Complétez chaque information avant de confirmer.");
+    await page.getByText("Votre activité — compléter si utile", { exact: true }).click();
     await page.getByLabel("Votre activité", { exact: true }).fill("Électricien");
     await expect(page.getByLabel("Votre zone d'intervention")).toHaveValue("Lyon");
     await page.getByLabel("Vos clients", { exact: true }).fill("Particuliers propriétaires");
     await page.getByLabel("Ce que vous proposez", { exact: true }).fill("Rénovation électrique");
-    await page.getByRole("button", { name: "Confirmer et continuer" }).click();
+    await page.getByRole("button", { name: "Oui, continuer vers mon objectif" }).click();
     await expect(stepHeading(page, "Qu'aimeriez-vous changer ?")).toBeFocused();
 
     // Rechargement : l'étape 3 est réaffichée avec ses saisies.
@@ -2943,21 +3143,22 @@ test("GH-279: five anonymous steps, back and reload keep the answers, and the ac
     await expect(understood).toBeVisible();
     await page.getByRole("button", { name: "C'est bien ça" }).click();
     await expect(page).toHaveURL(`${baseURL}/bienvenue/missions`);
-    await expect(stepHeading(page, "Un cap. Vos premières missions.")).toBeFocused();
+    await expect(stepHeading(page, "Des actions concrètes pour votre objectif.")).toBeFocused();
     await seedStarterMissionPlan(page, prisma);
     const pistes = page.getByRole("list", { name: "Missions proposées" }).getByRole("listitem");
     await expect.poll(() => pistes.count(), { timeout: 95_000 }).toBeGreaterThan(0);
     const missionCount = await pistes.count();
     expect(missionCount).toBeLessThanOrEqual(3);
-    await expect(pistes.first()).toContainText("Résultat recherché");
-    await expect(pistes.first()).toContainText("Indicateur");
-    await expect(pistes.first()).toContainText("Effort et prérequis");
+    await expect(pistes.first()).toContainText("De votre côté");
+    await expect(pistes.first()).toContainText("Le signal à observer");
+    await expect(pistes.first().locator("details")).not.toHaveAttribute("open");
     // #284 : rappel, « Ce que nous retenons », la première piste repérée, l'origine et le périmètre de chaque piste.
     await expect(page.getByText("Synthèse de l'analyse", { exact: true })).toBeVisible();
+    await page.getByText("Points à garder en tête", { exact: true }).click();
     await expect(page.getByText("Paul n'a pas pu lire votre site : ce qui suit repose sur ce que vous nous avez dit.")).toBeVisible();
     await expect(pistes.first()).toContainText("À examiner en premier");
     await expect(pistes).toContainText("Vous nous avez dit");
-    await expect(pistes).toContainText("Périmètre");
+    await expect(pistes).toContainText("Avant de commencer");
     const stepTitles = await pistes.locator("h3").allTextContents();
     expect(new Set(stepTitles).size).toBe(stepTitles.length);
     await expect(page.getByRole("button", { name: "Ça m'intéresse" })).toHaveCount(1);
@@ -2967,14 +3168,15 @@ test("GH-279: five anonymous steps, back and reload keep the answers, and the ac
     await page.getByRole("button", { name: "Retour" }).click();
     await expect(stepHeading(page, "Qu'aimeriez-vous changer ?")).toBeFocused();
     await page.getByRole("button", { name: "Retour" }).click();
-    await expect(stepHeading(page, "Votre présence. Votre activité.")).toBeFocused();
+    await expect(confirmation).toBeVisible();
     await expect(page.getByLabel("Ce que vous proposez", { exact: true })).toHaveValue("Rénovation électrique");
     await page.goto(`${baseURL}/bienvenue/missions`);
     await expect(page).toHaveURL(`${baseURL}/bienvenue`);
-    await page.getByRole("button", { name: "Confirmer et continuer" }).click();
+    await page.getByRole("button", { name: "Oui, continuer vers mon objectif" }).click();
     await expect(page.getByLabel("Votre ambition")).toHaveValue("+20 % de chiffre d'affaires en 12 mois, sans embaucher");
     await page.getByRole("button", { name: "Interpréter" }).click();
     await page.getByRole("button", { name: "C'est bien ça" }).click();
+    await expect(page).toHaveURL(`${baseURL}/bienvenue/missions`);
     await seedStarterMissionPlan(page, prisma);
     await page.getByRole("button", { name: "Ça m'intéresse" }).click({ timeout: 95_000 });
     await expect(page).toHaveURL(`${baseURL}/bienvenue/compte`);
@@ -2984,12 +3186,17 @@ test("GH-279: five anonymous steps, back and reload keep the answers, and the ac
     expect(await prisma.company.count({ where: { ownerEmail: email } })).toBe(0);
 
     // Étape 5 : deux mots de passe identiques, puis l'arrivée sur la stratégie.
+    await page.getByLabel("Votre prénom (facultatif)").fill("Claire");
     await page.getByLabel("Adresse e-mail").fill(email);
     await page.getByLabel("Mot de passe", { exact: true }).fill("mot-de-passe-valide");
     await page.getByLabel("Confirmez le mot de passe").fill("autre-mot-de-passe");
     await page.getByRole("button", { name: "Créer mon compte" }).click();
     await expect(page.locator("main").getByRole("alert")).toHaveText("Les deux mots de passe ne correspondent pas.");
     await page.getByLabel("Confirmez le mot de passe").fill("mot-de-passe-valide");
+    await page.getByLabel("Votre prénom (facultatif)").fill("<b>");
+    await page.getByRole("button", { name: "Créer mon compte" }).click();
+    await expect(page.locator("main").getByRole("alert")).toHaveText("Retirez les signes < et > de ce champ.");
+    await page.getByLabel("Votre prénom (facultatif)").fill("Claire");
     await page.getByRole("button", { name: "Créer mon compte" }).click();
     await expect(page).toHaveURL(`${baseURL}/strategie`);
     await expect(page.getByRole("heading", { name: "Bonjour Claire." })).toBeVisible();
@@ -3109,7 +3316,7 @@ test("GH-279: an expired draft starts over at step 1, and existing accounts neve
     await page.context().addCookies([{ name: "pepito_draft", value: token, url: baseURL }]);
     await page.goto(`${baseURL}/bienvenue`);
     await expect(stepHeading(page, "Votre entreprise. Notre point de départ.")).toBeVisible();
-    await expect(page.getByLabel("Votre prénom")).toHaveValue("");
+    await expect(page.getByLabel("Le nom de votre entreprise")).toHaveValue("");
 
     // Sans session, l'ancienne étape de profil mène au parcours.
     await page.context().clearCookies();
@@ -3140,7 +3347,7 @@ test("GH-279: an expired draft starts over at step 1, and existing accounts neve
   }
 });
 
-test("GH-280: « Je n'ai pas de site » reads no web page, announces the four rubrics, then opens step 2 « À renseigner par vous »", async ({ page }) => {
+test("GH-280: without a site, discovery opens confirmation without inventing missing profile fields", async ({ page }) => {
   test.setTimeout(90000);
   const prisma = journeyDatabase();
   const companyName = `Atelier Sans Site ${randomUUID().slice(0, 8)}`;
@@ -3151,22 +3358,12 @@ test("GH-280: « Je n'ai pas de site » reads no web page, announces the four ru
     await page.setExtraHTTPHeaders(testIpHeader());
     await page.goto(`${baseURL}/bienvenue`);
     await expect(page.getByText("Aucun mot de passe ni accès privé nécessaire.", { exact: false })).toBeVisible();
-    await page.getByLabel("Votre prénom").fill("Claire");
     await page.getByLabel("Le nom de votre entreprise").fill(companyName);
     await page.getByLabel("Sa localisation").fill("Lyon");
-    await page.getByLabel("Votre site (facultatif)").fill("https://atelier-sans-site.invalid");
-    await page.getByRole("button", { name: "Je n'ai pas de site" }).click();
-    const rubrics = page.getByRole("region", { name: "Ce que Paul lit" });
-    await expect(rubrics.getByRole("list")).toHaveAttribute("aria-live", "polite");
-    await expect(page.getByRole("button", { name: "Voir mes premiers constats" })).toBeFocused({ timeout: 30000 });
+    await page.getByRole("button", { name: "Découvrir mon entreprise" }).click();
+    await expect(page.getByRole("dialog", { name: "Est-ce bien votre entreprise ?" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Oui, continuer vers mon objectif" })).toBeVisible({ timeout: 30000 });
     await expect(page.getByLabel("Votre site (facultatif)")).toHaveValue("");
-    const items = rubrics.getByRole("listitem");
-    await expect(items).toHaveCount(4);
-    await expect(items.nth(0)).toHaveText(/Site et offres\s*Non disponible \(pas de site\)/);
-    await expect(items.nth(1)).toContainText("Informations publiques");
-    await expect(items.nth(3)).toHaveText(/Identité visuelle\s*Non disponible \(pas de site\)/);
-    // Un seul bouton principal : « Découvrir » passe en secondaire une fois les constats prêts.
-    await expect(page.getByRole("button", { name: "Découvrir mon entreprise" })).not.toHaveClass(/bg-\[var\(--bd-brand\)\]/);
     expect(await noHorizontalScroll(page)).toBe(true);
 
     // Le brouillon garde l'état des rubriques et le coût ; aucune ligne liée à une entreprise n'est écrite.
@@ -3176,13 +3373,14 @@ test("GH-280: « Je n'ai pas de site » reads no web page, announces the four ru
     expect(draft.analysis).toMatchObject({ status: "done", input: { companyName, website: "" }, rubrics: { site: { status: "unavailable", reason: "no_site" }, identity: { status: "unavailable", reason: "no_site" } }, cost: { usd: 0 } });
     expect({ companies: await prisma.company.count(), usage: await prisma.usageEvent.count(), reads: await prisma.sourceRead.count(), findings: await prisma.auditFinding.count() }).toEqual(before);
 
-    await page.getByRole("button", { name: "Voir mes premiers constats" }).click();
-    await expect(stepHeading(page, "Votre présence. Votre activité.")).toBeFocused();
+    await page.getByText("Votre activité — compléter si utile", { exact: true }).click();
     await expect(page.getByText("À renseigner par vous", { exact: true })).toHaveCount(3);
     await expect(page.getByLabel("Votre zone d'intervention")).toHaveValue("Lyon");
     await expect(page.getByLabel("Votre zone d'intervention")).toHaveAccessibleDescription("À confirmer");
     expect((await prisma.onboardingDraft.findUniqueOrThrow({ where: { tokenHash } })).profileConfirmed).toBe(false);
     expect(await noHorizontalScroll(page)).toBe(true);
+    await page.getByRole("button", { name: "Oui, continuer vers mon objectif" }).click();
+    await expect(stepHeading(page, "Qu'aimeriez-vous changer ?")).toBeVisible();
   } finally {
     if (tokenHash) await prisma.onboardingDraft.deleteMany({ where: { tokenHash } });
     await prisma.$disconnect();
@@ -3212,8 +3410,8 @@ test("GH-280: step 2 shows Paul's hypotheses and what was observed, with its sou
     await page.context().addCookies([{ name: "pepito_draft", value: draft.token, url: baseURL }]);
     await page.setViewportSize({ width: 360, height: 800 });
     await page.goto(`${baseURL}/bienvenue`);
-    await expect(stepHeading(page, "Votre présence. Votre activité.")).toBeVisible();
-    await expect(page.getByText("Vérifiez les liens et l'activité de Atelier Lumen.", { exact: true })).toBeVisible();
+    await expect(page.getByRole("dialog", { name: "Est-ce bien votre entreprise ?" })).toBeVisible();
+    await page.getByText("Votre activité — compléter si utile", { exact: true }).click();
     await expect(page.getByText("À confirmer", { exact: true })).toHaveCount(3);
     await expect(page.getByText("À renseigner par vous", { exact: true })).toHaveCount(1);
     await expect(page.getByLabel("Votre activité", { exact: true })).toHaveValue("Électricien");
@@ -3251,7 +3449,8 @@ test("GH-281: step 2 says where each field comes from, and changing company keep
     await page.context().addCookies([{ name: "pepito_draft", value: draft.token, url: baseURL }]);
     await page.setViewportSize({ width: 360, height: 800 });
     await page.goto(`${baseURL}/bienvenue`);
-    await expect(stepHeading(page, "Votre présence. Votre activité.")).toBeVisible();
+    await expect(page.getByRole("dialog", { name: "Est-ce bien votre entreprise ?" })).toBeVisible();
+    await page.getByText("Votre activité — compléter si utile", { exact: true }).click();
     // Les offres lues sur le site, les hypothèses du modèle à confirmer ; la zone reprend la localisation, à confirmer aussi.
     await expect(page.getByText("Lu sur le site", { exact: true })).toHaveCount(1);
     await expect(page.getByText("À confirmer", { exact: true })).toHaveCount(3);
@@ -3265,21 +3464,21 @@ test("GH-281: step 2 says where each field comes from, and changing company keep
     await expect(page.getByLabel("Votre zone d'intervention")).toHaveAccessibleDescription("");
     await page.getByLabel("Votre zone d'intervention").fill("Lyon");
     await expect(page.getByLabel("Votre zone d'intervention")).toHaveAccessibleDescription("À confirmer");
-    await expect(page.getByRole("button", { name: "Confirmer et continuer" })).toHaveClass(/bg-\[var\(--bd-brand\)\]/);
+    await expect(page.getByRole("button", { name: "Oui, continuer vers mon objectif" })).toHaveClass(/bg-\[var\(--bd-brand\)\]/);
     await expect(page.getByRole("button", { name: "Changer d'entreprise" })).not.toHaveClass(/bg-\[var\(--bd-brand\)\]/);
     expect(await noHorizontalScroll(page)).toBe(true);
 
     await page.getByRole("button", { name: "Changer d'entreprise" }).click();
     await expect(stepHeading(page, "Votre entreprise. Notre point de départ.")).toBeFocused();
-    await expect(page.getByLabel("Votre prénom")).toHaveValue("Claire");
     await expect(page.getByLabel("Le nom de votre entreprise")).toHaveValue("Atelier Lumen");
     await expect(page.getByLabel("Sa localisation")).toHaveValue("Lyon");
-    await expect(page.getByLabel("Votre site (facultatif)")).toHaveValue(website);
+    await expect(page.getByLabel("Votre site (facultatif)")).toHaveCount(0);
     expect(await prisma.onboardingDraft.findUniqueOrThrow({ where: { id: draft.id } })).toMatchObject({ step: 1, analysis: { runId: "run-corriger" } });
 
     // Rien n'a changé : retour à l'étape 2 avec la même analyse, sans en relancer une.
-    await page.getByRole("button", { name: "Voir mes premiers constats" }).click();
-    await expect(stepHeading(page, "Votre présence. Votre activité.")).toBeFocused();
+    await page.getByRole("button", { name: "Découvrir mon entreprise" }).click();
+    await expect(page.getByRole("dialog", { name: "Est-ce bien votre entreprise ?" })).toBeVisible();
+    await page.getByText("Votre activité — compléter si utile", { exact: true }).click();
     await expect(page.getByText("Lu sur le site", { exact: true })).toHaveCount(1);
     expect(await prisma.onboardingDraft.findUniqueOrThrow({ where: { id: draft.id } })).toMatchObject({ step: 2, analysis: { runId: "run-corriger" } });
   } finally {

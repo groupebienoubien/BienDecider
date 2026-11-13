@@ -87,6 +87,8 @@ export type DraftAnalysis = {
   input: AnalysisInput;
   rubrics: Record<RubricKey, Rubric>;
   findings: AnalysisFindings;
+  /** Les liens sont disponibles ; l'interprétation peut encore tourner. */
+  sourcesReady?: boolean;
   /** `model` : modèle réellement appelé, repris dans le `UsageEvent` du compte à l'inscription (#281) ; absent d'un brouillon ancien. */
   cost: { usd: number; inputTokens: number; outputTokens: number; model?: string };
   limit?: AnalysisLimit;
@@ -209,6 +211,13 @@ export function emptyFindings(): AnalysisFindings {
   return { trade: null, servingArea: null, targetClients: null, offers: null, tone: null, contacts: [], palette: null, logo: null, google: null, googlePlaceCandidates: [], pages: [] };
 }
 
+/** Garde les choix connus pendant une relecture, y compris si le quota empêche de nouveaux résultats. */
+export function googlePlaceCandidateIds(analysis: DraftAnalysis | null): string[] {
+  return analysis?.findings.googlePlaceCandidates?.length
+    ? analysis.findings.googlePlaceCandidates
+    : analysis?.input.googlePlaceCandidateIds ?? [];
+}
+
 export function newAnalysis(input: AnalysisInput, runId: string, now = new Date(), status: DraftAnalysis["status"] = "running", limit?: AnalysisLimit): DraftAnalysis {
   const pending: Rubric = { status: "pending" };
   const rubrics: Record<RubricKey, Rubric> = status === "limited"
@@ -268,6 +277,10 @@ export function analysisFinished(analysis: DraftAnalysis | null, now = new Date(
   return analysis !== null && !analysisRunning(analysis, now);
 }
 
+export function analysisSourcesReady(analysis: DraftAnalysis | null, now = new Date()): boolean {
+  return analysis?.sourcesReady === true || analysisFinished(analysis, now);
+}
+
 /** Analyse telle qu'affichée : une analyse interrompue passe ses rubriques encore « En cours » à « Non disponible ». */
 export function effectiveAnalysis(analysis: DraftAnalysis | null, now = new Date()): DraftAnalysis | null {
   if (!analysis || analysis.status !== "running" || analysisRunning(analysis, now)) return analysis;
@@ -312,6 +325,7 @@ const analysisSchema = z.object({
   status: z.enum(["running", "done", "limited"]),
   startedAt: z.string().max(40),
   finishedAt: z.string().max(40).nullable(),
+  sourcesReady: z.boolean().optional(),
   input: z.object({
     companyName: z.string(), location: z.string(), website: z.string(),
     googlePlaceId: z.string().max(256).nullable().optional(),
@@ -369,6 +383,7 @@ export function analysisView(analysis: DraftAnalysis | null, now = new Date()) {
   return {
     status: shown.status,
     finished: analysisFinished(shown, now),
+    sourcesReady: analysisSourcesReady(shown, now),
     rubrics: RUBRIC_KEYS.map((key) => ({ key, name: RUBRIC_NAMES[key], status: shown.rubrics[key].status, label: rubricLabel(shown.rubrics[key]) })),
     notice: analysisNotice(shown, now),
   };

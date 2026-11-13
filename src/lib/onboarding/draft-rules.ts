@@ -1,5 +1,5 @@
 import { MISSION_TEMPLATES, availableTemplates, enabledChannels, type TemplateKey } from "@/lib/missions/templates";
-import { ANALYSIS_MESSAGES, RUBRIC_KEYS, RUBRIC_NAMES, analysisFinished, analysisRunning, readAnalysis, type DraftAnalysis, type Provenance } from "@/lib/onboarding/analysis-rules";
+import { ANALYSIS_MESSAGES, RUBRIC_KEYS, RUBRIC_NAMES, analysisSourcesReady, analysisRunning, googlePlaceCandidateIds, readAnalysis, type DraftAnalysis, type Provenance } from "@/lib/onboarding/analysis-rules";
 import { EMPTY_TERMS, REINTERPRET_MESSAGE, capLabel, readAmbitionTerms, type AmbitionTerms } from "@/lib/ambition-rules";
 import { INTELLIGENCE_MESSAGES, intelligenceRunning, readIntelligence, sameIntelligenceInput, type CompetitorDecision, type CompetitorFact, type DraftIntelligence, type IntelligenceInput, type OpportunityFact } from "@/lib/onboarding/intelligence-rules";
 import type { ResponsibleAgent } from "@/lib/missions/rules";
@@ -7,7 +7,7 @@ import { createMissionDecisionPlan, type MissionDecisionPlan, type MissionEviden
 import { checkMissionProposal } from "@/lib/onboarding/mission-planning-rules";
 import { ambitionTargetsRequests, evaluateMissionObjective, hasNoAdditionalTime, hasNoAvailableCapacity, hasSatisfactoryBookingPage, needsWeekdayClarification } from "@/lib/missions/decision-rules";
 import { safeSourceUrl } from "@/lib/findings/certainty";
-import { decideSocialSources, readSocialSourceDecisions, type SocialSourceDecision } from "@/lib/onboarding/public-sources";
+import { declaredSocialSources, decideSocialSources, readSocialSourceDecisions, type SocialSourceDecision } from "@/lib/onboarding/public-sources";
 import { isPlaceId } from "@/lib/google-places";
 
 /** Vérifie le jeton d'une interprétation (`verifyInterpretation` côté serveur) ; injecté, car ce module est aussi lu par le client. */
@@ -17,7 +17,7 @@ const refuseAll: InterpretationVerifier = () => false;
 /**
  * Règles pures du parcours d'entrée en cinq étapes (#279, spécification §1.1, §1.2, §11, §12, §14).
  * Le serveur les applique à chaque transition ; l'interface les reflète. Depuis #280, « Découvrir » lance une
- * analyse publique (§1.3) gardée dans le brouillon ; « Voir les constats » ouvre l'étape 2 une fois l'analyse terminée.
+ * analyse publique gardée dans le brouillon ; la confirmation des liens précède l'objectif, sans attendre le modèle.
  */
 
 export const DRAFT_STEPS = [1, 2, 3, 4, 5] as const;
@@ -42,7 +42,7 @@ export type RetainedCost = { usd: number; inputTokens: number; outputTokens: num
  * `retained` (#284) : « Ce que nous retenons », 2 ou 3 phrases écrites au clic « C'est bien ça », effacées par un retour
  * avant l'étape 4 ; `retainedCost` : coût cumulé de ces rédactions, repris au compte à l'inscription.
  */
-export type DraftAmbition = { text: string; terms: AmbitionTerms; retained?: string[]; retainedCost?: RetainedCost; planningVersion?: 1 };
+export type DraftAmbition = { text: string; terms: AmbitionTerms; retained?: string[]; retainedCost?: RetainedCost; planningVersion?: 1 | 2 };
 
 export type DraftState = {
   step: DraftStep;
@@ -64,16 +64,16 @@ export type GooglePlaceChoice = { status: "confirmed"; placeId: string } | { sta
 
 export const STEP_TITLES: Record<DraftStep, string> = {
   1: "Votre entreprise. Notre point de départ.",
-  2: "Votre présence. Votre activité.",
+  2: "Vérifions votre entreprise.",
   3: "Qu'aimeriez-vous changer ?",
-  4: "Un cap. Vos premières missions.",
+  4: "Des actions concrètes pour votre objectif.",
   5: "Retrouvez votre stratégie.",
 };
 
 export const STEP_LABELS: Record<DraftStep, { name: string; subtitle: string }> = {
-  1: { name: "Découverte", subtitle: "Votre point de départ" },
-  2: { name: "Confirmation", subtitle: "Sources et activité" },
-  3: { name: "Ambition", subtitle: "Votre cap et vos limites" },
+  1: { name: "Votre entreprise", subtitle: "Un nom et une ville" },
+  2: { name: "Découverte", subtitle: "Confirmer vos liens" },
+  3: { name: "Votre objectif", subtitle: "Ce que vous voulez changer" },
   4: { name: "Mes premières missions", subtitle: "Du concret à décider" },
   5: { name: "Votre compte", subtitle: "Retrouver votre stratégie" },
 };
@@ -151,7 +151,7 @@ export type TransitionResult =
   | { ok: true; state: DraftState }
   | { ok: false; kind: "invalid"; code: OnboardingCode; error: string; errors: FieldErrors }
   | { ok: false; kind: "wrong_step"; step: DraftStep }
-  /** Une analyse est en cours : pas de second lancement, pas d'étape 2 avant sa fin (409). */
+  /** Une lecture empêche un changement de sources ou une préparation prématurée (409). */
   | { ok: false; kind: "busy"; error: string };
 
 const text = (value: unknown) => (typeof value === "string" ? value.trim() : "");
@@ -212,11 +212,11 @@ const invalid = (failure: { code: OnboardingCode; error: string; errors: FieldEr
 const invalidCode = (code: keyof typeof ONBOARDING_MESSAGES, field?: string): TransitionResult =>
   invalid({ code, error: ONBOARDING_MESSAGES[code], errors: field ? { [field]: ONBOARDING_MESSAGES[code] } : {} });
 
-/** Étape 1 : prénom, entreprise, localisation, site facultatif (M-01, M-03, M-04). */
+/** Entreprise et localisation obligatoires ; les anciens brouillons gardent prénom et site. */
 export function checkDiscovery(input: Record<string, unknown>): { ok: true; values: Pick<DraftProfile, "firstName" | "companyName" | "location" | "website"> } | { ok: false; code: OnboardingCode; error: string; errors: FieldErrors } {
   const values = { firstName: text(input.firstName), companyName: text(input.companyName), location: text(input.location), website: text(input.website) };
   const failure = checkFields([
-    { field: "firstName", value: values.firstName, max: LIMITS.firstName, missing: "M-01" },
+    { field: "firstName", value: values.firstName, max: LIMITS.firstName, missing: "M-01", optional: true },
     { field: "companyName", value: values.companyName, max: LIMITS.companyName, missing: "M-03-company" },
     { field: "location", value: values.location, max: LIMITS.location, missing: "M-03-location" },
     { field: "website", value: values.website, max: LIMITS.website, missing: "M-04", optional: true },
@@ -228,14 +228,14 @@ function discoveryDone(profile: DraftProfile): boolean {
   return checkDiscovery(profile).ok;
 }
 
-/** Étape 2 : activité, zone, clients et offres (M-05). */
+/** Les informations inconnues restent vides ; les valeurs renseignées sont contrôlées. */
 export function checkProfile(input: Record<string, unknown>): { ok: true; values: Pick<DraftProfile, "trade" | "servingArea" | "targetClients" | "offers"> } | { ok: false; code: OnboardingCode; error: string; errors: FieldErrors } {
   const values = { trade: text(input.trade), servingArea: text(input.servingArea), targetClients: text(input.targetClients), offers: text(input.offers) };
   const failure = checkFields([
-    { field: "trade", value: values.trade, max: LIMITS.trade, missing: "M-05" },
-    { field: "servingArea", value: values.servingArea, max: LIMITS.servingArea, missing: "M-05" },
-    { field: "targetClients", value: values.targetClients, max: LIMITS.targetClients, missing: "M-05" },
-    { field: "offers", value: values.offers, max: LIMITS.offers, missing: "M-05" },
+    { field: "trade", value: values.trade, max: LIMITS.trade, missing: "M-05", optional: true },
+    { field: "servingArea", value: values.servingArea, max: LIMITS.servingArea, missing: "M-05", optional: true },
+    { field: "targetClients", value: values.targetClients, max: LIMITS.targetClients, missing: "M-05", optional: true },
+    { field: "offers", value: values.offers, max: LIMITS.offers, missing: "M-05", optional: true },
   ]);
   return failure ? { ok: false, ...failure } : { ok: true, values };
 }
@@ -254,15 +254,16 @@ export function checkAmbition(value: unknown): { ok: true; ambition: string } | 
 export type DraftAction =
   | { action: "discover"; firstName?: unknown; companyName?: unknown; location?: unknown; website?: unknown }
   | { action: "see_findings" }
-  | { action: "confirm_profile"; trade?: unknown; servingArea?: unknown; targetClients?: unknown; offers?: unknown; website?: unknown; websiteRejected?: unknown; googlePlaceChoice?: unknown; socialSourceDecisions?: unknown }
+  | { action: "confirm_profile" | "update_sources"; trade?: unknown; servingArea?: unknown; targetClients?: unknown; offers?: unknown; website?: unknown; websiteRejected?: unknown; googlePlaceChoice?: unknown; socialSourceDecisions?: unknown; declaredSocialProfiles?: unknown }
   | { action: "interpret_ambition"; ambition?: unknown }
   | { action: "confirm_ambition"; ambition?: unknown; terms?: unknown; token?: unknown }
+  | { action: "prepare_missions" }
   | { action: "competitor_decision"; name?: unknown; source?: unknown; decision?: unknown }
   | { action: "interested" }
   | { action: "back"; step: unknown; website?: unknown; websiteRejected?: unknown }
   | { action: "goto"; step: unknown };
 
-export const DRAFT_ACTIONS = ["discover", "see_findings", "confirm_profile", "interpret_ambition", "confirm_ambition", "competitor_decision", "interested", "back", "goto"] as const;
+export const DRAFT_ACTIONS = ["discover", "see_findings", "confirm_profile", "update_sources", "interpret_ambition", "confirm_ambition", "prepare_missions", "competitor_decision", "interested", "back", "goto"] as const;
 
 /** Demande lisible, ou null (400). */
 export function parseDraftAction(body: Record<string, unknown>): DraftAction | null {
@@ -318,7 +319,7 @@ export function analysisMatchesProfile(state: DraftState): boolean {
 }
 
 function discoveredWebsite(analysis: DraftAnalysis | null): string {
-  const url = analysis?.status === "done" && analysis.rubrics.site.status === "read" ? analysis.findings.pages[0]?.url : "";
+  const url = analysis && (analysis.status === "done" || analysis.sourcesReady === true) && analysis.rubrics.site.status === "read" ? analysis.findings.pages[0]?.url : "";
   return url && url.length <= LIMITS.website && isValidWebsite(url) ? url : "";
 }
 
@@ -365,6 +366,7 @@ export function intelligenceInputFor(state: DraftState): IntelligenceInput {
     targetClients: profile.targetClients, ambitionText: state.ambition?.text ?? "",
     ...(excludedCompetitors.length ? { excludedCompetitors } : {}),
     planningContext: {
+      ...(state.ambition?.planningVersion === 2 ? { approachVersion: 2 as const } : {}),
       analysisRunId: analysis?.runId ?? null, evidence: evidence.slice(0, 30),
       limitations: [
         "Les publications sociales n'ont pas été lues ; les liens de profils ne prouvent ni leur activité ni leur performance.",
@@ -385,16 +387,17 @@ export function matchingIntelligence(state: DraftState): DraftIntelligence | nul
   const stored = { ...state.intelligence.input, excludedCompetitors: undefined };
   const current = { ...intelligenceInputFor(state), excludedCompetitors: undefined };
   // Les anciens brouillons ne possèdent pas encore de dossier de planification ; leur prochaine recherche le crée.
-  if (!stored.planningContext) current.planningContext = undefined;
+  if (!stored.planningContext && state.ambition?.planningVersion !== 2) current.planningContext = undefined;
   return sameIntelligenceInput(stored, current) ? state.intelligence : null;
 }
 
 /** L'étape n est-elle ouverte depuis l'étape n - 1 (étape précédente confirmée) ? */
 function previousConfirmed(state: DraftState, step: DraftStep, now: Date): boolean {
   if (step === 1) return true;
-  if (step === 2) return discoveryDone(state.profile) && analysisFinished(state.analysis, now) && analysisMatchesProfile(state);
+  if (step === 2) return discoveryDone(state.profile);
   if (step === 3) return state.profileConfirmed;
-  if (step === 5 && intelligenceRunning(state.intelligence, now)) return false;
+  if (step === 5 && (analysisRunning(state.analysis, now) || intelligenceRunning(state.intelligence, now))) return false;
+  if (step === 5 && state.ambition?.planningVersion && !matchingIntelligence(state)) return false;
   return state.diagnosticReady;
 }
 
@@ -407,17 +410,17 @@ export function applyDraftAction(state: DraftState, request: DraftAction, now = 
     case "discover": {
       if (state.step !== 1) return { ok: false, kind: "wrong_step", step: state.step };
       if (analysisRunning(state.analysis, now)) return { ok: false, kind: "busy", error: ANALYSIS_MESSAGES.busy };
-      const checked = checkDiscovery(request);
+      const checked = checkDiscovery({ ...state.profile, ...request });
       if (!checked.ok) return invalid(checked);
       const changed = (Object.keys(checked.values) as (keyof typeof checked.values)[]).some((key) => state.profile[key] !== checked.values[key]);
       const identityChanged = state.profile.companyName !== checked.values.companyName || state.profile.location !== checked.values.location;
-      // L'étape 1 reste affichée le temps de l'analyse ; un profil modifié se reconfirme à l'étape 2.
+      // La confirmation s'ouvre aussitôt ; elle suit la découverte des liens sans attendre le modèle.
       return {
         ok: true,
         state: {
           ...state,
-          step: 1,
-          profile: { ...state.profile, ...checked.values },
+          step: 2,
+          profile: { ...(identityChanged ? emptyProfile() : state.profile), ...checked.values, ...(identityChanged && request.website === undefined ? { website: "" } : {}) },
           profileConfirmed: changed ? false : state.profileConfirmed,
           ...(identityChanged ? { googlePlaceChoice: null, socialSourceDecisions: [], competitorDecisions: [] } : {}),
           ...(identityChanged || state.profile.website !== checked.values.website
@@ -427,18 +430,19 @@ export function applyDraftAction(state: DraftState, request: DraftAction, now = 
       };
     }
     case "see_findings": {
-      if (state.step !== 1) return { ok: false, kind: "wrong_step", step: state.step };
+      if (state.step !== 1 && state.step !== 2) return { ok: false, kind: "wrong_step", step: state.step };
       const checked = checkDiscovery(state.profile);
       if (!checked.ok) return invalid(checked);
-      if (analysisRunning(state.analysis, now)) return { ok: false, kind: "busy", error: ANALYSIS_MESSAGES.busy };
+      if (analysisRunning(state.analysis, now) && !analysisSourcesReady(state.analysis, now)) return { ok: false, kind: "busy", error: ANALYSIS_MESSAGES.busy };
       // L'analyse doit porter sur l'entreprise saisie : sinon, il faut relancer la découverte.
       if (!analysisMatchesProfile(state)) return invalid({ code: "analysis", error: ANALYSIS_MESSAGES.missing, errors: {} });
       return { ok: true, state: { ...state, step: 2 } };
     }
+    case "update_sources":
     case "confirm_profile": {
       if (state.step !== 2) return { ok: false, kind: "wrong_step", step: state.step };
-      if (analysisRunning(state.analysis, now)) return { ok: false, kind: "busy", error: ANALYSIS_MESSAGES.busy };
-      const checked = checkProfile(request);
+      if (analysisRunning(state.analysis, now) && !analysisSourcesReady(state.analysis, now)) return { ok: false, kind: "busy", error: ANALYSIS_MESSAGES.busy };
+      const checked = checkProfile(request.action === "update_sources" ? state.profile : request);
       if (!checked.ok) return invalid(checked);
       const website = request.website === undefined ? prefillWebsite(state) : text(request.website);
       const failure = checkFields([{ field: "website", value: website, max: LIMITS.website, missing: "M-04", optional: true }]);
@@ -449,7 +453,7 @@ export function applyDraftAction(state: DraftState, request: DraftAction, now = 
       if (request.websiteRejected === true && website) {
         return invalid({ code: "M-05", error: "Un site renseigné ne peut pas être écarté.", errors: {} });
       }
-      const candidateIds = state.analysis?.findings.googlePlaceCandidates ?? [];
+      const candidateIds = googlePlaceCandidateIds(state.analysis);
       const googlePlaceChoice = request.googlePlaceChoice === undefined
         ? state.googlePlaceChoice
         : readGooglePlaceChoice(request.googlePlaceChoice);
@@ -471,14 +475,19 @@ export function applyDraftAction(state: DraftState, request: DraftAction, now = 
       const websiteRejected = typeof request.websiteRejected === "boolean" ? request.websiteRejected
         : state.websiteRejected || (request.website !== undefined && !website && Boolean(prefillWebsite(state)));
       const sourceChanged = website !== prefillWebsite(state) || websiteRejected !== state.websiteRejected;
+      const declaredProfiles = request.action === "update_sources" || request.declaredSocialProfiles === undefined
+        ? state.socialSourceDecisions.filter((item) => item.origin === "declared")
+        : declaredSocialSources(request.declaredSocialProfiles);
+      if (!declaredProfiles) return invalid({ code: "M-05", error: "Indiquez une adresse de profil officiel Facebook, Instagram ou LinkedIn valide.", errors: {} });
       if (selectedPlaceId !== analyzedPlaceId || sourceChanged) {
+        if (analysisRunning(state.analysis, now)) return { ok: false, kind: "busy", error: "La lecture se termine. Patientez avant de changer les sources, puis réessayez." };
         return {
           ok: true,
           state: {
             ...state,
             step: 2,
             profile: { ...state.profile, ...checked.values, website },
-            socialSourceDecisions: [],
+            socialSourceDecisions: declaredProfiles,
             googlePlaceChoice,
             profileConfirmed: false,
             websiteRejected
@@ -486,16 +495,31 @@ export function applyDraftAction(state: DraftState, request: DraftAction, now = 
         };
       }
       if (!analysisMatchesProfile(state)) return invalid({ code: "analysis", error: ANALYSIS_MESSAGES.missing, errors: {} });
+      if (request.action === "update_sources") {
+        return {
+          ok: true,
+          state: {
+            ...state,
+            profile: { ...state.profile, ...checked.values, website },
+            googlePlaceChoice,
+            profileConfirmed: false,
+            diagnosticReady: false,
+          },
+        };
+      }
       const socialSourceDecisions = decideSocialSources(
         state.analysis?.findings.publicSources ?? [],
         request.socialSourceDecisions ?? []
       );
-      if (!socialSourceDecisions) {
+      if (!socialSourceDecisions || socialSourceDecisions.length + declaredProfiles.length > 10) {
         return invalid({
           code: "M-05",
           error: "Vérifiez ou écartez chaque lien social repéré.",
           errors: {}
         });
+      }
+      if (declaredProfiles.some((item) => socialSourceDecisions.some((candidate) => candidate.candidateUrl === item.candidateUrl))) {
+        return invalid({ code: "M-05", error: "Ce profil est déjà repéré. Confirmez-le dans les réseaux proposés plutôt que de l'ajouter à nouveau.", errors: {} });
       }
       return {
         ok: true,
@@ -503,7 +527,7 @@ export function applyDraftAction(state: DraftState, request: DraftAction, now = 
           ...state,
           step: 3,
           profile: { ...state.profile, ...checked.values, website },
-          socialSourceDecisions,
+          socialSourceDecisions: [...socialSourceDecisions, ...declaredProfiles],
           googlePlaceChoice,
           websiteRejected: typeof request.websiteRejected === "boolean" ? request.websiteRejected : state.websiteRejected,
           profileConfirmed: true
@@ -524,7 +548,13 @@ export function applyDraftAction(state: DraftState, request: DraftAction, now = 
       if (!confirmed.ok) return invalid(confirmed);
       // « Ce que nous retenons » est écrit ensuite par la route (#284) ; le coût des rédactions précédentes reste.
       const previousCost = state.ambition?.retainedCost;
-      return { ok: true, state: { ...state, step: 4, ambition: { text: checked.ambition, terms: confirmed.terms, planningVersion: 1, ...(previousCost ? { retainedCost: previousCost } : {}) }, diagnosticReady: true } };
+      return { ok: true, state: { ...state, step: 4, ambition: { text: checked.ambition, terms: confirmed.terms, planningVersion: 2, ...(previousCost ? { retainedCost: previousCost } : {}) }, diagnosticReady: true } };
+    }
+    case "prepare_missions": {
+      if (state.step !== 4) return { ok: false, kind: "wrong_step", step: state.step };
+      if (!state.profileConfirmed || !state.ambition || !state.diagnosticReady) return invalidCode("M-07");
+      if (analysisRunning(state.analysis, now)) return { ok: false, kind: "busy", error: ANALYSIS_MESSAGES.busy };
+      return { ok: true, state };
     }
     case "competitor_decision": {
       if (state.step !== 4 || !state.diagnosticReady) return { ok: false, kind: "wrong_step", step: state.step };
@@ -549,6 +579,8 @@ export function applyDraftAction(state: DraftState, request: DraftAction, now = 
     case "interested": {
       if (state.step !== 4 || !state.diagnosticReady) return state.step === 4 ? invalidCode("M-08") : { ok: false, kind: "wrong_step", step: state.step };
       if (intelligenceRunning(state.intelligence, now)) return { ok: false, kind: "busy", error: INTELLIGENCE_MESSAGES.busy };
+      if (analysisRunning(state.analysis, now)) return { ok: false, kind: "busy", error: ANALYSIS_MESSAGES.busy };
+      if (state.ambition?.planningVersion && !matchingIntelligence(state)) return invalid({ code: "intelligence", error: "Préparez vos missions avant de continuer.", errors: {} });
       return { ok: true, state: { ...state, step: 5 } };
     }
     case "back": {
@@ -613,9 +645,10 @@ export function isValidEmail(value: string): boolean {
 
 /** Le brouillon permet-il de créer le compte (M-09, M-03, M-10) ? */
 export function checkDraftForAccount(state: DraftState, now = new Date()): { ok: true } | { ok: false; code: OnboardingCode; error: string; step: DraftStep } {
-  if (!state.profile.firstName) return { ok: false, code: "M-09", error: ONBOARDING_MESSAGES["M-09"], step: 1 };
   if (!state.profile.companyName) return { ok: false, code: "M-03-company", error: ONBOARDING_MESSAGES["M-03-company"], step: 1 };
+  if (analysisRunning(state.analysis, now)) return { ok: false, code: "analysis", error: ANALYSIS_MESSAGES.busy, step: 4 };
   if (intelligenceRunning(state.intelligence, now)) return { ok: false, code: "intelligence", error: INTELLIGENCE_MESSAGES.busy, step: 4 };
+  if (state.ambition?.planningVersion && !matchingIntelligence(state)) return { ok: false, code: "intelligence", error: "Préparez vos missions avant de continuer.", step: 4 };
   if (state.step !== 5 || !state.diagnosticReady || !state.profileConfirmed) return { ok: false, code: "M-10", error: ONBOARDING_MESSAGES["M-10"], step: state.step };
   return { ok: true };
 }
@@ -810,7 +843,7 @@ export type StarterPlan = { recap: StarterRecap; retained: string[]; missions: S
  */
 export function rankStarterTemplates(state: DraftState, available: readonly TemplateKey[] = availableTemplates().map((template) => template.key)): TemplateKey[] {
   const intelligence = matchingIntelligence(state);
-  if (!intelligence?.planning && (state.ambition?.planningVersion === 1 || state.intelligence?.planning)) return [];
+  if (!intelligence?.planning && (state.ambition?.planningVersion || state.intelligence?.planning)) return [];
   if (intelligence?.planning) {
     if (intelligence.planning.status !== "done") return [];
     const checked = checkMissionProposal(intelligence.planning.proposal, intelligence, available);
@@ -1024,7 +1057,7 @@ export function starterPlan(state: DraftState, available?: readonly TemplateKey[
   const checkedPlan = planning?.status === "done" && intelligence
     ? checkMissionProposal(planning.proposal, intelligence, available)
     : null;
-  if ((planning || state.ambition?.planningVersion === 1 || state.intelligence?.planning) && (!checkedPlan || !checkedPlan.ok)) notes.push(INTELLIGENCE_MESSAGES.planningFailed);
+  if ((planning || state.ambition?.planningVersion || state.intelligence?.planning) && (!checkedPlan || !checkedPlan.ok)) notes.push(INTELLIGENCE_MESSAGES.planningFailed);
   if (checkedPlan?.ok && checkedPlan.value.notice) notes.push(checkedPlan.value.notice);
   const templates = rankStarterTemplates(state, available);
   if (templates.length === 0 && !needsWeekdayClarification(state.ambition?.text ?? "") && !hasNoAdditionalTime(state.ambition?.text ?? "") && !hasNoAvailableCapacity(state.ambition?.text ?? "")) {
@@ -1089,6 +1122,7 @@ export function readDraftState(row: { step: number; profile: unknown; ambition: 
   // « Ce que nous retenons » et son coût (#284) : illisibles, ils sont ignorés (les règles prennent le relais à l'étape 4).
   const retained = readRetained(ambitionRaw.retained);
   const retainedCost = readRetainedCost(ambitionRaw.retainedCost);
+  const planningVersion = ambitionRaw.planningVersion === 1 || ambitionRaw.planningVersion === 2 ? ambitionRaw.planningVersion : undefined;
   return {
     step: isDraftStep(row.step) ? row.step : 1,
     profile,
@@ -1098,7 +1132,7 @@ export function readDraftState(row: { step: number; profile: unknown; ambition: 
     websiteRejected: raw.websiteRejected === true,
     // Une ambition d'avant #282 (texte seul) garde des éléments vides.
     ambition: typeof ambitionRaw.text === "string"
-      ? { text: ambitionRaw.text, terms: readAmbitionTerms(ambitionRaw.terms) ?? { ...EMPTY_TERMS }, ...(retained ? { retained } : {}), ...(retainedCost ? { retainedCost } : {}), ...(ambitionRaw.planningVersion === 1 ? { planningVersion: 1 as const } : {}) }
+      ? { text: ambitionRaw.text, terms: readAmbitionTerms(ambitionRaw.terms) ?? { ...EMPTY_TERMS }, ...(retained ? { retained } : {}), ...(retainedCost ? { retainedCost } : {}), ...(planningVersion ? { planningVersion } : {}) }
       : null,
     profileConfirmed: row.profileConfirmed,
     diagnosticReady: row.diagnosticReady,

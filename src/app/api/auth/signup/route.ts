@@ -8,7 +8,7 @@ import { readSignupControl, releaseSignupSlot, reserveSignupSlot, todaySignupCou
 import { sendVerificationEmail } from "@/lib/email-verification";
 import { passwordPolicyError } from "@/lib/password-policy";
 import { SIGNUP_CLOSED_MESSAGE, SIGNUP_FULL_MESSAGE, secondsUntilNextSignupDay, signupAvailability } from "@/lib/signup-rules";
-import { ADDRESS_UNAVAILABLE_MESSAGE, ONBOARDING_MESSAGES, RECOVER_ACCOUNT_HREF, analysisMatchesProfile, checkDraftForAccount, clip, confirmedOrigin, isValidEmail, starterMarketFindings, starterPlan, stepHref, synthesisUsage } from "@/lib/onboarding/draft-rules";
+import { ADDRESS_UNAVAILABLE_MESSAGE, ONBOARDING_MESSAGES, RECOVER_ACCOUNT_HREF, analysisMatchesProfile, checkDraftForAccount, clip, confirmedOrigin, isValidEmail, profileFieldIssue, starterMarketFindings, starterPlan, stepHref, synthesisUsage } from "@/lib/onboarding/draft-rules";
 import { cleanOwnerName, type ProfileOrigins } from "@/lib/company-profile";
 import { clearDraftCookie, loadDraft } from "@/lib/onboarding/draft";
 import { recordSignupTrace } from "@/lib/onboarding/visit-trace";
@@ -72,6 +72,13 @@ export async function POST(request: NextRequest) {
   if (!draft) return NextResponse.json({ error: ONBOARDING_MESSAGES["M-10"], code: "M-10", step: 1, href: stepHref(1) }, { status: 409 });
   const ready = checkDraftForAccount(draft.state);
   if (!ready.ok) return NextResponse.json({ error: ready.error, code: ready.code, step: ready.step, href: stepHref(ready.step) }, { status: 409 });
+  if (body.firstName !== undefined) {
+    if (typeof body.firstName !== "string") return NextResponse.json({ error: "Vérifiez votre prénom.", field: "firstName" }, { status: 400 });
+    const firstName = body.firstName.trim();
+    const issue = profileFieldIssue("firstName", firstName);
+    if (issue) return NextResponse.json({ error: issue, field: "firstName" }, { status: 400 });
+    draft.state = { ...draft.state, profile: { ...draft.state.profile, firstName } };
+  }
 
   if (await findCompanyByOwnerEmail(email)) return addressUnavailable();
 

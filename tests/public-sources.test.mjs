@@ -2,12 +2,25 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   decideSocialSources,
+  declaredSocialSources,
   normalizeSocialProfileUrl,
   readSocialSourceDecisions,
   socialCandidatesFromLinks,
   socialPublicationStatuses
 } from "../src/lib/onboarding/public-sources.ts";
 import { extractLinks, pickInternalPages } from "../src/lib/onboarding/site-reader.ts";
+
+test("manually supplied profiles are validated and remain declarations after storage", () => {
+  const decisions = declaredSocialSources({ facebook: "https://facebook.com/latonnelle78", instagram: "https://instagram.com/la.tonnelle", linkedin: "" });
+  assert.equal(decisions.length, 2);
+  assert.equal(decisions[0].origin, "declared");
+  assert.equal(decisions[0].source, "");
+  assert.equal(decisions[0].readAt, "");
+  assert.deepEqual(readSocialSourceDecisions(JSON.parse(JSON.stringify(decisions))), decisions);
+  for (const input of [{ instagram: "https://facebook.com/wrong" }, { facebook: "javascript:alert(1)" }, { instagram: "https://instagram.com/p/post" }, { other: "https://example.test" }]) {
+    assert.equal(declaredSocialSources(input), null);
+  }
+});
 
 test("public social candidates keep their source and exclude shares, posts, and login pages", () => {
   const source = "https://example.test/contact";

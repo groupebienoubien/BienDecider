@@ -11,6 +11,7 @@ export function TradeCombobox({
   label = "Métier",
   invalid,
   describedBy,
+  required = true,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -19,6 +20,7 @@ export function TradeCombobox({
   label?: string;
   invalid?: boolean;
   describedBy?: string;
+  required?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const suggestions = searchTrades(value);
@@ -28,7 +30,7 @@ export function TradeCombobox({
       <label htmlFor={id} className="text-sm font-medium">{label}</label>
       <input
         id={id}
-        required
+        required={required}
         aria-invalid={invalid ? true : undefined}
         aria-describedby={describedBy}
         placeholder="Votre métier (ex: plombier, restaurant...)"

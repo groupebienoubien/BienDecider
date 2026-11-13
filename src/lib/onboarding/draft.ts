@@ -45,7 +45,7 @@ export function toJson(state: DraftState): { step: number; profile: Prisma.Input
     ambition: state.ambition === null ? undefined : {
       text: state.ambition.text,
       terms: { ...state.ambition.terms },
-      ...(state.ambition.planningVersion === 1 ? { planningVersion: 1 } : {}),
+      ...(state.ambition.planningVersion ? { planningVersion: state.ambition.planningVersion } : {}),
       // « Ce que nous retenons » et son coût (#284) ; absents, ils disparaissent de la colonne (retour avant l'étape 4).
       ...(state.ambition.retained ? { retained: [...state.ambition.retained] } : {}),
       ...(state.ambition.retainedCost ? { retainedCost: { ...state.ambition.retainedCost } } : {}),

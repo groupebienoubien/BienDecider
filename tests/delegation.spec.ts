@@ -2104,12 +2104,11 @@ const TEST_SECRET = "secret-de-test-ambition";
 const filledProfile = { firstName: "Claire", companyName: "Atelier Lumen", location: "Lyon", website: "", trade: "Électricien", servingArea: "Lyon et alentours", targetClients: "Particuliers propriétaires", offers: "Rénovation électrique" };
 
 test("GH-279: each step of the entry journey opens only once the previous one is confirmed", () => {
-  // Étape 1 : prénom, entreprise et localisation obligatoires ; site vide ou en http(s).
+  // Étape 1 : entreprise et localisation obligatoires ; les anciens champs restent validés s'ils sont fournis.
   const empty = applyDraftAction(emptyDraft(), { action: "discover", firstName: " ", companyName: "", location: "", website: "ftp://x" });
-  expect(empty).toMatchObject({ ok: false, kind: "invalid", code: "M-01", error: "Indiquez votre prénom." });
+  expect(empty).toMatchObject({ ok: false, kind: "invalid", code: "M-03-company", error: "Renseignez le nom de votre entreprise." });
   if (!empty.ok && empty.kind === "invalid") {
     expect(empty.errors).toEqual({
-      firstName: "Indiquez votre prénom.",
       companyName: "Renseignez le nom de votre entreprise.",
       location: "Indiquez la localisation de votre entreprise.",
       website: "Utilisez une adresse commençant par https:// ou http://.",
@@ -2125,8 +2124,8 @@ test("GH-279: each step of the entry journey opens only once the previous one is
   expect(checkDiscovery({ firstName: " Claire ", companyName: "Atelier", location: "Lyon", website: "" })).toEqual({ ok: true, values: { firstName: "Claire", companyName: "Atelier", location: "Lyon", website: "" } });
 
   const launched = applyDraftAction(emptyDraft(), { action: "discover", firstName: "Claire", companyName: "Atelier Lumen", location: "Lyon", website: "https://atelier-lumen.fr" });
-  // #280 : « Découvrir » reste à l'étape 1 le temps de l'analyse ; l'étape 2 s'ouvre par « Voir les constats ».
-  expect(launched).toMatchObject({ ok: true, state: { step: 1, profileConfirmed: false, profile: { firstName: "Claire", website: "https://atelier-lumen.fr" } } });
+  // La popup s'ouvre pendant la recherche des sources.
+  expect(launched).toMatchObject({ ok: true, state: { step: 2, profileConfirmed: false, profile: { firstName: "Claire", website: "https://atelier-lumen.fr" } } });
   if (!launched.ok) throw new Error("discover");
   const analysed = { ...launched.state, analysis: { ...newAnalysis({ companyName: "Atelier Lumen", location: "Lyon", website: "https://atelier-lumen.fr" }, "run-1"), status: "done" as const } };
   const discovered = applyDraftAction(analysed, { action: "see_findings" });
@@ -2134,7 +2133,7 @@ test("GH-279: each step of the entry journey opens only once the previous one is
   if (!discovered.ok) throw new Error("see_findings");
 
   // Étape 2 : activité, zone, clients et offres (M-05) ; une autre action renvoie à l'étape courante.
-  expect(applyDraftAction(discovered.state, { action: "confirm_profile", trade: "Électricien", servingArea: "", targetClients: "x", offers: "y" })).toMatchObject({ ok: false, code: "M-05", errors: { servingArea: "Complétez chaque information avant de confirmer." } });
+  expect(applyDraftAction(discovered.state, { action: "confirm_profile", trade: "Électricien", servingArea: "", targetClients: "x", offers: "y" })).toMatchObject({ ok: true, state: { profile: { servingArea: "" } } });
   expect(applyDraftAction(discovered.state, { action: "confirm_ambition", ambition: "Plus de chantiers cette année" })).toEqual({ ok: false, kind: "wrong_step", step: 2 });
   expect(applyDraftAction(discovered.state, { action: "interested" })).toEqual({ ok: false, kind: "wrong_step", step: 2 });
   expect(applyDraftAction(discovered.state, { action: "goto", step: 3 })).toEqual({ ok: false, kind: "wrong_step", step: 2 });
@@ -2154,6 +2153,8 @@ test("GH-279: each step of the entry journey opens only once the previous one is
   const ambitious = applyDraftAction(confirmed.state, { action: "confirm_ambition", ambition: "  +20 % de chiffre d'affaires en 12 mois  ", terms: read.terms, token }, new Date(), verify);
   expect(ambitious).toMatchObject({ ok: true, state: { step: 4, diagnosticReady: true, ambition: { text: "+20 % de chiffre d'affaires en 12 mois", terms: { gainPercent: 20, horizonMonths: 12 } } } });
   if (!ambitious.ok) throw new Error("confirm_ambition");
+  expect(applyDraftAction(ambitious.state, { action: "interested" })).toMatchObject({ ok: false, code: "intelligence" });
+  ambitious.state.intelligence = { ...newIntelligence(intelligenceInputFor(ambitious.state), "test-ready"), status: "failed", finishedAt: new Date().toISOString() };
 
   // Étape 4 : « Ça m'intéresse » exige le diagnostic prêt (M-08).
   expect(applyDraftAction({ ...ambitious.state, diagnosticReady: false }, { action: "interested" })).toMatchObject({ ok: false, code: "M-08" });
@@ -2165,7 +2166,7 @@ test("GH-279: each step of the entry journey opens only once the previous one is
   expect(applyDraftAction(ambitious.state, { action: "confirm_ambition", ambition: "Plus de chantiers cette année" })).toEqual({ ok: false, kind: "wrong_step", step: 4 });
   expect(applyDraftAction(interested.state, { action: "confirm_ambition", ambition: "Plus de chantiers cette année" })).toEqual({ ok: false, kind: "wrong_step", step: 5 });
   expect(checkDraftForAccount(ambitious.state)).toMatchObject({ ok: false, code: "M-10", step: 4 });
-  expect(checkDraftForAccount({ ...interested.state, profile: { ...interested.state.profile, firstName: "" } })).toMatchObject({ ok: false, code: "M-09" });
+  expect(checkDraftForAccount({ ...interested.state, profile: { ...interested.state.profile, firstName: "" } })).toEqual({ ok: true });
 
   // Revenir avant l'ambition : le diagnostic n'est plus prêt, les saisies restent.
   const back = applyDraftAction(interested.state, { action: "back", step: 2 });
@@ -2183,7 +2184,7 @@ test("GH-279: each step of the entry journey opens only once the previous one is
   expect(applyDraftAction(back.state, { action: "goto", step: 5 })).toEqual({ ok: false, kind: "wrong_step", step: 2 });
   // Un profil modifié à l'étape 1 se reconfirme à l'étape 2.
   const edited = applyDraftAction({ ...back.state, step: 1 }, { action: "discover", firstName: "Claire", companyName: "Atelier Lumen et fils", location: "Lyon", website: "https://atelier-lumen.fr" });
-  expect(edited).toMatchObject({ ok: true, state: { step: 1, profileConfirmed: false } });
+  expect(edited).toMatchObject({ ok: true, state: { step: 2, profileConfirmed: false } });
 
   expect(parseDraftAction({ action: "launch" })).toBeNull();
   expect(parseDraftAction({ action: "back", step: 2, extra: true })).toEqual({ action: "back", step: 2 });
@@ -3089,14 +3090,14 @@ test("GH-280: rubric states, interrupted analyses, relaunch rules and the daily 
   const atStep1 = { ...emptyDraft(), profile, analysis: running };
   expect(applyDraftAction(atStep1, { action: "discover", ...profile }, now)).toEqual({ ok: false, kind: "busy", error: ANALYSIS_MESSAGES.busy });
   expect(applyDraftAction(atStep1, { action: "see_findings" }, now)).toEqual({ ok: false, kind: "busy", error: ANALYSIS_MESSAGES.busy });
-  expect(applyDraftAction(atStep1, { action: "goto", step: 2 }, now)).toEqual({ ok: false, kind: "wrong_step", step: 1 });
+  expect(applyDraftAction(atStep1, { action: "goto", step: 2 }, now)).toMatchObject({ ok: true, state: { step: 2 } });
   expect(applyDraftAction({ ...atStep1, analysis: null }, { action: "see_findings" }, now)).toMatchObject({ ok: false, kind: "invalid", code: "analysis", error: ANALYSIS_MESSAGES.missing });
   expect(applyDraftAction({ ...atStep1, analysis: limited }, { action: "see_findings" }, now)).toMatchObject({ ok: true, state: { step: 2, profileConfirmed: false } });
   // Une analyse d'une autre entreprise (profil modifié depuis) n'ouvre pas l'étape 2.
   expect(applyDraftAction({ ...atStep1, profile: { ...profile, companyName: "Autre atelier" }, analysis: done }, { action: "see_findings" }, now)).toMatchObject({ ok: false, kind: "invalid", code: "analysis", error: ANALYSIS_MESSAGES.missing });
-  expect(applyDraftAction({ ...atStep1, profile: { ...profile, website: "" }, analysis: done }, { action: "goto", step: 2 }, now)).toEqual({ ok: false, kind: "wrong_step", step: 1 });
+  expect(applyDraftAction({ ...atStep1, profile: { ...profile, website: "" }, analysis: done }, { action: "goto", step: 2 }, now)).toMatchObject({ ok: true, state: { step: 2 } });
   expect(applyDraftAction({ ...atStep1, analysis: done }, { action: "goto", step: 2 }, now)).toMatchObject({ ok: true, state: { step: 2 } });
-  expect(applyDraftAction({ ...atStep1, step: 2, analysis: done }, { action: "see_findings" }, now)).toEqual({ ok: false, kind: "wrong_step", step: 2 });
+  expect(applyDraftAction({ ...atStep1, step: 2, analysis: done }, { action: "see_findings" }, now)).toMatchObject({ ok: true, state: { step: 2 } });
   expect(parseDraftAction({ action: "see_findings" })).toEqual({ action: "see_findings" });
   expect(readDraftState({ step: 1, profile: {}, ambition: null, profileConfirmed: false, diagnosticReady: false, analysis: done }).analysis).toEqual(done);
 

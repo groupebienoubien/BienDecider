@@ -2,13 +2,13 @@ import Link from "next/link";
 import { currentSignupAvailability } from "@/lib/signup-control";
 import { SIGNUP_CLOSED_MESSAGE, SIGNUP_FULL_MESSAGE } from "@/lib/signup-rules";
 import { analysisMatchesProfile, prefillFromPaul, prefillProfile, prefillWebsite } from "@/lib/onboarding/draft-rules";
-import { analysisView, limitedStepNotice, type DraftAnalysis, type Finding, type FirstFinding } from "@/lib/onboarding/analysis-rules";
+import { analysisView, googlePlaceCandidateIds, limitedStepNotice, type DraftAnalysis, type Finding, type FirstFinding } from "@/lib/onboarding/analysis-rules";
 import { CERTAINTY_LABELS } from "@/lib/findings/certainty";
 import { VISIT_TRACE_NOTICE } from "@/lib/onboarding/visit-trace-rules";
 import { placeMapsLink, readPlaceCandidate } from "@/lib/google-places";
 import { requireDraftPage } from "./guard";
 import { WelcomeFrame } from "./welcome-frame";
-import { AmbitionForm, DiscoveryStep, ProfileAnalysisWatcher, ProfileForm } from "./step-forms";
+import { AmbitionForm, CompanyConfirmation, DiscoveryStep, ProfileAnalysisWatcher, ProfileForm } from "./step-forms";
 
 const readDate = (iso: string) => new Intl.DateTimeFormat("fr-FR", { day: "numeric", month: "long", year: "numeric", timeZone: "Europe/Paris" }).format(new Date(iso));
 
@@ -134,7 +134,7 @@ export default async function WelcomePage() {
             <p>{availability === "closed" ? SIGNUP_CLOSED_MESSAGE : SIGNUP_FULL_MESSAGE}</p>
           </div>
         )}
-        <DiscoveryStep key="discover" profile={state.profile} analysis={analysisView(state.analysis)} />
+        <DiscoveryStep key="discover" profile={state.profile} />
         {/* FR-60 (#311) : la trace anonyme est annoncée dès l'étape 1. */}
         <p className="mt-6 text-sm text-[var(--bd-muted)]">
           {VISIT_TRACE_NOTICE} <Link href="/confidentialite#trace-visites" className="underline">Ce que nous gardons, et combien de temps</Link>
@@ -144,14 +144,19 @@ export default async function WelcomePage() {
   }
   if (state.step === 2) {
     const progress = analysisView(state.analysis);
-    if (progress && !progress.finished) {
-      return <WelcomeFrame step={2} intro={<p>Actualisation de vos sources pour {state.profile.companyName}.</p>}><ProfileAnalysisWatcher analysis={progress} /></WelcomeFrame>;
+    if (progress && !progress.sourcesReady && !state.googlePlaceChoice && !state.profile.website) {
+      return <WelcomeFrame step={2}>
+        <CompanyConfirmation companyName={state.profile.companyName} location={state.profile.location}>
+          <p className="mb-4">Paul recherche les fiches et les liens publics à vous faire vérifier.</p>
+          <ProfileAnalysisWatcher analysis={progress} stopAtSources />
+        </CompanyConfirmation>
+      </WelcomeFrame>;
     }
     const prefill = prefillProfile(state);
     const guessed = prefillFromPaul(prefill);
     const analysis = analysisMatchesProfile(state) ? state.analysis : null;
     const googlePlaceCandidates = await Promise.all(
-      (analysis?.findings.googlePlaceCandidates ?? []).map(async (id) => {
+      googlePlaceCandidateIds(analysis).map(async (id) => {
         const result = await readPlaceCandidate(id);
         return result.ok
           ? result.value
@@ -159,14 +164,16 @@ export default async function WelcomePage() {
       })
     );
     return (
-      <WelcomeFrame step={2} intro={<p>Vérifiez les liens et l&apos;activité de {state.profile.companyName}.</p>}>
+      <WelcomeFrame step={2}>
+        <CompanyConfirmation companyName={state.profile.companyName} location={state.profile.location}>
+        <p className="mb-5 text-sm leading-relaxed">Vérifiez votre site et vos profils officiels. Un lien non trouvé ne signifie pas que vous n&apos;êtes pas présent en ligne.</p>
         {analysis?.status === "limited" && (
           <p role="status" className="mb-6 rounded-lg border border-[var(--bd-line-strong)] bg-[var(--bd-attention-light)] p-4 text-sm font-semibold text-[var(--bd-ink)]">
             {limitedStepNotice(analysis.limit)}
           </p>
         )}
         <ProfileForm
-          key={analysis?.runId ?? "profile"}
+          key={`${state.profile.companyName}:${state.profile.location}`}
           prefill={prefill}
           website={prefillWebsite(state)}
           publicSources={analysis?.findings.publicSources ?? []}
@@ -175,7 +182,10 @@ export default async function WelcomePage() {
           googlePlaceChoice={state.googlePlaceChoice}
           websiteRejected={state.websiteRejected}
           googleStatus={analysis?.rubrics.google.status ?? null}
+          analysis={progress}
+          analysisRunId={analysis?.runId ?? null}
         />
+        {progress && !progress.finished && <ProfileAnalysisWatcher key={state.analysis?.runId} analysis={progress} compact />}
         {analysis && (
           <details className="mt-6 border-t border-[var(--bd-line)] pt-4 text-sm text-[var(--bd-ink)]">
             <summary className="cursor-pointer font-semibold">Constats et sources de cette lecture</summary>
@@ -185,11 +195,13 @@ export default async function WelcomePage() {
             </div>
           </details>
         )}
+        </CompanyConfirmation>
       </WelcomeFrame>
     );
   }
   return (
     <WelcomeFrame step={3} intro={<p>Dites, avec vos mots, ce que vous voulez voir changer pour {state.profile.companyName}.</p>}>
+      {analysisView(state.analysis)?.finished === false && <ProfileAnalysisWatcher analysis={analysisView(state.analysis)!} compact />}
       <AmbitionForm key="ambition" ambition={state.ambition?.text ?? ""} />
     </WelcomeFrame>
   );

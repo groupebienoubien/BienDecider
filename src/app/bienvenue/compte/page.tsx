@@ -12,9 +12,9 @@ export default async function WelcomeAccountPage() {
   const availability = await currentSignupAvailability();
   const count = starterPlan(state).missions.length;
   return (
-    <WelcomeFrame step={5} intro={<p>{state.profile.firstName}, enregistrez votre stratégie{count > 0 ? ` et ${count === 1 ? "votre mission" : `vos ${count} missions`}` : ""}.</p>}>
+    <WelcomeFrame step={5} intro={<p>{state.profile.firstName ? `${state.profile.firstName}, enregistrez` : "Enregistrez"} votre stratégie{count > 0 ? ` et ${count === 1 ? "votre mission" : `vos ${count} missions`}` : ""}.</p>}>
       {availability === "open" ? (
-        <AccountForm />
+        <AccountForm initialFirstName={state.profile.firstName} />
       ) : (
         <div role="status" className="flex flex-col gap-2 rounded-lg border border-[var(--bd-line-strong)] bg-[var(--bd-attention-light)] p-4 text-sm text-[var(--bd-ink)]">
           <p className="font-semibold">{availability === "closed" ? SIGNUP_CLOSED_MESSAGE : SIGNUP_FULL_MESSAGE}</p>

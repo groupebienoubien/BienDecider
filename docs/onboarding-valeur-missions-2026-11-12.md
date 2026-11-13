@@ -17,16 +17,35 @@ Cette actualisation porte sur le parcours réellement livré. Les sections suiva
 
 ### Parcours mis en place
 
-1. **Découverte** : prénom, entreprise, ville et site facultatif ; analyse publique existante.
-2. **Confirmation** : présence en ligne et activité sur le même écran. Une source corrigée est relue ici ; les anciens réseaux ne sont plus proposés à confirmer pendant la correction. Aucun passage à l'objectif pendant une lecture active ou avec des preuves obsolètes.
-3. **Ambition** : texte libre, reformulation et confirmation ; les détails qui répètent l'objectif sont repliés. Les questions nécessaires restent visibles.
-4. **Missions** : actions en premier, une priorité identifiée, résultat recherché et indicateur. Preuves, effort, collecte, risques, horizons et comparables restent consultables sans encombrer le chemin principal.
-5. **Compte puis stratégie** : nombre exact de missions annoncé ; plan conservé et créé dans l'ordre à l'inscription, aucune mission exécutée automatiquement.
+1. **Entreprise** : uniquement le nom et la ville. La découverte ouvre immédiatement la confirmation, sans demander de prénom ni de site au départ.
+2. **Découverte en popup** : sélectionner la fiche Google ou un site proposé déclenche immédiatement sa lecture en arrière-plan, sans bouton supplémentaire. La popup reste utilisable ; site, réseaux, activité, zone, clients et offres se complètent à l'arrivée des résultats, sans écraser les corrections, même un champ volontairement vidé. La confirmation du profil et des réseaux reste explicite. Facebook, Instagram et LinkedIn peuvent aussi être ajoutés manuellement ; ils restent des déclarations, sans source ni date de lecture inventées. L'activité et les autres précisions métier restent facultatives, dans un panneau repliable. Fermer la popup ne confirme rien et conserve les saisies à la réouverture.
+3. **Objectif** : texte libre, reformulation et confirmation. Le jalon `sourcesReady` permet de continuer dès que les liens sont disponibles, même si l'interprétation du site tourne encore. Une modification de source attend la fin de la lecture précédente et reste dans la popup pour faire vérifier les nouveaux liens.
+4. **Missions** : cartes aérées avec l'action, le résultat à tester, ce que Paul prépare (ou le test terrain mené par le dirigeant), « De votre côté », un signal principal et la date du bilan. Justification, mesure, effort, prérequis et preuves sont repliés ; les constats ne sont plus recopiés trois fois. La synthèse et les comparables restent secondaires.
+5. **Compte puis stratégie** : prénom facultatif à cette étape, nombre exact de missions annoncé ; plan conservé et créé dans l'ordre à l'inscription, aucune mission exécutée automatiquement.
+
+### Action et mesure
+
+- Un chiffre de référence manquant ne déclenche plus systématiquement un diagnostic de quatorze jours. Le planificateur privilégie un test concret avec une mesure légère intégrée.
+- Un diagnostic préalable reste pertinent si une inconnue empêche réellement une action faisable ou sûre ; il doit préciser la question décisive et la façon la plus courte d'y répondre.
+- Un créneau de semaine non précisé n'interdit plus à lui seul une proposition. Le créneau et la capacité restent à confirmer avant lancement ; les interdictions explicites de capacité nulle ou de temps supplémentaire restent appliquées.
+- Le prompt demande du texte brut, des phrases courtes, un angle précis et un signal principal, sans chaîne récitée « Objectif / Faits / Obstacle / Action / Signal / Bilan ». Il n'autorise ni prix, ni réduction, ni horaires, ni capacité inventés.
+- Exemple La Tonnelle : choisir avec le dirigeant un service à tester, préparer un message sur une offre réellement confirmée, puis compter simplement les tables qui citent ce message. Ne pas prétendre connaître le service le plus creux ni promettre les 10 %.
+
+### Enchaînement en arrière-plan
+
+- La sélection envoie `update_sources`, distinct de `confirm_profile` : elle reste à l'étape 2 et n'enregistre pas les hypothèses du formulaire comme des déclarations. Un site proposé rattache sa fiche Google si aucune fiche n'a encore été choisie.
+- Les changements de source sont désactivés pendant une lecture pour éviter les lancements concurrents. Les autres champs restent modifiables. Une erreur de lancement est affichée avec une relance explicite ; les quotas existants restent appliqués.
+- La popup est actualisée au jalon des sources puis à la fin de l'interprétation, sans remontage du formulaire. Une nouvelle lecture n'hérite pas des validations sociales de la précédente ; les champs non corrigés suivent seulement les résultats de la source courante.
+- Les liens sont persistés avant la fin de l'extraction. Les données non encore confirmées ne deviennent pas des déclarations du dirigeant lors de l'arrivée tardive du modèle.
+- Si l'objectif est confirmé pendant l'analyse, l'écran des missions attend sa fin, puis poursuit par un POST `prepare_missions`. La recherche et la planification utilisent alors le dernier dossier complet, pas un instantané partiel.
+- Les lectures de page restent sans effet serveur : le POST de continuation est contrôlé, plafonné et idempotent pour un dossier déjà préparé. Une erreur de lancement est visible et peut être réessayée.
+- Les raccourcis vers le compte sont refusés pendant l'analyse, la recherche ou une préparation non encore démarrée. Les refus de quota et les échecs de recherche restent explicites, sans missions génériques de secours.
+- Les plans déjà enregistrés ne sont pas réécrits au simple rechargement. Reconfirmer l'objectif passe le dossier à la version 2 et invalide l'ancien plan, même si le texte de l'objectif n'a pas changé ; la recherche suivante applique alors la nouvelle approche.
 
 ### Exploitation de l'analyse et limites
 
 - La génération vise une priorité immédiate, un deuxième levier et un test exploratoire distincts. Les offres, la clientèle déclarée et les opportunités sourcées comptent aussi, pas seulement le premier défaut du site.
-- Aucun appel IA supplémentaire ni nouvelle recherche au chargement de la page. Trois missions peuvent nécessiter davantage de tokens de sortie dans l'appel existant.
+- Aucun appel IA ajouté au dossier : la continuation ne fait que différer la recherche déjà demandée à la confirmation de l'objectif. Trois missions peuvent nécessiter davantage de tokens de sortie dans l'appel existant.
 - Trois missions ne sont pas garanties : les contraintes et preuves restent prioritaires. Le prompt exige d'expliquer pourquoi seules zéro, une ou deux actions sont justifiables. Les plans historiques restent lisibles.
 - Un profil social confirmé n'est ni une connexion OAuth ni une analyse de ses publications. Cette passe n'ajoute aucun connecteur ni aucune couverture de Snapchat ou d'autres plateformes.
 - Une correction de source peut encore nécessiter une nouvelle lecture, dans les quotas existants. Elle ne demande plus de revenir à la découverte ni de ressaisir les champs validés.
@@ -37,6 +56,36 @@ Cette actualisation porte sur le parcours réellement livré. Les sections suiva
 - Navigateur sur base locale jetable : cinq étapes jusqu'à l'inscription, retours et rechargements, cas sans site, provenance consultable, correction du site et confirmation du nouveau profil Instagram sans sortir de l'étape 2.
 - Types et lint ciblé ; contrôle visuel desktop/mobile. Aucune base client modifiée. La qualité de trois recommandations générées avec un appel réel au modèle reste à mesurer ; les sorties des tests sont contrôlées.
 - Bilan local : 25 tests passent dans la dernière exécution groupée ; le test avec appel réel au modèle est désactivé. Le parcours complet a réussi lors de la première recette, mais échoue dans les dernières passes à l'ouverture de la stratégie avec les erreurs de protocole de PGlite (`portal does not exist`, paramètres d'une requête préparée mélangés). Le démarrage de PostgreSQL natif est refusé depuis le terminal administrateur Windows : une recette finale sur PostgreSQL reste nécessaire, sans masquer cet échec ni modifier la stratégie pour contourner le banc de test.
+
+### Recette de la refonte popup / action immédiate
+
+La nouvelle passe utilise une base PGlite en mémoire isolée, avec plusieurs connexions autorisées, un pool applicatif de taille 1 et les services externes désactivés. Aucune base distante ni donnée client n'est modifiée.
+
+```text
+npx playwright test onboarding-quality.spec.ts mission-planning.spec.ts delegation.spec.ts user-journey.spec.ts --grep "onboarding quality|onboarding redesign|mission planning|GH-279: (each step|five)|GH-280: (the analysis fills|without a site|rubric states|step 2)|GH-281: (each field|step 2)|GH-292: step 2" --workers=1 --reporter=line
+```
+
+- Résultat : **36 réussis, 1 désactivé** (comparaison avec appel réel au modèle).
+- `npm run test:public-sources` : **5 réussis**.
+- `npx tsc --noEmit` : **réussi** ; ESLint ciblé sur les fichiers touchés : **réussi**, sans avertissement.
+- Parcours complet jusqu'au compte et à la stratégie, retours, rechargements, prénom facultatif et validation des erreurs : réussis.
+- Popup fermée avec Échap puis rouverte sans perte, liens déclarés et découverts conservés, objectif pendant l'analyse, continuation unique de la préparation : réussis.
+- Contrôle à **320, 390 et 1 440 px** : pas de débordement horizontal, corps des actions d'au moins 16 px, détails repliés ; captures desktop/mobile relues.
+- Reconfirmation du même objectif : l'ancienne version du plan est bien invalidée, contrairement au simple rechargement.
+- Les textes des tests sont contrôlés. L'amélioration rédactionnelle sur une génération réelle de La Tonnelle n'a pas été mesurée ; elle demande une nouvelle confirmation de l'objectif avec le service IA configuré.
+
+### Recette du remplissage automatique après sélection
+
+Sur le même banc local isolé, services externes désactivés :
+
+- Règles : `npx playwright test onboarding-quality.spec.ts delegation.spec.ts --grep "onboarding quality|GH-280|GH-281" --workers=1 --reporter=line` : **28 réussis**.
+- Navigateur : `npx playwright test user-journey.spec.ts --grep "onboarding autofill|onboarding quality|onboarding redesign|GH-279: (each step|five)|GH-280: step 2|GH-281: (each field|step 2)|GH-292: step 2" --workers=1 --reporter=line` : **9 réussis**.
+- `npm run test:public-sources` : **5 réussis** ; `npx tsc --noEmit` et ESLint ciblé : **réussis**.
+- Vérification finale après mutualisation des choix Google : `npx playwright test onboarding-quality.spec.ts delegation.spec.ts user-journey.spec.ts --grep "onboarding quality|GH-280|GH-281|onboarding autofill" --workers=1 --reporter=line` : **35 réussis**, dont le cas sans site ; types et lint revérifiés.
+- Sélection Google et site proposé : lancement automatique vérifié par le POST réel et l'analyse persistée. Le test simule ensuite deux arrivées différées pour vérifier le site, les nouveaux liens sociaux et les champs métier.
+- Corrections avant et pendant la lecture, champs volontairement vides, fermeture/réouverture, confirmation des liens, absence d'écrasement par une autre source et reprise après erreur : vérifiés.
+- Une attente explicite de la réponse de sélection a corrigé une course du test de site proposé ; la première passe comptait deux réussites et un échec de synchronisation du test.
+- Aucun appel réel au modèle ni accès réel à Google dans cette recette ; les étapes différées sont contrôlées.
 
 ## 1. Décision et périmètre
 
