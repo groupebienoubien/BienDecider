@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  INTELLIGENCE_STALE_MS, effectiveIntelligence, intelligenceFinished, intelligenceRunning, intelligenceUsage, intelligenceView,
+  INTELLIGENCE_STALE_MS, effectiveIntelligence, intelligenceFinished, intelligenceNotice, intelligenceRunning, intelligenceUsage, intelligenceView,
   needsNewIntelligence, newIntelligence, readCompetitorFacts, readIntelligence,
 } from "../src/lib/onboarding/intelligence-rules.ts";
 
@@ -19,14 +19,20 @@ test("une recherche neuve est « en cours », sans fait, coût à zéro", () => 
 
 test("une recherche « en cours » devient « en échec » une fois le délai dépassé", () => {
   const intelligence = newIntelligence(INPUT, "run-1", NOW);
-  const later = new Date(NOW.getTime() + INTELLIGENCE_STALE_MS + 1000);
+  assert.equal(INTELLIGENCE_STALE_MS, 240_000);
+  const later = new Date(NOW.getTime() + INTELLIGENCE_STALE_MS);
   assert.equal(intelligenceRunning(intelligence, later), false);
   assert.equal(intelligenceFinished(intelligence, later), true);
   assert.equal(effectiveIntelligence(intelligence, later).status, "failed");
   // Toujours « en cours » dans le délai.
-  const soon = new Date(NOW.getTime() + 1000);
+  const soon = new Date(NOW.getTime() + INTELLIGENCE_STALE_MS - 1);
   assert.equal(intelligenceRunning(intelligence, soon), true);
   assert.equal(effectiveIntelligence(intelligence, soon).status, "running");
+});
+
+test("le message de plafond annonce dix recherches par connexion et par jour", () => {
+  const limited = newIntelligence(INPUT, "limited", NOW, "limited", { scope: "ip", retryAt: "2026-11-13T10:00:00Z" });
+  assert.match(intelligenceNotice(limited, NOW), /depuis cette connexion \(10 recherches par jour\)/);
 });
 
 test("needsNewIntelligence : jamais relancée pour le même profil déjà cherché, relancée après un refus ou un échec", () => {

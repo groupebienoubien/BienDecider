@@ -75,7 +75,7 @@ export type AnalysisInput = {
 };
 
 /** Analyses anonymes par connexion (IP) et par 24 h (#280, D2). */
-export const ANALYSIS_PER_IP_DAILY_LIMIT = 3;
+export const ANALYSIS_PER_IP_DAILY_LIMIT = 10;
 /** Lecture refusée par un plafond : celui de la connexion ou celui de tous les visiteurs, et l'heure où il se libère. */
 export type AnalysisLimit = { scope: "ip" | "global"; retryAt: string };
 

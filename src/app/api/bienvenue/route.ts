@@ -12,8 +12,8 @@ import { createDraft, loadDraft, saveAnalysis, saveDraft, saveIntelligence, star
 import { errorLabel, runDraftAnalysis } from "@/lib/onboarding/analysis";
 import { runDraftIntelligence } from "@/lib/onboarding/intelligence";
 
-// L'analyse publique (#280) se déroule après la réponse, dans la durée de la route.
-export const maxDuration = 180;
+// Recherche (60 s) puis planification (120 s), avec une marge pour les accès au brouillon.
+export const maxDuration = 240;
 
 /**
  * Parcours d'entrée anonyme (#279, spécification §1.2) : POST `{ action, … }`.
@@ -95,7 +95,7 @@ async function refund(...attempts: ThrottleResult[]) {
   for (const attempt of attempts) await refundIpAttempt(attempt).catch(() => undefined);
 }
 
-/** Lance l'analyse de l'étape 1 : 3 par IP et par jour, plafond global du jour, jamais deux à la fois. */
+/** Lance l'analyse de l'étape 1 : plafond par IP et global du jour, jamais deux à la fois. */
 async function launchAnalysis(request: NextRequest, draftId: string, state: DraftState, now: Date) {
   const sameIdentity = state.analysis?.input.companyName === state.profile.companyName
     && state.analysis.input.location === state.profile.location;

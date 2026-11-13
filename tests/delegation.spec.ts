@@ -3079,7 +3079,7 @@ test("GH-280: rubric states, interrupted analyses, relaunch rules and the daily 
   const byIp = newAnalysis(analysisInput, "r", at, "limited", { scope: "ip", retryAt: "2026-11-09T14:40:00.000Z" });
   expect(readAnalysis(JSON.parse(JSON.stringify(byIp)))).toEqual(byIp);
   expect(rubricLabel(byIp.rubrics.site)).toBe("Non disponible (limite du jour atteinte)");
-  expect(analysisNotice(byIp, at)).toBe("Limite de lectures du jour atteinte depuis cette connexion (3 lectures par jour) : ce n'est pas une panne. Paul pourra lire votre entreprise aujourd'hui à 15 h 40. Vous pouvez continuer dès maintenant et compléter vous-même l'étape suivante.");
+  expect(analysisNotice(byIp, at)).toBe("Limite de lectures du jour atteinte depuis cette connexion (10 lectures par jour) : ce n'est pas une panne. Paul pourra lire votre entreprise aujourd'hui à 15 h 40. Vous pouvez continuer dès maintenant et compléter vous-même l'étape suivante.");
   expect(limitedStepNotice({ scope: "global", retryAt: "2026-11-10T08:05:00.000Z" }, at)).toBe("Paul n'a pas lu votre entreprise : limite de lectures du jour atteinte pour l'ensemble des visiteurs. Ce n'est pas une panne. Complétez les champs ci-dessous, ou revenez demain à 9 h 05 et choisissez « Non, corriger mes informations » pour qu'il la lise.");
   expect(retryLabel("2026-11-09T12:00:00.000Z", at)).toBe("dès maintenant");
   expect(readAnalysis({ runId: "r", status: "running" })).toBeNull();

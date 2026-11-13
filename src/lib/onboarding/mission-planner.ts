@@ -23,7 +23,7 @@ const planWithModel: MissionPlanner = async (intelligence) => {
     system: "Tu es Paul, associé stratégique d'une petite entreprise. Tu raisonnes à partir des preuves et de l'objectif, puis tu appelles record_mission_plan une seule fois. Aucun texte autour.",
     tools: [tool],
     messages: [{ role: "user", content: buildMissionPlanningPrompt(intelligence) }],
-  }, { timeout: 60_000, maxRetries: 0 });
+  }, { timeout: 120_000, maxRetries: 0 });
   const block = response.content.find((item): item is Anthropic.ToolUseBlock => item.type === "tool_use" && item.name === tool.name);
   if (!block) console.error(`Préparation des missions : aucun plan reçu du modèle (arrêt : ${response.stop_reason ?? "inconnu"}).`);
   return { proposal: block?.input, usage: response.usage, model: MISSION_PLANNING_MODEL };

@@ -124,7 +124,7 @@ export function readCompetitorFacts(raw: unknown, input: IntelligenceInput, now:
 }
 
 /** Recherches anonymes par connexion (IP) et par 24 h, comme l'analyse (#280, D2). */
-export const INTELLIGENCE_PER_IP_DAILY_LIMIT = 3;
+export const INTELLIGENCE_PER_IP_DAILY_LIMIT = 10;
 /** Lecture refusée par un plafond : celui de la connexion ou celui de tous les visiteurs, et l'heure où il se libère. */
 export type IntelligenceLimit = { scope: "ip" | "global"; retryAt: string };
 
@@ -144,7 +144,7 @@ export type DraftIntelligence = {
 };
 
 /** Une recherche « en cours » plus vieille que ce délai a été interrompue (durée maximale de la route). */
-export const INTELLIGENCE_STALE_MS = 180_000;
+export const INTELLIGENCE_STALE_MS = 240_000;
 
 export const INTELLIGENCE_MESSAGES = {
   limited: "Paul a atteint sa limite de recherches pour aujourd'hui : ce n'est pas une panne. Vos pistes restent fondées sur ce que vous avez déjà confirmé.",
