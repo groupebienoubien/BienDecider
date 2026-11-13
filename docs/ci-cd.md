@@ -103,6 +103,8 @@ Lier l'US avec `Closes #numero` seulement si tous ses critères sont livrés, si
 
 Pour `test:brand`, lancer le serveur et Chromium comme indiqué dans [../README.md](../README.md). `test:ux` crée et supprime des entreprises de test dans la base pointée par `DATABASE_URL` : **ne pas le lancer automatiquement sur la base du prototype**. La suite refuse toute base non locale, sauf `UX_TEST_ALLOW_REMOTE_DB=1` réservé à une base de développement dédiée ; la CI la lance à chaque PR sur sa propre base jetable.
 
+`test:brand` reste en lecture seule : pages publiques, formulaire de connexion non soumis et redirection de l'étape compte sans brouillon. Il ne soumet ni découverte d'entreprise, ni objectif, ni inscription ; aucun appel Google/IA ne doit être déclenché par cette suite. Les contrôles du formulaire d'inscription (libellés, autocomplétion et affichage du mot de passe) restent dans `test:ux`, avec un brouillon créé et supprimé sur la base jetable. Le parcours complet d'inscription y est également testé.
+
 ### 3. Relire et fusionner
 
 L'autre développeur fait une relecture courte et approuve. Si la PR touche un chemin de [CODEOWNERS](../.github/CODEOWNERS), GitHub bloque la fusion tant qu'il n'a pas approuvé. Attendre **Checks vert** ; si `main` a évolué, mettre à jour la branche via GitHub, résoudre les conflits et attendre la nouvelle CI. Fusionner avec **Squash and merge**. Le développeur qui fusionne vérifie que le workflow **Smoke test** passe après le déploiement, puis le parcours touché sur le domaine. Le second repart de `main` à jour pour son prochain changement.
