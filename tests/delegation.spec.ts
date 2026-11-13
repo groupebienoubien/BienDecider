@@ -2236,7 +2236,7 @@ test("GH-284: step 4 ranks the templates from the draft — site page first with
   expect(rankStarterTemplates(step4Draft({ read: false, ambition: "Recevoir plus de demandes de devis en 6 mois" }), ["agencies", "social_post", "site_page", "custom"])).toEqual(["social_post"]);
   expect(rankStarterTemplates(step4Draft({ ambition: "Recevoir plus de demandes de devis en 6 mois" }), catalogue)).toEqual(["site_page", "social_post"]);
   const weekdays = step4Draft({ ambition: "Plus de clients en semaine" });
-  expect(rankStarterTemplates(weekdays, catalogue)).toEqual([]);
+  expect(rankStarterTemplates(weekdays, catalogue)).toEqual(["site_page", "social_post"]);
   expect(starterPlan(weekdays).recap.notes).toContain("Pour choisir un test adapté à votre objectif en semaine : quels jours ou créneaux voulez-vous remplir, et quelle capacité avez-vous alors ?");
   expect(rankStarterTemplates(step4Draft({ ambition: "Plus de demandes sans temps supplémentaire" }), catalogue)).toEqual([]);
   expect(rankStarterTemplates(step4Draft({ ambition: "Je suis complet et ne peux pas accueillir de nouveau client" }), catalogue)).toEqual([]);
@@ -2280,7 +2280,7 @@ test("US #371 decision corpus v1: fictitious profiles produce only supported, ex
     {
       name: "restaurant with an unspecified weekday slot",
       options: { ambition: "Plus de clients en semaine", profile: { trade: "Restaurant", offers: "Déjeuner et dîner", targetClients: "Habitants du quartier" } },
-      templates: [],
+      templates: ["site_page", "social_post"],
       note: "Pour choisir un test adapté à votre objectif en semaine",
     },
     {
