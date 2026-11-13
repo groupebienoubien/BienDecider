@@ -114,6 +114,9 @@ test("mission planning: the dossier carries the actual finding, sources, objecti
   expect(prompt).toContain('"mediaBudgetPerMonth":0');
   expect(prompt).toContain("Vise trois missions complémentaires");
   expect(prompt).toContain("ne remplis jamais un quota sans preuve");
+  expect(prompt).toContain("Chaque clé du catalogue sert au plus une fois");
+  expect(prompt).toContain("title 80, outcome 120, scope.topic 120");
+  expect(prompt).toContain("chaque champ de decisionPlan 240");
   expect(prompt).toContain("mesure légère intégrée");
   expect(prompt).toContain("L'absence de chiffres de référence ne justifie pas à elle seule");
   expect(prompt).toContain("un seul signal principal");
@@ -185,6 +188,80 @@ test("mission planning: fabricated proofs, duplicate actions, incompatible scope
   ];
   for (const raw of invalid) expect(checkMissionProposal(raw, intelligence).ok, JSON.stringify(raw)).toBe(false);
   expect(checkMissionProposal(source, intelligence, ["custom"]).ok).toBe(false);
+});
+
+test("mission planning: text limits accept the boundary and identify an overflowing field without exposing its contents", () => {
+  const cases: { path: string; max: number; set: (plan: MissionProposal, value: string) => void }[] = [
+    { path: "retained.0", max: 240, set: (plan, value) => { plan.retained[0] = value; } },
+    { path: "notice", max: 600, set: (plan, value) => { plan.notice = value; } },
+    ...(["title", "outcome", "deduction", "risk"] as const).map((field) => ({
+      path: `missions.0.${field}`,
+      max: { title: 80, outcome: 120, deduction: 500, risk: 200 }[field],
+      set: (plan: MissionProposal, value: string) => { plan.missions[0][field] = value; },
+    })),
+    ...(["selectionReason", "indicator", "collectionMethod", "effort", "prerequisites", "ownerAction"] as const).map((field) => ({
+      path: `missions.0.decisionPlan.${field}`, max: 240,
+      set: (plan: MissionProposal, value: string) => { plan.missions[0].decisionPlan[field] = value; },
+    })),
+    { path: "missions.0.scope.page", max: 80, set: (plan, value) => { plan.missions[0].scope = { page: value }; } },
+    { path: "missions.0.scope.topic", max: 120, set: (plan, value) => {
+      Object.assign(plan.missions[0], { template: "social_post", channel: "facebook", stopRuleDays: 7, scope: { topic: value } });
+    } },
+    { path: "missions.0.scope.description", max: 300, set: (plan, value) => {
+      Object.assign(plan.missions[0], { template: "custom", channel: null, scope: { description: value } });
+    } },
+  ];
+  const intelligence = research();
+  for (const { path, max, set } of cases) {
+    const raw = proposal();
+    set(raw, "x".repeat(max));
+    expect(checkMissionProposal(raw, intelligence).ok, `${path} at its limit`).toBe(true);
+    set(raw, "x".repeat(max + 1));
+    expect(checkMissionProposal(raw, intelligence)).toEqual({
+      ok: false, error: `Format des propositions de missions invalide (${path} : too_big).`,
+    });
+  }
+  const markup = proposal();
+  markup.missions[0].decisionPlan.indicator = "Nombre de demandes > 4";
+  expect(checkMissionProposal(markup, intelligence)).toEqual({
+    ok: false, error: "Format des propositions de missions invalide (missions.0.decisionPlan.indicator : custom).",
+  });
+  expect(checkMissionProposal(undefined, intelligence)).toEqual({
+    ok: false, error: "Format des propositions de missions invalide (racine : invalid_type).",
+  });
+});
+
+test("mission planning: two supported mission types suffice without duplicating custom to reach three", () => {
+  const state = { ...restaurant(), analysis: null };
+  const intelligence = research(state);
+  const source = proposal();
+  const first = source.missions[0];
+  const plan: MissionProposal = {
+    retained: [
+      "Le menu déjeuner peut être testé auprès des salariés du quartier.",
+      "Les repas de groupe offrent une autre piste auprès des familles.",
+    ],
+    notice: "Sans constat observé sur le site ou la fiche Google, seules deux missions distinctes sont étayées.",
+    missions: [
+      { ...first, template: "social_post", channel: "facebook", evidenceIds: ["profile:offers"],
+        scope: { topic: "Présenter les repas de groupe aux familles" }, stopRuleDays: 7 },
+      { ...first, template: "custom", channel: null, evidenceIds: ["profile:targetClients"],
+        scope: { description: "Tester les réservations du mardi auprès des salariés voisins." } },
+    ],
+  };
+  expect(checkMissionProposal(plan, intelligence).ok).toBe(true);
+  const stored = readDraftState({
+    ...state, intelligence: { ...intelligence, planning: {
+      status: "done", proposal: plan, cost: { usd: 0, inputTokens: 0, outputTokens: 0 },
+    } },
+  });
+  expect(starterPlan(stored).missions.map((mission) => mission.template)).toEqual(["social_post", "custom"]);
+  expect(checkMissionProposal({ ...plan, missions: [...plan.missions, plan.missions[1]] }, intelligence)).toEqual({
+    ok: false, error: "Un même modèle de mission est proposé deux fois.",
+  });
+  expect(checkMissionProposal(plan, intelligence, ["custom"])).toEqual({
+    ok: false, error: "Une mission est indisponible ou incompatible avec l'objectif.",
+  });
 });
 
 test("mission planning: changes to objective, budget, analysis or source decisions invalidate the stored plan", () => {

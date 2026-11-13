@@ -1,30 +1,31 @@
 import { z } from "zod";
 import { safeSourceUrl } from "@/lib/findings/certainty";
-import { missionDecisionPlanSchema, type MissionDecisionPlan, type MissionEvidence } from "@/lib/missions/decision-plan";
+import { DECISION_PLAN_TEXT_MAX, missionDecisionPlanSchema, type MissionDecisionPlan, type MissionEvidence } from "@/lib/missions/decision-plan";
 import { evaluateMissionObjective } from "@/lib/missions/decision-rules";
 import { MISSION_CHANNELS } from "@/lib/missions/channels";
 import { availableTemplates, enabledChannels, type TemplateKey } from "@/lib/missions/templates";
 import { containsPromise, validateNewMission } from "@/lib/missions/rules";
 import type { DraftIntelligence, IntelligenceInput } from "@/lib/onboarding/intelligence-rules";
 
+const MAX = { title: 80, outcome: 120, topic: 120, page: 80, description: 300, deduction: 500, risk: 200, retained: 240, notice: 600 } as const;
 const text = (min: number, max: number) => z.string().trim().min(min).max(max).refine((value) => !/[<>]/.test(value));
 const candidateSchema = z.object({
   template: z.enum(["social_post", "site_page", "google_profile", "custom"]),
   channel: z.enum(MISSION_CHANNELS).nullable(),
-  title: text(5, 80),
-  outcome: text(5, 120),
+  title: text(5, MAX.title),
+  outcome: text(5, MAX.outcome),
   evidenceIds: z.array(z.string().min(1).max(100)).min(1).max(3),
-  scope: z.object({ topic: text(5, 120).optional(), page: text(1, 80).optional(), description: text(10, 300).optional() }).strict(),
+  scope: z.object({ topic: text(5, MAX.topic).optional(), page: text(1, MAX.page).optional(), description: text(10, MAX.description).optional() }).strict(),
   stopRuleDays: z.number().int().min(7).max(90),
-  deduction: text(10, 500),
-  risk: text(10, 200),
+  deduction: text(10, MAX.deduction),
+  risk: text(10, MAX.risk),
   decisionPlan: missionDecisionPlanSchema.omit({ evidence: true }),
 }).strict();
 
 export const missionProposalSchema = z.object({
-  retained: z.array(text(20, 240)).min(2).max(3),
+  retained: z.array(text(20, MAX.retained)).min(2).max(3),
   missions: z.array(candidateSchema).max(3),
-  notice: text(10, 600).nullable(),
+  notice: text(10, MAX.notice).nullable(),
 }).strict();
 export type MissionProposal = z.infer<typeof missionProposalSchema>;
 export type PlannedMission = Omit<MissionProposal["missions"][number], "decisionPlan"> & { finding: string; decisionPlan: MissionDecisionPlan };
@@ -54,15 +55,21 @@ function planningTemplates(input: IntelligenceInput, available: readonly Templat
 export function checkMissionProposal(raw: unknown, intelligence: DraftIntelligence, available: readonly TemplateKey[] = availableTemplates().map((template) => template.key)):
   { ok: true; value: CheckedMissionProposal } | { ok: false; error: string } {
   const parsed = missionProposalSchema.safeParse(raw);
-  if (!parsed.success) return { ok: false, error: "Format des propositions de missions invalide." };
+  if (!parsed.success) {
+    const issues = parsed.error.issues.slice(0, 3).map((issue) => `${issue.path.join(".") || "racine"} : ${issue.code}`).join(" ; ");
+    return { ok: false, error: `Format des propositions de missions invalide (${issues}).` };
+  }
   const proposal = parsed.data;
   const allowed = new Set(planningTemplates(intelligence.input, available).map((template) => template.key));
   const evidenceById = new Map(planningEvidence(intelligence).map((item) => [item.id, item]));
   const seen = new Set<string>();
   const missions: PlannedMission[] = [];
   for (const candidate of proposal.missions) {
-    if (!allowed.has(candidate.template) || seen.has(candidate.template)) {
-      return { ok: false, error: "Une mission est indisponible, incompatible avec l'objectif ou proposée deux fois." };
+    if (!allowed.has(candidate.template)) {
+      return { ok: false, error: "Une mission est indisponible ou incompatible avec l'objectif." };
+    }
+    if (seen.has(candidate.template)) {
+      return { ok: false, error: "Un même modèle de mission est proposé deux fois." };
     }
     seen.add(candidate.template);
     const evidence: MissionEvidence[] = [];
@@ -108,10 +115,11 @@ export function buildMissionPlanningPrompt(intelligence: DraftIntelligence): str
   const templates = planningTemplates(intelligence.input, availableTemplates().map((template) => template.key));
   return [
     "Sélectionne puis rédige un plan de tests commerciaux pour cette entreprise précise. Vise trois missions complémentaires et ordonnées pour exploiter toute l'analyse déjà disponible : une priorité immédiate, un deuxième levier distinct et un test exploratoire. Ce sont des options à décider, pas trois actions à lancer ensemble.",
-    "Examine chaque modèle disponible à partir du dossier avant de sélectionner les missions. Ne te limite pas au premier défaut du site : exploite aussi les offres, la clientèle déclarée, les contacts publics et les opportunités sourcées. Ne duplique ni le sujet ni le résultat recherché. Si seules zéro, une ou deux missions sont justifiables, conserve ce nombre et explique dans notice la contrainte ou l'information manquante qui empêche d'aller plus loin ; ne remplis jamais un quota sans preuve.",
+    "Examine chaque modèle disponible à partir du dossier avant de sélectionner les missions. Ne te limite pas au premier défaut du site : exploite aussi les offres, la clientèle déclarée, les contacts publics et les opportunités sourcées. Ne duplique ni le sujet ni le résultat recherché. Chaque clé du catalogue sert au plus une fois : jamais deux missions custom ni deux social_post, même sur des sujets différents. Si seules zéro, une ou deux missions sont justifiables, conserve ce nombre et explique dans notice la contrainte ou l'information manquante qui empêche d'aller plus loin ; ne remplis jamais un quota sans preuve.",
     "Privilégie une action testable immédiatement avec une mesure légère intégrée. L'absence de chiffres de référence ne justifie pas à elle seule une mission de relevé ou quatorze jours d'attente. Un diagnostic préalable n'est prioritaire que si une inconnue empêche réellement de choisir une action faisable ou sûre : précise la question décisive et le moyen le plus court d'y répondre. Sinon, choisis avec le dirigeant un créneau à tester, sans prétendre connaître le plus creux, et mesure pendant l'action.",
     "Relie pour chaque mission l'objectif, un fait cité, une action concrète, un signal observable et une décision au bilan. Cette chaîne guide ton raisonnement, mais ne la récite pas sous la forme « Objectif : Faits : Obstacle : Action : Signal : Bilan : ». selectionReason explique en une ou deux phrases pourquoi ce test est utile maintenant, pas pourquoi tous les autres canaux sont exclus.",
     "Écris pour un dirigeant pressé : texte brut, sans titres Markdown, listes ni jargon. title : un verbe d'action et un objet précis, idéalement moins de 65 caractères. outcome : le changement à tester, pas une promesse ni une répétition du titre. scope : ce qui sera réellement préparé ou testé, avec un angle concret, pas « améliorer la visibilité ». ownerAction : une ou deux actions courtes à sa charge. indicator : un seul signal principal. collectionMethod : une collecte légère et la décision de répéter, ajuster ou arrêter au bilan. Évite de recopier les preuves dans chaque champ.",
+    `Longueurs maximales strictes, espaces compris : title ${MAX.title}, outcome ${MAX.outcome}, scope.topic ${MAX.topic}, scope.page ${MAX.page}, scope.description ${MAX.description}, deduction ${MAX.deduction}, risk ${MAX.risk}, chaque champ de decisionPlan ${DECISION_PLAN_TEXT_MAX}, chaque phrase de retained ${MAX.retained}, notice ${MAX.notice}. Un seul dépassement invalide tout le plan : reste nettement en dessous. N'utilise jamais les caractères < ou >.`,
     "La synthèse retained doit tirer une priorité des faits en deux ou trois phrases courtes, et non répéter le profil. Les titres, sujets, résultats, indicateurs, prérequis et effort doivent être propres à cette entreprise et à son objectif. Ne propose pas de réduction, de prix, d'horaires ou de capacité inventés pour rendre une mission plus accrocheuse.",
     "N'invente aucun fait, chiffre, défaut, accès à un compte, disponibilité, prix, publication ou dépense. Une page lue n'est pas une page à refaire : propose une amélioration seulement si un constat précis le justifie. Une note concurrentielle ne prouve pas un défaut chez nous.",
     "Les comparables ne sont pas encore confirmés par le dirigeant : ils sont un contexte à vérifier, pas des preuves pour justifier une mission. evidenceIds doit citer uniquement les identifiants du dossier de preuves, jamais une URL ou un nouvel identifiant.",

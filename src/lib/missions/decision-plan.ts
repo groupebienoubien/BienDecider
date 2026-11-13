@@ -2,7 +2,8 @@ import { z } from "zod";
 import type { TemplateKey } from "@/lib/missions/templates";
 import { planningEvidenceSchema } from "@/lib/onboarding/intelligence-rules";
 
-const DECISION_PLAN_TEXT = z.string().trim().min(5).max(240).refine((value) => !/[<>]/.test(value));
+export const DECISION_PLAN_TEXT_MAX = 240;
+const DECISION_PLAN_TEXT = z.string().trim().min(5).max(DECISION_PLAN_TEXT_MAX).refine((value) => !/[<>]/.test(value));
 
 export const missionEvidenceSchema = planningEvidenceSchema;
 export type MissionEvidence = z.infer<typeof missionEvidenceSchema>;

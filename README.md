@@ -68,6 +68,8 @@ Audit de l'onboarding, correctifs de confiance et cas d'usage priorisés pour l'
 
 Les nouvelles premières missions sont sélectionnées et rédigées avec **Opus 5.5**, raisonnement adaptatif et effort élevé, après la recherche de marché (les autres agents restent sur Sonnet). Le dossier comprend les constats observés, sources et dates, le profil confirmé, l'objectif, les contraintes et les limites de lecture. Le plan validé est conservé dans le brouillon puis transféré à l'inscription, sans nouvelle génération. Un échec ou un quota atteint n'est pas remplacé par des missions génériques. Les anciens brouillons conservent leur ancien plan : revenir à l'étape Ambition et confirmer l'objectif lance la nouvelle préparation. Les missions déjà créées ne sont pas réécrites.
 
+Chaque type de mission ne peut apparaître qu'une fois : si seules une ou deux missions sont étayées, le modèle doit expliquer cette limite plutôt que compléter artificiellement le plan. Le prompt reprend les longueurs maximales du schéma ; les textes trop longs ou contenant `<` ou `>` restent refusés. En cas de format invalide, le journal serveur indique les champs rejetés et les codes de validation, sans leur contenu.
+
 Tests du plan sans appel externe ni écriture en base : `node -r dotenv/config node_modules/@playwright/test/cli.js test mission-planning.spec.ts onboarding-quality.spec.ts --workers=1`. La configuration `.env` est chargée pour les imports serveur, mais ces tests ne consultent pas la base. Évaluation payante sur deux entreprises fictives avec le vrai modèle, sans accès à la base, dans PowerShell :
 
 ```powershell
