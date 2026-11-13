@@ -1,3 +1,4 @@
+import { mock } from "node:test";
 import { expect, test } from "@playwright/test";
 import { EMPTY_TERMS } from "../src/lib/ambition-rules";
 import { analysisView, newAnalysis, ruleFirstFindings } from "../src/lib/onboarding/analysis-rules";
@@ -224,12 +225,54 @@ test("onboarding quality: research blocks every account transition while running
   expect(applyDraftAction(state, { action: "interested" }, NOW)).toMatchObject({ ok: false, kind: "busy" });
   expect(applyDraftAction(state, { action: "goto", step: 5 }, NOW)).toMatchObject({ ok: false });
   expect(checkDraftForAccount({ ...state, step: 5 }, NOW)).toMatchObject({ ok: false, code: "intelligence", step: 4 });
+  for (const elapsed of [60_001, 180_001, 239_999]) {
+    const stillRunning = new Date(NOW.getTime() + elapsed);
+    expect(applyDraftAction(state, { action: "interested" }, stillRunning)).toMatchObject({ ok: false, kind: "busy" });
+    expect(checkDraftForAccount({ ...state, step: 5 }, stillRunning)).toMatchObject({ ok: false, code: "intelligence", step: 4 });
+    expect(needsNewIntelligence(state.intelligence, intelligenceInputFor(state), stillRunning)).toBe(false);
+  }
   const later = new Date(NOW.getTime() + INTELLIGENCE_STALE_MS + 1);
   expect(intelligenceNotice(state.intelligence, later)).toBe(INTELLIGENCE_MESSAGES.planningFailed);
   expect(applyDraftAction(state, { action: "interested" }, later)).toMatchObject({ ok: true, state: { step: 5 } });
   for (const status of ["done", "failed", "limited"] as const) {
     const finished = { ...state, intelligence: { ...state.intelligence, status } };
     expect(applyDraftAction(finished, { action: "interested" }, NOW)).toMatchObject({ ok: true });
+  }
+});
+
+test("onboarding quality: analysis and mission preparation allow ten attempts per IP per day, not eleven", async () => {
+  const { consumeIpAttempt } = await import("../src/lib/auth-throttle");
+  const { prisma } = await import("../src/lib/prisma");
+  const originalSecret = process.env.SESSION_SECRET;
+  const originalQuery = prisma.$queryRaw;
+  const originalExecute = prisma.$executeRaw;
+  let count = 0;
+  const query = mock.fn(async () => [{ count: ++count, elapsed: 0 }]);
+  const cleanup = mock.fn(async () => 0);
+  try {
+    Object.defineProperties(prisma, {
+      $queryRaw: { value: query, configurable: true, writable: true },
+      $executeRaw: { value: cleanup, configurable: true, writable: true },
+    });
+    expect(prisma.$queryRaw).toBe(query);
+    expect(prisma.$executeRaw).toBe(cleanup);
+    process.env.SESSION_SECRET = "test-only-throttle-secret";
+    for (const scope of ["analysis", "intelligence"] as const) {
+      count = 0;
+      const request = new Request("https://example.invalid/api/bienvenue", { headers: { "x-real-ip": "test-ip" } });
+      for (let attempt = 1; attempt <= 10; attempt++) {
+        expect(await consumeIpAttempt(request, scope), `${scope}: attempt ${attempt}`).toMatchObject({ limited: false });
+      }
+      expect(await consumeIpAttempt(request, scope)).toMatchObject({ limited: true, retryAfterSeconds: 86_400 });
+    }
+    expect(query.mock.callCount()).toBe(22);
+  } finally {
+    Object.defineProperties(prisma, {
+      $queryRaw: { value: originalQuery, configurable: true, writable: true },
+      $executeRaw: { value: originalExecute, configurable: true, writable: true },
+    });
+    if (originalSecret === undefined) delete process.env.SESSION_SECRET;
+    else process.env.SESSION_SECRET = originalSecret;
   }
 });
 

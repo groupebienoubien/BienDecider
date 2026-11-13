@@ -28,6 +28,8 @@ Décisions de Samir (2026-11-07) :
 - **Pages lues** : la page d'accueil, plus jusqu'à deux pages internes du même site repérées par leurs liens (contact, services, prestations). Trois requêtes au plus, chacune passant par le lecteur protégé.
 - La spec reste entière (environ 2 700 jetons).
 
+Dérogation de test du 2026-11-13 : le plafond d'analyse par IP et par 24 h passe temporairement de 3 à 10, comme celui de la recherche/préparation des missions. Le plafond global et la durée de la fenêtre restent inchangés.
+
 ## Boundaries & Constraints
 
 **Always:**
@@ -98,7 +100,7 @@ Décisions de Samir (2026-11-07) :
   - réduction du HTML en texte ;
   - accueil, plus au plus deux pages internes du même hôte, choisies par les mots de leurs liens (contact, services, prestations, tarifs) ;
   - palette (`theme-color`, couleurs CSS en ligne) et logo (`og:image`, icônes) repérés.
-- [x] `src/lib/auth-throttle.ts` -- portée `analysis` (3 par IP en 24 h) et compteur global du jour (une ligne `AuthThrottle` de clé fixe, plafond `ANONYMOUS_ANALYSIS_DAILY_LIMIT`, 300 par défaut).
+- [x] `src/lib/auth-throttle.ts` -- portée `analysis` (10 par IP en 24 h pendant les tests) et compteur global du jour (une ligne `AuthThrottle` de clé fixe, plafond `ANONYMOUS_ANALYSIS_DAILY_LIMIT`, 300 par défaut).
 - [x] `src/lib/onboarding/analysis.ts` -- `runDraftAnalysis(draftId, profile, deps)` : rubriques mises à jour au fil de l'eau, extraction en un seul appel au modèle, provenance et coût ; fonction pure `rubricsFor(...)`.
 - [x] `src/lib/onboarding/draft-rules.ts`, `draft.ts` -- état d'analyse, actions « discover » (lance) et « see_findings » (étape 2), préremplissage de l'étape 2.
 - [x] `src/app/api/bienvenue/route.ts`, `src/app/api/bienvenue/analyse/route.ts` -- lancement plafonné par IP, refus d'un double lancement, GET de la progression.

@@ -2205,7 +2205,7 @@ test("a mission report and its decision belong to the session company, are valid
   }
 });
 
-test("GH-280: the public analysis refuses internal sites, a second launch and a fourth daily run, and step 2 stays open", async ({ playwright }) => {
+test("GH-280: the public analysis refuses internal sites, a second launch and an eleventh daily run, and step 2 stays open", async ({ playwright }) => {
   test.setTimeout(90000);
   const prisma = openDatabase();
   const ip = { "x-real-ip": `test-${randomUUID()}` };
@@ -2227,7 +2227,9 @@ test("GH-280: the public analysis refuses internal sites, a second launch and a 
   try {
     const companiesBefore = await prisma.company.count();
     // Site interne : aucune lecture, « Non disponible (accès refusé) », la suite continue.
-    for (const website of ["http://127.0.0.1", "http://10.0.0.5", "http://[::1]"]) {
+    const internalSites = ["http://127.0.0.1", "http://10.0.0.5", "http://[::1]"];
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const website = internalSites[attempt % internalSites.length];
       const first = await visitor();
       const launched = await post(first, { action: "discover", ...identity, website });
       expect(launched.status(), website).toBe(200);
@@ -2248,17 +2250,17 @@ test("GH-280: the public analysis refuses internal sites, a second launch and a 
       expect((await prisma.onboardingDraft.findUniqueOrThrow({ where: { id: draft.id } })).profileConfirmed).toBe(false);
     }
 
-    // Quatrième analyse du jour pour cette IP : pas d'analyse, « revenez plus tard », l'étape 2 reste ouverte.
-    const fourth = await visitor();
-    const limited = await post(fourth, { action: "discover", ...identity, website: "" });
+    // Onzième analyse du jour pour cette IP : pas d'analyse, « revenez plus tard », l'étape 2 reste ouverte.
+    const limitedVisitor = await visitor();
+    const limited = await post(limitedVisitor, { action: "discover", ...identity, website: "" });
     expect(limited.status()).toBe(429);
     expect(Number(limited.headers()["retry-after"])).toBeGreaterThan(0);
     const limitedBody = await limited.json();
     expect(limitedBody).toMatchObject({ code: "limited", analysis: { status: "limited", finished: true } });
-    expect(limitedBody.error).toContain("depuis cette connexion (3 lectures par jour) : ce n'est pas une panne");
+    expect(limitedBody.error).toContain("depuis cette connexion (10 lectures par jour) : ce n'est pas une panne");
     expect(limitedBody.analysis.rubrics[0].label).toBe("Non disponible (limite du jour atteinte)");
-    expect((await post(fourth, { action: "see_findings" })).status()).toBe(200);
-    expect((await draftOf(fourth)).step).toBe(2);
+    expect((await post(limitedVisitor, { action: "see_findings" })).status()).toBe(200);
+    expect((await draftOf(limitedVisitor)).step).toBe(2);
     expect(await prisma.company.count()).toBe(companiesBefore);
 
     // Double clic : une analyse en cours refuse un second lancement et l'étape 2 ; elle continue.

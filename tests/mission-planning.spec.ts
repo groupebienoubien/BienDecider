@@ -1,10 +1,12 @@
+import Anthropic from "@anthropic-ai/sdk";
+import { mock } from "node:test";
 import { expect, test } from "@playwright/test";
 import { EMPTY_TERMS } from "../src/lib/ambition-rules";
-import { MISSION_PLANNING_MODEL } from "../src/lib/anthropic";
+import { anthropic, MISSION_PLANNING_MODEL } from "../src/lib/anthropic";
 import { newAnalysis } from "../src/lib/onboarding/analysis-rules";
 import { applyDraftAction, emptyDraft, intelligenceInputFor, matchingIntelligence, readDraftState, starterPlan, type DraftState } from "../src/lib/onboarding/draft-rules";
 import { runDraftIntelligence } from "../src/lib/onboarding/intelligence";
-import { INTELLIGENCE_MESSAGES, missionPlanningUsage, needsNewIntelligence, newIntelligence, readIntelligence, type DraftIntelligence } from "../src/lib/onboarding/intelligence-rules";
+import { INTELLIGENCE_MESSAGES, INTELLIGENCE_STALE_MS, missionPlanningUsage, needsNewIntelligence, newIntelligence, readIntelligence, type DraftIntelligence } from "../src/lib/onboarding/intelligence-rules";
 import { buildMissionPlanningPrompt, checkMissionProposal, type MissionProposal } from "../src/lib/onboarding/mission-planning-rules";
 import { prepareMissionPlanning } from "../src/lib/onboarding/mission-planner";
 import { validateNewMission } from "../src/lib/missions/rules";
@@ -317,9 +319,62 @@ test("mission planning: generation follows search, retains Opus cost even on inv
   expect(unavailable.status).toBe("failed");
 });
 
+for (const elapsed of [90_000, 120_000]) {
+  test(`mission planning: the real SDK ${elapsed === 90_000 ? "accepts a response after 60 seconds" : "stops at 120 seconds without retrying"}`, async () => {
+    const originalKey = process.env.ANTHROPIC_API_KEY;
+    process.env.ANTHROPIC_API_KEY = "test-only-no-network";
+    let requests = 0;
+    const client = new Anthropic({
+      apiKey: "test-only-no-network", authToken: null,
+      fetch: async (_url, init) => {
+        requests++;
+        mock.timers.tick(elapsed);
+        if (init?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
+        return Response.json({
+          id: "mission-plan", type: "message", role: "assistant", model: MISSION_PLANNING_MODEL,
+          stop_reason: "tool_use", stop_sequence: null,
+          usage: { input_tokens: 1000, output_tokens: 500 },
+          content: [{ type: "tool_use", id: "record-plan", name: "record_mission_plan", input: proposal() }],
+        });
+      },
+    });
+    const create = mock.method(anthropic.messages, "create", client.messages.create.bind(client.messages));
+    const errors = mock.method(console, "error", () => {});
+    mock.timers.enable({ apis: ["setTimeout"] });
+    try {
+      const planning = await prepareMissionPlanning(research());
+      expect(planning.status).toBe(elapsed === 90_000 ? "done" : "failed");
+      expect(requests).toBe(1);
+      expect(create.mock.calls[0].arguments[0]).toMatchObject({ max_tokens: 6500 });
+      expect(create.mock.calls[0].arguments[1]).toEqual({ timeout: 120_000, maxRetries: 0 });
+      if (elapsed === 90_000) {
+        expect(starterPlan({ ...restaurant(), intelligence: { ...research(), planning } }).missions).toHaveLength(1);
+        expect(errors.mock.callCount()).toBe(0);
+      } else {
+        expect(errors.mock.calls.map((call) => call.arguments)).toEqual([
+          ["Préparation des missions impossible : Request timed out."],
+        ]);
+      }
+    } finally {
+      mock.timers.reset();
+      create.mock.restore();
+      errors.mock.restore();
+      if (originalKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+      else process.env.ANTHROPIC_API_KEY = originalKey;
+    }
+  });
+}
+
+test("mission planning: route and progress leave time for search, generation and persistence", async () => {
+  const { maxDuration } = await import("../src/app/api/bienvenue/route");
+  expect(maxDuration).toBe(240);
+  expect(INTELLIGENCE_STALE_MS).toBe(maxDuration * 1000);
+  expect(60_000 + 120_000).toBeLessThan(INTELLIGENCE_STALE_MS);
+});
+
 test("mission planning: live Opus comparison on two synthetic businesses", async () => {
   test.skip(process.env.MISSION_PLANNER_LIVE !== "1", "Opt-in paid API evaluation, without database reads or writes.");
-  test.setTimeout(150_000);
+  test.setTimeout(270_000);
   const first = restaurant();
   const second = restaurant();
   second.profile = { ...second.profile, companyName: "Atelier Test", trade: "Électricien", offers: "Dépannage électrique", targetClients: "Propriétaires lyonnais", website: "https://electricien.example/" };

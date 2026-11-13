@@ -78,7 +78,9 @@ node -r dotenv/config .\node_modules\@playwright\test\cli.js test mission-planni
 Remove-Item Env:\MISSION_PLANNER_LIVE
 ```
 
-L'appel de planification est limité à 6 500 tokens de sortie et 60 secondes, après une recherche de marché bornée à 60 secondes au total. La route dispose de 180 secondes ; la progression considère un traitement interrompu après ce délai comme un échec. Coût, modèle et tokens de planification ont leur propre événement `onboarding_mission_planning` à l'inscription.
+L'appel de planification est limité à 6 500 tokens de sortie et 120 secondes, sans reprise automatique, après une recherche de marché bornée à 60 secondes au total. La route dispose de 240 secondes, dont une marge pour les accès au brouillon ; la progression considère un traitement interrompu après ce délai comme un échec. Coût, modèle et tokens de planification ont leur propre événement `onboarding_mission_planning` à l'inscription.
+
+Pour les tests du parcours d'entrée, les plafonds par IP et par 24 h sont temporairement relevés à **10 analyses** et **10 recherches/préparations de missions**. La création de brouillons reste limitée à 20 par IP et par 24 h ; les plafonds globaux restent inchangés (300 par défaut pour chaque étape, réglables par `ANONYMOUS_ANALYSIS_DAILY_LIMIT` et `ANONYMOUS_INTELLIGENCE_DAILY_LIMIT`). Les compteurs existants ne sont pas remis à zéro.
 
 Gmail manuel : voir [docs/oauth-setup.md](docs/oauth-setup.md) pour `GMAIL_OAUTH_CLIENT_ID`, `GMAIL_OAUTH_CLIENT_SECRET` et `OAUTH_TOKEN_ENCRYPTION_KEY`. Callback `/api/oauth/gmail/callback`, scopes Gmail send + identité standard, aucun accès en lecture aux emails. Sans ces variables, la connexion reste désactivée. Tests locaux : `npm run test:gmail` (aucun réseau).
 
