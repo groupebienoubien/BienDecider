@@ -2,6 +2,42 @@
 
 Audit du 12 novembre 2026, correctifs ciblés et cas d'usage de la refonte.
 
+## Actualisation du 13 novembre : raccourcir le chemin vers les missions
+
+Cette actualisation porte sur le parcours réellement livré. Les sections suivantes conservent l'audit historique et les cibles plus larges du 12 novembre.
+
+### Incohérences constatées
+
+| Priorité | Cause vérifiée | Correction |
+| --- | --- | --- |
+| P1 | Modifier le site ou choisir Google renvoyait à la découverte, puis obligeait à retrouver les réseaux dans la confirmation. | La relecture reste à l'étape 2, avec progression et rafraîchissement des candidats. |
+| P1 | Le planificateur pouvait s'arrêter au premier levier. Ce n'était pas un plafond technique d'une mission : le schéma en accepte trois. | Le même appel examine tous les modèles disponibles et vise trois leviers complémentaires, ordonnés et justifiés. |
+| P1 | Sources, constats, statut des réseaux, profil et synthèse se répétaient avant les décisions. Chaque mission affichait sept lignes de cadrage. | Confirmation centrée sur les liens et l'activité ; constats repliables ; résultat, indicateur et action du dirigeant visibles dans les missions. |
+| P1 | Le compte promettait toujours trois missions, quel que soit le plan affiché. | Le texte reprend le nombre réel, y compris zéro ou une mission. |
+
+### Parcours mis en place
+
+1. **Découverte** : prénom, entreprise, ville et site facultatif ; analyse publique existante.
+2. **Confirmation** : présence en ligne et activité sur le même écran. Une source corrigée est relue ici ; les anciens réseaux ne sont plus proposés à confirmer pendant la correction. Aucun passage à l'objectif pendant une lecture active ou avec des preuves obsolètes.
+3. **Ambition** : texte libre, reformulation et confirmation ; les détails qui répètent l'objectif sont repliés. Les questions nécessaires restent visibles.
+4. **Missions** : actions en premier, une priorité identifiée, résultat recherché et indicateur. Preuves, effort, collecte, risques, horizons et comparables restent consultables sans encombrer le chemin principal.
+5. **Compte puis stratégie** : nombre exact de missions annoncé ; plan conservé et créé dans l'ordre à l'inscription, aucune mission exécutée automatiquement.
+
+### Exploitation de l'analyse et limites
+
+- La génération vise une priorité immédiate, un deuxième levier et un test exploratoire distincts. Les offres, la clientèle déclarée et les opportunités sourcées comptent aussi, pas seulement le premier défaut du site.
+- Aucun appel IA supplémentaire ni nouvelle recherche au chargement de la page. Trois missions peuvent nécessiter davantage de tokens de sortie dans l'appel existant.
+- Trois missions ne sont pas garanties : les contraintes et preuves restent prioritaires. Le prompt exige d'expliquer pourquoi seules zéro, une ou deux actions sont justifiables. Les plans historiques restent lisibles.
+- Un profil social confirmé n'est ni une connexion OAuth ni une analyse de ses publications. Cette passe n'ajoute aucun connecteur ni aucune couverture de Snapchat ou d'autres plateformes.
+- Une correction de source peut encore nécessiter une nouvelle lecture, dans les quotas existants. Elle ne demande plus de revenir à la découverte ni de ressaisir les champs validés.
+
+### Recette
+
+- Règles : tests de qualité onboarding et de planification, conservation de trois missions distinctes, refus des preuves inventées, coût et absence de secours générique.
+- Navigateur sur base locale jetable : cinq étapes jusqu'à l'inscription, retours et rechargements, cas sans site, provenance consultable, correction du site et confirmation du nouveau profil Instagram sans sortir de l'étape 2.
+- Types et lint ciblé ; contrôle visuel desktop/mobile. Aucune base client modifiée. La qualité de trois recommandations générées avec un appel réel au modèle reste à mesurer ; les sorties des tests sont contrôlées.
+- Bilan local : 25 tests passent dans la dernière exécution groupée ; le test avec appel réel au modèle est désactivé. Le parcours complet a réussi lors de la première recette, mais échoue dans les dernières passes à l'ouverture de la stratégie avec les erreurs de protocole de PGlite (`portal does not exist`, paramètres d'une requête préparée mélangés). Le démarrage de PostgreSQL natif est refusé depuis le terminal administrateur Windows : une recette finale sur PostgreSQL reste nécessaire, sans masquer cet échec ni modifier la stratégie pour contourner le banc de test.
+
 ## 1. Décision et périmètre
 
 **Le problème principal est confirmé : le parcours personnalise les mots davantage qu'il ne personnalise la décision.** Une mission crédible doit relier :

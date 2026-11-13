@@ -4,13 +4,15 @@ import { WelcomeFrame } from "../welcome-frame";
 import { AccountForm } from "../step-forms";
 import { currentSignupAvailability } from "@/lib/signup-control";
 import { SIGNUP_CLOSED_MESSAGE, SIGNUP_FULL_MESSAGE } from "@/lib/signup-rules";
+import { starterPlan } from "@/lib/onboarding/draft-rules";
 
 /** Étape 5 (#279) : le compte est créé en dernier, puis le dirigeant arrive sur sa stratégie. */
 export default async function WelcomeAccountPage() {
   const state = await requireDraftPage("/bienvenue/compte");
   const availability = await currentSignupAvailability();
+  const count = starterPlan(state).missions.length;
   return (
-    <WelcomeFrame step={5} intro={<p>{state.profile.firstName}, créez votre compte pour retrouver votre stratégie et vos trois missions.</p>}>
+    <WelcomeFrame step={5} intro={<p>{state.profile.firstName}, enregistrez votre stratégie{count > 0 ? ` et ${count === 1 ? "votre mission" : `vos ${count} missions`}` : ""}.</p>}>
       {availability === "open" ? (
         <AccountForm />
       ) : (

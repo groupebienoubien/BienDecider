@@ -34,7 +34,7 @@ export function useDraftAction() {
       const response = await fetch("/api/bienvenue", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
       const data = await response.json().catch(() => null);
       // 409 : autre étape ou session ouverte, le serveur dit où aller.
-      if ((response.ok || response.status === 409) && data && typeof data.href === "string") {
+      if ((response.ok || response.status === 409 || (response.status === 429 && data?.code === "limited")) && data && typeof data.href === "string") {
         go(data.href);
         return;
       }
@@ -79,7 +79,7 @@ export function StepColumn({ current }: { current: DraftStep }) {
   const steps = Object.entries(STEP_LABELS).map(([key, label]) => ({ step: Number(key) as DraftStep, ...label }));
   return (
     <nav aria-label="Étapes du parcours">
-      <ol className="flex flex-row flex-wrap items-center gap-1 lg:flex-col lg:items-stretch">
+      <ol className="grid grid-cols-5 items-center gap-1 lg:flex lg:flex-col lg:items-stretch">
         {steps.map(({ step, name, subtitle }) => {
           const done = step < current;
           const isCurrent = step === current;
@@ -89,7 +89,7 @@ export function StepColumn({ current }: { current: DraftStep }) {
                 {done ? "✓" : step}
               </span>
               <span className="flex flex-col items-start text-left">
-                <span className={`text-sm ${isCurrent ? "font-bold" : "sr-only font-medium lg:not-sr-only"} text-[var(--bd-ink)]`}>
+                <span className={`sr-only text-sm lg:not-sr-only ${isCurrent ? "font-bold" : "font-medium"} text-[var(--bd-ink)]`}>
                   {name}
                   {done && <span className="sr-only"> (terminée)</span>}
                 </span>
@@ -100,11 +100,11 @@ export function StepColumn({ current }: { current: DraftStep }) {
           return (
             <li key={step} aria-current={isCurrent ? "step" : undefined}>
               {done ? (
-                <button type="button" disabled={busy} onClick={() => send({ action: "back", step })} className="flex min-h-11 min-w-11 items-center gap-3 lg:items-start rounded-md px-2 py-1.5 hover:bg-[var(--bd-cream-deep)] lg:w-full">
+                <button type="button" disabled={busy} onClick={() => send({ action: "back", step })} className="flex min-h-11 min-w-11 items-center justify-center gap-3 lg:items-start lg:justify-start rounded-md px-2 py-1.5 hover:bg-[var(--bd-cream-deep)] lg:w-full">
                   {content}
                 </button>
               ) : (
-                <div className={`flex min-h-11 items-center gap-3 rounded-md px-2 py-1.5 lg:items-start ${isCurrent ? "bg-[var(--bd-cream)]" : ""}`}>{content}</div>
+                <div className={`flex min-h-11 items-center justify-center gap-3 rounded-md px-2 py-1.5 lg:items-start lg:justify-start ${isCurrent ? "bg-[var(--bd-cream)]" : ""}`}>{content}</div>
               )}
             </li>
           );

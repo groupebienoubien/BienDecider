@@ -141,6 +141,8 @@ export function AmbitionEditor({ target, initialText }: { target: Target; initia
         {shown && (
           <section aria-label="Ce que Paul comprend" className="flex flex-col gap-3 rounded-lg border-l-4 border-[var(--bd-brand)] bg-[var(--bd-cream)] p-4 text-sm text-[var(--bd-ink)]">
             <p className="text-base">Voici ce que je comprends. {shown.reformulation}.</p>
+            {(shown.found.length > 0 || shown.notes.length > 0) && <details open={target === "entreprise"}>
+              <summary className="cursor-pointer font-semibold">Détails de votre objectif</summary>
             {shown.found.length > 0 && (
               <div>
                 <h3 className="font-semibold">Ce que j&apos;ai retenu</h3>
@@ -153,6 +155,7 @@ export function AmbitionEditor({ target, initialText }: { target: Target; initia
                 <ul className="mt-1 list-disc pl-5">{shown.notes.map((item) => <li key={item}>{item}</li>)}</ul>
               </div>
             )}
+            </details>}
             {shown.questions.length > 0 && (
               <div>
                 <p className="font-semibold">{AMBITION_REFINE_INTRO}</p>

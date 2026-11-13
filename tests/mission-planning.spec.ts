@@ -94,6 +94,8 @@ test("mission planning: the dossier carries the actual finding, sources, objecti
   expect(prompt).toContain(state.ambition!.text);
   expect(prompt).toContain("publications sociales n'ont pas été lues");
   expect(prompt).toContain('"mediaBudgetPerMonth":0');
+  expect(prompt).toContain("Vise trois missions complémentaires");
+  expect(prompt).toContain("ne remplis jamais un quota sans preuve");
   expect(prompt).not.toContain('"key":"agencies"');
   expect(prompt).not.toContain('"key":"review_reply"');
 });
@@ -117,6 +119,32 @@ test("mission planning: displayed missions and synthesis survive storage unchang
   expect(readIntelligence(state.intelligence)).toEqual(state.intelligence);
   expect(starterPlan(persisted)).toEqual(displayed);
   expect(missionPlanningUsage(persisted.intelligence)).toMatchObject({ agent: "onboarding_mission_planning", model: MISSION_PLANNING_MODEL, costUsd: 0.03 });
+});
+
+test("mission planning: three complementary missions survive storage without another analysis", () => {
+  const state = restaurant();
+  const intelligence = research(state);
+  const source = proposal();
+  const first = source.missions[0];
+  const expanded: MissionProposal = { ...source, missions: [first, {
+    ...first, template: "social_post", channel: "facebook", title: "Présenter les repas de groupe aux familles",
+    outcome: "Mesurer les demandes de repas de groupe après une publication",
+    evidenceIds: ["profile:offers", "profile:targetClients"], scope: { topic: "Repas de groupe pour les familles lyonnaises" }, stopRuleDays: 7,
+    decisionPlan: { ...first.decisionPlan, selectionReason: "Tester une deuxième offre auprès des familles, sans répéter la page du déjeuner des salariés.", indicator: "Demandes de repas de groupe déclarées après la publication." },
+  }, {
+    ...first, template: "custom", channel: null, title: "Tester les réservations auprès des salariés voisins",
+    outcome: "Recueillir les freins à la réservation du mardi midi",
+    evidenceIds: ["profile:targetClients"], scope: { description: "Interroger les salariés du quartier sur les conditions d'une réservation le mardi midi." },
+    decisionPlan: { ...first.decisionPlan, selectionReason: "Explorer les freins auprès de la clientèle déclarée avant de multiplier les publications.", indicator: "Freins à la réservation déclarés par les salariés interrogés." },
+  }] };
+  expect(checkMissionProposal(expanded, intelligence).ok).toBe(true);
+  const stored = readDraftState({
+    step: 5, profile: state.profile, ambition: state.ambition, profileConfirmed: true, diagnosticReady: true,
+    analysis: state.analysis, intelligence: { ...intelligence, planning: { status: "done", proposal: expanded, cost: { usd: 0.03, inputTokens: 1000, outputTokens: 500, model: MISSION_PLANNING_MODEL } } },
+  });
+  expect(starterPlan(stored).missions.map(({ title }) => title)).toEqual(expanded.missions.map(({ title }) => title));
+  expect(starterPlan(stored).missions.map(({ first }) => first)).toEqual([true, false, false]);
+  expect(missionPlanningUsage(stored.intelligence)?.costUsd).toBe(0.03);
 });
 
 test("mission planning: fabricated proofs, duplicate actions, incompatible scope and promises are refused as a whole", () => {

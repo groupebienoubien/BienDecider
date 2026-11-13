@@ -20,10 +20,10 @@ export function WelcomeFrame({ step, intro, children }: { step: DraftStep; intro
           </div>
         </header>
         <div className="mt-6 grid gap-6 lg:grid-cols-[240px_minmax(0,1fr)] lg:gap-10">
-          <aside className="rounded-lg bg-white p-3 lg:self-start">
+          <aside className="lg:self-start">
             <StepColumn current={step} />
           </aside>
-          <section aria-labelledby="step-title" className="min-w-0 rounded-lg bg-white p-5 sm:p-8">
+          <section aria-labelledby="step-title" className="min-w-0 border-t border-[var(--bd-line)] pt-5 lg:border-l lg:border-t-0 lg:pl-8 lg:pt-0">
             <div id="step-title" key={step}>
               <StepHeading>{STEP_TITLES[step]}</StepHeading>
             </div>
