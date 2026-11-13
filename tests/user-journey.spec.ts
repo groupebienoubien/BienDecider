@@ -3353,6 +3353,7 @@ test("GH-292: step 2 shows the first findings with their certainty, consequence,
     await page.setViewportSize({ width: 360, height: 800 });
     await page.goto(`${baseURL}/bienvenue`);
     const constats = page.getByRole("region", { name: "Vos premiers constats" });
+    await page.getByText("Constats et sources de cette lecture", { exact: true }).click();
     await expect(constats.getByRole("listitem")).toHaveCount(2);
     const observed = constats.getByRole("listitem").filter({ hasText: "aucune réalisation" });
     await expect(observed).toContainText("Observé");
