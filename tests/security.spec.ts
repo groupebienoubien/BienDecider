@@ -2237,8 +2237,9 @@ test("GH-280: the public analysis refuses internal sites, a second launch and a 
       expect(view.rubrics.find((rubric) => rubric.key === "identity")?.label, website).toBe("Non disponible (accès refusé)");
       const draft = await draftOf(first);
       expect(draft.analysis).toMatchObject({ status: "done", cost: { usd: expect.any(Number) }, rubrics: { site: { reason: "refused" } } });
-      expect(draft.step).toBe(1);
-      // Relancer la même entreprise ne relance rien : les constats restent.
+      expect(draft.step).toBe(2);
+      // Corriger puis relancer la même entreprise ne relance rien : les constats restent.
+      expect((await post(first, { action: "back", step: 1 })).status()).toBe(200);
       expect((await post(first, { action: "discover", ...identity, website })).status()).toBe(200);
       expect((await prisma.onboardingDraft.findUniqueOrThrow({ where: { id: draft.id } })).analysis).toMatchObject({ runId: (draft.analysis as { runId: string }).runId });
       const seen = await post(first, { action: "see_findings" });
@@ -2401,7 +2402,7 @@ test("GH-282: the ambition is confirmed only with the token of the exact interpr
     const stored = await prisma.onboardingDraft.findUniqueOrThrow({ where: { id: draft.id } });
     expect(stored).toMatchObject({ step: 4, diagnosticReady: true, ambition: { text, terms: interpretation.terms } });
     // La synthèse du modèle suit la recherche ; sans modèle, seul le résumé de règles est affiché.
-    expect(stored.ambition).toMatchObject({ planningVersion: 1 });
+    expect(stored.ambition).toMatchObject({ planningVersion: 2 });
     const plan = starterPlan(readDraftState(stored));
     const retained = plan.retained;
     expect(retained.length).toBeGreaterThanOrEqual(2);

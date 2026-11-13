@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { EMPTY_TERMS } from "../src/lib/ambition-rules";
-import { newAnalysis, ruleFirstFindings } from "../src/lib/onboarding/analysis-rules";
+import { analysisView, newAnalysis, ruleFirstFindings } from "../src/lib/onboarding/analysis-rules";
+import { runDraftAnalysis } from "../src/lib/onboarding/analysis";
 import {
   analysisMatchesProfile, applyDraftAction, checkDraftForAccount, emptyDraft, intelligenceInputFor,
   matchingIntelligence, prefillWebsite, readDraftState, starterMarketFinding, starterMarketFindings, starterPlan, type DraftState,
@@ -11,6 +12,80 @@ import { synthesisInput } from "../src/lib/onboarding/synthesis";
 
 const NOW = new Date("2026-11-12T10:00:00Z");
 const WEBSITE = "https://restaurant.example/";
+
+test("onboarding quality: discovery only needs company and location and clears another company's profile", () => {
+  const initial = emptyDraft();
+  expect(applyDraftAction(initial, { action: "discover", companyName: "La Tonnelle" }, NOW)).toMatchObject({ ok: false, errors: { location: expect.any(String) } });
+  const result = applyDraftAction(initial, { action: "discover", companyName: "La Tonnelle", location: "Maurepas" }, NOW);
+  expect(result).toMatchObject({ ok: true, state: { step: 2, profile: { firstName: "", companyName: "La Tonnelle", location: "Maurepas", offers: "" } } });
+  const changed = applyDraftAction({ ...draft(), step: 1 }, { action: "discover", companyName: "Autre atelier", location: "Paris" }, NOW);
+  expect(changed).toMatchObject({ ok: true, state: { profile: { trade: "", offers: "", targetClients: "", website: "" }, profileConfirmed: false } });
+});
+
+test("onboarding quality: links can be confirmed before interpretation finishes, unknown fields stay empty", () => {
+  const state = discoveredDraft();
+  const running = { ...state.analysis!, status: "running" as const, sourcesReady: true, finishedAt: null };
+  const confirmed = applyDraftAction({ ...state, analysis: running }, { action: "confirm_profile" }, NOW);
+  expect(confirmed).toMatchObject({ ok: true, state: { step: 3, profileConfirmed: true, profile: { trade: "", targetClients: "", offers: "", website: WEBSITE } } });
+  expect(analysisView(running, NOW)).toMatchObject({ finished: false, sourcesReady: true });
+  expect(applyDraftAction({ ...state, analysis: running }, { action: "confirm_profile", website: "https://other.example/" }, NOW)).toMatchObject({ ok: false, kind: "busy" });
+  expect(applyDraftAction({ ...state, analysis: { ...running, sourcesReady: false } }, { action: "confirm_profile" }, NOW)).toMatchObject({ ok: false, kind: "busy" });
+  if (!confirmed.ok) throw new Error("Confirmation failed");
+  const goal = applyDraftAction(confirmed.state, { action: "confirm_ambition", ambition: "Plus de clients en semaine", terms: EMPTY_TERMS, token: "test" }, NOW, () => true);
+  expect(goal).toMatchObject({ ok: true, state: { step: 4 } });
+  if (!goal.ok) throw new Error("Objective failed");
+  expect(applyDraftAction(goal.state, { action: "prepare_missions" }, NOW)).toMatchObject({ ok: false, kind: "busy" });
+  expect(applyDraftAction(goal.state, { action: "interested" }, NOW)).toMatchObject({ ok: false, kind: "busy" });
+  expect(checkDraftForAccount({ ...goal.state, step: 5 }, NOW)).toMatchObject({ ok: false, step: 4 });
+  const finished = { ...goal.state, analysis: { ...running, status: "done" as const } };
+  expect(applyDraftAction(finished, { action: "prepare_missions" }, NOW)).toMatchObject({ ok: true });
+  expect(applyDraftAction(finished, { action: "goto", step: 5 }, NOW)).toMatchObject({ ok: false });
+});
+
+test("onboarding quality: automatic source selection never confirms the profile and refuses overlapping reads", () => {
+  const state = discoveredDraft();
+  const candidateIds = ["ChIJatelierLumen01", "ChIJatelierLumen02"];
+  state.analysis!.findings.googlePlaceCandidates = candidateIds;
+  const choice = { status: "confirmed" as const, placeId: candidateIds[0] };
+  const request = { action: "update_sources" as const, googlePlaceChoice: choice, website: WEBSITE };
+  const selected = applyDraftAction(state, request, NOW);
+  expect(selected).toMatchObject({ ok: true, state: { step: 2, profileConfirmed: false, googlePlaceChoice: choice, profile: { ...state.profile, website: WEBSITE } } });
+  if (!selected.ok) throw new Error("Automatic source selection failed");
+  const analysis = newAnalysis({
+    companyName: state.profile.companyName, location: state.profile.location, website: WEBSITE,
+    googlePlaceId: choice.placeId, googlePlaceCandidateIds: candidateIds,
+  }, "selected", NOW);
+  const running = { ...selected.state, analysis };
+  expect(applyDraftAction(running, request, NOW)).toMatchObject({ ok: false, kind: "busy" });
+  analysis.sourcesReady = true;
+  expect(applyDraftAction(running, { ...request, googlePlaceChoice: { status: "confirmed", placeId: candidateIds[1] } }, NOW)).toMatchObject({ ok: false, kind: "busy" });
+  expect(applyDraftAction(running, { action: "confirm_profile" }, NOW)).toMatchObject({ ok: true, state: { step: 3, profileConfirmed: true } });
+  analysis.status = "done";
+  expect(applyDraftAction(running, request, NOW)).toMatchObject({ ok: true, state: { step: 2, profileConfirmed: false, analysis: { runId: "selected" } } });
+  expect(applyDraftAction(running, { ...request, googlePlaceChoice: { status: "confirmed", placeId: "ChIJunknownPlace01" } }, NOW)).toMatchObject({ ok: false, code: "M-05" });
+  expect(applyDraftAction({ ...running, step: 3 }, request, NOW)).toMatchObject({ ok: false, kind: "wrong_step" });
+  analysis.status = "limited";
+  expect(applyDraftAction(running, { action: "confirm_profile" }, NOW)).toMatchObject({ ok: true, state: { step: 3, profileConfirmed: true, googlePlaceChoice: choice } });
+});
+
+test("onboarding quality: the source milestone is persisted before the model finishes", async () => {
+  const input = { companyName: "Atelier Test", location: "Lyon", website: WEBSITE };
+  let releaseModel: () => void = () => { throw new Error("Model was not started"); };
+  const modelWait = new Promise<void>((resolve) => { releaseModel = resolve; });
+  let sourcesSaved: () => void = () => { throw new Error("Source promise not initialized"); };
+  const ready = new Promise<void>((resolve) => { sourcesSaved = resolve; });
+  const snapshots: ReturnType<typeof newAnalysis>[] = [];
+  const running = runDraftAnalysis("test", input, {
+    analysis: newAnalysis(input, "milestone", NOW), now: () => NOW, places: { apiKey: "" },
+    readSite: async () => ({ ok: true, url: WEBSITE, readAt: NOW.toISOString(), pages: [{ url: WEBSITE, title: "Accueil", text: "Restaurant" }], palette: [], logo: null, socialSources: [] }),
+    extract: async () => { await modelWait; return { ok: false }; },
+    save: async (snapshot) => { snapshots.push(snapshot); if (snapshot.sourcesReady) sourcesSaved(); return true; },
+  });
+  await ready;
+  expect(snapshots.at(-1)).toMatchObject({ status: "running", sourcesReady: true });
+  releaseModel();
+  expect(await running).toMatchObject({ status: "done", sourcesReady: true });
+});
 
 function draft(): DraftState {
   const state = emptyDraft();

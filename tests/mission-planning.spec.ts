@@ -2,13 +2,13 @@ import { expect, test } from "@playwright/test";
 import { EMPTY_TERMS } from "../src/lib/ambition-rules";
 import { MISSION_PLANNING_MODEL } from "../src/lib/anthropic";
 import { newAnalysis } from "../src/lib/onboarding/analysis-rules";
-import { emptyDraft, intelligenceInputFor, matchingIntelligence, readDraftState, starterPlan, type DraftState } from "../src/lib/onboarding/draft-rules";
+import { applyDraftAction, emptyDraft, intelligenceInputFor, matchingIntelligence, readDraftState, starterPlan, type DraftState } from "../src/lib/onboarding/draft-rules";
 import { runDraftIntelligence } from "../src/lib/onboarding/intelligence";
 import { INTELLIGENCE_MESSAGES, missionPlanningUsage, needsNewIntelligence, newIntelligence, readIntelligence, type DraftIntelligence } from "../src/lib/onboarding/intelligence-rules";
 import { buildMissionPlanningPrompt, checkMissionProposal, type MissionProposal } from "../src/lib/onboarding/mission-planning-rules";
 import { prepareMissionPlanning } from "../src/lib/onboarding/mission-planner";
 import { validateNewMission } from "../src/lib/missions/rules";
-import { hasNoAvailableCapacity, needsWeekdayClarification } from "../src/lib/missions/decision-rules";
+import { evaluateMissionObjective, hasNoAvailableCapacity, needsWeekdayClarification } from "../src/lib/missions/decision-rules";
 
 const NOW = new Date("2026-11-12T12:00:00Z");
 
@@ -17,6 +17,8 @@ test("mission planning: a weekly volume target is not confused with an unspecifi
   expect(needsWeekdayClarification("Recevoir davantage de demandes chaque semaine")).toBe(false);
   expect(needsWeekdayClarification("Avoir plus de clients en semaine")).toBe(true);
   expect(needsWeekdayClarification("Avoir plus de clients le mardi en semaine")).toBe(false);
+  expect(evaluateMissionObjective({ template: "social_post", objective: "Avoir plus de clients en semaine" })).toEqual({ allowed: true });
+  expect(evaluateMissionObjective({ template: "social_post", objective: "Je suis complet et je veux plus de clients en semaine" }).allowed).toBe(false);
 });
 
 test("mission planning: complete websites are not confused with full business capacity", () => {
@@ -34,6 +36,22 @@ test("mission planning: the real draft serializer preserves the no-fallback mark
   const persisted = readDraftState(toJson(state));
   expect(persisted.ambition?.planningVersion).toBe(1);
   expect(starterPlan(persisted).missions).toEqual([]);
+});
+
+test("mission planning: reconfirming an unchanged objective refreshes the old approach, not a page reload", async () => {
+  const state = restaurant();
+  state.intelligence = research(state);
+  expect(matchingIntelligence(state)).toEqual(state.intelligence);
+  const updated = applyDraftAction({ ...state, step: 3 }, { action: "confirm_ambition", ambition: state.ambition!.text, terms: state.ambition!.terms, token: "test" }, NOW, () => true);
+  if (!updated.ok) throw new Error("Objective confirmation failed");
+  expect(updated.state.ambition?.planningVersion).toBe(2);
+  expect(matchingIntelligence(updated.state)).toBeNull();
+  expect(needsNewIntelligence(state.intelligence, intelligenceInputFor(updated.state), NOW)).toBe(true);
+  const { toJson } = await import("../src/lib/onboarding/draft");
+  expect(readDraftState(toJson(updated.state)).ambition?.planningVersion).toBe(2);
+  const current = research(updated.state);
+  expect(readIntelligence(current)?.input.planningContext?.approachVersion).toBe(2);
+  expect(matchingIntelligence({ ...updated.state, intelligence: current })).toEqual(current);
 });
 
 function restaurant(): DraftState {
@@ -96,6 +114,10 @@ test("mission planning: the dossier carries the actual finding, sources, objecti
   expect(prompt).toContain('"mediaBudgetPerMonth":0');
   expect(prompt).toContain("Vise trois missions complémentaires");
   expect(prompt).toContain("ne remplis jamais un quota sans preuve");
+  expect(prompt).toContain("mesure légère intégrée");
+  expect(prompt).toContain("L'absence de chiffres de référence ne justifie pas à elle seule");
+  expect(prompt).toContain("un seul signal principal");
+  expect(prompt).toContain("sans titres Markdown");
   expect(prompt).not.toContain('"key":"agencies"');
   expect(prompt).not.toContain('"key":"review_reply"');
 });

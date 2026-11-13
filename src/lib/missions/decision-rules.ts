@@ -49,9 +49,6 @@ export function evaluateMissionObjective(input: {
 }): MissionObjectiveDecision {
   const { template, objective } = input;
   if (!ACQUISITION_TEMPLATES.has(template)) return { allowed: true };
-  if (needsWeekdayClarification(objective)) {
-    return { allowed: false, reason: "Il faut d'abord demander quels jours ou créneaux sont visés et quelle capacité est disponible." };
-  }
   if (hasNoAdditionalTime(objective)) {
     return { allowed: false, reason: "Le dirigeant indique ne pas avoir de temps supplémentaire pour réaliser ce test." };
   }

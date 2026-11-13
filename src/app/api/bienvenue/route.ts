@@ -6,7 +6,7 @@ import { consumeGlobalAnalysis, consumeGlobalIntelligence, consumeIpAttempt, ref
 import { applyDraftAction, checkInterpretation, emptyDraft, intelligenceInputFor, parseDraftAction, stepHref, type DraftState } from "@/lib/onboarding/draft-rules";
 import { signInterpretation, verifyInterpretation } from "@/lib/ambition-token";
 import { anonymousAmbitionModel, interpretAmbition } from "@/lib/ambition";
-import { ANALYSIS_MESSAGES, analysisView, limitedNotice, needsNewAnalysis, newAnalysis } from "@/lib/onboarding/analysis-rules";
+import { ANALYSIS_MESSAGES, analysisRunning, analysisView, googlePlaceCandidateIds, limitedNotice, needsNewAnalysis, newAnalysis } from "@/lib/onboarding/analysis-rules";
 import { needsNewIntelligence, newIntelligence } from "@/lib/onboarding/intelligence-rules";
 import { createDraft, loadDraft, saveAnalysis, saveDraft, saveIntelligence, startAnalysis, startIntelligence } from "@/lib/onboarding/draft";
 import { errorLabel, runDraftAnalysis } from "@/lib/onboarding/analysis";
@@ -60,11 +60,18 @@ export async function POST(request: NextRequest) {
     }
     draftId = (await createDraft(state)).id;
   }
-  if (action.action === "discover" || (action.action === "confirm_profile" && state.step === 2) || (action.action === "back" && state.step === 1)) {
+  if (action.action === "discover" || action.action === "update_sources" || (action.action === "confirm_profile" && state.step === 2) || (action.action === "back" && state.step === 1)) {
     return launchAnalysis(request, draftId, state, now);
   }
   // Recherche réelle de marché avant compte (#361, #362) : jamais bloquante pour cette transition, contrairement à l'analyse.
-  if (action.action === "confirm_ambition") await launchIntelligence(request, draftId, state, now).catch((error: unknown) => console.error(`Recherche de marché non lancée pour le brouillon ${draftId} : ${errorLabel(error)}.`));
+  if ((action.action === "confirm_ambition" || action.action === "prepare_missions") && !analysisRunning(state.analysis, now)) {
+    try {
+      await launchIntelligence(request, draftId, state, now);
+    } catch (error) {
+      console.error(`Recherche de marché non lancée pour le brouillon ${draftId} : ${errorLabel(error)}.`);
+      return NextResponse.json({ error: "La préparation des missions n'a pas pu démarrer. Réessayez dans un instant." }, { status: 503 });
+    }
+  }
   return NextResponse.json({ step: state.step, href: stepHref(state.step) });
 }
 
@@ -97,7 +104,7 @@ async function launchAnalysis(request: NextRequest, draftId: string, state: Draf
     location: state.profile.location,
     website: state.profile.website,
     googlePlaceId: state.googlePlaceChoice?.status === "confirmed" ? state.googlePlaceChoice.placeId : null,
-    googlePlaceCandidateIds: sameIdentity ? state.analysis?.findings.googlePlaceCandidates ?? [] : [],
+    googlePlaceCandidateIds: sameIdentity ? googlePlaceCandidateIds(state.analysis) : [],
     websiteRejected: state.websiteRejected,
   };
   const href = stepHref(state.step);

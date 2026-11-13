@@ -303,6 +303,13 @@ export async function runDraftAnalysis(draftId: string, profile: AnalysisInput, 
     })();
     const [siteResult, place] = await Promise.all([siteRead, placeRead]);
     if (!alive) return analysis;
+    await publish({
+      sourcesReady: true,
+      findings: {
+        ...analysis.findings,
+        ...(place?.category ? { trade: hypothesis(place.category) } : {}),
+      },
+    });
 
     const pages = siteResult?.ok ? siteResult.pages : [];
     if (pages.length === 0 && !place) {

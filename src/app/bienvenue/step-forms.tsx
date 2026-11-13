@@ -1,14 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { TradeCombobox } from "@/components/trade-combobox";
 import { AmbitionEditor } from "@/components/ambition-editor";
 import { LIMITS, profileOriginLabel, type DraftProfile, type GooglePlaceChoice, type ProfilePrefill } from "@/lib/onboarding/draft-rules";
 import type { AnalysisView, RubricStatus } from "@/lib/onboarding/analysis-rules";
 import type { CompetitorDecision, CompetitorDimension, CompetitorFact } from "@/lib/onboarding/intelligence-rules";
-import { type PublicSourceCandidate, type SocialSourceDecision } from "@/lib/onboarding/public-sources";
+import { normalizeSocialProfileUrl, SOCIAL_PLATFORMS, type PublicSourceCandidate, type SocialSourceDecision } from "@/lib/onboarding/public-sources";
 import type { PlaceCandidate } from "@/lib/google-places";
 import { safeSourceUrl } from "@/lib/findings/certainty";
 import { FieldError, FormError, INPUT_CLASS, PRIMARY_BUTTON, SECONDARY_BUTTON, useDraftAction, type FieldErrors } from "./journey-client";
@@ -41,7 +41,6 @@ function TextField({ id, label, hint, example, value, onChange, errors, max, req
   );
 }
 
-const DISCOVERY_ERROR = "La découverte n'a pas pu être lancée. Réessayez dans un instant.";
 const POLL_MS = 1_200;
 
 const CLIENT_SUGGESTIONS = ["Particuliers", "Familles", "Professionnels", "Entreprises", "Touristes"];
@@ -139,124 +138,45 @@ function RubricList({ analysis }: { analysis: AnalysisView }) {
   );
 }
 
-/**
- * Étape 1 (#280) : prénom, entreprise, localisation, site facultatif. « Découvrir mon entreprise » enregistre et lance
- * l'analyse publique ; la progression des quatre rubriques est relue toutes les 1,2 s ; une fois l'analyse terminée,
- * « Voir mes premiers constats » ouvre l'étape 2 et reçoit le focus.
- */
-export function DiscoveryStep({ profile, analysis: initial }: { profile: DraftProfile; analysis: AnalysisView | null }) {
-  const router = useRouter();
-  const findings = useDraftAction();
-  const [values, setValues] = useState({ firstName: profile.firstName, companyName: profile.companyName, location: profile.location, website: profile.website });
-  const [analysis, setAnalysis] = useState<AnalysisView | null>(initial);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [errors, setErrors] = useState<FieldErrors>({});
-  const seeRef = useRef<HTMLButtonElement>(null);
-  const focusOnFinish = useRef(false);
-  // Saisies enregistrées par le dernier « Découvrir » : toute modification depuis demande une nouvelle découverte.
-  const [saved, setSaved] = useState(values);
+export function DiscoveryStep({ profile }: { profile: DraftProfile }) {
+  const { busy, error, errors, send } = useDraftAction();
+  const [values, setValues] = useState({ companyName: profile.companyName, location: profile.location });
   const set = (key: keyof typeof values) => (value: string) => setValues((current) => ({ ...current, [key]: value }));
-  const running = analysis?.finished === false;
-  const edited = (Object.keys(values) as (keyof typeof values)[]).some((key) => values[key].trim() !== saved[key].trim());
-  const finished = analysis?.finished === true && !edited;
-
-  useEffect(() => {
-    if (!running) return;
-    let stopped = false;
-    const timer = window.setInterval(async () => {
-      try {
-        const response = await fetch("/api/bienvenue/analyse", { cache: "no-store" });
-        const data = await response.json().catch(() => null);
-        if (stopped) return;
-        if (response.ok && data && typeof data.analysis === "object" && data.analysis !== null) {
-          setAnalysis(data.analysis as AnalysisView);
-          return;
-        }
-        // Plus d'analyse, brouillon expiré ou session ouverte : on arrête d'interroger, puis une seule navigation.
-        if (!response.ok && !(data && typeof data.href === "string")) return;
-        stopped = true;
-        window.clearInterval(timer);
-        setAnalysis(null);
-        const href = data && typeof data.href === "string" ? data.href : "/bienvenue";
-        if (href === "/bienvenue") router.refresh();
-        else router.push(href);
-      } catch {
-        // Réseau coupé : la prochaine interrogation réessaie.
-      }
-    }, POLL_MS);
-    return () => {
-      stopped = true;
-      window.clearInterval(timer);
-    };
-  }, [running, router]);
-
-  useEffect(() => {
-    if (finished && focusOnFinish.current) {
-      focusOnFinish.current = false;
-      seeRef.current?.focus();
-    }
-  }, [finished, analysis]);
-
-  async function discover(website: string) {
-    setBusy(true);
-    setError(null);
-    setErrors({});
-    try {
-      const response = await fetch("/api/bienvenue", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "discover", ...values, website }) });
-      const data = await response.json().catch(() => null);
-      // Enregistrées : réponse acceptée, ou quota atteint (le brouillon les garde quand même).
-      if (response.ok || data?.code === "limited") setSaved({ ...values, website });
-      if (data && typeof data.analysis === "object" && data.analysis !== null) {
-        focusOnFinish.current = true;
-        setAnalysis(data.analysis as AnalysisView);
-      }
-      if (response.ok) return;
-      // 409 sans analyse : autre étape ou session ouverte, le serveur dit où aller.
-      if (response.status === 409 && data && typeof data.href === "string") {
-        findings.go(data.href);
-        return;
-      }
-      setErrors(data && typeof data.errors === "object" && data.errors !== null ? data.errors : {});
-      // Quota atteint : le message est déjà sous les rubriques.
-      if (data?.code !== "limited") setError(data && typeof data.error === "string" ? data.error : DISCOVERY_ERROR);
-    } catch {
-      setError(DISCOVERY_ERROR);
-    } finally {
-      setBusy(false);
-    }
-  }
-
   return (
-    <div className="flex flex-col gap-6">
-      <form noValidate className="flex flex-col gap-5" onSubmit={(event) => { event.preventDefault(); if (!running) void discover(values.website); }}>
-        <TextField id="firstName" label="Votre prénom" value={values.firstName} onChange={set("firstName")} errors={errors} max={LIMITS.firstName} autoComplete="given-name" />
+      <form noValidate className="flex flex-col gap-5" onSubmit={(event) => { event.preventDefault(); void send({ action: "discover", ...values }); }}>
         <TextField id="companyName" label="Le nom de votre entreprise" value={values.companyName} onChange={set("companyName")} errors={errors} max={LIMITS.companyName} autoComplete="organization" />
         <TextField id="location" label="Sa localisation" hint="La ville ou le code postal de votre entreprise." value={values.location} onChange={set("location")} errors={errors} max={LIMITS.location} autoComplete="address-level2" />
-        <TextField id="website" label="Votre site (facultatif)" hint="Une adresse commençant par https:// ou http://." value={values.website} onChange={set("website")} errors={errors} max={LIMITS.website} required={false} type="url" autoComplete="url" />
-        <p className={HINT}>Paul lit seulement ce qui est public : votre site et votre fiche Google. Aucun mot de passe ni accès privé nécessaire.</p>
+        <p className={HINT}>Paul recherche votre entreprise. Vous vérifiez ensuite son site et ses réseaux. Aucun mot de passe ni accès privé nécessaire.</p>
         <FormError error={error} errors={errors} />
-        <div className="flex flex-wrap items-center gap-3">
-          <button type="submit" className={finished ? SECONDARY_OUTLINE : PRIMARY_BUTTON} disabled={busy || running}>Découvrir mon entreprise</button>
-          <button
-            type="button" className={SECONDARY_BUTTON} disabled={busy || running}
-            onClick={() => { setValues((current) => ({ ...current, website: "" })); void discover(""); }}
-          >
-            Je n&apos;ai pas de site
-          </button>
-        </div>
+        <div><button type="submit" className={PRIMARY_BUTTON} disabled={busy}>{busy ? "Recherche…" : "Découvrir mon entreprise"}</button></div>
       </form>
-      {analysis && <RubricList analysis={analysis} />}
-      {finished && (
-        <div className="flex flex-col gap-3">
-          <FormError error={findings.error} errors={findings.errors} />
-          <div>
-            <button ref={seeRef} type="button" className={PRIMARY_BUTTON} disabled={findings.busy} onClick={() => findings.send({ action: "see_findings" })}>
-              Voir mes premiers constats
-            </button>
+  );
+}
+
+export function CompanyConfirmation({ companyName, location, children }: { companyName: string; location: string; children: ReactNode }) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const titleId = useId();
+  const [open, setOpen] = useState(true);
+  useEffect(() => {
+    if (open && !dialog.current?.open) dialog.current?.showModal();
+    if (!open && dialog.current?.open) dialog.current.close();
+  }, [open]);
+  return (
+    <div>
+      <p className="mb-4 leading-relaxed">Confirmez les informations de {companyName} pour passer à votre objectif.</p>
+      <button type="button" className={PRIMARY_BUTTON} onClick={() => setOpen(true)}>Vérifier mon entreprise</button>
+      <dialog ref={dialog} aria-labelledby={titleId} onClose={() => setOpen(false)} className="fixed inset-0 m-auto max-h-[90dvh] w-[calc(100%_-_2rem)] max-w-2xl overflow-y-auto rounded-xl border border-[var(--bd-line)] bg-white p-5 text-[var(--bd-ink)] shadow-xl backdrop:bg-black/40 sm:p-8">
+        <div className="mb-5 flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-[var(--bd-brand)]">Découverte</p>
+            <h2 id={titleId} className="mt-1 text-2xl font-bold">Est-ce bien votre entreprise ?</h2>
+            <p className="mt-3 break-words text-lg font-semibold">{companyName}</p>
+            <p className={HINT}>{location}</p>
           </div>
+          <button type="button" className={SECONDARY_BUTTON} onClick={() => setOpen(false)} aria-label="Fermer la confirmation">Fermer</button>
         </div>
-      )}
+        {children}
+      </dialog>
     </div>
   );
 }
@@ -273,7 +193,9 @@ export function ProfileForm({
   googlePlaceCandidates,
   googlePlaceChoice: initialGooglePlaceChoice,
   websiteRejected,
-  googleStatus
+  googleStatus,
+  analysis,
+  analysisRunId,
 }: {
   prefill: ProfilePrefill;
   website: string;
@@ -283,12 +205,18 @@ export function ProfileForm({
   googlePlaceChoice: GooglePlaceChoice | null;
   websiteRejected: boolean;
   googleStatus: RubricStatus | null;
+  analysis: AnalysisView | null;
+  analysisRunId: string | null;
 }) {
   const { busy, error, errors, send } = useDraftAction();
   const correct = useDraftAction();
-  const [values, setValues] = useState(prefill.values);
-  const [website, setWebsite] = useState(initialWebsite);
-  const [googlePlaceChoice, setGooglePlaceChoice] = useState(initialGooglePlaceChoice);
+  const sourceAction = useDraftAction();
+  const [edits, setEdits] = useState<Partial<ProfilePrefill["values"]>>({});
+  const values = { ...prefill.values, ...edits };
+  const [websiteEdit, setWebsite] = useState<string>();
+  const website = websiteEdit ?? initialWebsite;
+  const [placeEdit, setGooglePlaceChoice] = useState<GooglePlaceChoice>();
+  const googlePlaceChoice = placeEdit ?? initialGooglePlaceChoice;
   const placeChoiceKey = (choice: GooglePlaceChoice | null) =>
     choice?.status === "confirmed" ? choice.placeId : choice?.status ?? "";
   const googlePlaceChanged = placeChoiceKey(googlePlaceChoice) !== placeChoiceKey(initialGooglePlaceChoice);
@@ -296,22 +224,48 @@ export function ProfileForm({
     || (googlePlaceChanged && (googlePlaceChoice?.status === "confirmed" || initialGooglePlaceChoice?.status === "confirmed"));
   const websiteCandidates = publicSources.filter((candidate) => candidate.platform === "website");
   const socialCandidates = publicSources.filter((candidate) => candidate.platform !== "website");
-  const [socialChoices, setSocialChoices] = useState(() => socialCandidates.map((candidate) => {
+  const [socialEdits, setSocialEdits] = useState<Record<string, { confirmedUrl: string; confirmed: boolean }>>({});
+  const socialChoices = socialCandidates.map((candidate) => {
     const saved = socialSourceDecisions.find((decision) => decision.candidateUrl === candidate.url);
     return {
       candidateUrl: candidate.url,
-      confirmedUrl: saved?.confirmedUrl ?? candidate.url,
-      confirmed: saved?.status === "confirmed"
+      ...(socialEdits[`${analysisRunId}:${candidate.url}`] ?? {
+        confirmedUrl: saved?.confirmedUrl ?? candidate.url,
+        confirmed: saved?.status === "confirmed",
+      }),
     };
-  }));
-  const set = (key: keyof typeof values) => (value: string) => setValues((current) => ({ ...current, [key]: value }));
+  });
+  const [declaredProfiles, setDeclaredProfiles] = useState(() => Object.fromEntries(SOCIAL_PLATFORMS.map((platform) => [
+    platform,
+    socialSourceDecisions.find((item) => item.platform === platform && item.origin === "declared" && !socialCandidates.some((candidate) => candidate.url === item.candidateUrl))?.confirmedUrl ?? "",
+  ])));
+  const set = (key: keyof typeof values) => (value: string) => setEdits((current) => ({ ...current, [key]: value }));
   // Une valeur modifiée par le dirigeant est la sienne : l'étiquette d'origine disparaît.
   const origin = (key: keyof typeof values) => (values[key] === prefill.values[key] ? profileOriginLabel(prefill.origins[key]) ?? undefined : undefined);
   const tradeOrigin = origin("trade");
-  const pending = busy || correct.busy;
+  const pending = busy || correct.busy || sourceAction.busy;
+  const reading = analysis?.finished === false;
+  const sourcePending = sourceAction.busy || (googlePlaceChanged && !sourceAction.error);
+  const confirmDisabled = pending || sourcePending || (reading && (!analysis.sourcesReady || sourcesChanged));
+
+  function updateSources(choice: GooglePlaceChoice | null, url: string) {
+    void sourceAction.send({
+      action: "update_sources",
+      googlePlaceChoice: choice,
+      website: url.trim(),
+      websiteRejected: !url.trim() && (websiteRejected || websiteEdit === ""),
+    });
+  }
+
+  function selectPlace(choice: GooglePlaceChoice, discoveredSite: string) {
+    setGooglePlaceChoice(choice);
+    updateSources(choice, websiteEdit ?? discoveredSite);
+  }
+
   return (
     <form noValidate className="flex flex-col gap-5" onSubmit={(event) => {
       event.preventDefault();
+      if (confirmDisabled) return;
       const websiteValue = website.trim();
       const rejectedWebsite = !websiteValue && (websiteRejected || Boolean(initialWebsite.trim()));
       void send({
@@ -320,6 +274,13 @@ export function ProfileForm({
         website: websiteValue,
         websiteRejected: rejectedWebsite,
         googlePlaceChoice,
+        declaredSocialProfiles: Object.fromEntries(SOCIAL_PLATFORMS.map((platform) => {
+          const url = normalizeSocialProfileUrl(platform, declaredProfiles[platform]);
+          const alreadyConfirmed = url !== null && socialChoices.some((choice) => choice.confirmed
+            && normalizeSocialProfileUrl(platform, choice.candidateUrl) === url
+            && normalizeSocialProfileUrl(platform, choice.confirmedUrl) === url);
+          return [platform, alreadyConfirmed ? "" : declaredProfiles[platform]];
+        })),
         socialSourceDecisions: socialChoices.map((choice) => ({
           candidateUrl: choice.candidateUrl,
           confirmedUrl: choice.confirmed ? choice.confirmedUrl : null,
@@ -328,7 +289,12 @@ export function ProfileForm({
       });
     }}>
       <h2 className="text-base font-semibold">Votre présence en ligne</h2>
-      <TextField id="website" label="Votre site (facultatif)" value={website} onChange={setWebsite} errors={errors} max={LIMITS.website} required={false} type="url" />
+      <TextField id="website" label="Votre site (facultatif)" value={website} onChange={setWebsite} errors={{ ...sourceAction.errors, ...errors }} max={LIMITS.website} required={false} type="url" />
+      {(sourcePending || reading) && (
+        <p role="status" className="rounded-md bg-[var(--bd-cream)] p-3 text-sm leading-relaxed">
+          Paul complète automatiquement votre site, vos réseaux et votre activité. Vous pouvez continuer à corriger les informations ; vos saisies seront conservées.
+        </p>
+      )}
       {googlePlaceCandidates.length > 0 && (
         <fieldset className="flex flex-col gap-3 rounded-lg border border-[var(--bd-line)] p-4">
           <legend className="px-1 text-sm font-semibold">Votre fiche Google</legend>
@@ -342,7 +308,8 @@ export function ProfileForm({
                     name="google-place-choice"
                     value={candidate.id}
                     checked={googlePlaceChoice?.status === "confirmed" && googlePlaceChoice.placeId === candidate.id}
-                    onChange={() => setGooglePlaceChoice({ status: "confirmed", placeId: candidate.id })}
+                    disabled={pending || sourcePending || reading}
+                    onChange={() => selectPlace({ status: "confirmed", placeId: candidate.id }, candidate.website ?? websiteCandidate?.url ?? "")}
                   />
                   <span className="flex flex-col gap-1">
                     <span className="font-semibold">{candidate.name}</span>
@@ -367,7 +334,8 @@ export function ProfileForm({
               name="google-place-choice"
               value="none"
               checked={googlePlaceChoice?.status === "rejected"}
-              onChange={() => setGooglePlaceChoice({ status: "rejected" })}
+              disabled={pending || sourcePending || reading}
+              onChange={() => selectPlace({ status: "rejected" }, "")}
             />
             Aucune de ces fiches ne correspond à mon entreprise
           </label>
@@ -379,11 +347,6 @@ export function ProfileForm({
       {!googlePlaceCandidates.length && googleStatus === "unavailable" && (
         <p role="status" className={HINT}>Fiche Google non lue : recherche indisponible.</p>
       )}
-      {googlePlaceChanged && googlePlaceChoice?.status === "confirmed" && (
-        <p role="status" className="rounded-md bg-[var(--bd-cream)] p-3 text-sm text-[var(--bd-ink)]">
-          Cette fiche et son site seront relus ici avant la confirmation des réseaux.
-        </p>
-      )}
       {websiteCandidates.length > 0 && (
         <fieldset className="flex flex-col gap-2 rounded-lg border border-[var(--bd-line)] p-4">
           <legend className="px-1 text-sm font-semibold">Autres sites repérés</legend>
@@ -393,14 +356,20 @@ export function ProfileForm({
               <p className={HINT}>
                 Repéré via <a href={candidate.source} target="_blank" rel="noopener noreferrer" className="break-all underline">cette fiche Google</a>, le {new Date(candidate.readAt).toLocaleDateString("fr-FR")}.
               </p>
-              <button type="button" className={SECONDARY_BUTTON} disabled={pending} onClick={() => setWebsite(candidate.url)}>
+              <button type="button" className={SECONDARY_BUTTON} disabled={pending || sourcePending || reading} onClick={() => {
+                const place = googlePlaceCandidates.find((item) => item.link === candidate.source);
+                const choice = googlePlaceChoice ?? (place ? { status: "confirmed" as const, placeId: place.id } : null);
+                if (choice) setGooglePlaceChoice(choice);
+                setWebsite(candidate.url);
+                updateSources(choice, candidate.url);
+              }}>
                 Utiliser cette adresse
               </button>
             </div>
           ))}
         </fieldset>
       )}
-      {sourcesChanged ? <p role="status" className={HINT}>Les réseaux seront actualisés avec vos nouvelles sources.</p> : socialCandidates.length ? (
+      {sourcesChanged || (reading && !analysis.sourcesReady) ? <p role="status" className={HINT}>Les réseaux seront actualisés avec vos nouvelles sources.</p> : socialCandidates.length ? (
         <fieldset className="flex flex-col gap-3 rounded-lg border border-[var(--bd-line)] p-4">
           <legend className="px-1 text-sm font-semibold">Vos réseaux</legend>
           <p className={HINT}>Cochez vos profils officiels. Les autres liens seront écartés.</p>
@@ -419,11 +388,7 @@ export function ProfileForm({
                     id={checkboxId}
                     type="checkbox"
                     checked={choice.confirmed}
-                    onChange={(event) => setSocialChoices((current) => current.map((item) =>
-                      item.candidateUrl === choice.candidateUrl
-                        ? { ...item, confirmed: event.target.checked }
-                        : item
-                    ))}
+                    onChange={(event) => setSocialEdits((current) => ({ ...current, [`${analysisRunId}:${choice.candidateUrl}`]: { ...choice, confirmed: event.target.checked } }))}
                   />
                   Ce profil est officiel
                 </label>
@@ -431,7 +396,7 @@ export function ProfileForm({
                   <summary className="cursor-pointer text-[var(--bd-muted)]">Source et correction du lien</summary>
                   <p className="my-2 text-[var(--bd-muted)]">Repéré sur <a href={candidate.source} target="_blank" rel="noopener noreferrer" className="break-all underline">{candidate.source}</a>, le {new Date(candidate.readAt).toLocaleDateString("fr-FR")}.</p>
                   <label htmlFor={urlId} className={LABEL}>Adresse du profil</label>
-                  <input id={urlId} type="url" className={INPUT_CLASS} value={choice.confirmedUrl} onChange={(event) => setSocialChoices((current) => current.map((item) => item.candidateUrl === choice.candidateUrl ? { ...item, confirmedUrl: event.target.value } : item))} />
+                  <input id={urlId} type="url" className={INPUT_CLASS} value={choice.confirmedUrl} onChange={(event) => setSocialEdits((current) => ({ ...current, [`${analysisRunId}:${choice.candidateUrl}`]: { ...choice, confirmedUrl: event.target.value } }))} />
                 </details>
               </div>
             );
@@ -441,22 +406,46 @@ export function ProfileForm({
         <p className={HINT}>Aucun réseau repéré dans les pages lues, sans conclusion sur votre présence en ligne.</p>
       )}
       {socialCandidates.length > 0 && <p className={HINT}>Liens publics uniquement : les publications sociales ne sont pas analysées, aucun compte n&apos;est connecté.</p>}
-      <h2 className="border-t border-[var(--bd-line)] pt-5 text-base font-semibold">Votre activité</h2>
+      <details className="rounded-lg border border-[var(--bd-line)] p-4">
+        <summary className="cursor-pointer font-semibold">Ajouter un profil non trouvé</summary>
+        <p className={`${HINT} my-3`}>Les liens renseignés ici seront retenus comme vos déclarations, pas comme des pages analysées.</p>
+        <div className="flex flex-col gap-3">
+          {SOCIAL_PLATFORMS.map((platform) => (
+            <div key={platform} className="flex flex-col gap-1.5">
+              <label htmlFor={`declared-${platform}`} className={LABEL}>{platform === "facebook" ? "Facebook" : platform === "instagram" ? "Instagram" : "LinkedIn"}</label>
+              <input id={`declared-${platform}`} type="url" maxLength={600} className={INPUT_CLASS} value={declaredProfiles[platform]} onChange={(event) => setDeclaredProfiles((current) => ({ ...current, [platform]: event.target.value }))} />
+            </div>
+          ))}
+        </div>
+      </details>
+      <details className="border-t border-[var(--bd-line)] pt-4" open={["trade", "servingArea", "targetClients", "offers"].some((field) => errors[field]) || undefined}>
+      <summary className="min-h-11 cursor-pointer text-base font-semibold">Votre activité — compléter si utile</summary>
+      <p className={`${HINT} mb-4`}>Corrigez ce que vous savez. Une information inconnue peut rester vide.</p>
+      <div className="flex flex-col gap-5">
       <div className="flex flex-col gap-1.5">
-        <TradeCombobox id="trade" label="Votre activité" value={values.trade} onChange={set("trade")} invalid={Boolean(errors.trade)} describedBy={[tradeOrigin ? "trade-origin" : null, errors.trade ? "trade-error" : null].filter(Boolean).join(" ") || undefined} />
+        <TradeCombobox id="trade" label="Votre activité" required={false} value={values.trade} onChange={set("trade")} invalid={Boolean(errors.trade)} describedBy={[tradeOrigin ? "trade-origin" : null, errors.trade ? "trade-error" : null].filter(Boolean).join(" ") || undefined} />
         {tradeOrigin && <p id="trade-origin" className={HINT}>{tradeOrigin}</p>}
         <FieldError id="trade-error" message={errors.trade} />
       </div>
-      <TextField id="servingArea" label="Votre zone d'intervention" hint={origin("servingArea")} value={values.servingArea} onChange={set("servingArea")} errors={errors} max={LIMITS.servingArea} />
-      <TextField id="targetClients" label="Vos clients" hint={origin("targetClients")} example="Qui vous achète ? Quelques mots suffisent, ou choisissez ci-dessous." value={values.targetClients} onChange={set("targetClients")} errors={errors} max={LIMITS.targetClients} />
+      <TextField id="servingArea" label="Votre zone d'intervention" required={false} hint={origin("servingArea")} value={values.servingArea} onChange={set("servingArea")} errors={errors} max={LIMITS.servingArea} />
+      <TextField id="targetClients" label="Vos clients" required={false} hint={origin("targetClients")} example="Qui vous achète ? Quelques mots suffisent, ou choisissez ci-dessous." value={values.targetClients} onChange={set("targetClients")} errors={errors} max={LIMITS.targetClients} />
       <Suggestions label="Exemples de clients" options={CLIENT_SUGGESTIONS} value={values.targetClients} onChange={set("targetClients")} max={LIMITS.targetClients} />
-      <TextField id="offers" label="Ce que vous proposez" hint={origin("offers")} example="Vos principaux produits ou services, séparés par des virgules. Par exemple : menu du jour, plats à emporter ; ou : dépannage, rénovation de salle de bain." value={values.offers} onChange={set("offers")} errors={errors} max={LIMITS.offers} />
+      <TextField id="offers" label="Ce que vous proposez" required={false} hint={origin("offers")} example="Vos principaux produits ou services, séparés par des virgules." value={values.offers} onChange={set("offers")} errors={errors} max={LIMITS.offers} />
+      </div>
+      </details>
+      <FormError error={sourceAction.error} errors={sourceAction.errors} />
+      {sourceAction.error && <button type="button" className={SECONDARY_OUTLINE} disabled={pending || reading} onClick={() => {
+        const candidate = googlePlaceCandidates.find((item) => googlePlaceChoice?.status === "confirmed" && item.id === googlePlaceChoice.placeId);
+        updateSources(googlePlaceChoice, websiteEdit ?? candidate?.website ?? websiteCandidates.find((item) => item.source === candidate?.link)?.url ?? website);
+      }}>Réessayer la lecture automatique</button>}
       <FormError error={error ?? correct.error} errors={errors} />
       <div className="flex flex-wrap items-center gap-3">
-        <button type="submit" className={PRIMARY_BUTTON} disabled={pending}>
-          {sourcesChanged
+        <button type="submit" className={PRIMARY_BUTTON} disabled={confirmDisabled}>
+          {sourcePending || (reading && !analysis.sourcesReady)
+            ? "Lecture des sources en cours…"
+            : sourcesChanged
             ? "Actualiser mes sources"
-            : "Confirmer et continuer"}
+            : "Oui, continuer vers mon objectif"}
         </button>
         <button type="button" className={SECONDARY_BUTTON} disabled={pending} onClick={() => correct.send({ action: "back", step: 1 })}>Changer d&apos;entreprise</button>
       </div>
@@ -465,10 +454,11 @@ export function ProfileForm({
 }
 
 /** Étape 3 (#282) : l'ambition dite avec vos mots, reformulée par Paul, puis confirmée telle quelle. */
-export function ProfileAnalysisWatcher({ analysis }: { analysis: AnalysisView }) {
+export function ProfileAnalysisWatcher({ analysis, stopAtSources = false, compact = false }: { analysis: AnalysisView; stopAtSources?: boolean; compact?: boolean }) {
   const router = useRouter();
   const [current, setCurrent] = useState(analysis);
   const [error, setError] = useState<string | null>(null);
+  const sourcesRefreshed = useRef(analysis.sourcesReady);
   useEffect(() => {
     let stopped = false;
     let fetching = false;
@@ -490,12 +480,15 @@ export function ProfileAnalysisWatcher({ analysis }: { analysis: AnalysisView })
         if (data?.analysis) {
           setCurrent(data.analysis);
           setError(null);
-          if (data.analysis.finished) {
+          if (data.analysis.finished || (stopAtSources && data.analysis.sourcesReady)) {
             stopped = true;
             window.clearInterval(timer);
             router.refresh();
+          } else if (data.analysis.sourcesReady && !sourcesRefreshed.current) {
+            sourcesRefreshed.current = true;
+            router.refresh();
           }
-        }
+        } else setError("La progression n'est pas disponible. Une nouvelle tentative aura lieu automatiquement.");
       } catch {
         if (!stopped) setError("Connexion interrompue. La lecture reprendra automatiquement.");
       } finally {
@@ -503,8 +496,15 @@ export function ProfileAnalysisWatcher({ analysis }: { analysis: AnalysisView })
       }
     }, POLL_MS);
     return () => { stopped = true; window.clearInterval(timer); };
-  }, [router]);
-  return <div className="flex flex-col gap-3"><RubricList analysis={current} />{error && <p role="status" className={HINT}>{error}</p>}</div>;
+  }, [router, stopAtSources]);
+  return <div className="flex flex-col gap-3">
+    {compact ? <details className="mb-5 rounded-lg bg-[var(--bd-cream-deep)] p-3 text-sm">
+      <summary className="cursor-pointer font-semibold">L&apos;analyse continue en arrière-plan</summary>
+      <p className="my-2">Vous pouvez continuer. Paul utilisera la lecture terminée pour préparer vos missions.</p>
+      <RubricList analysis={current} />
+    </details> : <RubricList analysis={current} />}
+    {error && <p role="status" className={HINT}>{error}</p>}
+  </div>;
 }
 
 export function AmbitionForm({ ambition }: { ambition: string }) {
@@ -525,10 +525,11 @@ export function InterestButton() {
 const ACCOUNT_ERROR = "Création du compte impossible. Réessayez dans un instant.";
 
 /** Étape 5 : e-mail et mot de passe saisi deux fois ; le compte est créé en dernier. */
-export function AccountForm() {
+export function AccountForm({ initialFirstName = "" }: { initialFirstName?: string }) {
   const router = useRouter();
   const { go } = useDraftAction();
   const [email, setEmail] = useState("");
+  const [firstName, setFirstName] = useState(initialFirstName);
   const [password, setPassword] = useState("");
   const [passwordConfirmation, setPasswordConfirmation] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -540,7 +541,7 @@ export function AccountForm() {
     setError(null);
     setBusy(true);
     try {
-      const response = await fetch("/api/auth/signup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, password, passwordConfirmation }) });
+      const response = await fetch("/api/auth/signup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ firstName, email, password, passwordConfirmation }) });
       const data = await response.json().catch(() => null);
       if (response.ok) {
         // Le bouton reste désactivé jusqu'à la stratégie : pas de second envoi.
@@ -564,6 +565,7 @@ export function AccountForm() {
   const type = showPassword ? "text" : "password";
   return (
     <form noValidate className="flex flex-col gap-5" onSubmit={submit}>
+      <TextField id="firstName" label="Votre prénom (facultatif)" required={false} value={firstName} onChange={setFirstName} errors={{ firstName: fieldError("firstName") }} max={LIMITS.firstName} autoComplete="given-name" />
       <div className="flex flex-col gap-1.5">
         <label htmlFor="email" className={LABEL}>Adresse e-mail</label>
         <input id="email" type="email" autoComplete="email" required maxLength={LIMITS.email} value={email} onChange={(event) => setEmail(event.target.value)} aria-invalid={fieldError("email") ? true : undefined} aria-describedby={described("email")} className={INPUT_CLASS} />

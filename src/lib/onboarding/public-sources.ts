@@ -16,6 +16,7 @@ export type SocialSourceDecision = {
   status: "confirmed" | "rejected";
   source: string;
   readAt: string;
+  origin?: "declared";
 };
 
 type Link = { url: URL; text: string };
@@ -131,8 +132,24 @@ export function readSocialSourceDecisions(value: unknown): SocialSourceDecision[
       confirmedUrl,
       status: raw.status,
       source: raw.source.slice(0, 600),
-      readAt: raw.readAt.slice(0, 40)
+      readAt: raw.readAt.slice(0, 40),
+      ...(raw.origin === "declared" ? { origin: "declared" as const } : {}),
     });
+  }
+  return decisions;
+}
+
+export function declaredSocialSources(value: unknown): SocialSourceDecision[] | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const entries = Object.entries(value);
+  const decisions: SocialSourceDecision[] = [];
+  for (const [platform, raw] of entries) {
+    const social = SOCIAL_PLATFORMS.find((item) => item === platform);
+    if (!social || typeof raw !== "string") return null;
+    if (!raw.trim()) continue;
+    const url = normalizeSocialProfileUrl(social, raw.trim());
+    if (!url) return null;
+    decisions.push({ platform: social, candidateUrl: url, confirmedUrl: url, status: "confirmed", source: "", readAt: "", origin: "declared" });
   }
   return decisions;
 }

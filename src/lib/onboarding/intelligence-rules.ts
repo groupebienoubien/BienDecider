@@ -14,13 +14,14 @@ export const planningEvidenceSchema = z.object({
   source: z.string().max(600).nullable(), readAt: z.string().max(40).nullable(),
 }).strict();
 const planningContextSchema = z.object({
+  approachVersion: z.literal(2).optional(),
   analysisRunId: z.string().max(100).nullable(),
   evidence: z.array(planningEvidenceSchema).max(30),
   limitations: z.array(z.string().max(600)).max(30),
   hypotheses: z.array(z.string().max(300)).max(10).optional(),
   mediaBudgetPerMonth: z.number().nullable(),
   recruitment: z.enum(["possible", "no", "unspecified"]),
-  socialProfiles: z.array(z.object({ platform: z.enum(["facebook", "instagram", "linkedin"]), url: z.string().max(600) })).max(3),
+  socialProfiles: z.array(z.object({ platform: z.enum(["facebook", "instagram", "linkedin"]), url: z.string().max(600) })).max(10),
 });
 export type PlanningContext = z.infer<typeof planningContextSchema>;
 export type IntelligenceInput = { companyName?: string; location?: string; website?: string; trade: string; servingArea: string; offers: string; targetClients: string; ambitionText: string; excludedCompetitors?: ExcludedCompetitor[]; planningContext?: PlanningContext };

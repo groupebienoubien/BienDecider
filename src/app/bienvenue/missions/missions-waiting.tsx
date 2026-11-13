@@ -3,8 +3,26 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { INTELLIGENCE_MESSAGES, type IntelligenceView } from "@/lib/onboarding/intelligence-rules";
+import { FormError, PRIMARY_BUTTON, useDraftAction } from "../journey-client";
 
 const POLL_MS = 1200;
+
+export function PrepareMissions() {
+  const { busy, error, errors, send } = useDraftAction();
+  const started = useRef(false);
+  useEffect(() => {
+    if (started.current) return;
+    started.current = true;
+    void send({ action: "prepare_missions" });
+  }, [send]);
+  return (
+    <div className="flex flex-col gap-4">
+      <p role="status">Votre analyse est prête. Paul prépare maintenant les actions adaptées à votre objectif.</p>
+      <FormError error={error} errors={errors} />
+      {error && <button type="button" className={PRIMARY_BUTTON} disabled={busy} onClick={() => void send({ action: "prepare_missions" })}>Réessayer la préparation</button>}
+    </div>
+  );
+}
 
 /**
  * Attente de la recherche réelle de marché (#364) : tant qu'elle tourne, un message annoncé (lecteurs d'écran),
