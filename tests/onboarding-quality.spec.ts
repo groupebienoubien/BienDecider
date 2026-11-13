@@ -46,11 +46,10 @@ test("onboarding quality: discovered website is editable, confirmed and survives
   const removed = applyDraftAction({ ...state, step: 2 }, { action: "confirm_profile", ...state.profile, website: "" }, NOW);
   expect(removed.ok).toBe(true);
   if (!removed.ok) throw new Error("Profile confirmation failed");
+  expect(removed.state.step).toBe(2);
   expect(prefillWebsite(removed.state)).toBe("");
   expect(analysisMatchesProfile(removed.state)).toBe(false);
-  const back = applyDraftAction(removed.state, { action: "back", step: 2 }, NOW);
-  if (!back.ok) throw new Error("Profile reopening failed");
-  expect(prefillWebsite(back.state)).toBe("");
+  expect(applyDraftAction(removed.state, { action: "confirm_profile", ...removed.state.profile }, NOW)).toMatchObject({ ok: false, code: "analysis" });
 });
 
 test("onboarding quality: a discovered website never overrides another company or an explicit correction", () => {
@@ -78,7 +77,7 @@ test("onboarding quality: a Google listing is read only after explicit selection
 
   const choice = { status: "confirmed" as const, placeId: candidateIds[1] };
   const selected = applyDraftAction(candidates, { action: "confirm_profile", ...profile, googlePlaceChoice: choice }, NOW);
-  expect(selected).toMatchObject({ ok: true, state: { step: 1, googlePlaceChoice: choice, profileConfirmed: false } });
+  expect(selected).toMatchObject({ ok: true, state: { step: 2, googlePlaceChoice: choice, profileConfirmed: false } });
   if (!selected.ok) throw new Error("Google place selection failed");
   const correctedWithSelection = applyDraftAction(candidates, {
     action: "confirm_profile",
@@ -89,7 +88,7 @@ test("onboarding quality: a Google listing is read only after explicit selection
   expect(correctedWithSelection).toMatchObject({
     ok: true,
     state: {
-      step: 1,
+      step: 2,
       profile: { website: "https://atelier-lumen.example/" },
       googlePlaceChoice: choice,
       profileConfirmed: false
@@ -98,7 +97,7 @@ test("onboarding quality: a Google listing is read only after explicit selection
   if (!correctedWithSelection.ok) throw new Error("Concurrent website correction and place selection failed");
 
   const input = {
-    companyName: state.profile.companyName, location: state.profile.location, website: "",
+    companyName: state.profile.companyName, location: state.profile.location, website: selected.state.profile.website,
     googlePlaceId: candidateIds[1], googlePlaceCandidateIds: candidateIds,
   };
   const selectedAnalysis = newAnalysis(input, "confirmed-place", NOW, "done");
@@ -121,6 +120,17 @@ test("onboarding quality: a Google listing is read only after explicit selection
 
   const rejected = applyDraftAction(candidates, { action: "confirm_profile", ...profile, googlePlaceChoice: { status: "rejected" } }, NOW);
   expect(rejected).toMatchObject({ ok: true, state: { step: 3, googlePlaceChoice: { status: "rejected" } } });
+});
+
+test("onboarding quality: source corrections stay in confirmation and cannot confirm a running reading", () => {
+  const state = discoveredDraft();
+  const changed = applyDraftAction(state, { action: "confirm_profile", ...state.profile, website: "https://correct.example/" }, NOW);
+  expect(changed).toMatchObject({ ok: true, state: { step: 2, profileConfirmed: false, socialSourceDecisions: [] } });
+  if (!changed.ok) throw new Error("Source correction failed");
+  const running = newAnalysis({ companyName: state.profile.companyName, location: state.profile.location, website: changed.state.profile.website }, "reread", NOW);
+  expect(applyDraftAction({ ...changed.state, analysis: running }, { action: "confirm_profile", ...changed.state.profile }, NOW)).toMatchObject({ ok: false, kind: "busy" });
+  const completed = { ...running, status: "done" as const, finishedAt: NOW.toISOString() };
+  expect(applyDraftAction({ ...changed.state, analysis: completed }, { action: "confirm_profile", ...changed.state.profile }, NOW)).toMatchObject({ ok: true, state: { step: 3, profileConfirmed: true } });
 });
 
 test("onboarding quality: no input or failed reading never proves an absent website", () => {

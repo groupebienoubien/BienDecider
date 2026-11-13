@@ -8,7 +8,7 @@ import { AmbitionEditor } from "@/components/ambition-editor";
 import { LIMITS, profileOriginLabel, type DraftProfile, type GooglePlaceChoice, type ProfilePrefill } from "@/lib/onboarding/draft-rules";
 import type { AnalysisView, RubricStatus } from "@/lib/onboarding/analysis-rules";
 import type { CompetitorDecision, CompetitorDimension, CompetitorFact } from "@/lib/onboarding/intelligence-rules";
-import { socialPublicationStatuses, type PublicSourceCandidate, type SocialSourceDecision } from "@/lib/onboarding/public-sources";
+import { type PublicSourceCandidate, type SocialSourceDecision } from "@/lib/onboarding/public-sources";
 import type { PlaceCandidate } from "@/lib/google-places";
 import { safeSourceUrl } from "@/lib/findings/certainty";
 import { FieldError, FormError, INPUT_CLASS, PRIMARY_BUTTON, SECONDARY_BUTTON, useDraftAction, type FieldErrors } from "./journey-client";
@@ -292,9 +292,10 @@ export function ProfileForm({
   const placeChoiceKey = (choice: GooglePlaceChoice | null) =>
     choice?.status === "confirmed" ? choice.placeId : choice?.status ?? "";
   const googlePlaceChanged = placeChoiceKey(googlePlaceChoice) !== placeChoiceKey(initialGooglePlaceChoice);
+  const sourcesChanged = website.trim() !== initialWebsite.trim()
+    || (googlePlaceChanged && (googlePlaceChoice?.status === "confirmed" || initialGooglePlaceChoice?.status === "confirmed"));
   const websiteCandidates = publicSources.filter((candidate) => candidate.platform === "website");
   const socialCandidates = publicSources.filter((candidate) => candidate.platform !== "website");
-  const socialPublicationStatus = socialPublicationStatuses(socialCandidates);
   const [socialChoices, setSocialChoices] = useState(() => socialCandidates.map((candidate) => {
     const saved = socialSourceDecisions.find((decision) => decision.candidateUrl === candidate.url);
     return {
@@ -313,14 +314,6 @@ export function ProfileForm({
       event.preventDefault();
       const websiteValue = website.trim();
       const rejectedWebsite = !websiteValue && (websiteRejected || Boolean(initialWebsite.trim()));
-      if (website.trim() && website.trim() !== initialWebsite.trim()) {
-        void correct.send({ action: "back", step: 1, website, websiteRejected: false });
-        return;
-      }
-      if (rejectedWebsite && !websiteRejected) {
-        void correct.send({ action: "back", step: 1, website: "", websiteRejected: true });
-        return;
-      }
       void send({
         action: "confirm_profile",
         ...values,
@@ -334,11 +327,11 @@ export function ProfileForm({
         }))
       });
     }}>
-      <TextField id="website" label="Votre site (facultatif)" hint="Adresse renseignée ou repérée pendant la lecture. Vérifiez-la : elle sera conservée dans votre profil après confirmation." value={website} onChange={setWebsite} errors={errors} max={LIMITS.website} required={false} type="url" />
+      <h2 className="text-base font-semibold">Votre présence en ligne</h2>
+      <TextField id="website" label="Votre site (facultatif)" value={website} onChange={setWebsite} errors={errors} max={LIMITS.website} required={false} type="url" />
       {googlePlaceCandidates.length > 0 && (
         <fieldset className="flex flex-col gap-3 rounded-lg border border-[var(--bd-line)] p-4">
-          <legend className="px-1 text-sm font-semibold">Fiches Google candidates — à confirmer</legend>
-          <p className={HINT}>Une fiche n&apos;est pas attribuée à votre entreprise d&apos;après son seul nom. Vérifiez l&apos;adresse et l&apos;activité, puis choisissez la vôtre ou indiquez qu&apos;aucune ne correspond.</p>
+          <legend className="px-1 text-sm font-semibold">Votre fiche Google</legend>
           {googlePlaceCandidates.map((candidate) => {
             const websiteCandidate = websiteCandidates.find((source) => source.source === candidate.link);
             return (
@@ -381,19 +374,19 @@ export function ProfileForm({
         </fieldset>
       )}
       {!googlePlaceCandidates.length && googleStatus === "not_found" && (
-        <p role="status" className={HINT}>Fiche Google non identifiée pendant cette recherche. Cela ne permet pas de conclure qu&apos;elle n&apos;existe pas.</p>
+        <p role="status" className={HINT}>Fiche Google non identifiée ; son absence n&apos;est pas établie.</p>
       )}
       {!googlePlaceCandidates.length && googleStatus === "unavailable" && (
-        <p role="status" className={HINT}>Fiche Google non lue : le service de recherche est indisponible. Aucune conclusion n&apos;est tirée sur votre présence en ligne.</p>
+        <p role="status" className={HINT}>Fiche Google non lue : recherche indisponible.</p>
       )}
       {googlePlaceChanged && googlePlaceChoice?.status === "confirmed" && (
         <p role="status" className="rounded-md bg-[var(--bd-cream)] p-3 text-sm text-[var(--bd-ink)]">
-          Après votre choix, Paul relira cette fiche et son site public. Vous pourrez ensuite confirmer ou corriger les liens avant de continuer.
+          Cette fiche et son site seront relus ici avant la confirmation des réseaux.
         </p>
       )}
       {websiteCandidates.length > 0 && (
         <fieldset className="flex flex-col gap-2 rounded-lg border border-[var(--bd-line)] p-4">
-          <legend className="px-1 text-sm font-semibold">Sites candidats — aucun n&apos;est confirmé</legend>
+          <legend className="px-1 text-sm font-semibold">Autres sites repérés</legend>
           {websiteCandidates.map((candidate) => (
             <div key={`${candidate.url}:${candidate.source}`} className="flex flex-col gap-1">
               <a href={candidate.url} target="_blank" rel="noopener noreferrer" className="break-all text-sm font-semibold text-[var(--bd-brand)] underline">{candidate.url}</a>
@@ -407,10 +400,10 @@ export function ProfileForm({
           ))}
         </fieldset>
       )}
-      {socialCandidates.length ? (
+      {sourcesChanged ? <p role="status" className={HINT}>Les réseaux seront actualisés avec vos nouvelles sources.</p> : socialCandidates.length ? (
         <fieldset className="flex flex-col gap-3 rounded-lg border border-[var(--bd-line)] p-4">
-          <legend className="px-1 text-sm font-semibold">Profils sociaux repérés — à confirmer séparément</legend>
-          <p className={HINT}>Une ressemblance de nom ne suffit pas. Cochez uniquement les profils officiels. Les liens de partage et publications isolées ne sont pas proposés.</p>
+          <legend className="px-1 text-sm font-semibold">Vos réseaux</legend>
+          <p className={HINT}>Cochez vos profils officiels. Les autres liens seront écartés.</p>
           {socialCandidates.map((candidate, index) => {
             const choice = socialChoices.find((item) => item.candidateUrl === candidate.url);
             if (!choice) return null;
@@ -421,9 +414,6 @@ export function ProfileForm({
                 <a href={candidate.url} target="_blank" rel="noopener noreferrer" className="break-all text-sm font-semibold text-[var(--bd-brand)] underline">
                   {candidate.platform} : {candidate.url}
                 </a>
-                <p className={HINT}>
-                  Repéré sur <a href={candidate.source} target="_blank" rel="noopener noreferrer" className="break-all underline">{candidate.source}</a>, le {new Date(candidate.readAt).toLocaleDateString("fr-FR")}.
-                </p>
                 <label htmlFor={checkboxId} className="flex items-center gap-2 text-sm">
                   <input
                     id={checkboxId}
@@ -437,54 +427,21 @@ export function ProfileForm({
                   />
                   Ce profil est officiel
                 </label>
-                <label htmlFor={urlId} className={LABEL}>Corriger le lien si nécessaire</label>
-                <input
-                  id={urlId}
-                  type="url"
-                  className={INPUT_CLASS}
-                  value={choice.confirmedUrl}
-                  onChange={(event) => setSocialChoices((current) => current.map((item) =>
-                    item.candidateUrl === choice.candidateUrl
-                      ? { ...item, confirmedUrl: event.target.value }
-                      : item
-                  ))}
-                />
+                <details className="text-sm">
+                  <summary className="cursor-pointer text-[var(--bd-muted)]">Source et correction du lien</summary>
+                  <p className="my-2 text-[var(--bd-muted)]">Repéré sur <a href={candidate.source} target="_blank" rel="noopener noreferrer" className="break-all underline">{candidate.source}</a>, le {new Date(candidate.readAt).toLocaleDateString("fr-FR")}.</p>
+                  <label htmlFor={urlId} className={LABEL}>Adresse du profil</label>
+                  <input id={urlId} type="url" className={INPUT_CLASS} value={choice.confirmedUrl} onChange={(event) => setSocialChoices((current) => current.map((item) => item.candidateUrl === choice.candidateUrl ? { ...item, confirmedUrl: event.target.value } : item))} />
+                </details>
               </div>
             );
           })}
         </fieldset>
       ) : (
-        <p className={HINT}>Aucun profil social public fiable n&apos;a été identifié dans les pages lues. Cela ne signifie pas que vous n&apos;avez pas de présence en ligne.</p>
+        <p className={HINT}>Aucun réseau repéré dans les pages lues, sans conclusion sur votre présence en ligne.</p>
       )}
-      <section aria-labelledby="social-publications-title" className="flex flex-col gap-2 rounded-lg border border-[var(--bd-line)] p-4">
-        <h2 id="social-publications-title" className="text-sm font-semibold">État de lecture des publications sociales</h2>
-        <p className={HINT}>Aucune publication n&apos;est lue à cette étape. L&apos;accès aux publications n&apos;a pas été vérifié ; nous ne déduisons ni compte privé, ni mur de connexion, ni inactivité.</p>
-        <ul className="flex flex-col gap-1 text-sm text-[var(--bd-ink)]">
-          {socialPublicationStatus.map((status) => {
-            const candidates = socialCandidates.filter((candidate) => candidate.platform === status.platform);
-            const confirmed = candidates.some((candidate) => {
-              const choice = socialChoices.find((item) => item.candidateUrl === candidate.url);
-              const saved = socialSourceDecisions.find((decision) => decision.candidateUrl === candidate.url);
-              return Boolean(choice?.confirmed && saved?.status === "confirmed" && saved.confirmedUrl === choice.confirmedUrl);
-            });
-            const markedConfirmed = candidates.some((candidate) =>
-              socialChoices.find((choice) => choice.candidateUrl === candidate.url)?.confirmed
-            );
-            const profileStatus = status.profile === "candidate_found"
-              ? confirmed
-                ? "Profil confirmé par vous."
-                : markedConfirmed
-                  ? "Profil marqué comme officiel ici ; validez le formulaire pour enregistrer ce choix."
-                  : "Profil candidat, à confirmer ou écarter."
-              : "Aucun profil repéré dans les pages consultées ; cela n'en prouve pas l'absence.";
-            return (
-              <li key={status.platform}>
-                <span className="font-semibold">{status.platform} :</span> {profileStatus} Publications non lues ; accès non vérifié.
-              </li>
-            );
-          })}
-        </ul>
-      </section>
+      {socialCandidates.length > 0 && <p className={HINT}>Liens publics uniquement : les publications sociales ne sont pas analysées, aucun compte n&apos;est connecté.</p>}
+      <h2 className="border-t border-[var(--bd-line)] pt-5 text-base font-semibold">Votre activité</h2>
       <div className="flex flex-col gap-1.5">
         <TradeCombobox id="trade" label="Votre activité" value={values.trade} onChange={set("trade")} invalid={Boolean(errors.trade)} describedBy={[tradeOrigin ? "trade-origin" : null, errors.trade ? "trade-error" : null].filter(Boolean).join(" ") || undefined} />
         {tradeOrigin && <p id="trade-origin" className={HINT}>{tradeOrigin}</p>}
@@ -497,19 +454,59 @@ export function ProfileForm({
       <FormError error={error ?? correct.error} errors={errors} />
       <div className="flex flex-wrap items-center gap-3">
         <button type="submit" className={PRIMARY_BUTTON} disabled={pending}>
-          {website.trim() && website.trim() !== initialWebsite.trim()
-            ? "Retourner relire ce site"
-            : googlePlaceChanged && googlePlaceChoice?.status === "confirmed"
-              ? "Relire cette fiche et son site"
-              : "Oui, c'est bien moi"}
+          {sourcesChanged
+            ? "Actualiser mes sources"
+            : "Confirmer et continuer"}
         </button>
-        <button type="button" className={SECONDARY_BUTTON} disabled={pending} onClick={() => correct.send({ action: "back", step: 1 })}>Non, corriger mes informations</button>
+        <button type="button" className={SECONDARY_BUTTON} disabled={pending} onClick={() => correct.send({ action: "back", step: 1 })}>Changer d&apos;entreprise</button>
       </div>
     </form>
   );
 }
 
 /** Étape 3 (#282) : l'ambition dite avec vos mots, reformulée par Paul, puis confirmée telle quelle. */
+export function ProfileAnalysisWatcher({ analysis }: { analysis: AnalysisView }) {
+  const router = useRouter();
+  const [current, setCurrent] = useState(analysis);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let stopped = false;
+    let fetching = false;
+    const timer = window.setInterval(async () => {
+      if (fetching) return;
+      fetching = true;
+      try {
+        const response = await fetch("/api/bienvenue/analyse", { cache: "no-store" });
+        const data = await response.json();
+        if (stopped) return;
+        if (!response.ok) {
+          if (typeof data?.href === "string") {
+            stopped = true;
+            window.clearInterval(timer);
+            router.push(data.href);
+          } else setError("Lecture interrompue. Réessayez dans un instant.");
+          return;
+        }
+        if (data?.analysis) {
+          setCurrent(data.analysis);
+          setError(null);
+          if (data.analysis.finished) {
+            stopped = true;
+            window.clearInterval(timer);
+            router.refresh();
+          }
+        }
+      } catch {
+        if (!stopped) setError("Connexion interrompue. La lecture reprendra automatiquement.");
+      } finally {
+        fetching = false;
+      }
+    }, POLL_MS);
+    return () => { stopped = true; window.clearInterval(timer); };
+  }, [router]);
+  return <div className="flex flex-col gap-3"><RubricList analysis={current} />{error && <p role="status" className={HINT}>{error}</p>}</div>;
+}
+
 export function AmbitionForm({ ambition }: { ambition: string }) {
   return <AmbitionEditor target="bienvenue" initialText={ambition} />;
 }

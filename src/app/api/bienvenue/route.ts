@@ -60,7 +60,7 @@ export async function POST(request: NextRequest) {
     }
     draftId = (await createDraft(state)).id;
   }
-  if (action.action === "discover" || (action.action === "confirm_profile" && state.step === 1) || (action.action === "back" && state.step === 1)) {
+  if (action.action === "discover" || (action.action === "confirm_profile" && state.step === 2) || (action.action === "back" && state.step === 1)) {
     return launchAnalysis(request, draftId, state, now);
   }
   // Recherche réelle de marché avant compte (#361, #362) : jamais bloquante pour cette transition, contrairement à l'analyse.
@@ -100,9 +100,9 @@ async function launchAnalysis(request: NextRequest, draftId: string, state: Draf
     googlePlaceCandidateIds: sameIdentity ? state.analysis?.findings.googlePlaceCandidates ?? [] : [],
     websiteRejected: state.websiteRejected,
   };
-  const href = stepHref(1);
+  const href = stepHref(state.step);
   // La même entreprise déjà lue : rien à relancer, les constats restent.
-  if (!needsNewAnalysis(state.analysis, input, now)) return NextResponse.json({ step: 1, href, analysis: analysisView(state.analysis, now) });
+  if (!needsNewAnalysis(state.analysis, input, now)) return NextResponse.json({ step: state.step, href, analysis: analysisView(state.analysis, now) });
 
   const runId = randomUUID();
   const perIp = await consumeIpAttempt(request, "analysis");
@@ -121,7 +121,7 @@ async function launchAnalysis(request: NextRequest, draftId: string, state: Draf
     const refused = newAnalysis(input, runId, now, "limited", limit);
     await startAnalysis(draftId, refused, now);
     return NextResponse.json(
-      { error: limitedNotice(limit, now), code: "limited", step: 1, analysis: analysisView(refused, now) },
+      { error: limitedNotice(limit, now), code: "limited", step: state.step, href, analysis: analysisView(refused, now) },
       { status: 429, headers: { "Retry-After": String(limited.retryAfterSeconds) } },
     );
   }
@@ -145,7 +145,7 @@ async function launchAnalysis(request: NextRequest, draftId: string, state: Draf
   }
   after(() => runDraftAnalysis(draftId, input, { analysis, save: (next) => saveAnalysis(draftId, next) })
     .catch((error: unknown) => console.error(`Analyse du brouillon ${draftId} en échec : ${errorLabel(error)}.`)));
-  return NextResponse.json({ step: 1, href, analysis: analysisView(analysis, now) });
+  return NextResponse.json({ step: state.step, href, analysis: analysisView(analysis, now) });
 }
 
 /**

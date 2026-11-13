@@ -10,6 +10,7 @@ import { createSessionToken } from "../src/lib/session-token";
 import { createTestDraft, discoverThenSeeFindings, interpretThenConfirmAmbition, testIpHeader, waitForIntelligence } from "./support/onboarding-draft";
 import { intelligenceInputFor, readDraftState } from "../src/lib/onboarding/draft-rules";
 import { INTELLIGENCE_MESSAGES, newIntelligence } from "../src/lib/onboarding/intelligence-rules";
+import { newAnalysis } from "../src/lib/onboarding/analysis-rules";
 
 config({ quiet: true });
 
@@ -2830,6 +2831,40 @@ test("onboarding quality: no missions or account shortcut while research is runn
   }
 });
 
+test("onboarding quality: corrected sources refresh in step 2 before confirming the new social profiles", async ({ page }) => {
+  const prisma = journeyDatabase();
+  const draft = await createTestDraft(prisma, { step: 2, profile: { website: "https://atelier-lumen.invalid" } });
+  try {
+    await page.context().addCookies([{ name: "pepito_draft", value: draft.token, url: baseURL }]);
+    await page.setViewportSize({ width: 360, height: 800 });
+    await page.goto(`${baseURL}/bienvenue`);
+    await page.getByLabel("Votre site (facultatif)").fill("https://corrected.invalid/");
+    await page.getByRole("button", { name: "Actualiser mes sources" }).click();
+    await expect(page.getByRole("button", { name: "Confirmer et continuer" })).toBeVisible({ timeout: 30_000 });
+    const row = await prisma.onboardingDraft.findUniqueOrThrow({ where: { id: draft.id } });
+    expect(row.step).toBe(2);
+    expect(readDraftState(row).profile.website).toBe("https://corrected.invalid/");
+    const analysis = newAnalysis({ companyName: "Atelier Lumen", location: "Lyon", website: "https://corrected.invalid/", googlePlaceId: null, googlePlaceCandidateIds: [], websiteRejected: false }, "reread-social");
+    await prisma.onboardingDraft.update({ where: { id: draft.id }, data: { analysis } });
+    await page.reload();
+    await expect(page.getByRole("region", { name: "Ce que Paul lit" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Confirmer et continuer" })).toHaveCount(0);
+    expect((await page.request.post(`${baseURL}/api/bienvenue`, { headers: { Origin: baseURL }, data: { action: "confirm_profile" } })).status()).toBe(409);
+    const candidate = { platform: "instagram", url: "https://www.instagram.com/atelier.lumen/", source: "https://corrected.invalid/", readAt: new Date().toISOString() };
+    await prisma.onboardingDraft.update({ where: { id: draft.id }, data: { analysis: { ...analysis, status: "done", finishedAt: new Date().toISOString(), findings: { ...analysis.findings, publicSources: [candidate] } } } });
+    await expect(page.getByRole("checkbox", { name: "Ce profil est officiel" })).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("2 sur 5", { exact: true })).toBeVisible();
+    await page.getByRole("checkbox", { name: "Ce profil est officiel" }).check();
+    await page.getByRole("button", { name: "Confirmer et continuer" }).click();
+    await expect(stepHeading(page, "Qu'aimeriez-vous changer ?")).toBeVisible();
+    expect(readDraftState(await prisma.onboardingDraft.findUniqueOrThrow({ where: { id: draft.id } })).socialSourceDecisions).toMatchObject([{ status: "confirmed", confirmedUrl: "https://instagram.com/atelier.lumen" }]);
+    expect(await noHorizontalScroll(page)).toBe(true);
+  } finally {
+    await prisma.onboardingDraft.deleteMany({ where: { id: draft.id } });
+    await prisma.$disconnect();
+  }
+});
+
 test("GH-279: five anonymous steps, back and reload keep the answers, and the account comes last", async ({ page }) => {
   test.setTimeout(120000);
   const prisma = journeyDatabase();
@@ -2861,7 +2896,7 @@ test("GH-279: five anonymous steps, back and reload keep the answers, and the ac
     await expect(seeFindings).toBeFocused({ timeout: 30000 });
     await expect(page.getByRole("region", { name: "Ce que Paul lit" }).getByRole("listitem").first()).toContainText("Non disponible (site illisible)");
     await page.keyboard.press("Enter");
-    await expect(stepHeading(page, "Paul semble avoir compris votre entreprise.")).toBeFocused();
+    await expect(stepHeading(page, "Votre présence. Votre activité.")).toBeFocused();
     await expect(page.getByText("2 sur 5", { exact: true })).toBeVisible();
     const draftCookie = (await page.context().cookies()).find((cookie) => cookie.name === "pepito_draft");
     expect(draftCookie).toMatchObject({ httpOnly: true, sameSite: "Lax" });
@@ -2871,15 +2906,15 @@ test("GH-279: five anonymous steps, back and reload keep the answers, and the ac
     // Saut d'étape : l'étape 5 renvoie à l'étape courante.
     await page.goto(`${baseURL}/bienvenue/compte`);
     await expect(page).toHaveURL(`${baseURL}/bienvenue`);
-    await expect(stepHeading(page, "Paul semble avoir compris votre entreprise.")).toBeVisible();
+    await expect(stepHeading(page, "Votre présence. Votre activité.")).toBeVisible();
 
-    await page.getByRole("button", { name: "Oui, c'est bien moi" }).click();
+    await page.getByRole("button", { name: "Confirmer et continuer" }).click();
     await expect(page.locator("main").getByRole("alert").first()).toHaveText("Complétez chaque information avant de confirmer.");
-    await page.getByLabel("Votre activité").fill("Électricien");
+    await page.getByLabel("Votre activité", { exact: true }).fill("Électricien");
     await expect(page.getByLabel("Votre zone d'intervention")).toHaveValue("Lyon");
     await page.getByLabel("Vos clients", { exact: true }).fill("Particuliers propriétaires");
     await page.getByLabel("Ce que vous proposez", { exact: true }).fill("Rénovation électrique");
-    await page.getByRole("button", { name: "Oui, c'est bien moi" }).click();
+    await page.getByRole("button", { name: "Confirmer et continuer" }).click();
     await expect(stepHeading(page, "Qu'aimeriez-vous changer ?")).toBeFocused();
 
     // Rechargement : l'étape 3 est réaffichée avec ses saisies.
@@ -2918,11 +2953,11 @@ test("GH-279: five anonymous steps, back and reload keep the answers, and the ac
     await expect(pistes.first()).toContainText("Indicateur");
     await expect(pistes.first()).toContainText("Effort et prérequis");
     // #284 : rappel, « Ce que nous retenons », la première piste repérée, l'origine et le périmètre de chaque piste.
-    await expect(page.getByRole("heading", { name: "Ce que nous retenons" })).toBeVisible();
+    await expect(page.getByText("Synthèse de l'analyse", { exact: true })).toBeVisible();
     await expect(page.getByText("Paul n'a pas pu lire votre site : ce qui suit repose sur ce que vous nous avez dit.")).toBeVisible();
     await expect(pistes.first()).toContainText("À examiner en premier");
     await expect(pistes).toContainText("Vous nous avez dit");
-    await expect(pistes).toContainText("Périmètre proposé");
+    await expect(pistes).toContainText("Périmètre");
     const stepTitles = await pistes.locator("h3").allTextContents();
     expect(new Set(stepTitles).size).toBe(stepTitles.length);
     await expect(page.getByRole("button", { name: "Ça m'intéresse" })).toHaveCount(1);
@@ -2932,11 +2967,11 @@ test("GH-279: five anonymous steps, back and reload keep the answers, and the ac
     await page.getByRole("button", { name: "Retour" }).click();
     await expect(stepHeading(page, "Qu'aimeriez-vous changer ?")).toBeFocused();
     await page.getByRole("button", { name: "Retour" }).click();
-    await expect(stepHeading(page, "Paul semble avoir compris votre entreprise.")).toBeFocused();
+    await expect(stepHeading(page, "Votre présence. Votre activité.")).toBeFocused();
     await expect(page.getByLabel("Ce que vous proposez", { exact: true })).toHaveValue("Rénovation électrique");
     await page.goto(`${baseURL}/bienvenue/missions`);
     await expect(page).toHaveURL(`${baseURL}/bienvenue`);
-    await page.getByRole("button", { name: "Oui, c'est bien moi" }).click();
+    await page.getByRole("button", { name: "Confirmer et continuer" }).click();
     await expect(page.getByLabel("Votre ambition")).toHaveValue("+20 % de chiffre d'affaires en 12 mois, sans embaucher");
     await page.getByRole("button", { name: "Interpréter" }).click();
     await page.getByRole("button", { name: "C'est bien ça" }).click();
@@ -2944,6 +2979,8 @@ test("GH-279: five anonymous steps, back and reload keep the answers, and the ac
     await page.getByRole("button", { name: "Ça m'intéresse" }).click({ timeout: 95_000 });
     await expect(page).toHaveURL(`${baseURL}/bienvenue/compte`);
     await expect(stepHeading(page, "Retrouvez votre stratégie.")).toBeFocused();
+    await expect(page.locator("main")).toContainText("votre mission.");
+    await expect(page.locator("main")).not.toContainText("vos trois missions");
     expect(await prisma.company.count({ where: { ownerEmail: email } })).toBe(0);
 
     // Étape 5 : deux mots de passe identiques, puis l'arrivée sur la stratégie.
@@ -3140,7 +3177,7 @@ test("GH-280: « Je n'ai pas de site » reads no web page, announces the four ru
     expect({ companies: await prisma.company.count(), usage: await prisma.usageEvent.count(), reads: await prisma.sourceRead.count(), findings: await prisma.auditFinding.count() }).toEqual(before);
 
     await page.getByRole("button", { name: "Voir mes premiers constats" }).click();
-    await expect(stepHeading(page, "Paul semble avoir compris votre entreprise.")).toBeFocused();
+    await expect(stepHeading(page, "Votre présence. Votre activité.")).toBeFocused();
     await expect(page.getByText("À renseigner par vous", { exact: true })).toHaveCount(3);
     await expect(page.getByLabel("Votre zone d'intervention")).toHaveValue("Lyon");
     await expect(page.getByLabel("Votre zone d'intervention")).toHaveAccessibleDescription("À confirmer");
@@ -3175,11 +3212,12 @@ test("GH-280: step 2 shows Paul's hypotheses and what was observed, with its sou
     await page.context().addCookies([{ name: "pepito_draft", value: draft.token, url: baseURL }]);
     await page.setViewportSize({ width: 360, height: 800 });
     await page.goto(`${baseURL}/bienvenue`);
-    await expect(stepHeading(page, "Paul semble avoir compris votre entreprise.")).toBeVisible();
-    await expect(page.getByText("voici ce que Paul a compris de Atelier Lumen", { exact: false })).toBeVisible();
+    await expect(stepHeading(page, "Votre présence. Votre activité.")).toBeVisible();
+    await expect(page.getByText("Vérifiez les liens et l'activité de Atelier Lumen.", { exact: true })).toBeVisible();
     await expect(page.getByText("À confirmer", { exact: true })).toHaveCount(3);
     await expect(page.getByText("À renseigner par vous", { exact: true })).toHaveCount(1);
-    await expect(page.getByLabel("Votre activité")).toHaveValue("Électricien");
+    await expect(page.getByLabel("Votre activité", { exact: true })).toHaveValue("Électricien");
+    await page.getByText("Constats et sources de cette lecture", { exact: true }).click();
     const seen = page.getByRole("region", { name: "Ce que Paul a observé" });
     await expect(seen).toContainText("Chaque champ ci-dessous indique d'où vient sa valeur");
     const contact = seen.getByRole("listitem").filter({ hasText: "contact@atelier-lumen.test" });
@@ -3192,7 +3230,7 @@ test("GH-280: step 2 shows Paul's hypotheses and what was observed, with its sou
   }
 });
 
-test("GH-281: step 2 says where each field comes from, and « Non, corriger mes informations » goes back to step 1 without a new analysis", async ({ page }) => {
+test("GH-281: step 2 says where each field comes from, and changing company keeps the previous answers", async ({ page }) => {
   const prisma = journeyDatabase();
   const website = "https://atelier-lumen.test";
   const draft = await createTestDraft(prisma, { step: 2, profile: { website, trade: "", servingArea: "", targetClients: "", offers: "" } });
@@ -3213,7 +3251,7 @@ test("GH-281: step 2 says where each field comes from, and « Non, corriger mes 
     await page.context().addCookies([{ name: "pepito_draft", value: draft.token, url: baseURL }]);
     await page.setViewportSize({ width: 360, height: 800 });
     await page.goto(`${baseURL}/bienvenue`);
-    await expect(stepHeading(page, "Paul semble avoir compris votre entreprise.")).toBeVisible();
+    await expect(stepHeading(page, "Votre présence. Votre activité.")).toBeVisible();
     // Les offres lues sur le site, les hypothèses du modèle à confirmer ; la zone reprend la localisation, à confirmer aussi.
     await expect(page.getByText("Lu sur le site", { exact: true })).toHaveCount(1);
     await expect(page.getByText("À confirmer", { exact: true })).toHaveCount(3);
@@ -3227,11 +3265,11 @@ test("GH-281: step 2 says where each field comes from, and « Non, corriger mes 
     await expect(page.getByLabel("Votre zone d'intervention")).toHaveAccessibleDescription("");
     await page.getByLabel("Votre zone d'intervention").fill("Lyon");
     await expect(page.getByLabel("Votre zone d'intervention")).toHaveAccessibleDescription("À confirmer");
-    await expect(page.getByRole("button", { name: "Oui, c'est bien moi" })).toHaveClass(/bg-\[var\(--bd-brand\)\]/);
-    await expect(page.getByRole("button", { name: "Non, corriger mes informations" })).not.toHaveClass(/bg-\[var\(--bd-brand\)\]/);
+    await expect(page.getByRole("button", { name: "Confirmer et continuer" })).toHaveClass(/bg-\[var\(--bd-brand\)\]/);
+    await expect(page.getByRole("button", { name: "Changer d'entreprise" })).not.toHaveClass(/bg-\[var\(--bd-brand\)\]/);
     expect(await noHorizontalScroll(page)).toBe(true);
 
-    await page.getByRole("button", { name: "Non, corriger mes informations" }).click();
+    await page.getByRole("button", { name: "Changer d'entreprise" }).click();
     await expect(stepHeading(page, "Votre entreprise. Notre point de départ.")).toBeFocused();
     await expect(page.getByLabel("Votre prénom")).toHaveValue("Claire");
     await expect(page.getByLabel("Le nom de votre entreprise")).toHaveValue("Atelier Lumen");
@@ -3241,7 +3279,7 @@ test("GH-281: step 2 says where each field comes from, and « Non, corriger mes 
 
     // Rien n'a changé : retour à l'étape 2 avec la même analyse, sans en relancer une.
     await page.getByRole("button", { name: "Voir mes premiers constats" }).click();
-    await expect(stepHeading(page, "Paul semble avoir compris votre entreprise.")).toBeFocused();
+    await expect(stepHeading(page, "Votre présence. Votre activité.")).toBeFocused();
     await expect(page.getByText("Lu sur le site", { exact: true })).toHaveCount(1);
     expect(await prisma.onboardingDraft.findUniqueOrThrow({ where: { id: draft.id } })).toMatchObject({ step: 2, analysis: { runId: "run-corriger" } });
   } finally {
@@ -3315,6 +3353,7 @@ test("GH-292: step 2 shows the first findings with their certainty, consequence,
     await page.setViewportSize({ width: 360, height: 800 });
     await page.goto(`${baseURL}/bienvenue`);
     const constats = page.getByRole("region", { name: "Vos premiers constats" });
+    await page.getByText("Constats et sources de cette lecture", { exact: true }).click();
     await expect(constats.getByRole("listitem")).toHaveCount(2);
     const observed = constats.getByRole("listitem").filter({ hasText: "aucune réalisation" });
     await expect(observed).toContainText("Observé");

@@ -64,7 +64,7 @@ export type GooglePlaceChoice = { status: "confirmed"; placeId: string } | { sta
 
 export const STEP_TITLES: Record<DraftStep, string> = {
   1: "Votre entreprise. Notre point de départ.",
-  2: "Paul semble avoir compris votre entreprise.",
+  2: "Votre présence. Votre activité.",
   3: "Qu'aimeriez-vous changer ?",
   4: "Un cap. Vos premières missions.",
   5: "Retrouvez votre stratégie.",
@@ -72,7 +72,7 @@ export const STEP_TITLES: Record<DraftStep, string> = {
 
 export const STEP_LABELS: Record<DraftStep, { name: string; subtitle: string }> = {
   1: { name: "Découverte", subtitle: "Votre point de départ" },
-  2: { name: "Premiers constats", subtitle: "Les signes que Paul a compris" },
+  2: { name: "Confirmation", subtitle: "Sources et activité" },
   3: { name: "Ambition", subtitle: "Votre cap et vos limites" },
   4: { name: "Mes premières missions", subtitle: "Du concret à décider" },
   5: { name: "Votre compte", subtitle: "Retrouver votre stratégie" },
@@ -437,9 +437,10 @@ export function applyDraftAction(state: DraftState, request: DraftAction, now = 
     }
     case "confirm_profile": {
       if (state.step !== 2) return { ok: false, kind: "wrong_step", step: state.step };
+      if (analysisRunning(state.analysis, now)) return { ok: false, kind: "busy", error: ANALYSIS_MESSAGES.busy };
       const checked = checkProfile(request);
       if (!checked.ok) return invalid(checked);
-      const website = request.website === undefined ? state.profile.website : text(request.website);
+      const website = request.website === undefined ? prefillWebsite(state) : text(request.website);
       const failure = checkFields([{ field: "website", value: website, max: LIMITS.website, missing: "M-04", optional: true }]);
       if (failure) return invalid(failure);
       if (request.websiteRejected !== undefined && typeof request.websiteRejected !== "boolean") {
@@ -467,20 +468,24 @@ export function applyDraftAction(state: DraftState, request: DraftAction, now = 
       }
       const selectedPlaceId = googlePlaceChoice?.status === "confirmed" ? googlePlaceChoice.placeId : null;
       const analyzedPlaceId = state.analysis?.input.googlePlaceId ?? null;
-      if (selectedPlaceId !== analyzedPlaceId) {
+      const websiteRejected = typeof request.websiteRejected === "boolean" ? request.websiteRejected
+        : state.websiteRejected || (request.website !== undefined && !website && Boolean(prefillWebsite(state)));
+      const sourceChanged = website !== prefillWebsite(state) || websiteRejected !== state.websiteRejected;
+      if (selectedPlaceId !== analyzedPlaceId || sourceChanged) {
         return {
           ok: true,
           state: {
             ...state,
-            step: 1,
+            step: 2,
             profile: { ...state.profile, ...checked.values, website },
             socialSourceDecisions: [],
             googlePlaceChoice,
             profileConfirmed: false,
-            websiteRejected: typeof request.websiteRejected === "boolean" ? request.websiteRejected : state.websiteRejected
+            websiteRejected
           }
         };
       }
+      if (!analysisMatchesProfile(state)) return invalid({ code: "analysis", error: ANALYSIS_MESSAGES.missing, errors: {} });
       const socialSourceDecisions = decideSocialSources(
         state.analysis?.findings.publicSources ?? [],
         request.socialSourceDecisions ?? []

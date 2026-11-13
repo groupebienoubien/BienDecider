@@ -8,7 +8,7 @@ import { VISIT_TRACE_NOTICE } from "@/lib/onboarding/visit-trace-rules";
 import { placeMapsLink, readPlaceCandidate } from "@/lib/google-places";
 import { requireDraftPage } from "./guard";
 import { WelcomeFrame } from "./welcome-frame";
-import { AmbitionForm, DiscoveryStep, ProfileForm } from "./step-forms";
+import { AmbitionForm, DiscoveryStep, ProfileAnalysisWatcher, ProfileForm } from "./step-forms";
 
 const readDate = (iso: string) => new Intl.DateTimeFormat("fr-FR", { day: "numeric", month: "long", year: "numeric", timeZone: "Europe/Paris" }).format(new Date(iso));
 
@@ -128,7 +128,7 @@ export default async function WelcomePage() {
     // Inscriptions fermées ou complètes : le visiteur le sait dès l'étape 1, le formulaire reste utilisable.
     const availability = await currentSignupAvailability();
     return (
-      <WelcomeFrame step={1} intro={<p>Quelques mots sur votre entreprise pour commencer. Paul lit ce qui est public, puis vous montre ce qu&apos;il a compris. Aucun compte n&apos;est créé à cette étape.</p>}>
+      <WelcomeFrame step={1} intro={<p>Découvrez vos premières actions avant de créer votre compte.</p>}>
         {availability !== "open" && (
           <div role="status" className="mb-6 rounded-lg border border-[var(--bd-line-strong)] bg-[var(--bd-attention-light)] p-4 text-sm font-semibold text-[var(--bd-ink)]">
             <p>{availability === "closed" ? SIGNUP_CLOSED_MESSAGE : SIGNUP_FULL_MESSAGE}</p>
@@ -143,6 +143,10 @@ export default async function WelcomePage() {
     );
   }
   if (state.step === 2) {
+    const progress = analysisView(state.analysis);
+    if (progress && !progress.finished) {
+      return <WelcomeFrame step={2} intro={<p>Actualisation de vos sources pour {state.profile.companyName}.</p>}><ProfileAnalysisWatcher analysis={progress} /></WelcomeFrame>;
+    }
     const prefill = prefillProfile(state);
     const guessed = prefillFromPaul(prefill);
     const analysis = analysisMatchesProfile(state) ? state.analysis : null;
@@ -155,17 +159,14 @@ export default async function WelcomePage() {
       })
     );
     return (
-      <WelcomeFrame step={2} intro={<p>{state.profile.firstName}, {guessed ? `voici ce que Paul a compris de ${state.profile.companyName}. Vérifiez, corrigez ou complétez, puis confirmez.` : `décrivez en quelques mots l'activité de ${state.profile.companyName}. Complétez ou corrigez, puis confirmez.`}</p>}>
+      <WelcomeFrame step={2} intro={<p>Vérifiez les liens et l&apos;activité de {state.profile.companyName}.</p>}>
         {analysis?.status === "limited" && (
           <p role="status" className="mb-6 rounded-lg border border-[var(--bd-line-strong)] bg-[var(--bd-attention-light)] p-4 text-sm font-semibold text-[var(--bd-ink)]">
             {limitedStepNotice(analysis.limit)}
           </p>
         )}
-        {analysis?.constats && <FirstFindings constats={analysis.constats} />}
-        {analysis && <ObservedFindings analysis={analysis} guessed={guessed} />}
-        <p className="mb-4 text-sm text-[var(--bd-muted)]">Cette première lecture couvre le site et les informations Google accessibles. Les publications Facebook, Instagram et LinkedIn ne sont pas analysées à cette étape.</p>
         <ProfileForm
-          key="profile"
+          key={analysis?.runId ?? "profile"}
           prefill={prefill}
           website={prefillWebsite(state)}
           publicSources={analysis?.findings.publicSources ?? []}
@@ -175,6 +176,15 @@ export default async function WelcomePage() {
           websiteRejected={state.websiteRejected}
           googleStatus={analysis?.rubrics.google.status ?? null}
         />
+        {analysis && (
+          <details className="mt-6 border-t border-[var(--bd-line)] pt-4 text-sm text-[var(--bd-ink)]">
+            <summary className="cursor-pointer font-semibold">Constats et sources de cette lecture</summary>
+            <div className="mt-4">
+              {analysis.constats && <FirstFindings constats={analysis.constats} />}
+              <ObservedFindings analysis={analysis} guessed={guessed} />
+            </div>
+          </details>
+        )}
       </WelcomeFrame>
     );
   }
