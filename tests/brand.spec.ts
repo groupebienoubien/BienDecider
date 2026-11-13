@@ -1,10 +1,9 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect } from "@playwright/test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import Loading from "../src/app/loading";
 import ErrorPage from "../src/app/error";
 import { BrandLogo } from "../src/components/brand-logo";
-import { discoverThenSeeFindings, interpretThenConfirmAmbition } from "./support/onboarding-draft";
 
 const baseURL = process.env.UX_TEST_BASE_URL ?? "http://localhost:3000";
 
@@ -97,40 +96,30 @@ test("BienDecider public identity, metadata, contact and responsive pages", asyn
   }
   await page.goto(`${baseURL}/login`);
   await expect(page.getByRole("link", { name: "Créer un compte", exact: true })).toHaveAttribute("href", "/bienvenue");
-  // L'ancienne inscription mène au parcours d'entrée (#279).
-  await page.goto(`${baseURL}/signup`);
-  await expect(page).toHaveURL(`${baseURL}/bienvenue`);
+  // Sans brouillon, l'ancienne inscription et l'étape compte mènent au début du parcours (#279).
+  for (const path of ["/signup", "/bienvenue/compte"]) {
+    await page.goto(`${baseURL}${path}`);
+    await expect(page).toHaveURL(`${baseURL}/bienvenue`);
+  }
   await expect(page.getByRole("heading", { level: 1, name: "Votre entreprise. Notre point de départ.", exact: true })).toBeVisible();
   await expect(page.getByText("1 sur 5", { exact: true })).toBeVisible();
   await expect(page.getByRole("link", { name: "Revoir le concept", exact: true })).toHaveAttribute("href", "/");
 });
 
-/** Brouillon mené jusqu'à l'étape 5 par l'API du parcours, avec les cookies de la page. */
-async function reachAccountStep(page: Page) {
-  const post = (data: Record<string, unknown>) => page.request.post(`${baseURL}/api/bienvenue`, { headers: { Origin: baseURL }, data });
-  await discoverThenSeeFindings(page.request, baseURL, { firstName: "Claire", companyName: "Atelier Lumen", location: "Lyon" });
-  expect((await post({ action: "confirm_profile", trade: "Électricien", servingArea: "Lyon", targetClients: "Particuliers", offers: "Rénovation électrique" })).status(), "confirm_profile").toBe(200);
-  expect((await interpretThenConfirmAmbition(page.request, baseURL, "Plus de chantiers cette année")).confirmed.status(), "confirm_ambition").toBe(200);
-  expect((await post({ action: "interested" })).status(), "interested").toBe(200);
-}
-
-test("login and signup fields have permanent labels, autocomplete and a password toggle", async ({ page }) => {
-  for (const [path, autocomplete] of [["/login", "current-password"], ["/bienvenue/compte", "new-password"]] as const) {
-    await page.setViewportSize({ width: 320, height: 900 });
-    if (path === "/bienvenue/compte") await reachAccountStep(page);
-    await page.goto(`${baseURL}${path}`);
-    await expect(page).toHaveURL(`${baseURL}${path}`);
-    const email = page.getByLabel("Adresse e-mail", { exact: true });
-    const password = page.getByLabel("Mot de passe", { exact: true });
-    await expect(email).toHaveAttribute("autocomplete", "email");
-    await expect(password).toHaveAttribute("autocomplete", autocomplete);
-    await password.fill("secret-test");
-    await expect(password).toHaveAttribute("type", "password");
-    await page.getByLabel("Afficher le mot de passe", { exact: true }).check();
-    await expect(password).toHaveAttribute("type", "text");
-    await expect(password).toHaveValue("secret-test");
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-  }
+test("login fields have permanent labels, autocomplete and a password toggle", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 900 });
+  await page.goto(`${baseURL}/login`);
+  await expect(page).toHaveURL(`${baseURL}/login`);
+  const email = page.getByLabel("Adresse e-mail", { exact: true });
+  const password = page.getByLabel("Mot de passe", { exact: true });
+  await expect(email).toHaveAttribute("autocomplete", "email");
+  await expect(password).toHaveAttribute("autocomplete", "current-password");
+  await password.fill("secret-test");
+  await expect(password).toHaveAttribute("type", "password");
+  await page.getByLabel("Afficher le mot de passe", { exact: true }).check();
+  await expect(password).toHaveAttribute("type", "text");
+  await expect(password).toHaveValue("secret-test");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
 
 test("the privacy policy distinguishes processing from publication and is reachable without a session", async ({ page }) => {
@@ -209,4 +198,3 @@ test("the channels page says, channel by channel, what BienDecider publishes and
   await expect(card("Page Facebook")).toContainText("Diffusé par BienDecider, après votre confirmation");
   await expect(card("Instagram")).toContainText("Préparé par l’équipe, publié par vous");
 });
-

@@ -3071,6 +3071,36 @@ test("onboarding redesign: confirm links, enter the goal during analysis, then s
   }
 });
 
+test("GH-279: signup fields have permanent labels, autocomplete and a password toggle", async ({ page }) => {
+  const prisma = journeyDatabase();
+  const draft = await createTestDraft(prisma, { step: 5 });
+  try {
+    await page.context().addCookies([{ name: "pepito_draft", value: draft.token, url: baseURL, httpOnly: true, sameSite: "Lax" }]);
+    await page.setViewportSize({ width: 320, height: 900 });
+    await page.goto(`${baseURL}/bienvenue/compte`);
+    await expect(page).toHaveURL(`${baseURL}/bienvenue/compte`);
+    const email = page.getByLabel("Adresse e-mail", { exact: true });
+    const password = page.getByLabel("Mot de passe", { exact: true });
+    const confirmation = page.getByLabel("Confirmez le mot de passe", { exact: true });
+    await expect(email).toHaveAttribute("autocomplete", "email");
+    await expect(password).toHaveAttribute("autocomplete", "new-password");
+    await expect(confirmation).toHaveAttribute("autocomplete", "new-password");
+    await password.fill("secret-test");
+    await confirmation.fill("secret-test");
+    await expect(password).toHaveAttribute("type", "password");
+    await expect(confirmation).toHaveAttribute("type", "password");
+    await page.getByLabel("Afficher le mot de passe", { exact: true }).check();
+    await expect(password).toHaveAttribute("type", "text");
+    await expect(confirmation).toHaveAttribute("type", "text");
+    await expect(password).toHaveValue("secret-test");
+    await expect(confirmation).toHaveValue("secret-test");
+    expect(await noHorizontalScroll(page)).toBe(true);
+  } finally {
+    await prisma.onboardingDraft.deleteMany({ where: { id: draft.id } });
+    await prisma.$disconnect();
+  }
+});
+
 test("GH-279: five anonymous steps, back and reload keep the answers, and the account comes last", async ({ page }) => {
   test.setTimeout(120000);
   const prisma = journeyDatabase();
