@@ -10,7 +10,7 @@ import { hashPassword } from "../src/lib/password";
 import { signupDayKey } from "../src/lib/signup-rules";
 import { startSmtpSink } from "./support/smtp-sink";
 import { DRAFT_AMBITION, DRAFT_AMBITION_TERMS, createTestDraft, waitForAnalysis } from "./support/onboarding-draft";
-import { newAnalysis } from "../src/lib/onboarding/analysis-rules";
+import { ANALYSIS_PER_IP_DAILY_LIMIT, newAnalysis } from "../src/lib/onboarding/analysis-rules";
 import { readDraftState, retainedFromRules, starterPlan } from "../src/lib/onboarding/draft-rules";
 import { createMissionDecisionPlan } from "../src/lib/missions/decision-plan";
 import { purgeExpiredDrafts, purgeOldTraces } from "../src/lib/onboarding/visit-trace";
@@ -485,8 +485,8 @@ test("one IP cannot flood login or signup, and other IPs and successful logins a
     const createdDrafts: string[] = [];
     for (let attempt = 1; attempt <= 20; attempt++) {
       const response = await discover(starter);
-      // Au-delà de 3 analyses par IP (#280), le brouillon est créé sans analyse : 429, mais l'étape 2 reste ouverte.
-      expect(response.status(), `draft ${attempt}`).toBe(attempt <= 3 ? 200 : 429);
+      // Au-delà du plafond d'analyses par IP (#280), le brouillon est créé sans analyse : 429, mais l'étape 2 reste ouverte.
+      expect(response.status(), `draft ${attempt}`).toBe(attempt <= ANALYSIS_PER_IP_DAILY_LIMIT ? 200 : 429);
       createdDrafts.push(/pepito_draft=([^;]+)/.exec(response.headers()["set-cookie"] ?? "")?.[1] ?? "");
     }
     expect(createdDrafts.every(Boolean)).toBe(true);
